@@ -9,8 +9,8 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 - **Agentic** — the agent can Read / Write / Edit / Bash / Search with the vault as its working directory.
 - **Permission gating** (Claude) — tool calls surface as cards; sensitive actions (Edit/Write/unlisted Bash) prompt with **Allow once / Always allow / Deny**, with a per-session allowlist and auto-allow for read-only tools. Codex is gated by its own sandbox (`workspace-write`).
 - **Tool-call cards** — running / success / error, with diff preview for edits and command + output for shell.
-- **Context** — the active note is auto-attached as a removable chip.
-- **History** — switch between conversations in the session; copy any reply.
+- **Context** — the active note is auto-attached as a removable chip; attach more notes via the "+ Note" picker.
+- **History** — conversations **persist to disk** (survive reload, with session resume) and are switchable from the header; copy any reply.
 
 ## Requirements
 
@@ -38,7 +38,7 @@ Create a `.obsidian-plugin-dir` file containing the absolute path to your vault'
 
 ## Status
 
-Phases 1–4 implemented: text streaming, agentic tools + permission gating (Claude), Codex backend with tool cards, theme-aware transparent UI, context chips, history, copy. Codex tool-event parsing is best-effort (CLI event schema is version-sensitive).
+Phases 1–5 implemented: text streaming, agentic tools + permission gating (Claude), Codex backend with tool cards, theme-aware transparent UI, context chips + multi-note attach, persistent conversation history, copy. Codex tool-event parsing is best-effort (CLI event schema is version-sensitive); per-action Codex approvals (`codex proto`) are not yet wired — Codex relies on its sandbox.
 
 ## License
 

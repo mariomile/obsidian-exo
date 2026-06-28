@@ -239,6 +239,20 @@
   width: 12px;
   height: 12px;
 }
+.mva-chip-add {
+  cursor: pointer;
+  color: var(--text-faint);
+  background: transparent;
+  border-style: dashed;
+  transition: color var(--mva-t), border-color var(--mva-t);
+}
+.mva-chip-add:hover {
+  color: var(--text-normal);
+  border-color: var(--background-modifier-border-hover);
+}
+.mva-chip-add .mva-chip-label {
+  font-family: inherit;
+}
 
 /* ------------------------------- copy --------------------------------- */
 .mva-copy {

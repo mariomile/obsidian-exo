@@ -3,7 +3,9 @@ import {
   WorkspaceLeaf,
   MarkdownRenderer,
   FileSystemAdapter,
+  FuzzySuggestModal,
   Menu,
+  TFile,
   setIcon,
   Notice,
 } from "obsidian";
@@ -21,24 +23,30 @@ const ADAPTERS: Record<ProviderId, ProviderAdapter> = {
   codex: codexAdapter,
 };
 
+const MAX_CONVOS = 30;
+const MAX_PERSIST_OUTPUT = 2000;
+
 interface ToolCard {
   card: HTMLElement;
   statusEl: HTMLElement;
   bodyEl: HTMLElement;
 }
 
-/** A single assistant response: an ordered flow of text segments + tool cards. */
-interface AssistantCtx {
-  el: HTMLElement;
-  bodyEl: HTMLElement;
-  cards: Map<string, ToolCard>;
-  curTextEl: HTMLElement | null;
-  curRaw: string;
-  fullText: string;
-  thinkingEl: HTMLElement | null;
+/* ----- persisted data model ----- */
+type Segment =
+  | { t: "text"; md: string }
+  | { t: "tool"; name: string; input: unknown; ok: boolean | null; output: string };
+type Message = { role: "user"; text: string } | { role: "assistant"; segments: Segment[] };
+
+interface ConvoData {
+  id: string;
+  title: string;
+  provider: ProviderId;
+  model: string;
+  sessionId?: string;
+  messages: Message[];
 }
 
-/** A conversation kept alive via its (detached) rendered DOM. */
 interface Convo {
   id: string;
   listEl: HTMLElement;
@@ -47,6 +55,20 @@ interface Convo {
   provider: ProviderId;
   model: string;
   allow: Set<string>;
+  messages: Message[];
+}
+
+interface AssistantCtx {
+  el: HTMLElement;
+  bodyEl: HTMLElement;
+  cards: Map<string, ToolCard>;
+  segById: Map<string, Segment>;
+  segments: Segment[];
+  curTextEl: HTMLElement | null;
+  curTextSeg: { t: "text"; md: string } | null;
+  curRaw: string;
+  fullText: string;
+  thinkingEl: HTMLElement | null;
 }
 
 let convoSeed = 0;
@@ -69,6 +91,7 @@ export class ChatView extends ItemView {
   private modelSelect!: HTMLSelectElement;
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
+  private manualAttached: string[] = [];
   private renderTimer: number | null = null;
   private renderTarget: AssistantCtx | null = null;
 
@@ -99,9 +122,7 @@ export class ChatView extends ItemView {
     this.buildHeader(root);
     this.listWrap = root.createDiv({ cls: "mva-list-wrap" });
     this.buildComposer(root);
-    this.active = this.makeConvo();
-    this.listWrap.appendChild(this.active.listEl);
-    this.renderEmptyState();
+    await this.restore();
     this.refreshContext();
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshContext()));
   }
@@ -168,21 +189,86 @@ export class ChatView extends ItemView {
     void this.plugin.saveSettings();
   }
 
+  /* ------------------------- persistence ---------------------------- */
+
+  private async restore(): Promise<void> {
+    const raw = (await this.plugin.loadConversations()) as ConvoData[];
+    for (const d of raw) {
+      if (!d || !Array.isArray(d.messages)) continue;
+      const c: Convo = {
+        id: d.id || `c${++convoSeed}`,
+        listEl: createDiv({ cls: "mva-list" }),
+        title: d.title || "New chat",
+        sessionId: d.sessionId,
+        provider: d.provider === "codex" ? "codex" : "claude",
+        model: d.model || "",
+        allow: new Set(),
+        messages: d.messages,
+      };
+      this.renderConvoDom(c);
+      this.convos.push(c);
+    }
+    convoSeed = Math.max(convoSeed, this.convos.length);
+    if (this.convos.length === 0) {
+      this.active = this.makeConvo();
+      this.convos.push(this.active);
+    } else {
+      this.active = this.convos[this.convos.length - 1];
+      this.sessionId = this.active.sessionId;
+      this.provider = this.active.provider;
+      this.model = this.active.model;
+    }
+    this.listWrap.empty();
+    this.listWrap.appendChild(this.active.listEl);
+    if (this.active.messages.length === 0) this.renderEmptyState();
+    this.refreshProviderUI();
+    this.scrollToBottom();
+  }
+
+  private serialize(): ConvoData[] {
+    this.saveActive();
+    const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
+    return all.slice(-MAX_CONVOS).map((c) => ({
+      id: c.id,
+      title: c.title,
+      provider: c.provider,
+      model: c.model,
+      sessionId: c.sessionId,
+      messages: c.messages.map((m) =>
+        m.role === "assistant"
+          ? {
+              role: "assistant" as const,
+              segments: m.segments.map((s) =>
+                s.t === "tool"
+                  ? { ...s, output: s.output.slice(0, MAX_PERSIST_OUTPUT) }
+                  : s
+              ),
+            }
+          : m
+      ),
+    }));
+  }
+
+  private persist(): void {
+    void this.plugin.saveConversations(this.serialize());
+  }
+
   /* ------------------------- conversations -------------------------- */
 
   private makeConvo(): Convo {
-    const listEl = createDiv({ cls: "mva-list" });
     return {
       id: `c${++convoSeed}`,
-      listEl,
+      listEl: createDiv({ cls: "mva-list" }),
       title: "New chat",
       provider: this.provider,
       model: this.model,
       allow: new Set(),
+      messages: [],
     };
   }
 
   private saveActive(): void {
+    if (!this.active) return;
     this.active.sessionId = this.sessionId;
     this.active.provider = this.provider;
     this.active.model = this.model;
@@ -196,6 +282,7 @@ export class ChatView extends ItemView {
     const c = this.makeConvo();
     this.convos.push(c);
     this.switchTo(c);
+    this.persist();
   }
 
   private switchTo(c: Convo): void {
@@ -218,9 +305,7 @@ export class ChatView extends ItemView {
   private openHistory(e: MouseEvent): void {
     const menu = new Menu();
     const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
-    if (all.length === 0) {
-      menu.addItem((i) => i.setTitle("No conversations yet").setDisabled(true));
-    }
+    if (all.length === 0) menu.addItem((i) => i.setTitle("No conversations yet").setDisabled(true));
     for (const c of [...all].reverse()) {
       menu.addItem((i) =>
         i
@@ -259,24 +344,45 @@ export class ChatView extends ItemView {
     return f ? f.path : null;
   }
 
+  private contextPaths(): string[] {
+    const out: string[] = [];
+    const active = this.excludeActiveNote ? null : this.activeNotePath();
+    if (active) out.push(active);
+    for (const p of this.manualAttached) if (!out.includes(p)) out.push(p);
+    return out;
+  }
+
   private refreshContext(): void {
     if (!this.contextEl) return;
     this.contextEl.empty();
-    const path = this.activeNotePath();
-    if (!path || this.excludeActiveNote) {
-      this.contextEl.toggleClass("is-empty", true);
-      return;
-    }
-    this.contextEl.toggleClass("is-empty", false);
+    const active = this.excludeActiveNote ? null : this.activeNotePath();
+    if (active) this.addChip(active, true);
+    for (const p of this.manualAttached) this.addChip(p, false);
+
+    const add = this.contextEl.createDiv({ cls: "mva-chip mva-chip-add", attr: { "aria-label": "Attach a note" } });
+    setIcon(add.createSpan({ cls: "mva-chip-icon" }), "plus");
+    add.createSpan({ cls: "mva-chip-label", text: "Note" });
+    add.onclick = () => this.pickNote();
+  }
+
+  private addChip(path: string, isActive: boolean): void {
     const chip = this.contextEl.createDiv({ cls: "mva-chip" });
     setIcon(chip.createSpan({ cls: "mva-chip-icon" }), "file-text");
     chip.createSpan({ cls: "mva-chip-label", text: path.split("/").pop() ?? path });
     const x = chip.createSpan({ cls: "mva-chip-x", attr: { "aria-label": "Remove" } });
     setIcon(x, "x");
     x.onclick = () => {
-      this.excludeActiveNote = true;
+      if (isActive) this.excludeActiveNote = true;
+      else this.manualAttached = this.manualAttached.filter((p) => p !== path);
       this.refreshContext();
     };
+  }
+
+  private pickNote(): void {
+    new NotePicker(this.app, (f) => {
+      if (!this.manualAttached.includes(f.path)) this.manualAttached.push(f.path);
+      this.refreshContext();
+    }).open();
   }
 
   private autoGrow(): void {
@@ -304,12 +410,37 @@ export class ChatView extends ItemView {
     this.listEl.querySelector(".mva-empty")?.remove();
   }
 
+  /** Rebuild a conversation's DOM from its persisted messages. */
+  private renderConvoDom(c: Convo): void {
+    c.listEl.empty();
+    for (const m of c.messages) {
+      if (m.role === "user") {
+        const el = c.listEl.createDiv({ cls: "mva-turn mva-user" });
+        void MarkdownRenderer.render(this.app, m.text, el.createDiv({ cls: "mva-bubble" }), "", this);
+      } else {
+        const el = c.listEl.createDiv({ cls: "mva-turn mva-assistant" });
+        const body = el.createDiv({ cls: "mva-assistant-body" });
+        let full = "";
+        for (const s of m.segments) {
+          if (s.t === "text") {
+            void MarkdownRenderer.render(this.app, s.md, body.createDiv({ cls: "mva-bubble" }), "", this);
+            full += s.md;
+          } else {
+            const refs = this.createToolCard(body, s.name, s.input);
+            this.finishToolCard(refs, s.ok !== false, s.output);
+          }
+        }
+        if (full.trim()) this.attachCopy(el, full);
+      }
+    }
+  }
+
   private addUserTurn(text: string): void {
     this.clearEmptyState();
     if (this.active.title === "New chat") this.active.title = text.slice(0, 48);
+    this.active.messages.push({ role: "user", text });
     const el = this.listEl.createDiv({ cls: "mva-turn mva-user" });
-    const bubble = el.createDiv({ cls: "mva-bubble" });
-    void MarkdownRenderer.render(this.app, text, bubble, "", this);
+    void MarkdownRenderer.render(this.app, text, el.createDiv({ cls: "mva-bubble" }), "", this);
     this.scrollToBottom();
   }
 
@@ -325,7 +456,10 @@ export class ChatView extends ItemView {
       el,
       bodyEl,
       cards: new Map(),
+      segById: new Map(),
+      segments: [],
       curTextEl: null,
+      curTextSeg: null,
       curRaw: "",
       fullText: "",
       thinkingEl: thinking,
@@ -344,8 +478,11 @@ export class ChatView extends ItemView {
     if (!ctx.curTextEl) {
       ctx.curTextEl = ctx.bodyEl.createDiv({ cls: "mva-bubble" });
       ctx.curRaw = "";
+      ctx.curTextSeg = { t: "text", md: "" };
+      ctx.segments.push(ctx.curTextSeg);
     }
     ctx.curRaw += text;
+    ctx.curTextSeg!.md += text;
     ctx.fullText += text;
     this.scheduleRender(ctx);
   }
@@ -374,12 +511,11 @@ export class ChatView extends ItemView {
     this.renderText(ctx);
   }
 
-  private addCopyButton(ctx: AssistantCtx): void {
-    if (!ctx.fullText.trim()) return;
-    const btn = ctx.el.createEl("button", { cls: "mva-copy", attr: { "aria-label": "Copy" } });
+  private attachCopy(turnEl: HTMLElement, text: string): void {
+    const btn = turnEl.createEl("button", { cls: "mva-copy", attr: { "aria-label": "Copy" } });
     setIcon(btn, "copy");
     btn.onclick = () => {
-      void navigator.clipboard.writeText(ctx.fullText);
+      void navigator.clipboard.writeText(text);
       btn.empty();
       setIcon(btn, "check");
       window.setTimeout(() => {
@@ -391,11 +527,9 @@ export class ChatView extends ItemView {
 
   /* ------------------------------ tools ----------------------------- */
 
-  private addToolCard(ctx: AssistantCtx, id: string, name: string, input: unknown): void {
-    this.dropThinking(ctx);
-    ctx.curTextEl = null;
+  private createToolCard(parent: HTMLElement, name: string, input: unknown): ToolCard {
     const meta = toolMeta(name, input);
-    const card = ctx.bodyEl.createDiv({ cls: "mva-tool is-running is-collapsed" });
+    const card = parent.createDiv({ cls: "mva-tool is-running is-collapsed" });
     const head = card.createDiv({ cls: "mva-tool-head" });
     const statusEl = head.createDiv({ cls: "mva-tool-status" });
     setIcon(statusEl, "loader");
@@ -405,13 +539,10 @@ export class ChatView extends ItemView {
     const bodyEl = card.createDiv({ cls: "mva-tool-body" });
     renderToolDetail(bodyEl, name, input, null);
     head.onclick = () => card.toggleClass("is-collapsed", !card.hasClass("is-collapsed"));
-    ctx.cards.set(id, { card, statusEl, bodyEl });
-    this.scrollToBottom();
+    return { card, statusEl, bodyEl };
   }
 
-  private resolveToolCard(ctx: AssistantCtx, id: string, ok: boolean, output: string): void {
-    const c = ctx.cards.get(id);
-    if (!c) return;
+  private finishToolCard(c: ToolCard, ok: boolean, output: string): void {
     c.card.removeClass("is-running");
     c.card.addClass(ok ? "is-ok" : "is-error");
     c.statusEl.empty();
@@ -421,6 +552,29 @@ export class ChatView extends ItemView {
       const text = output.length > 4000 ? output.slice(0, 4000) + "\n… (truncated)" : output;
       out.createEl("code", { text });
     }
+  }
+
+  private addToolCard(ctx: AssistantCtx, id: string, name: string, input: unknown): void {
+    this.dropThinking(ctx);
+    ctx.curTextEl = null;
+    ctx.curTextSeg = null;
+    const refs = this.createToolCard(ctx.bodyEl, name, input);
+    ctx.cards.set(id, refs);
+    const seg: Segment = { t: "tool", name, input, ok: null, output: "" };
+    ctx.segments.push(seg);
+    ctx.segById.set(id, seg);
+    this.scrollToBottom();
+  }
+
+  private resolveToolCard(ctx: AssistantCtx, id: string, ok: boolean, output: string): void {
+    const c = ctx.cards.get(id);
+    const seg = ctx.segById.get(id);
+    if (seg && seg.t === "tool") {
+      seg.ok = ok;
+      seg.output = output;
+    }
+    if (!c) return;
+    this.finishToolCard(c, ok, output);
     this.scrollToBottom();
   }
 
@@ -434,6 +588,7 @@ export class ChatView extends ItemView {
   ): void {
     this.dropThinking(ctx);
     ctx.curTextEl = null;
+    ctx.curTextSeg = null;
     const meta = toolMeta(tool, input);
     const card = ctx.bodyEl.createDiv({ cls: "mva-perm" });
     const head = card.createDiv({ cls: "mva-perm-head" });
@@ -488,9 +643,10 @@ export class ChatView extends ItemView {
     this.inputEl.value = "";
     this.autoGrow();
 
-    // Build the message, optionally prefixed with the active-note context.
-    const notePath = this.excludeActiveNote ? null : this.activeNotePath();
-    const message = notePath ? `Current note: ${notePath}\n\n${text}` : text;
+    const paths = this.contextPaths();
+    const message = paths.length
+      ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${text}`
+      : text;
 
     this.addUserTurn(text);
     const ctx = this.addAssistantTurn();
@@ -526,6 +682,7 @@ export class ChatView extends ItemView {
         case "error":
           this.dropThinking(ctx);
           ctx.curTextEl = null;
+          ctx.curTextSeg = null;
           ctx.bodyEl.createDiv({ cls: "mva-inline-error", text: `⚠️ ${e.message}` });
           break;
       }
@@ -548,7 +705,7 @@ export class ChatView extends ItemView {
         onEvent
       );
       this.flushRender(ctx);
-      this.addCopyButton(ctx);
+      if (ctx.fullText.trim()) this.attachCopy(ctx.el, ctx.fullText);
     } catch (err) {
       this.flushRender(ctx);
       if (isAbort(err)) {
@@ -566,8 +723,10 @@ export class ChatView extends ItemView {
         new Notice(msg);
       }
     } finally {
+      if (ctx.segments.length) this.active.messages.push({ role: "assistant", segments: ctx.segments });
       this.setStreaming(false);
       this.abort = undefined;
+      this.persist();
       this.scrollToBottom();
     }
   }
@@ -576,5 +735,22 @@ export class ChatView extends ItemView {
     const adapter = this.app.vault.adapter;
     if (adapter instanceof FileSystemAdapter) return adapter.getBasePath();
     return "";
+  }
+}
+
+/* ---------------------- note picker (multi-attach) ---------------------- */
+class NotePicker extends FuzzySuggestModal<TFile> {
+  constructor(app: import("obsidian").App, private onPick: (f: TFile) => void) {
+    super(app);
+    this.setPlaceholder("Attach a note to the conversation…");
+  }
+  getItems(): TFile[] {
+    return this.app.vault.getMarkdownFiles();
+  }
+  getItemText(f: TFile): string {
+    return f.path;
+  }
+  onChooseItem(f: TFile): void {
+    this.onPick(f);
   }
 }
