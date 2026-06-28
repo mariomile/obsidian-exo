@@ -38,4 +38,31 @@ export default class MarioverseAgentPlugin extends Plugin {
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
   }
+
+  private convoFile(): string {
+    return `${this.manifest.dir}/conversations.json`;
+  }
+
+  /** Persisted conversation history (separate from settings/data.json). */
+  async loadConversations(): Promise<unknown[]> {
+    try {
+      const p = this.convoFile();
+      if (await this.app.vault.adapter.exists(p)) {
+        const raw = await this.app.vault.adapter.read(p);
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      /* corrupt/missing → start fresh */
+    }
+    return [];
+  }
+
+  async saveConversations(data: unknown[]): Promise<void> {
+    try {
+      await this.app.vault.adapter.write(this.convoFile(), JSON.stringify(data));
+    } catch {
+      /* non-fatal */
+    }
+  }
 }
