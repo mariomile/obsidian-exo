@@ -26,6 +26,7 @@ import { createObsidianToolServer, OBSIDIAN_READ_TOOLS, OBSIDIAN_MEMORY_TOOLS } 
 import { readBootContext } from "./obsidian/memory";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { renderNeighborhoodPanel, renderMiniGraph, wikilinkify, type TouchedNote } from "./ui/graph-view";
+import { renderCapabilitiesPanel } from "./ui/capabilities";
 
 export const VIEW_TYPE = "kortex-view";
 
@@ -121,6 +122,7 @@ export class ChatView extends ItemView {
   private listWrap!: HTMLElement;
   private composerEl!: HTMLElement;
   private galleryEl: HTMLElement | null = null;
+  private capsEl: HTMLElement | null = null;
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private brandDot!: HTMLElement;
@@ -243,17 +245,7 @@ export class ChatView extends ItemView {
   private buildHeader(root: HTMLElement): void {
     const header = root.createDiv({ cls: "mva-header" });
     this.brandDot = header.createSpan({ cls: "mva-dot" });
-    this.providerSelect = header.createEl("select", { cls: "mva-select", attr: { "aria-label": "Provider" } });
-    for (const id of ["claude", "codex"] as ProviderId[]) {
-      this.providerSelect.createEl("option", { text: ADAPTERS[id].displayName }).value = id;
-    }
-    this.providerSelect.onchange = () => this.onProviderChange(this.providerSelect.value as ProviderId);
-
-    this.modelSelect = header.createEl("select", { cls: "mva-select", attr: { "aria-label": "Model" } });
-    this.modelSelect.onchange = () => {
-      this.model = this.modelSelect.value;
-      this.persistModel();
-    };
+    header.createSpan({ cls: "mva-brand-name", text: "Kortex" });
     header.createDiv({ cls: "mva-spacer" }).style.flex = "1";
 
     const histBtn = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "History" } });
@@ -263,8 +255,6 @@ export class ChatView extends ItemView {
     const newChat = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "New chat" } });
     setIcon(newChat, "plus");
     newChat.onclick = () => this.newConversation();
-
-    this.refreshProviderUI();
   }
 
   private onProviderChange(next: ProviderId): void {
@@ -400,6 +390,7 @@ export class ChatView extends ItemView {
 
   private newConversation(): void {
     if (this.galleryEl) this.hideGallery();
+    if (this.capsEl) this.hideCapabilities();
     // Keep other conversations (and their live sessions) alive — parallel.
     this.saveActive();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
@@ -411,6 +402,7 @@ export class ChatView extends ItemView {
 
   private switchTo(c: Convo): void {
     if (c === this.active) return;
+    if (this.capsEl) this.hideCapabilities();
     this.saveActive();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.active = c;
@@ -435,7 +427,10 @@ export class ChatView extends ItemView {
 
   private toggleGallery(): void {
     if (this.galleryEl) this.hideGallery();
-    else this.showGallery();
+    else {
+      if (this.capsEl) this.hideCapabilities();
+      this.showGallery();
+    }
   }
 
   private hideGallery(): void {
@@ -443,6 +438,34 @@ export class ChatView extends ItemView {
     this.galleryEl = null;
     this.listEl.show();
     this.composerEl.show();
+  }
+
+  /* -------------------------- capabilities -------------------------- */
+
+  private toggleCapabilities(): void {
+    if (this.capsEl) this.hideCapabilities();
+    else this.showCapabilities();
+  }
+
+  private hideCapabilities(): void {
+    this.capsEl?.remove();
+    this.capsEl = null;
+    this.listEl.show();
+  }
+
+  private showCapabilities(): void {
+    if (this.galleryEl) this.hideGallery();
+    this.listEl.hide();
+    const wrap = this.listWrap.createDiv({ cls: "mva-gallery-wrap" });
+    this.capsEl = wrap;
+    void renderCapabilitiesPanel(wrap, this.app, this.plugin.settings, {
+      provider: this.provider,
+      model: this.model,
+      onOpenNote: (p) => {
+        this.hideCapabilities();
+        this.openNote(p);
+      },
+    });
   }
 
   private showGallery(): void {
@@ -617,27 +640,26 @@ export class ChatView extends ItemView {
     const tb = bar.createDiv({ cls: "mva-toolbar" });
     const s = this.plugin.settings;
 
-    // Effort as a slider (default · low → max)
-    const eff = tb.createDiv({ cls: "mva-slider-wrap" });
-    const effLabel = eff.createSpan({ cls: "mva-slider-label" });
-    const slider = eff.createEl("input", {
-      cls: "mva-slider",
-      attr: { type: "range", min: "0", max: "5", step: "1", "aria-label": "Effort" },
-    });
-    const setEffLabel = () => effLabel.setText(`Effort: ${ChatView.EFFORTS[Number(slider.value)]}`);
-    slider.value = String(Math.max(0, ChatView.EFFORTS.indexOf(s.effort || "default")));
-    setEffLabel();
-    slider.oninput = () => {
-      setEffLabel();
-      s.effort = ChatView.EFFORTS[Number(slider.value)];
-      void this.plugin.saveSettings();
+    // Provider (type) + model selects — all controls live in this bottom bar.
+    this.providerSelect = tb.createEl("select", { cls: "mva-tb-sel", attr: { "aria-label": "Provider" } });
+    for (const id of ["claude", "codex"] as ProviderId[]) {
+      this.providerSelect.createEl("option", { text: ADAPTERS[id].displayName }).value = id;
+    }
+    this.providerSelect.onchange = () => this.onProviderChange(this.providerSelect.value as ProviderId);
+
+    this.modelSelect = tb.createEl("select", { cls: "mva-tb-sel", attr: { "aria-label": "Model" } });
+    this.modelSelect.onchange = () => {
+      this.model = this.modelSelect.value;
+      this.persistModel();
     };
 
+    this.buildEffort(tb);
+
     const perm = this.toolbarSelect(tb, "Permissions", [
-      ["default", "Permissions: ask"],
-      ["acceptEdits", "Permissions: accept edits"],
-      ["plan", "Permissions: plan"],
-      ["bypassPermissions", "Permissions: bypass"],
+      ["default", "Ask"],
+      ["acceptEdits", "Accept edits"],
+      ["plan", "Plan"],
+      ["bypassPermissions", "Bypass"],
     ]);
     perm.value = s.permissionMode;
     perm.onchange = () => {
@@ -645,8 +667,70 @@ export class ChatView extends ItemView {
       void this.plugin.saveSettings();
     };
 
+    const caps = tb.createEl("button", { cls: "mva-tb-icon", attr: { "aria-label": "Capabilities" } });
+    setIcon(caps, "layout-dashboard");
+    caps.onclick = () => this.toggleCapabilities();
+
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
     this.usageEl = tb.createDiv({ cls: "mva-usage", attr: { "aria-label": "Context used" } });
+  }
+
+  /** Effort control: a chip that opens a Faster→Smarter dotted popover. */
+  private buildEffort(tb: HTMLElement): void {
+    const s = this.plugin.settings;
+    const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+    const wrap = tb.createDiv({ cls: "mva-eff" });
+    const trigger = wrap.createDiv({ cls: "mva-tb-chip", attr: { "aria-label": "Effort" } });
+    const pop = wrap.createDiv({ cls: "mva-eff-pop" });
+    pop.hide();
+
+    const head = pop.createDiv({ cls: "mva-eff-head" });
+    head.createSpan({ cls: "mva-eff-h", text: "Effort" });
+    head.createSpan({ cls: "mva-eff-v" });
+    const help = head.createSpan({ cls: "mva-eff-help", attr: { title: "Higher effort = more reasoning, slower replies." } });
+    setIcon(help, "help-circle");
+    const ends = pop.createDiv({ cls: "mva-eff-ends" });
+    ends.createSpan({ text: "Faster" });
+    ends.createSpan({ text: "Smarter" });
+    const dots = pop.createDiv({ cls: "mva-eff-dots" });
+
+    let idx = Math.max(0, ChatView.EFFORTS.indexOf(s.effort || "default"));
+    const render = () => {
+      const label = cap(ChatView.EFFORTS[idx]);
+      trigger.setText(`Effort: ${label}`);
+      (pop.querySelector(".mva-eff-v") as HTMLElement)?.setText(label);
+      Array.from(dots.children).forEach((d, i) => {
+        d.toggleClass("is-on", i < idx);
+        d.toggleClass("is-thumb", i === idx);
+      });
+    };
+    ChatView.EFFORTS.forEach((e, i) => {
+      const d = dots.createSpan({ cls: "mva-eff-dot", attr: { "aria-label": cap(e) } });
+      d.onclick = () => {
+        idx = i;
+        s.effort = ChatView.EFFORTS[i];
+        void this.plugin.saveSettings();
+        render();
+      };
+    });
+    render();
+
+    let open = false;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrap.contains(e.target as Node)) close();
+    };
+    const close = () => {
+      open = false;
+      pop.hide();
+      document.removeEventListener("click", onDoc, true);
+    };
+    trigger.onclick = (e) => {
+      e.stopPropagation();
+      if (open) return close();
+      open = true;
+      pop.show();
+      document.addEventListener("click", onDoc, true);
+    };
   }
 
   private updateUsage(u: ContextUsage | null): void {
