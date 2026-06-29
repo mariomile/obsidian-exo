@@ -10,7 +10,7 @@ import {
   Notice,
 } from "obsidian";
 import { Autocomplete, type AcItem } from "./ui/autocomplete";
-import type MarioverseAgentPlugin from "./main";
+import type KortexPlugin from "./main";
 import { resolveCli, describeError, isAbort } from "./cli";
 import { claudeAdapter } from "./providers/claude";
 import { codexAdapter } from "./providers/codex";
@@ -23,7 +23,7 @@ import type {
 } from "./providers/types";
 import { toolMeta, toolFilePath, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
 
-export const VIEW_TYPE = "marioverse-agent-view";
+export const VIEW_TYPE = "kortex-view";
 
 const ADAPTERS: Record<ProviderId, ProviderAdapter> = {
   claude: claudeAdapter,
@@ -114,7 +114,7 @@ export class ChatView extends ItemView {
   private renderTimer: number | null = null;
   private renderTarget: AssistantCtx | null = null;
 
-  constructor(leaf: WorkspaceLeaf, private plugin: MarioverseAgentPlugin) {
+  constructor(leaf: WorkspaceLeaf, private plugin: KortexPlugin) {
     super(leaf);
     this.provider = plugin.settings.provider;
     this.model = this.provider === "claude" ? plugin.settings.claudeModel : plugin.settings.codexModel;
@@ -124,7 +124,7 @@ export class ChatView extends ItemView {
     return VIEW_TYPE;
   }
   getDisplayText(): string {
-    return "Marioverse Agent";
+    return "Kortex";
   }
   getIcon(): string {
     return "bot";
@@ -1110,7 +1110,7 @@ export class ChatView extends ItemView {
   private openSettings(): void {
     const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
     setting?.open();
-    setting?.openTabById("marioverse-agent");
+    setting?.openTabById("kortex");
   }
 
   private vaultPath(): string {

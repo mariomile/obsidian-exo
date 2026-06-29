@@ -1,4 +1,4 @@
-# Marioverse Agent
+# Kortex
 
 An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** or the **Codex CLI**. Your vault is the agent's working directory. Custom-rendered, theme-aware chat UI — no terminal.
 
@@ -32,7 +32,7 @@ npm run build    # typecheck + production bundle
 ```
 
 Create a `.obsidian-plugin-dir` file containing the absolute path to your vault's
-`.obsidian/plugins/marioverse-agent` folder to auto-deploy on each build.
+`.obsidian/plugins/kortex` folder to auto-deploy on each build.
 
 ## Architecture
 

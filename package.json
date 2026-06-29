@@ -1,7 +1,7 @@
 {
-  "name": "obsidian-marioverse-agent",
+  "name": "obsidian-kortex",
   "version": "0.1.0",
-  "description": "An agentic AI assistant in your Obsidian sidebar, powered by the Claude or Codex CLI — with a custom, theme-aware chat UI.",
+  "description": "Kortex — an agentic AI assistant in your Obsidian sidebar, powered by the Claude or Codex CLI, with a custom theme-aware chat UI.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

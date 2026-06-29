@@ -2,7 +2,7 @@ import { Plugin, WorkspaceLeaf } from "obsidian";
 import { ChatView, VIEW_TYPE } from "./view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 
-export default class MarioverseAgentPlugin extends Plugin {
+export default class KortexPlugin extends Plugin {
   settings!: MVASettings;
 
   async onload(): Promise<void> {
@@ -10,10 +10,10 @@ export default class MarioverseAgentPlugin extends Plugin {
 
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
 
-    this.addRibbonIcon("bot", "Open Marioverse Agent", () => this.activateView());
+    this.addRibbonIcon("bot", "Open Kortex", () => this.activateView());
 
     this.addCommand({
-      id: "open-marioverse-agent",
+      id: "open-chat",
       name: "Open chat",
       callback: () => this.activateView(),
     });
