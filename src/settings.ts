@@ -1,5 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import type MarioverseAgentPlugin from "./main";
+import type KortexPlugin from "./main";
 import type { PermissionMode, ProviderId } from "./providers/types";
 
 export interface MVASettings {
@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
 };
 
 export class MVASettingTab extends PluginSettingTab {
-  constructor(app: App, private plugin: MarioverseAgentPlugin) {
+  constructor(app: App, private plugin: KortexPlugin) {
     super(app, plugin);
   }
 
