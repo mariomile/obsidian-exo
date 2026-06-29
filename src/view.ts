@@ -69,6 +69,12 @@ interface Convo {
   allow: Set<string>;
   updatedAt?: number;
   messages: Message[];
+  // Per-conversation runtime (enables parallel conversations).
+  session: AgentSession | null;
+  sessionSig: string;
+  streaming: boolean;
+  queue: string[];
+  pendingEl: HTMLElement | null; // container for queued-message chips
 }
 
 interface AssistantCtx {
@@ -88,20 +94,23 @@ interface AssistantCtx {
   reasonRaw: string;
   sources: Set<string>;
   touched: TouchedNote[];
+  convo: Convo;
 }
+
+/** Abort a turn if no event arrives for this long (avoids infinite loading). */
+const IDLE_TIMEOUT = 120_000;
 
 let convoSeed = 0;
 
 export class ChatView extends ItemView {
   private provider: ProviderId;
   private model: string;
-  private sessionId?: string;
-  private streaming = false;
-  private sessionAllow = new Set<string>();
-
-  private session: AgentSession | null = null;
-  private sessionSig = "";
   private usageEl: HTMLElement | null = null;
+
+  /** Active conversation is streaming (drives the send/stop button). */
+  private get streaming(): boolean {
+    return this.active?.streaming ?? false;
+  }
   private obsidianServer: unknown = null;
   private memoryPreamble = "";
   private neighborhoodEl: HTMLElement | null = null;
@@ -164,16 +173,17 @@ export class ChatView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    this.dropSession();
+    for (const c of this.convos) this.dropSession(c);
+    if (this.active) this.dropSession(this.active);
   }
 
   /* --------------------------- session mgmt ------------------------- */
 
-  private sessionSigOf(): string {
+  private sessionSigOf(c: Convo): string {
     const s = this.plugin.settings;
     return [
-      this.provider,
-      this.model,
+      c.provider,
+      c.model,
       s.effort,
       s.toolsEnabled,
       s.permissionMode,
@@ -181,49 +191,49 @@ export class ChatView extends ItemView {
       s.systemPrompt,
       s.obsidianToolsEnabled,
       s.memoryReadEnabled,
-      this.active?.id,
+      c.id,
     ].join("|");
   }
 
-  private async ensureSession(): Promise<AgentSession> {
-    const sig = this.sessionSigOf();
-    if (this.session && sig === this.sessionSig) return this.session;
-    this.session?.dispose();
+  private async ensureSession(c: Convo): Promise<AgentSession> {
+    const sig = this.sessionSigOf(c);
+    if (c.session && sig === c.sessionSig) return c.session;
+    c.session?.dispose();
     const s = this.plugin.settings;
-    const bin = this.provider === "claude" ? s.claudeBin : s.codexBin;
-    const cli = await resolveCli(this.provider, bin);
+    const bin = c.provider === "claude" ? s.claudeBin : s.codexBin;
+    const cli = await resolveCli(c.provider, bin);
 
     // Obsidian-native tools are Claude-only and require agentic (gated) mode.
-    const useObsidian = s.obsidianToolsEnabled && s.toolsEnabled && this.provider === "claude";
+    const useObsidian = s.obsidianToolsEnabled && s.toolsEnabled && c.provider === "claude";
     if (useObsidian && !this.obsidianServer) this.obsidianServer = createObsidianToolServer(this.app);
 
     let memoryPreamble: string | undefined;
-    if (s.memoryReadEnabled && this.provider === "claude") {
+    if (s.memoryReadEnabled && c.provider === "claude") {
       if (!this.memoryPreamble) this.memoryPreamble = await readBootContext(this.app);
       memoryPreamble = this.memoryPreamble || undefined;
     }
 
-    this.session = ADAPTERS[this.provider].createSession({
+    c.session = ADAPTERS[c.provider].createSession({
       cli,
-      model: this.model,
+      model: c.model,
       effort: s.effort,
       systemPrompt: s.systemPrompt || undefined,
       cwd: this.vaultPath(),
       permissionMode: s.permissionMode,
       toolsEnabled: s.toolsEnabled,
       fastStartup: s.fastStartup,
-      resumeSessionId: this.active.sessionId,
+      resumeSessionId: c.sessionId,
       obsidianServer: useObsidian ? this.obsidianServer : undefined,
       memoryPreamble,
     });
-    this.sessionSig = sig;
-    return this.session;
+    c.sessionSig = sig;
+    return c.session;
   }
 
-  private dropSession(): void {
-    this.session?.dispose();
-    this.session = null;
-    this.sessionSig = "";
+  private dropSession(c: Convo): void {
+    c.session?.dispose();
+    c.session = null;
+    c.sessionSig = "";
   }
 
   /* ----------------------------- header ----------------------------- */
@@ -262,10 +272,11 @@ export class ChatView extends ItemView {
     }
     this.provider = next;
     this.model = next === "claude" ? this.plugin.settings.claudeModel : this.plugin.settings.codexModel;
-    this.sessionId = undefined;
+    this.active.provider = next;
+    this.active.model = this.model;
     this.active.sessionId = undefined;
-    this.sessionAllow.clear();
-    this.dropSession();
+    this.active.allow.clear();
+    this.dropSession(this.active);
     this.updateUsage(null);
     this.refreshProviderUI();
   }
@@ -284,6 +295,7 @@ export class ChatView extends ItemView {
   }
 
   private persistModel(): void {
+    if (this.active) this.active.model = this.model;
     if (this.provider === "claude") this.plugin.settings.claudeModel = this.model;
     else this.plugin.settings.codexModel = this.model;
     void this.plugin.saveSettings();
@@ -305,6 +317,11 @@ export class ChatView extends ItemView {
         allow: new Set(),
         updatedAt: d.updatedAt,
         messages: d.messages,
+        session: null,
+        sessionSig: "",
+        streaming: false,
+        queue: [],
+        pendingEl: null,
       };
       this.renderConvoDom(c);
       this.convos.push(c);
@@ -315,7 +332,6 @@ export class ChatView extends ItemView {
       this.convos.push(this.active);
     } else {
       this.active = this.convos[this.convos.length - 1];
-      this.sessionId = this.active.sessionId;
       this.provider = this.active.provider;
       this.model = this.active.model;
     }
@@ -366,20 +382,23 @@ export class ChatView extends ItemView {
       model: this.model,
       allow: new Set(),
       messages: [],
+      session: null,
+      sessionSig: "",
+      streaming: false,
+      queue: [],
+      pendingEl: null,
     };
   }
 
   private saveActive(): void {
     if (!this.active) return;
-    this.active.sessionId = this.sessionId;
     this.active.provider = this.provider;
     this.active.model = this.model;
-    this.active.allow = this.sessionAllow;
   }
 
   private newConversation(): void {
     if (this.galleryEl) this.hideGallery();
-    this.dropSession();
+    // Keep other conversations (and their live sessions) alive — parallel.
     this.saveActive();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     const c = this.makeConvo();
@@ -390,20 +409,26 @@ export class ChatView extends ItemView {
 
   private switchTo(c: Convo): void {
     if (c === this.active) return;
-    this.dropSession();
-    this.updateUsage(null);
     this.saveActive();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.active = c;
-    this.sessionId = c.sessionId;
     this.provider = c.provider;
     this.model = c.model;
-    this.sessionAllow = c.allow;
     this.listWrap.empty();
     this.listWrap.appendChild(c.listEl);
     if (c.listEl.childElementCount === 0) this.renderEmptyState();
     this.refreshProviderUI();
-    this.scrollToBottom();
+    this.syncSendButton();
+    this.updateUsage(null);
+    this.scrollConvo(c);
+  }
+
+  /** Reflect the active conversation's streaming state on the send button. */
+  private syncSendButton(): void {
+    const on = this.streaming;
+    this.sendBtn.empty();
+    setIcon(this.sendBtn, on ? "square" : "arrow-up");
+    this.sendBtn.toggleClass("is-streaming", on);
   }
 
   private toggleGallery(): void {
@@ -501,7 +526,7 @@ export class ChatView extends ItemView {
     this.inputEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (!this.streaming) void this.send();
+        void this.send(); // send() queues if the active conversation is streaming
       }
     });
     this.sendBtn = row.createEl("button", { cls: "mva-send", attr: { "aria-label": "Send" } });
@@ -745,8 +770,8 @@ export class ChatView extends ItemView {
     }
   }
 
-  private clearEmptyState(): void {
-    this.listEl.querySelector(".mva-empty")?.remove();
+  private clearEmptyState(c: Convo = this.active): void {
+    c.listEl.querySelector(".mva-empty")?.remove();
   }
 
   private refreshNeighborhood(): void {
@@ -800,18 +825,18 @@ export class ChatView extends ItemView {
     }
   }
 
-  private addUserTurn(text: string): void {
-    this.clearEmptyState();
-    if (this.active.title === "New chat") this.active.title = text.slice(0, 48);
-    this.active.messages.push({ role: "user", text });
-    const el = this.listEl.createDiv({ cls: "mva-turn mva-user" });
+  private addUserTurn(c: Convo, text: string): void {
+    this.clearEmptyState(c);
+    if (c.title === "New chat") c.title = text.slice(0, 48);
+    c.messages.push({ role: "user", text });
+    const el = c.listEl.createDiv({ cls: "mva-turn mva-user" });
     void MarkdownRenderer.render(this.app, text, el.createDiv({ cls: "mva-bubble" }), "", this);
-    this.scrollToBottom();
+    this.scrollConvo(c);
   }
 
-  private addAssistantTurn(userText: string): AssistantCtx {
-    this.clearEmptyState();
-    const el = this.listEl.createDiv({ cls: "mva-turn mva-assistant" });
+  private addAssistantTurn(c: Convo, userText: string): AssistantCtx {
+    this.clearEmptyState(c);
+    const el = c.listEl.createDiv({ cls: "mva-turn mva-assistant" });
     const bodyEl = el.createDiv({ cls: "mva-assistant-body" });
     const thinking = bodyEl.createDiv({ cls: "mva-thinking" });
     thinking.createSpan({ cls: "mva-thinking-dot" });
@@ -834,8 +859,9 @@ export class ChatView extends ItemView {
       reasonRaw: "",
       sources: new Set(),
       touched: [],
+      convo: c,
     };
-    this.scrollToBottom();
+    this.scrollConvo(c);
     return ctx;
   }
 
@@ -892,8 +918,10 @@ export class ChatView extends ItemView {
     if (this.renderTimer !== null) return;
     this.renderTimer = window.setTimeout(() => {
       this.renderTimer = null;
-      if (this.renderTarget) this.renderText(this.renderTarget, true);
-      this.scrollToBottom();
+      if (this.renderTarget) {
+        this.renderText(this.renderTarget, true);
+        this.scrollConvo(this.renderTarget.convo);
+      }
     }, 60);
   }
 
@@ -924,7 +952,7 @@ export class ChatView extends ItemView {
       setIcon(retry, "refresh-cw");
       retry.onclick = () => {
         if (this.streaming) return;
-        void this.runTurn(retryText);
+        void this.runTurn(this.active, retryText);
       };
     }
   }
@@ -1014,25 +1042,26 @@ export class ChatView extends ItemView {
     const seg: Segment = { t: "tool", name, input, ok: null, output: "" };
     ctx.segments.push(seg);
     ctx.segById.set(id, seg);
-    this.scrollToBottom();
+    this.scrollConvo(ctx.convo);
   }
 
   private resolveToolCard(ctx: AssistantCtx, id: string, ok: boolean, output: string): void {
-    const c = ctx.cards.get(id);
+    const card = ctx.cards.get(id);
     const seg = ctx.segById.get(id);
     if (seg && seg.t === "tool") {
       seg.ok = ok;
       seg.output = output;
     }
-    if (!c) return;
-    this.finishToolCard(c, ok, output);
-    this.scrollToBottom();
+    if (!card) return;
+    this.finishToolCard(card, ok, output);
+    this.scrollConvo(ctx.convo);
   }
 
   /* -------------------------- permissions --------------------------- */
 
   private addPermissionCard(
     ctx: AssistantCtx,
+    c: Convo,
     tool: string,
     input: unknown,
     resolve: (d: { behavior: "allow"; remember?: boolean } | { behavior: "deny"; message?: string }) => void
@@ -1063,54 +1092,100 @@ export class ChatView extends ItemView {
     actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Allow once" }).onclick = () =>
       settle({ behavior: "allow" });
     actions.createEl("button", { cls: "mva-btn", text: "Always allow" }).onclick = () => {
-      this.sessionAllow.add(tool);
+      c.allow.add(tool);
       settle({ behavior: "allow", remember: true });
     };
     actions.createEl("button", { cls: "mva-btn mva-btn-danger", text: "Deny" }).onclick = () =>
       settle({ behavior: "deny", message: "Denied by user." });
-    this.scrollToBottom();
+    this.scrollConvo(c);
   }
 
   /* ----------------------------- send ------------------------------- */
 
   private scrollToBottom(): void {
-    this.listEl.scrollTop = this.listEl.scrollHeight;
+    this.scrollConvo(this.active);
   }
 
-  private setStreaming(on: boolean): void {
-    this.streaming = on;
-    this.sendBtn.empty();
-    setIcon(this.sendBtn, on ? "square" : "arrow-up");
-    this.sendBtn.toggleClass("is-streaming", on);
+  /** Scroll a conversation to the bottom — only if it's the visible one. */
+  private scrollConvo(c: Convo): void {
+    if (c === this.active) this.listEl.scrollTop = this.listEl.scrollHeight;
+  }
+
+  private setStreaming(c: Convo, on: boolean): void {
+    c.streaming = on;
+    if (c === this.active) this.syncSendButton();
   }
 
   private stop(): void {
-    this.session?.interrupt();
+    const c = this.active;
+    c.queue = [];
+    this.renderQueue(c);
+    c.session?.interrupt();
   }
 
   private send(): void {
     const text = this.inputEl.value.trim();
-    if (!text || this.streaming) return;
+    if (!text) return;
     this.inputEl.value = "";
     this.autoGrow();
-    void this.runTurn(text);
+    const c = this.active;
+    if (c.streaming) {
+      c.queue.push(text); // queue while a turn is running
+      this.renderQueue(c);
+    } else {
+      void this.runTurn(c, text);
+    }
   }
 
-  private async runTurn(text: string): Promise<void> {
-    if (this.streaming) return;
-    const paths = this.contextPaths();
+  /** Render queued (not-yet-sent) messages as removable chips. */
+  private renderQueue(c: Convo): void {
+    if (!c.queue.length) {
+      c.pendingEl?.remove();
+      c.pendingEl = null;
+      return;
+    }
+    if (!c.pendingEl) c.pendingEl = c.listEl.createDiv({ cls: "mva-queue" });
+    c.pendingEl.empty();
+    c.queue.forEach((q, i) => {
+      const row = c.pendingEl!.createDiv({ cls: "mva-queued" });
+      setIcon(row.createSpan({ cls: "mva-queued-icon" }), "clock");
+      row.createSpan({ cls: "mva-queued-text", text: q });
+      const x = row.createSpan({ cls: "mva-chip-x", attr: { "aria-label": "Remove" } });
+      setIcon(x, "x");
+      x.onclick = () => {
+        c.queue.splice(i, 1);
+        this.renderQueue(c);
+      };
+    });
+    this.scrollConvo(c);
+  }
+
+  private async runTurn(c: Convo, text: string): Promise<void> {
+    const paths = c === this.active ? this.contextPaths() : [];
     const message = paths.length
       ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${text}`
       : text;
 
-    this.addUserTurn(text);
-    const ctx = this.addAssistantTurn(text);
-    this.setStreaming(true);
+    this.addUserTurn(c, text);
+    const ctx = this.addAssistantTurn(c, text);
+    this.setStreaming(c, true);
 
-    const adapter = ADAPTERS[this.provider];
+    const adapter = ADAPTERS[c.provider];
     const s = this.plugin.settings;
 
+    // Watchdog: reset on every event; fire if the turn stalls with no output.
+    let timedOut = false;
+    let watchdog: number | null = null;
+    const bump = () => {
+      if (watchdog !== null) window.clearTimeout(watchdog);
+      watchdog = window.setTimeout(() => {
+        timedOut = true;
+        c.session?.interrupt();
+      }, IDLE_TIMEOUT);
+    };
+
     const onEvent = (e: AgentEvent) => {
+      bump();
       switch (e.kind) {
         case "text-delta":
           this.appendText(ctx, e.text);
@@ -1134,23 +1209,20 @@ export class ChatView extends ItemView {
           break;
         case "permission-request": {
           const isRead = READ_ONLY_TOOLS.has(e.tool) || OBSIDIAN_READ_TOOLS.has(e.tool);
-          if ((s.autoAllowRead && isRead) || this.sessionAllow.has(e.tool)) {
+          if ((s.autoAllowRead && isRead) || c.allow.has(e.tool)) {
             e.resolve({ behavior: "allow" });
           } else if (OBSIDIAN_MEMORY_TOOLS.has(e.tool) && !s.memoryWriteEnabled) {
             e.resolve({ behavior: "deny", message: "Memory writing is disabled in Kortex settings." });
           } else {
-            this.addPermissionCard(ctx, e.tool, e.input, e.resolve);
+            this.addPermissionCard(ctx, c, e.tool, e.input, e.resolve);
           }
           break;
         }
         case "usage":
-          this.updateUsage(e.usage);
+          if (c === this.active) this.updateUsage(e.usage);
           break;
         case "turn-end":
-          if (e.sessionId) {
-            this.sessionId = e.sessionId;
-            this.active.sessionId = e.sessionId;
-          }
+          if (e.sessionId) c.sessionId = e.sessionId;
           break;
         case "error":
           this.dropThinking(ctx);
@@ -1162,21 +1234,25 @@ export class ChatView extends ItemView {
     };
 
     try {
-      const session = await this.ensureSession();
+      bump();
+      const session = await this.ensureSession(c);
       await session.send(message, onEvent);
       this.flushRender(ctx);
+      if (timedOut && !ctx.fullText && ctx.cards.size === 0) {
+        this.renderError(ctx, `No response — timed out after ${IDLE_TIMEOUT / 1000}s.`);
+      }
       this.attachSources(ctx.el, ctx.sources);
-      if (this.plugin.settings.featureMiniGraph && ctx.touched.length) {
+      if (s.featureMiniGraph && ctx.touched.length) {
         renderMiniGraph(ctx.el.createDiv({ cls: "mva-graph-wrap" }), ctx.touched, (p) => this.openNote(p));
       }
       if (ctx.fullText.trim()) this.attachActions(ctx.el, ctx.fullText, text);
     } catch (err) {
       this.flushRender(ctx);
-      this.dropSession(); // a failed turn likely poisoned the session
-      if (isAbort(err)) {
+      this.dropSession(c); // a failed turn likely poisoned the session
+      if (isAbort(err) || timedOut) {
         ctx.el.addClass("mva-aborted");
         if (!ctx.fullText && ctx.cards.size === 0) {
-          ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
+          ctx.bodyEl.createSpan({ cls: "mva-faint", text: timedOut ? "Timed out." : "Stopped." });
         }
       } else {
         this.dropThinking(ctx);
@@ -1185,11 +1261,18 @@ export class ChatView extends ItemView {
         new Notice(msg);
       }
     } finally {
-      if (ctx.segments.length) this.active.messages.push({ role: "assistant", segments: ctx.segments });
-      this.active.updatedAt = Date.now();
-      this.setStreaming(false);
+      if (watchdog !== null) window.clearTimeout(watchdog);
+      if (ctx.segments.length) c.messages.push({ role: "assistant", segments: ctx.segments });
+      c.updatedAt = Date.now();
+      this.setStreaming(c, false);
       this.persist();
-      this.scrollToBottom();
+      this.scrollConvo(c);
+      // Drain the queue: run the next message in this conversation.
+      if (c.queue.length) {
+        const next = c.queue.shift()!;
+        this.renderQueue(c);
+        void this.runTurn(c, next);
+      }
     }
   }
 

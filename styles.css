@@ -1039,6 +1039,41 @@
   stroke-width: 1.5;
 }
 
+/* ------------------------------- queue -------------------------------- */
+.mva-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 4px;
+  opacity: 0.7;
+}
+.mva-queued {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 5px 9px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: var(--mva-r3);
+}
+.mva-queued-icon {
+  display: inline-flex;
+  color: var(--text-faint);
+}
+.mva-queued-icon .svg-icon {
+  width: 12px;
+  height: 12px;
+}
+.mva-queued-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ------------------------------ keyframes ----------------------------- */
 @keyframes mva-spin {
   to {
