@@ -991,9 +991,6 @@ export class ChatView extends ItemView {
       this.persistModel();
     };
 
-    // Separator: provider+model group | effort+perm group
-    tb.createDiv({ cls: "mva-tb-sep" });
-
     this.buildEffort(tb);
     this.buildPerm(tb);
 
@@ -1124,27 +1121,12 @@ export class ChatView extends ItemView {
       });
     };
 
-    const head = pop.createDiv({ cls: "mva-perm-head" });
-    head.createSpan({ cls: "mva-perm-title", text: "Permissions" });
-
-    // Option descriptions for the popover
-    const descriptions: Record<string, string> = {
-      default: "Ask before every action",
-      plan: "Propose a plan, then ask",
-      acceptEdits: "Auto-allow file edits",
-      bypassPermissions: "No approval required",
-    };
-
     for (const [val, label] of ChatView.PERM_OPTS) {
       const row = pop.createDiv({ cls: "mva-perm-opt" });
       row.dataset.permVal = val;
       const riskMod = ChatView.permRisk(val);
       if (riskMod) row.addClass(riskMod);
-      const top = row.createDiv({ cls: "mva-perm-opt-top" });
-      top.createSpan({ cls: "mva-perm-opt-label", text: label });
-      if (riskMod === "is-danger") top.createSpan({ cls: "mva-perm-opt-badge", text: "⚠ no gating" });
-      if (riskMod === "is-caution") top.createSpan({ cls: "mva-perm-opt-badge is-caution", text: "auto-allows edits" });
-      row.createDiv({ cls: "mva-perm-opt-desc", text: descriptions[val] });
+      row.setText(label);
       row.onclick = () => {
         s.permissionMode = val as typeof s.permissionMode;
         void this.plugin.saveSettings();
