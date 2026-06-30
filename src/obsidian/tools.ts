@@ -15,7 +15,7 @@ interface OmnisearchResult {
   score: number;
   path: string;
   basename: string;
-  excerpt: string;
+  excerpt?: string;
 }
 interface OmnisearchApi {
   search(query: string): Promise<OmnisearchResult[]>;
@@ -54,7 +54,7 @@ export function createObsidianToolServer(app: App) {
 
   const searchVault = tool(
     "search_vault",
-    "Full-text search across the vault's notes. Returns ranked note paths with snippets. Uses Omnisearch (BM25 + fuzzy) when installed, else a built-in scorer. Prefer this over Grep for vault content.",
+    "Full-text search across your vault — notes, and with Omnisearch also indexed attachments (PDF/image/canvas). Returns ranked paths with snippets, using Omnisearch (BM25 + fuzzy) when installed, else a built-in scorer. Prefer this over Grep for vault content.",
     { query: z.string(), limit: z.number().optional() },
     async (args) => {
       const limit = Math.min(args.limit ?? 10, 30);
@@ -68,7 +68,7 @@ export function createObsidianToolServer(app: App) {
           return ok(
             results
               .slice(0, limit)
-              .map((r) => `- [[${r.path}]] — ${r.excerpt.replace(/\s+/g, " ").trim().slice(0, 160)}`)
+              .map((r) => `- [[${r.path}]] — ${(r.excerpt ?? "").replace(/\s+/g, " ").trim().slice(0, 160)}`)
               .join("\n")
           );
         } catch {
