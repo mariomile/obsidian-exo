@@ -35,6 +35,11 @@ export default class KortexPlugin extends Plugin {
       name: "Fork conversation into new tab",
       callback: withView((v) => v.cmdForkConversation()),
     });
+    this.addCommand({
+      id: "compact",
+      name: "Compact conversation (free up context)",
+      callback: withView((v) => v.cmdCompact()),
+    });
 
     this.addSettingTab(new MVASettingTab(this.app, this));
   }

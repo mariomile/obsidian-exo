@@ -117,6 +117,7 @@ export class ChatView extends ItemView {
     return this.active?.streaming ?? false;
   }
   private obsidianServer: unknown = null;
+  private obsidianAlwaysLoad = true;
   private memoryPreamble = "";
 
   private convos: Convo[] = [];
@@ -196,6 +197,8 @@ export class ChatView extends ItemView {
       s.obsidianToolsEnabled,
       s.nativeFirst,
       s.memoryReadEnabled,
+      s.autoCompactEnabled,
+      s.contextSavingMode,
       c.id,
     ].join("|");
   }
@@ -210,7 +213,12 @@ export class ChatView extends ItemView {
 
     // Obsidian-native tools are Claude-only and require agentic (gated) mode.
     const useObsidian = s.obsidianToolsEnabled && s.toolsEnabled && c.provider === "claude";
-    if (useObsidian && !this.obsidianServer) this.obsidianServer = createObsidianToolServer(this.app);
+    // Rebuild the server if the always-load (context-saving) preference changed.
+    const wantAlwaysLoad = !s.contextSavingMode;
+    if (useObsidian && (!this.obsidianServer || this.obsidianAlwaysLoad !== wantAlwaysLoad)) {
+      this.obsidianServer = createObsidianToolServer(this.app, wantAlwaysLoad);
+      this.obsidianAlwaysLoad = wantAlwaysLoad;
+    }
 
     let memoryPreamble: string | undefined;
     if (s.memoryReadEnabled && c.provider === "claude") {
@@ -231,6 +239,7 @@ export class ChatView extends ItemView {
       obsidianServer: useObsidian ? this.obsidianServer : undefined,
       nativeFirst: useObsidian && s.nativeFirst,
       memoryPreamble,
+      autoCompact: s.autoCompactEnabled && c.provider === "claude",
     });
     c.sessionSig = sig;
     return c.session;
@@ -553,6 +562,28 @@ export class ChatView extends ItemView {
   cmdForkConversation(): void {
     this.forkConversation(this.active);
   }
+  cmdCompact(): void {
+    this.compactActive();
+  }
+
+  /** Manually compact the active conversation's context (Claude). */
+  private compactActive(): void {
+    const c = this.active;
+    if (c.provider !== "claude") {
+      new Notice("Compact is available for Claude.");
+      return;
+    }
+    if (c.streaming) {
+      new Notice("Wait for the current turn to finish, then compact.");
+      return;
+    }
+    if (!c.session?.compact) {
+      new Notice("Send a message first — nothing to compact yet.");
+      return;
+    }
+    c.session.compact();
+    new Notice("Compacting the conversation…");
+  }
 
   /** Reflect the active conversation's streaming state on the send button. */
   private syncSendButton(): void {
@@ -809,7 +840,11 @@ export class ChatView extends ItemView {
     caps.onclick = () => this.toggleCapabilities();
 
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
-    this.usageEl = tb.createDiv({ cls: "mva-usage", attr: { "aria-label": "Context used" } });
+    this.usageEl = tb.createDiv({
+      cls: "mva-usage",
+      attr: { "aria-label": "Context used — click to compact" },
+    });
+    this.usageEl.onclick = () => this.compactActive();
   }
 
   /** Effort control: a chip that opens a Faster→Smarter dotted popover. */
@@ -1452,6 +1487,13 @@ export class ChatView extends ItemView {
         case "usage":
           if (c === this.active) this.updateUsage(e.usage);
           break;
+        case "compact": {
+          const div = c.listEl.createDiv({ cls: "mva-compact-divider" });
+          setIcon(div.createSpan({ cls: "mva-compact-icon" }), "scissors");
+          div.createSpan({ text: "Context compacted" });
+          this.scrollConvo(c);
+          break;
+        }
         case "turn-end":
           if (e.sessionId) c.sessionId = e.sessionId;
           break;

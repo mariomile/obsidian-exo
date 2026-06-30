@@ -32,6 +32,7 @@ export type AgentEvent =
       resolve: (d: PermissionDecision) => void;
     }
   | { kind: "usage"; usage: ContextUsage }
+  | { kind: "compact"; summary?: string }
   | { kind: "turn-end"; sessionId?: string }
   | { kind: "error"; message: string };
 
@@ -64,6 +65,8 @@ export interface SessionOpts {
   nativeFirst?: boolean;
   /** Vault `_system/` memory preamble appended to the system prompt. */
   memoryPreamble?: string;
+  /** Auto-compact the conversation when the context window fills (token saver). */
+  autoCompact?: boolean;
 }
 
 /**
@@ -76,6 +79,8 @@ export interface AgentSession {
   send(message: string, onEvent: (e: AgentEvent) => void): Promise<void>;
   /** Interrupt the in-flight turn. */
   interrupt(): void;
+  /** Compact the conversation context (best-effort; Claude supports /compact). */
+  compact?(): void;
   /** Tear down the session (kills any live process). */
   dispose(): void;
   /** Current context-window usage, if the provider exposes it. */

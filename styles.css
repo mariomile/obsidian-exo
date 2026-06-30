@@ -1030,9 +1030,39 @@
   color: var(--text-faint);
   padding: 2px 4px;
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  border-radius: var(--mva-r1);
+}
+.mva-usage:hover {
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
 }
 .mva-usage.is-warn {
   color: var(--color-orange, #e0a341);
+}
+
+/* --------------------------- compact divider -------------------------- */
+.mva-compact-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 12px 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mva-compact-divider::before,
+.mva-compact-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--background-modifier-border);
+}
+.mva-compact-icon .svg-icon {
+  width: 12px;
+  height: 12px;
 }
 
 /* ------------------------------ sources ------------------------------- */

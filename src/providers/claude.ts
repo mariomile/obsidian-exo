@@ -63,6 +63,7 @@ class ClaudeSession implements AgentSession {
         ...(opts.effort && opts.effort !== "default"
           ? { effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max" }
           : {}),
+        ...(opts.autoCompact ? { autoCompactEnabled: true } : {}),
         ...(() => {
           const sys = [opts.systemPrompt, opts.memoryPreamble].filter(Boolean).join("\n\n");
           return sys ? { systemPrompt: sys } : {};
@@ -144,6 +145,10 @@ class ClaudeSession implements AgentSession {
     const emit = this.onEvent;
     if (!emit) return;
 
+    if (msg.type === "system" && msg.subtype === "compact_boundary") {
+      emit({ kind: "compact", summary: msg.compact_summary });
+      return;
+    }
     if (msg.type === "stream_event") {
       const ev = msg.event;
       if (ev?.type === "content_block_delta") {
@@ -210,6 +215,15 @@ class ClaudeSession implements AgentSession {
       this.wake = null;
       w?.();
     });
+  }
+
+  /** Trigger conversation compaction via the CLI's /compact command. */
+  compact(): void {
+    if (this.disposed) return;
+    this.queue.push({ role: "user", content: "/compact" });
+    const w = this.wake;
+    this.wake = null;
+    w?.();
   }
 
   interrupt(): void {
@@ -292,6 +306,7 @@ interface ClaudeMsg {
   subtype?: string;
   session_id?: string;
   result?: string;
+  compact_summary?: string;
   event?: { type?: string; delta?: { type?: string; text?: string; thinking?: string } };
   message?: {
     content?: Array<{
