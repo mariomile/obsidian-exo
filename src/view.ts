@@ -170,7 +170,7 @@ export class ChatView extends ItemView {
     return VIEW_TYPE;
   }
   getDisplayText(): string {
-    return "Kortex";
+    return "Exo";
   }
   getIcon(): string {
     return "bot";
@@ -281,7 +281,7 @@ export class ChatView extends ItemView {
   private buildHeader(root: HTMLElement): void {
     const header = root.createDiv({ cls: "mva-header" });
     this.brandDot = header.createSpan({ cls: "mva-dot" });
-    header.createSpan({ cls: "mva-brand-name", text: "Kortex" });
+    header.createSpan({ cls: "mva-brand-name", text: "Exo" });
     header.createDiv({ cls: "mva-spacer" }).style.flex = "1";
 
     const histBtn = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "History" } });
@@ -1850,7 +1850,7 @@ export class ChatView extends ItemView {
           if ((s.autoAllowRead && isRead) || c.allow.has(e.tool)) {
             allow({ behavior: "allow" });
           } else if (OBSIDIAN_MEMORY_TOOLS.has(e.tool) && !s.memoryWriteEnabled) {
-            e.resolve({ behavior: "deny", message: "Memory writing is disabled in Kortex settings." });
+            e.resolve({ behavior: "deny", message: "Memory writing is disabled in Exo settings." });
           } else {
             this.addPermissionCard(ctx, c, e.tool, e.input, (d) =>
               d.behavior === "allow" ? allow(d) : e.resolve(d)
