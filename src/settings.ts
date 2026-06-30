@@ -25,6 +25,9 @@ export interface MVASettings {
   featureSurfacing: boolean;
   featureWikilinkify: boolean;
   featureMiniGraph: boolean;
+  // Tab bar runtime state (not user-facing settings).
+  openTabIds: string[];
+  activeTabId: string;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -47,6 +50,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   featureSurfacing: true,
   featureWikilinkify: false,
   featureMiniGraph: false,
+  openTabIds: [],
+  activeTabId: "",
 };
 
 export class MVASettingTab extends PluginSettingTab {
