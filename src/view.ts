@@ -121,7 +121,10 @@ export class ChatView extends ItemView {
 
   private convos: Convo[] = [];
   private active!: Convo;
+  /** Ids of conversations shown in the tab bar (ordered). Subset of `convos`. */
+  private openTabs: string[] = [];
 
+  private tabsEl!: HTMLElement;
   private listWrap!: HTMLElement;
   private composerEl!: HTMLElement;
   private galleryEl: HTMLElement | null = null;
@@ -160,6 +163,7 @@ export class ChatView extends ItemView {
     root.empty();
     root.addClass("mva-root");
     this.buildHeader(root);
+    this.tabsEl = root.createDiv({ cls: "mva-tabs" });
     this.listWrap = root.createDiv({ cls: "mva-list-wrap" });
     this.buildComposer(root);
     await this.restore();
@@ -319,18 +323,28 @@ export class ChatView extends ItemView {
       this.convos.push(c);
     }
     convoSeed = Math.max(convoSeed, this.convos.length);
+
+    const byId = new Map(this.convos.map((c) => [c.id, c]));
+    const s = this.plugin.settings;
     if (this.convos.length === 0) {
       this.active = this.makeConvo();
       this.convos.push(this.active);
     } else {
-      this.active = this.convos[this.convos.length - 1];
+      this.active = byId.get(s.activeTabId) ?? this.convos[this.convos.length - 1];
       this.provider = this.active.provider;
       this.model = this.active.model;
     }
+
+    // Restore the open-tab set (filter to still-existing convos); fall back to active.
+    this.openTabs = (s.openTabIds ?? []).filter((id) => byId.has(id));
+    if (!this.openTabs.includes(this.active.id)) this.openTabs.push(this.active.id);
+    if (this.openTabs.length === 0) this.openTabs = [this.active.id];
+
     this.listWrap.empty();
     this.listWrap.appendChild(this.active.listEl);
     if (this.active.messages.length === 0) this.renderEmptyState();
     this.refreshProviderUI();
+    this.renderTabs();
     this.scrollToBottom();
   }
 
@@ -398,6 +412,7 @@ export class ChatView extends ItemView {
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     const c = this.makeConvo();
     this.convos.push(c);
+    this.openTabs.push(c.id);
     this.switchTo(c);
     this.persist();
   }
@@ -408,6 +423,7 @@ export class ChatView extends ItemView {
     this.saveActive();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.active = c;
+    if (!this.openTabs.includes(c.id)) this.openTabs.push(c.id);
     this.provider = c.provider;
     this.model = c.model;
     this.listWrap.empty();
@@ -416,7 +432,126 @@ export class ChatView extends ItemView {
     this.refreshProviderUI();
     this.syncSendButton();
     this.updateUsage(null);
+    this.renderTabs();
+    this.persistTabs();
     this.scrollConvo(c);
+  }
+
+  /* ----------------------------- tab bar ---------------------------- */
+
+  /** Render the open-conversation tab strip. */
+  private renderTabs(): void {
+    if (!this.tabsEl) return;
+    this.tabsEl.empty();
+    const ids = this.openTabs.filter((id) => this.convos.some((c) => c.id === id));
+    this.openTabs = ids;
+    // A lone empty tab needs no bar — keep the chrome minimal.
+    if (ids.length <= 1) {
+      this.tabsEl.addClass("is-hidden");
+      return;
+    }
+    this.tabsEl.removeClass("is-hidden");
+    for (const id of ids) {
+      const c = this.convos.find((x) => x.id === id);
+      if (!c) continue;
+      const tab = this.tabsEl.createDiv({ cls: "mva-tab" + (c === this.active ? " is-active" : "") });
+      const dot = tab.createSpan({ cls: "mva-tab-dot" });
+      dot.style.background = ADAPTERS[c.provider].brandColor;
+      if (c.streaming) tab.addClass("is-streaming");
+      tab.createSpan({ cls: "mva-tab-title", text: c.title || "New chat" });
+      const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
+      setIcon(x, "x");
+      x.onclick = (e) => {
+        e.stopPropagation();
+        this.closeTab(c);
+      };
+      tab.onclick = () => this.switchTo(c);
+    }
+    const add = this.tabsEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
+    setIcon(add, "plus");
+    add.onclick = () => this.newConversation();
+  }
+
+  /** Close a tab (the conversation stays in history; reopen from the gallery). */
+  private closeTab(c: Convo): void {
+    const idx = this.openTabs.indexOf(c.id);
+    if (idx === -1) return;
+    this.openTabs.splice(idx, 1);
+    this.dropSession(c); // free the live session; resumable from history
+    if (c === this.active) {
+      const nextId = this.openTabs[idx] ?? this.openTabs[idx - 1] ?? this.openTabs[this.openTabs.length - 1];
+      const next = nextId ? this.convos.find((x) => x.id === nextId) : undefined;
+      if (next) {
+        this.switchTo(next); // this.active is still `c` here, so this runs
+      } else {
+        // No tabs left — open a fresh one.
+        const fresh = this.makeConvo();
+        this.convos.push(fresh);
+        this.openTabs.push(fresh.id);
+        this.switchTo(fresh);
+      }
+    } else {
+      this.renderTabs();
+      this.persistTabs();
+    }
+    this.persist();
+  }
+
+  /** Fork the active conversation into a new tab (full transcript + resume id). */
+  private forkConversation(src: Convo): void {
+    const c = this.makeConvo();
+    c.title = src.title ? `${src.title} (fork)` : "Fork";
+    c.provider = src.provider;
+    c.model = src.model;
+    c.sessionId = src.sessionId; // best-effort: continue with the same context
+    c.messages = src.messages.map((m) =>
+      m.role === "assistant" ? { role: "assistant", segments: [...m.segments] } : { ...m }
+    );
+    c.updatedAt = Date.now();
+    this.renderConvoDom(c);
+    this.convos.push(c);
+    this.openTabs.push(c.id);
+    this.switchTo(c);
+    this.persist();
+    new Notice("Forked conversation into a new tab.");
+  }
+
+  /** Clear the active conversation to a fresh session, keeping the tab. */
+  private newSessionInTab(): void {
+    const c = this.active;
+    this.dropSession(c);
+    c.messages = [];
+    c.sessionId = undefined;
+    c.allow.clear();
+    c.queue = [];
+    c.title = "New chat";
+    c.updatedAt = Date.now();
+    c.listEl.empty();
+    c.pendingEl = null;
+    this.renderEmptyState();
+    this.updateUsage(null);
+    this.renderTabs();
+    this.persist();
+  }
+
+  private persistTabs(): void {
+    this.plugin.settings.openTabIds = [...this.openTabs];
+    this.plugin.settings.activeTabId = this.active?.id ?? "";
+    void this.plugin.saveSettings();
+  }
+
+  /* ----- command entry points (called from main.ts) ----- */
+  cmdNewTab(): void {
+    this.newConversation();
+  }
+  cmdNewSession(): void {
+    this.newSessionInTab();
+  }
+  cmdCloseTab(): void {
+    this.closeTab(this.active);
+  }
+  cmdForkConversation(): void {
+    this.forkConversation(this.active);
   }
 
   /** Reflect the active conversation's streaming state on the send button. */
@@ -905,7 +1040,10 @@ export class ChatView extends ItemView {
 
   private addUserTurn(c: Convo, text: string): void {
     this.clearEmptyState(c);
-    if (c.title === "New chat") c.title = text.slice(0, 48);
+    if (c.title === "New chat") {
+      c.title = text.slice(0, 48);
+      this.renderTabs(); // reflect the new title in the tab
+    }
     c.messages.push({ role: "user", text });
     const el = c.listEl.createDiv({ cls: "mva-turn mva-user" });
     void MarkdownRenderer.render(this.app, text, el.createDiv({ cls: "mva-bubble" }), "", this);
@@ -1032,6 +1170,10 @@ export class ChatView extends ItemView {
         void this.runTurn(target, retryText);
       };
     }
+
+    const fork = bar.createEl("button", { cls: "mva-act", attr: { "aria-label": "Fork into new tab" } });
+    setIcon(fork, "git-fork");
+    fork.onclick = () => this.forkConversation(convo ?? this.active);
   }
 
   /** Render a clickable "Sources" footer from the notes the agent read. */
@@ -1199,6 +1341,7 @@ export class ChatView extends ItemView {
   private setStreaming(c: Convo, on: boolean): void {
     c.streaming = on;
     if (c === this.active) this.syncSendButton();
+    this.renderTabs(); // keep the per-tab streaming dot in sync
   }
 
   private stop(): void {

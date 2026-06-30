@@ -18,6 +18,24 @@ export default class KortexPlugin extends Plugin {
       callback: () => this.activateView(),
     });
 
+    const withView = (fn: (v: ChatView) => void) => () => {
+      const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+      if (view instanceof ChatView) fn(view);
+      else void this.activateView();
+    };
+    this.addCommand({ id: "new-tab", name: "New tab", callback: withView((v) => v.cmdNewTab()) });
+    this.addCommand({
+      id: "new-session",
+      name: "New session (clear current tab)",
+      callback: withView((v) => v.cmdNewSession()),
+    });
+    this.addCommand({ id: "close-tab", name: "Close current tab", callback: withView((v) => v.cmdCloseTab()) });
+    this.addCommand({
+      id: "fork-conversation",
+      name: "Fork conversation into new tab",
+      callback: withView((v) => v.cmdForkConversation()),
+    });
+
     this.addSettingTab(new MVASettingTab(this.app, this));
   }
 
