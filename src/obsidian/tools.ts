@@ -10,6 +10,22 @@ const err = (text: string): Result => ({ content: [{ type: "text", text }], isEr
 const MAX_CONTENT = 8000;
 const SKIP_LARGER_THAN = 200_000;
 
+/** Omnisearch public API (when the plugin is installed). */
+interface OmnisearchResult {
+  score: number;
+  path: string;
+  basename: string;
+  excerpt: string;
+}
+interface OmnisearchApi {
+  search(query: string): Promise<OmnisearchResult[]>;
+}
+function getOmnisearch(app: App): OmnisearchApi | null {
+  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, { api?: OmnisearchApi }> } }).plugins;
+  const api = plugins?.plugins?.["omnisearch"]?.api;
+  return api && typeof api.search === "function" ? api : null;
+}
+
 function slugify(s: string): string {
   return s
     .toLowerCase()
@@ -38,11 +54,29 @@ export function createObsidianToolServer(app: App) {
 
   const searchVault = tool(
     "search_vault",
-    "Full-text search across the vault's notes. Returns ranked note paths with snippets. Prefer this over Grep for vault content.",
+    "Full-text search across the vault's notes. Returns ranked note paths with snippets. Uses Omnisearch (BM25 + fuzzy) when installed, else a built-in scorer. Prefer this over Grep for vault content.",
     { query: z.string(), limit: z.number().optional() },
     async (args) => {
-      const search = prepareSimpleSearch(args.query);
       const limit = Math.min(args.limit ?? 10, 30);
+
+      // Preferred path: Omnisearch plugin API (better ranking, fuzzy, attachments).
+      const omni = getOmnisearch(app);
+      if (omni) {
+        try {
+          const results = await omni.search(args.query);
+          if (results.length === 0) return ok(`No matches for "${args.query}".`);
+          return ok(
+            results
+              .slice(0, limit)
+              .map((r) => `- [[${r.path}]] — ${r.excerpt.replace(/\s+/g, " ").trim().slice(0, 160)}`)
+              .join("\n")
+          );
+        } catch {
+          /* Omnisearch index not ready — fall back to the built-in scorer. */
+        }
+      }
+
+      const search = prepareSimpleSearch(args.query);
       const hits: { path: string; score: number; snippet: string }[] = [];
       for (const file of app.vault.getMarkdownFiles()) {
         if (file.stat.size > SKIP_LARGER_THAN) continue;
