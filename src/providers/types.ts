@@ -74,6 +74,10 @@ export interface SessionOpts {
   memoryPreamble?: string;
   /** Auto-compact the conversation when the context window fills (token saver). */
   autoCompact?: boolean;
+  /** Codex sandbox: read-only | workspace-write | danger-full-access. */
+  sandboxMode?: string;
+  /** Codex approval policy: untrusted | on-request | on-failure | never. */
+  approvalPolicy?: string;
 }
 
 /**
@@ -88,6 +92,8 @@ export interface AgentSession {
   interrupt(): void;
   /** Compact the conversation context (best-effort; Claude supports /compact). */
   compact?(): void;
+  /** Change the permission mode live (Claude); used by the plan-mode toggle. */
+  setPermissionMode?(mode: PermissionMode): void;
   /** Tear down the session (kills any live process). */
   dispose(): void;
   /** Current context-window usage, if the provider exposes it. */

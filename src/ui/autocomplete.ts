@@ -43,7 +43,7 @@ export class Autocomplete {
   private async onInput(): Promise<void> {
     const pos = this.ta.selectionStart;
     const before = this.ta.value.slice(0, pos);
-    const m = before.match(/(^|\s)([/@])([^\s]*)$/);
+    const m = before.match(/(^|\s)([/@$])([^\s]*)$/);
     if (!m) {
       this.close();
       return;
@@ -98,7 +98,7 @@ export class Autocomplete {
       e.stopPropagation();
       this.sel = (this.sel - 1 + this.items.length) % this.items.length;
       this.render();
-    } else if (e.key === "Enter" || e.key === "Tab") {
+    } else if (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) {
       e.preventDefault();
       e.stopPropagation();
       this.choose(this.sel);

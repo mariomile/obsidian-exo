@@ -8,6 +8,9 @@ export interface MVASettings {
   codexBin: string;
   claudeModel: string;
   codexModel: string;
+  /** Extra model ids (comma/newline separated) added to the model pickers. */
+  claudeCustomModels: string;
+  codexCustomModels: string;
   effort: string;
   systemPrompt: string;
   /** User-defined prompt templates surfaced in the "/" menu. */
@@ -17,6 +20,9 @@ export interface MVASettings {
   permissionMode: PermissionMode;
   autoAllowRead: boolean;
   fastStartup: boolean;
+  /** Codex sandbox + approval policy. */
+  codexSandbox: string;
+  codexApproval: string;
   /** Auto-compact the conversation when context fills (token saver, Claude). */
   autoCompactEnabled: boolean;
   /** Load native tool defs on-demand instead of always in context (saves tokens). */
@@ -40,6 +46,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   codexBin: "",
   claudeModel: "",
   codexModel: "",
+  claudeCustomModels: "",
+  codexCustomModels: "",
   effort: "default",
   systemPrompt: "",
   customPrompts: [],
@@ -47,6 +55,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   permissionMode: "default",
   autoAllowRead: true,
   fastStartup: true,
+  codexSandbox: "workspace-write",
+  codexApproval: "on-request",
   autoCompactEnabled: true,
   contextSavingMode: false,
   obsidianToolsEnabled: true,
@@ -107,6 +117,67 @@ export class MVASettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.codexBin)
           .onChange(async (v) => {
             this.plugin.settings.codexBin = v.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Codex sandbox")
+      .setDesc("Filesystem access for Codex when tools are enabled.")
+      .addDropdown((d) =>
+        d
+          .addOptions({
+            "read-only": "Read-only",
+            "workspace-write": "Workspace write",
+            "danger-full-access": "Full access (danger)",
+          })
+          .setValue(this.plugin.settings.codexSandbox)
+          .onChange(async (v) => {
+            this.plugin.settings.codexSandbox = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Codex approval policy")
+      .setDesc("When Codex asks before running commands.")
+      .addDropdown((d) =>
+        d
+          .addOptions({
+            untrusted: "Untrusted (ask often)",
+            "on-request": "On request",
+            "on-failure": "On failure",
+            never: "Never",
+          })
+          .setValue(this.plugin.settings.codexApproval)
+          .onChange(async (v) => {
+            this.plugin.settings.codexApproval = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Custom Claude models")
+      .setDesc("Extra model ids to add to the Claude picker (comma or newline separated).")
+      .addTextArea((t) =>
+        t
+          .setPlaceholder("claude-opus-4-6\nclaude-sonnet-4-6")
+          .setValue(this.plugin.settings.claudeCustomModels)
+          .onChange(async (v) => {
+            this.plugin.settings.claudeCustomModels = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Custom Codex models")
+      .setDesc("Extra model ids to add to the Codex picker (comma or newline separated).")
+      .addTextArea((t) =>
+        t
+          .setPlaceholder("gpt-5-codex\no3")
+          .setValue(this.plugin.settings.codexCustomModels)
+          .onChange(async (v) => {
+            this.plugin.settings.codexCustomModels = v;
             await this.plugin.saveSettings();
           })
       );

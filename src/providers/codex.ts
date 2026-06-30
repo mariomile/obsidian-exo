@@ -25,7 +25,10 @@ class CodexSession implements AgentSession {
     const o = this.opts;
     const args = ["exec", "--json", "--skip-git-repo-check", "-C", o.cwd];
     if (this.sessionId) args.splice(1, 0, "resume", this.sessionId);
-    args.push("-s", o.toolsEnabled ? "workspace-write" : "read-only");
+    // Sandbox: forced read-only when tools are off; otherwise the chosen mode.
+    const sandbox = o.toolsEnabled ? o.sandboxMode || "workspace-write" : "read-only";
+    args.push("-s", sandbox);
+    if (o.approvalPolicy) args.push("-a", o.approvalPolicy);
     if (o.model && o.model !== "default") args.push("-m", o.model);
     if (o.effort && o.effort !== "default") args.push("-c", `model_reasoning_effort="${o.effort}"`);
     if (o.fastStartup) args.push("-c", "mcp_servers={}");

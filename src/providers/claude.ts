@@ -233,6 +233,17 @@ class ClaudeSession implements AgentSession {
     });
   }
 
+  /** Change the permission mode live (e.g. toggling plan mode). */
+  setPermissionMode(mode: import("./types").PermissionMode): void {
+    if (this.disposed) return;
+    try {
+      const p = this.q.setPermissionMode?.(mode);
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+
   /** Trigger conversation compaction via the CLI's /compact command. */
   compact(): void {
     if (this.disposed) return;

@@ -44,6 +44,11 @@ export default class KortexPlugin extends Plugin {
       name: "Compact conversation (free up context)",
       callback: withView((v) => v.cmdCompact()),
     });
+    this.addCommand({
+      id: "toggle-plan",
+      name: "Toggle plan mode",
+      callback: withView((v) => v.cmdTogglePlan()),
+    });
 
     this.addCommand({
       id: "inline-edit",

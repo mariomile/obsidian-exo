@@ -112,6 +112,8 @@ interface AssistantCtx {
   convo: Convo;
   /** Per-turn debounce timer, so parallel conversations don't fight over a shared one. */
   renderTimer: number | null;
+  /** Live TodoWrite panel for this turn (re-rendered on each update). */
+  todosEl: HTMLElement | null;
 }
 
 /** Abort a turn if no event arrives for this long (avoids infinite loading). */
@@ -147,6 +149,7 @@ export class ChatView extends ItemView {
   private brandDot!: HTMLElement;
   private providerSelect!: HTMLSelectElement;
   private modelSelect!: HTMLSelectElement;
+  private permSelect!: HTMLSelectElement;
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
   private manualAttached: string[] = [];
@@ -213,6 +216,8 @@ export class ChatView extends ItemView {
       s.memoryReadEnabled,
       s.autoCompactEnabled,
       s.contextSavingMode,
+      s.codexSandbox,
+      s.codexApproval,
       c.id,
     ].join("|");
   }
@@ -254,6 +259,8 @@ export class ChatView extends ItemView {
       nativeFirst: useObsidian && s.nativeFirst,
       memoryPreamble,
       autoCompact: s.autoCompactEnabled && c.provider === "claude",
+      sandboxMode: s.codexSandbox,
+      approvalPolicy: s.codexApproval,
     });
     c.sessionSig = sig;
     return c.session;
@@ -305,8 +312,22 @@ export class ChatView extends ItemView {
     this.brandDot.style.color = a.brandColor;
     this.contentEl.style.setProperty("--mva-brand", a.brandColor);
     this.modelSelect.empty();
+    const seen = new Set<string>();
     for (const m of a.models()) {
       this.modelSelect.createEl("option", { text: m.label }).value = m.id;
+      seen.add(m.id);
+    }
+    const custom = this.provider === "claude"
+      ? this.plugin.settings.claudeCustomModels
+      : this.plugin.settings.codexCustomModels;
+    for (const id of custom.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      this.modelSelect.createEl("option", { text: id }).value = id;
+    }
+    // Keep a custom current model selectable even if not yet listed.
+    if (this.model && !seen.has(this.model)) {
+      this.modelSelect.createEl("option", { text: this.model }).value = this.model;
     }
     this.modelSelect.value = this.model || "";
   }
@@ -580,6 +601,20 @@ export class ChatView extends ItemView {
     this.compactActive();
   }
 
+  /** Toggle plan mode (Shift+Tab) — explore & propose before editing. */
+  private togglePlanMode(): void {
+    const s = this.plugin.settings;
+    const next = s.permissionMode === "plan" ? "default" : "plan";
+    s.permissionMode = next;
+    void this.plugin.saveSettings();
+    if (this.permSelect) this.permSelect.value = next;
+    this.active.session?.setPermissionMode?.(next);
+    new Notice(next === "plan" ? "Plan mode on — the agent will propose before acting." : "Plan mode off.");
+  }
+  cmdTogglePlan(): void {
+    this.togglePlanMode();
+  }
+
   /** Manually compact the active conversation's context (Claude). */
   private compactActive(): void {
     const c = this.active;
@@ -744,6 +779,11 @@ export class ChatView extends ItemView {
       this.onDrop(e);
     });
     this.inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Tab" && e.shiftKey) {
+        e.preventDefault();
+        this.togglePlanMode();
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         void this.send(); // send() queues if the active conversation is streaming
@@ -755,6 +795,7 @@ export class ChatView extends ItemView {
 
     new Autocomplete(this.inputEl, row, [
       { trigger: "/", getItems: (q) => this.slashItems(q) },
+      { trigger: "$", getItems: (q) => this.skillItems(q) },
       { trigger: "@", getItems: (q) => this.atItems(q) },
     ]);
 
@@ -839,12 +880,13 @@ export class ChatView extends ItemView {
 
   /* --------------------------- autocomplete ------------------------- */
 
-  private slashCache: { commands: string[]; skills: string[] } | null = null;
+  private slashCache: { commands: string[]; skills: string[]; agents: string[] } | null = null;
 
-  private async loadSlash(): Promise<{ commands: string[]; skills: string[] }> {
+  private async loadSlash(): Promise<{ commands: string[]; skills: string[]; agents: string[] }> {
     if (this.slashCache) return this.slashCache;
     const commands: string[] = [];
     const skills: string[] = [];
+    const agents: string[] = [];
     const base = (p: string) => p.split("/").pop()?.replace(/\.md$/, "") ?? p;
     try {
       const c = await this.app.vault.adapter.list(".claude/commands");
@@ -859,8 +901,23 @@ export class ChatView extends ItemView {
     } catch {
       /* no skills dir */
     }
-    this.slashCache = { commands, skills };
+    try {
+      const a = await this.app.vault.adapter.list(".claude/agents");
+      for (const f of a.files) if (f.endsWith(".md")) agents.push(base(f));
+    } catch {
+      /* no agents dir */
+    }
+    this.slashCache = { commands, skills, agents };
     return this.slashCache;
+  }
+
+  /** `$` trigger — skills. */
+  private async skillItems(query: string): Promise<AcItem[]> {
+    const q = query.toLowerCase();
+    const { skills } = await this.loadSlash();
+    return skills
+      .filter((sk) => sk.toLowerCase().includes(q))
+      .map((sk) => ({ label: sk, detail: "skill", icon: "sparkles", insert: `$${sk} ` }));
   }
 
   private async slashItems(query: string): Promise<AcItem[]> {
@@ -881,9 +938,15 @@ export class ChatView extends ItemView {
     return out;
   }
 
-  private atItems(query: string): AcItem[] {
+  private async atItems(query: string): Promise<AcItem[]> {
     const q = query.toLowerCase();
     const out: AcItem[] = [];
+    // Subagents first — reference a vault agent by @mention.
+    const { agents } = await this.loadSlash();
+    for (const a of agents) {
+      if (q && !a.toLowerCase().includes(q)) continue;
+      out.push({ label: a, detail: "subagent", icon: "bot", insert: `@${a} ` });
+    }
     for (const f of this.app.vault.getAllLoadedFiles()) {
       if (!f.path || f.path === "/") continue;
       if (q && !f.path.toLowerCase().includes(q)) continue;
@@ -932,10 +995,12 @@ export class ChatView extends ItemView {
       ["plan", "Plan"],
       ["bypassPermissions", "Bypass"],
     ]);
+    this.permSelect = perm;
     perm.value = s.permissionMode;
     perm.onchange = () => {
       s.permissionMode = perm.value as typeof s.permissionMode;
       void this.plugin.saveSettings();
+      this.active.session?.setPermissionMode?.(s.permissionMode);
     };
 
     const caps = tb.createEl("button", { cls: "mva-tb-icon", attr: { "aria-label": "Capabilities" } });
@@ -1225,6 +1290,7 @@ export class ChatView extends ItemView {
       touched: [],
       convo: c,
       renderTimer: null,
+      todosEl: null,
     };
     this.scrollConvo(c);
     return ctx;
@@ -1262,6 +1328,32 @@ export class ChatView extends ItemView {
     ctx.curTextSeg!.md += text;
     ctx.fullText += text;
     this.scheduleRender(ctx);
+  }
+
+  /** Render/refresh the agent's TodoWrite list as a live checklist panel. */
+  private renderTodos(ctx: AssistantCtx, input: unknown): void {
+    const todos = (input as { todos?: Array<{ content?: string; status?: string }> })?.todos;
+    if (!Array.isArray(todos)) return;
+    this.dropThinking(ctx);
+    ctx.curTextEl = null;
+    ctx.curTextSeg = null;
+    if (!ctx.todosEl) ctx.todosEl = ctx.bodyEl.createDiv({ cls: "mva-todos" });
+    const el = ctx.todosEl;
+    el.empty();
+    const done = todos.filter((t) => t.status === "completed").length;
+    const head = el.createDiv({ cls: "mva-todos-head" });
+    setIcon(head.createSpan({ cls: "mva-todos-icon" }), "list-checks");
+    head.createSpan({ text: `Tasks ${done}/${todos.length}` });
+    for (const t of todos) {
+      const row = el.createDiv({ cls: `mva-todo is-${t.status ?? "pending"}` });
+      const box = row.createSpan({ cls: "mva-todo-box" });
+      setIcon(
+        box,
+        t.status === "completed" ? "check" : t.status === "in_progress" ? "loader-2" : "circle"
+      );
+      row.createSpan({ cls: "mva-todo-text", text: t.content ?? "" });
+    }
+    this.scrollConvo(ctx.convo);
   }
 
   private renderText(ctx: AssistantCtx, streaming = false): void {
@@ -1600,6 +1692,10 @@ export class ChatView extends ItemView {
           this.appendReasoning(ctx, e.text);
           break;
         case "tool-call-start": {
+          if (e.name === "TodoWrite") {
+            this.renderTodos(ctx, e.input);
+            break;
+          }
           this.addToolCard(ctx, e.id, e.name, e.input);
           const fp = toolFilePath(e.name, e.input);
           if (fp) {

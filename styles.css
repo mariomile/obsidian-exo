@@ -323,6 +323,59 @@
   border-radius: var(--mva-r1);
 }
 
+/* ------------------------------- todos -------------------------------- */
+.mva-todos {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r2);
+  background: var(--background-secondary);
+}
+.mva-todos-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+.mva-todos-head .svg-icon {
+  width: 13px;
+  height: 13px;
+}
+.mva-todo {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 13px;
+  padding: 2px 0;
+  color: var(--text-normal);
+}
+.mva-todo-box {
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--text-faint);
+}
+.mva-todo-box .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+.mva-todo.is-completed .mva-todo-text {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+.mva-todo.is-completed .mva-todo-box {
+  color: var(--color-green, #3ca84b);
+}
+.mva-todo.is-in_progress .mva-todo-box {
+  color: var(--mva-brand, var(--interactive-accent));
+}
+.mva-todo.is-in_progress .mva-todo-box .svg-icon {
+  animation: mva-spin 0.9s linear infinite;
+}
+
 .mva-error .mva-bubble {
   color: var(--text-error);
 }
