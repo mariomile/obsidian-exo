@@ -58,7 +58,7 @@ async function ensureParentFolder(app: App, path: string): Promise<void> {
  * `_system/` memory capture. Handlers run in-process and use the Obsidian API
  * (metadataCache/vault/fileManager) — no shell, graph- and frontmatter-aware.
  */
-export function createObsidianToolServer(app: App) {
+export function createObsidianToolServer(app: App, alwaysLoad = true) {
   const need = (target: string): TFile => {
     const f = resolveLink(app, target);
     if (!f) throw new Error(`Note not found: ${target}`);
@@ -376,7 +376,7 @@ export function createObsidianToolServer(app: App) {
   return createSdkMcpServer({
     name: "obsidian",
     version: "1.0.0",
-    alwaysLoad: true,
+    alwaysLoad,
     instructions:
       "Obsidian-native tools. Prefer these over generic file/Bash tools for vault work — they respect links, tags, and frontmatter.",
     tools: [

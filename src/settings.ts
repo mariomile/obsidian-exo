@@ -17,6 +17,10 @@ export interface MVASettings {
   permissionMode: PermissionMode;
   autoAllowRead: boolean;
   fastStartup: boolean;
+  /** Auto-compact the conversation when context fills (token saver, Claude). */
+  autoCompactEnabled: boolean;
+  /** Load native tool defs on-demand instead of always in context (saves tokens). */
+  contextSavingMode: boolean;
   // Obsidian-native (Claude). All optional/toggleable.
   obsidianToolsEnabled: boolean;
   nativeFirst: boolean;
@@ -43,6 +47,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   permissionMode: "default",
   autoAllowRead: true,
   fastStartup: true,
+  autoCompactEnabled: true,
+  contextSavingMode: false,
   obsidianToolsEnabled: true,
   nativeFirst: false,
   memoryReadEnabled: true,
@@ -149,6 +155,32 @@ export class MVASettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(this.plugin.settings.fastStartup).onChange(async (v) => {
           this.plugin.settings.fastStartup = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-compact (token saver)")
+      .setDesc(
+        "Automatically summarize and compact the conversation when the context window fills. " +
+          "Strongly recommended to keep long chats from re-billing the whole history each turn. Claude only."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.autoCompactEnabled).onChange(async (v) => {
+          this.plugin.settings.autoCompactEnabled = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Context-saving mode")
+      .setDesc(
+        "Load Obsidian-native tool definitions on demand instead of always in context. " +
+          "Saves tokens every turn; the agent may take an extra step to discover a tool. Claude only."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.contextSavingMode).onChange(async (v) => {
+          this.plugin.settings.contextSavingMode = v;
           await this.plugin.saveSettings();
         })
       );
