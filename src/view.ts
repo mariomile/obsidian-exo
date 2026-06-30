@@ -153,7 +153,7 @@ export class ChatView extends ItemView {
   private brandDot!: HTMLElement;
   private providerSelect!: HTMLSelectElement;
   private modelSelect!: HTMLSelectElement;
-  private permSelect!: HTMLSelectElement;
+  private permChip!: HTMLElement;   // custom chip replacing native <select>
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
   private manualAttached: string[] = [];
@@ -611,7 +611,7 @@ export class ChatView extends ItemView {
     const next = s.permissionMode === "plan" ? "default" : "plan";
     s.permissionMode = next;
     void this.plugin.saveSettings();
-    if (this.permSelect) this.permSelect.value = next;
+    this.refreshPermChip();
     this.active.session?.setPermissionMode?.(next);
     new Notice(next === "plan" ? "Plan mode on — the agent will propose before acting." : "Plan mode off.");
   }
@@ -991,21 +991,11 @@ export class ChatView extends ItemView {
       this.persistModel();
     };
 
-    this.buildEffort(tb);
+    // Separator: provider+model group | effort+perm group
+    tb.createDiv({ cls: "mva-tb-sep" });
 
-    const perm = this.toolbarSelect(tb, "Permissions", [
-      ["default", "Ask"],
-      ["acceptEdits", "Accept edits"],
-      ["plan", "Plan"],
-      ["bypassPermissions", "Bypass"],
-    ]);
-    this.permSelect = perm;
-    perm.value = s.permissionMode;
-    perm.onchange = () => {
-      s.permissionMode = perm.value as typeof s.permissionMode;
-      void this.plugin.saveSettings();
-      this.active.session?.setPermissionMode?.(s.permissionMode);
-    };
+    this.buildEffort(tb);
+    this.buildPerm(tb);
 
     const caps = tb.createEl("button", { cls: "mva-tb-icon", attr: { "aria-label": "Capabilities" } });
     setIcon(caps, "layout-dashboard");
@@ -1095,6 +1085,103 @@ export class ChatView extends ItemView {
     const sel = parent.createEl("select", { cls: "mva-tb-select", attr: { "aria-label": label } });
     for (const [v, t] of opts) sel.createEl("option", { text: t }).value = v;
     return sel;
+  }
+
+  /* ---- Permission chip helpers ---- */
+  private static readonly PERM_OPTS: [string, string][] = [
+    ["default", "Ask"],
+    ["acceptEdits", "Accept edits"],
+    ["plan", "Plan"],
+    ["bypassPermissions", "Bypass"],
+  ];
+  private static permLabel(mode: string): string {
+    return ChatView.PERM_OPTS.find(([v]) => v === mode)?.[1] ?? mode;
+  }
+  /** Returns a CSS modifier class for risk coloring; empty string = safe mode. */
+  private static permRisk(mode: string): "" | "is-caution" | "is-danger" {
+    if (mode === "bypassPermissions") return "is-danger";
+    if (mode === "acceptEdits") return "is-caution";
+    return "";
+  }
+
+  /** Custom permission chip (replaces native <select>) with semantic risk color. */
+  private buildPerm(tb: HTMLElement): void {
+    const s = this.plugin.settings;
+    const wrap = tb.createDiv({ cls: "mva-perm" });
+    const chip = wrap.createDiv({ cls: "mva-perm-chip", attr: { "aria-label": "Permission mode" } });
+    this.permChip = chip;
+    const pop = wrap.createDiv({ cls: "mva-perm-pop" });
+    pop.hide();
+
+    const render = () => {
+      const mode = s.permissionMode;
+      const risk = ChatView.permRisk(mode);
+      chip.className = `mva-perm-chip${risk ? ` ${risk}` : ""}`;
+      chip.setText(`Perm: ${ChatView.permLabel(mode)}`);
+      // Update option active states
+      pop.querySelectorAll<HTMLElement>("[data-perm-val]").forEach((el) => {
+        el.toggleClass("is-active", el.dataset.permVal === mode);
+      });
+    };
+
+    const head = pop.createDiv({ cls: "mva-perm-head" });
+    head.createSpan({ cls: "mva-perm-title", text: "Permissions" });
+
+    // Option descriptions for the popover
+    const descriptions: Record<string, string> = {
+      default: "Ask before every action",
+      plan: "Propose a plan, then ask",
+      acceptEdits: "Auto-allow file edits",
+      bypassPermissions: "No approval required",
+    };
+
+    for (const [val, label] of ChatView.PERM_OPTS) {
+      const row = pop.createDiv({ cls: "mva-perm-opt" });
+      row.dataset.permVal = val;
+      const riskMod = ChatView.permRisk(val);
+      if (riskMod) row.addClass(riskMod);
+      const top = row.createDiv({ cls: "mva-perm-opt-top" });
+      top.createSpan({ cls: "mva-perm-opt-label", text: label });
+      if (riskMod === "is-danger") top.createSpan({ cls: "mva-perm-opt-badge", text: "⚠ no gating" });
+      if (riskMod === "is-caution") top.createSpan({ cls: "mva-perm-opt-badge is-caution", text: "auto-allows edits" });
+      row.createDiv({ cls: "mva-perm-opt-desc", text: descriptions[val] });
+      row.onclick = () => {
+        s.permissionMode = val as typeof s.permissionMode;
+        void this.plugin.saveSettings();
+        this.active.session?.setPermissionMode?.(s.permissionMode);
+        render();
+        close();
+      };
+    }
+
+    render();
+
+    let open = false;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrap.contains(e.target as Node)) close();
+    };
+    const close = () => {
+      open = false;
+      pop.hide();
+      document.removeEventListener("click", onDoc, true);
+    };
+    chip.onclick = (e) => {
+      e.stopPropagation();
+      if (open) return close();
+      open = true;
+      pop.show();
+      document.addEventListener("click", onDoc, true);
+    };
+    this.register(() => close());
+  }
+
+  /** Sync the permission chip text + risk class after an external mode change. */
+  private refreshPermChip(): void {
+    if (!this.permChip) return;
+    const mode = this.plugin.settings.permissionMode;
+    const risk = ChatView.permRisk(mode);
+    this.permChip.className = `mva-perm-chip${risk ? ` ${risk}` : ""}`;
+    this.permChip.setText(`Perm: ${ChatView.permLabel(mode)}`);
   }
 
   private activeNotePath(): string | null {

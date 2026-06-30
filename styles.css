@@ -84,10 +84,11 @@
   display: flex;
   align-items: center;
   gap: 3px;
-  padding: 4px 6px 0;
+  padding: 4px 6px 3px;
   overflow-x: auto;
   scrollbar-width: none;
   flex-shrink: 0;
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 .mva-tabs::-webkit-scrollbar {
   display: none;
@@ -410,10 +411,13 @@
 .mva-composer {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 5px;
+  padding: 8px 12px 10px;
   background: transparent;
   flex-shrink: 0;
+  /* Subtle top line — frames the control zone as a unified strip */
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: -1px;
 }
 .mva-input-row {
   display: flex;
@@ -621,6 +625,124 @@
   height: 16px;
   border-radius: 6px;
   background: var(--text-normal);
+}
+
+/* ----------------------- toolbar separator ----------------------------- */
+.mva-tb-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--background-modifier-border);
+  margin: 0 2px;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+/* --------------------- permission chip (risk-aware) -------------------- */
+.mva-perm {
+  position: relative;
+  display: inline-flex;
+}
+
+.mva-perm-chip {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: var(--mva-r1);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--mva-t), background var(--mva-t), border-color var(--mva-t);
+  border: 1px solid transparent;
+}
+.mva-perm-chip:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+/* Caution (Accept edits) — amber accent */
+.mva-perm-chip.is-caution {
+  color: var(--color-orange, #e0a341);
+  border-color: color-mix(in oklch, var(--color-orange, #e0a341) 30%, transparent);
+}
+.mva-perm-chip.is-caution:hover {
+  background: color-mix(in oklch, var(--color-orange, #e0a341) 10%, transparent);
+}
+/* Danger (Bypass) — red accent */
+.mva-perm-chip.is-danger {
+  color: var(--color-red, #e05b5b);
+  border-color: color-mix(in oklch, var(--color-red, #e05b5b) 35%, transparent);
+  font-weight: 500;
+}
+.mva-perm-chip.is-danger:hover {
+  background: color-mix(in oklch, var(--color-red, #e05b5b) 10%, transparent);
+}
+
+/* permission popover */
+.mva-perm-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 40;
+  width: 210px;
+  padding: 10px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r3);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.mva-perm-head {
+  margin-bottom: 8px;
+}
+.mva-perm-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.mva-perm-opt {
+  padding: 7px 8px;
+  border-radius: var(--mva-r1);
+  cursor: pointer;
+  transition: background var(--mva-t);
+}
+.mva-perm-opt:hover {
+  background: var(--background-modifier-hover);
+}
+.mva-perm-opt.is-active {
+  background: var(--background-modifier-hover);
+}
+.mva-perm-opt-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mva-perm-opt-label {
+  font-size: 12.5px;
+  color: var(--text-normal);
+  font-weight: 500;
+}
+.mva-perm-opt-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--color-red, #e05b5b) 15%, transparent);
+  color: var(--color-red, #e05b5b);
+  font-weight: 500;
+}
+.mva-perm-opt-badge.is-caution {
+  background: color-mix(in oklch, var(--color-orange, #e0a341) 15%, transparent);
+  color: var(--color-orange, #e0a341);
+}
+.mva-perm-opt-desc {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+/* risk-colored option rows */
+.mva-perm-opt.is-danger .mva-perm-opt-label {
+  color: var(--color-red, #e05b5b);
+}
+.mva-perm-opt.is-caution .mva-perm-opt-label {
+  color: var(--color-orange, #e0a341);
 }
 
 /* ------------------------------ context ------------------------------- */
