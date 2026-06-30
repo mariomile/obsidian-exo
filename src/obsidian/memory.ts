@@ -45,7 +45,7 @@ export async function readBootContext(app: App): Promise<string> {
 
   return cap(
     [
-      "## Vault memory — you are Kortex, embedded in this Obsidian vault.",
+      "## Vault memory — you are Exo, embedded in this Obsidian vault.",
       "Honor these conventions: prefer the `mcp__obsidian__*` tools for vault operations (they respect links/tags/frontmatter); follow the tag system (#type/*, #status/*, #domain/*) and the object schema; use [[wikilinks]] for internal references; never create files at the vault root.",
       ...parts,
     ].join("\n\n"),

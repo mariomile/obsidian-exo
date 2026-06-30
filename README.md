@@ -1,8 +1,10 @@
-# Kortex
+# Exo
 
 An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** or the **Codex CLI**. Your vault is the agent's working directory. Custom-rendered, theme-aware chat UI — no terminal.
 
-![Kortex — empty state](assets/kortex-empty.png)
+> The plugin id is `kortex` (folder, settings, repo) for install continuity; the product name is **Exo**.
+
+![Exo — empty state](assets/kortex-empty.png)
 
 <table>
   <tr>
@@ -49,7 +51,7 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 
 1. Install the BRAT community plugin.
 2. *Add beta plugin* → `mariomile/obsidian-kortex`.
-3. Enable **Kortex** in Community Plugins, then open it from the ribbon or the command palette (*Kortex: Open chat*).
+3. Enable **Exo** in Community Plugins, then open it from the ribbon or the command palette (*Exo: Open chat*).
 
 **Manual:** download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/mariomile/obsidian-kortex/releases/latest) into `<vault>/.obsidian/plugins/kortex/`, then enable it.
 
