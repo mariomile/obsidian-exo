@@ -268,7 +268,9 @@ class ClaudeSession implements AgentSession {
     if (this.disposed) return;
     // Unblock a pending permission first so the SDK can unwind and emit a result.
     this.denyPending?.();
-    this.safeInterrupt();
+    // Only interrupt when a turn is actually running — calling q.interrupt() on an
+    // idle/closed transport throws "ProcessTransport is not ready for writing".
+    if (this.resolveTurn) this.safeInterrupt();
   }
 
   dispose(): void {
@@ -280,7 +282,8 @@ class ClaudeSession implements AgentSession {
     } catch {
       /* ignore */
     }
-    this.safeInterrupt();
+    // Interrupt only if a turn is in flight (avoids the transport error on idle teardown).
+    if (this.resolveTurn) this.safeInterrupt();
     // The pump loop breaks on `disposed` without emitting a result, so settle here
     // to ensure any awaiting send() promise is released.
     this.settleTurn(new Error("Session disposed."));

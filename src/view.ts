@@ -60,7 +60,11 @@ interface ToolCard {
 type Segment =
   | { t: "text"; md: string }
   | { t: "tool"; name: string; input: unknown; ok: boolean | null; output: string };
-type Message = { role: "user"; text: string } | { role: "assistant"; segments: Segment[] };
+/** Per-turn file snapshot for code rewind: path → content before the turn (null = didn't exist). */
+type Checkpoint = Map<string, string | null>;
+type Message =
+  | { role: "user"; text: string }
+  | { role: "assistant"; segments: Segment[]; checkpoint?: Checkpoint };
 
 interface ConvoData {
   id: string;
@@ -1427,6 +1431,13 @@ export class ChatView extends ItemView {
     const rewind = bar.createEl("button", { cls: "mva-act", attr: { "aria-label": "Rewind here (conversation only)" } });
     setIcon(rewind, "undo-2");
     rewind.onclick = () => this.rewindTo(convo ?? this.active, turnEl);
+
+    const rewindCode = bar.createEl("button", {
+      cls: "mva-act",
+      attr: { "aria-label": "Rewind code + conversation (restore files to this point)" },
+    });
+    setIcon(rewindCode, "history");
+    rewindCode.onclick = () => void this.rewindCodeTo(convo ?? this.active, turnEl);
   }
 
   /** Conversation-only rewind: drop turns after this one and reset the session.
@@ -1449,6 +1460,93 @@ export class ChatView extends ItemView {
     this.updateUsage(null);
     this.persist();
     new Notice("Rewound the conversation. Files are unchanged; the session was reset.");
+  }
+
+  /** Normalize a possibly-absolute tool path (built-in Write/Edit use absolute paths)
+   *  to a vault-relative path the vault API understands. */
+  private relPath(p: string): string {
+    const base = this.vaultPath();
+    if (base && base !== "." && p.startsWith(base + "/")) return p.slice(base.length + 1);
+    return p;
+  }
+
+  /** Snapshot a file's current content before a write (null = it doesn't exist yet). */
+  private async snapshot(cp: Checkpoint, rawPath: string): Promise<void> {
+    const path = this.relPath(rawPath);
+    if (cp.has(path)) return;
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (f instanceof TFile) {
+      try {
+        cp.set(path, await this.app.vault.read(f));
+      } catch {
+        cp.set(path, null);
+      }
+    } else {
+      cp.set(path, null);
+    }
+  }
+
+  /** Code + conversation rewind: restore files touched after this turn to their
+   *  pre-turn state, then drop the later turns. Checkpoints are per-session
+   *  (in-memory), so this works until the view is reloaded. */
+  private async rewindCodeTo(c: Convo, turnEl: HTMLElement): Promise<void> {
+    if (c.streaming) {
+      new Notice("Stop the current turn before rewinding.");
+      return;
+    }
+    const turns = Array.from(c.listEl.querySelectorAll(".mva-turn"));
+    const idx = turns.indexOf(turnEl);
+    if (idx < 0) return;
+
+    // Undo THIS turn's edits and everything after — restore files to before this
+    // turn ran. Iterate oldest→newest, first write per path wins (it holds the
+    // state as of the rewind point).
+    const undone = c.messages.slice(idx);
+    const restored = new Set<string>();
+    let changed = 0;
+    let missingCheckpoints = false;
+    for (const m of undone) {
+      if (m.role !== "assistant") continue;
+      if (!m.checkpoint) {
+        if (m.segments.some((seg) => seg.t === "tool")) missingCheckpoints = true;
+        continue;
+      }
+      for (const [path, before] of m.checkpoint) {
+        if (restored.has(path)) continue;
+        restored.add(path);
+        try {
+          const f = this.app.vault.getAbstractFileByPath(path);
+          if (before === null) {
+            if (f instanceof TFile) {
+              await this.app.vault.delete(f);
+              changed++;
+            }
+          } else if (f instanceof TFile) {
+            await this.app.vault.modify(f, before);
+            changed++;
+          } else {
+            // recreate a file that was deleted after the rewind point
+            await this.app.vault.create(path, before);
+            changed++;
+          }
+        } catch {
+          /* skip files we can't restore */
+        }
+      }
+    }
+
+    // Then the conversation rewind — drop this turn and everything after.
+    c.messages = c.messages.slice(0, idx);
+    for (let i = turns.length - 1; i >= idx; i--) turns[i].remove();
+    this.dropSession(c);
+    c.sessionId = undefined;
+    c.queue = [];
+    this.renderQueue(c);
+    c.updatedAt = Date.now();
+    this.updateUsage(null);
+    this.persist();
+    const note = `Rewound. Restored ${changed} file${changed === 1 ? "" : "s"}; session reset.`;
+    new Notice(missingCheckpoints ? `${note} (some edits had no snapshot — reload clears checkpoints.)` : note);
   }
 
   /** Render a clickable "Sources" footer from the notes the agent read. */
@@ -1697,6 +1795,9 @@ export class ChatView extends ItemView {
     const adapter = ADAPTERS[c.provider];
     const s = this.plugin.settings;
 
+    // File snapshots taken before this turn's writes, for "Rewind code + conversation".
+    const checkpoint: Checkpoint = new Map();
+
     // Watchdog: reset on every event; fire if the turn stalls with no output.
     let timedOut = false;
     let watchdog: number | null = null;
@@ -1728,6 +1829,7 @@ export class ChatView extends ItemView {
             const writeTools = /Write|Edit|MultiEdit|append_to_note|update_frontmatter|create_note|add_links/;
             const kind = writeTools.test(e.name) ? "write" : "read";
             if (kind === "read") ctx.sources.add(fp);
+            else void this.snapshot(checkpoint, fp); // checkpoint before the write runs
             if (!ctx.touched.some((t) => t.path === fp)) ctx.touched.push({ path: fp, kind });
           }
           break;
@@ -1737,12 +1839,22 @@ export class ChatView extends ItemView {
           break;
         case "permission-request": {
           const isRead = READ_ONLY_TOOLS.has(e.tool) || OBSIDIAN_READ_TOOLS.has(e.tool);
+          const fp = toolFilePath(e.tool, e.input);
+          const isWrite =
+            !!fp && /Write|Edit|MultiEdit|append_to_note|update_frontmatter|create_note|add_links|NotebookEdit/.test(e.tool);
+          // Snapshot the target file (pre-edit) before letting a write proceed.
+          const allow = (d: { behavior: "allow"; remember?: boolean }) => {
+            if (isWrite && fp) void this.snapshot(checkpoint, fp).finally(() => e.resolve(d));
+            else e.resolve(d);
+          };
           if ((s.autoAllowRead && isRead) || c.allow.has(e.tool)) {
-            e.resolve({ behavior: "allow" });
+            allow({ behavior: "allow" });
           } else if (OBSIDIAN_MEMORY_TOOLS.has(e.tool) && !s.memoryWriteEnabled) {
             e.resolve({ behavior: "deny", message: "Memory writing is disabled in Kortex settings." });
           } else {
-            this.addPermissionCard(ctx, c, e.tool, e.input, e.resolve);
+            this.addPermissionCard(ctx, c, e.tool, e.input, (d) =>
+              d.behavior === "allow" ? allow(d) : e.resolve(d)
+            );
           }
           break;
         }
@@ -1827,7 +1939,13 @@ export class ChatView extends ItemView {
         ctx.el.addClass("mva-aborted");
         ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
       }
-      if (ctx.segments.length) c.messages.push({ role: "assistant", segments: ctx.segments });
+      if (ctx.segments.length) {
+        c.messages.push({
+          role: "assistant",
+          segments: ctx.segments,
+          ...(checkpoint.size ? { checkpoint } : {}),
+        });
+      }
       c.updatedAt = Date.now();
       this.setStreaming(c, false);
       this.persist();
