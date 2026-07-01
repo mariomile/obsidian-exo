@@ -28,6 +28,7 @@ import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
+import { PromptVarsModal, extractVars } from "./ui/prompt-vars";
 
 export const VIEW_TYPE = "exo-view";
 /** Custom Obsidian icon id for the Exo brand mark (registered in main.ts). */
@@ -1047,7 +1048,13 @@ export class ChatView extends ItemView {
     const out: AcItem[] = [];
     for (const p of this.plugin.settings.customPrompts) {
       if (p.name.toLowerCase().includes(q)) {
-        out.push({ label: p.name, detail: "prompt", icon: "message-square", insert: p.prompt + " " });
+        out.push({
+          label: p.name,
+          detail: "prompt",
+          icon: "message-square",
+          insert: "",
+          onSelect: () => this.usePrompt(p.prompt),
+        });
       }
     }
     const { commands, skills } = await this.loadSlash();
@@ -1411,6 +1418,28 @@ export class ChatView extends ItemView {
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   }
 
+  /** Use a custom prompt: if it has {{vars}}, collect them first, then insert. */
+  private usePrompt(promptText: string): void {
+    const vars = extractVars(promptText);
+    if (vars.length === 0) {
+      this.insertAtComposer(promptText);
+      return;
+    }
+    new PromptVarsModal(this.app, promptText, vars, (filled) => this.insertAtComposer(filled)).open();
+  }
+
+  /** Insert text at the composer's caret (replacing any selection), then focus. */
+  private insertAtComposer(text: string): void {
+    const el = this.inputEl;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    el.value = el.value.slice(0, start) + text + el.value.slice(end);
+    const caret = start + text.length;
+    el.setSelectionRange(caret, caret);
+    el.focus();
+    this.autoGrow();
+  }
+
   /* --------------------------- rendering ---------------------------- */
 
   private static readonly STARTERS: [string, string, string][] = [
@@ -1455,11 +1484,7 @@ export class ChatView extends ItemView {
         const row = list.createDiv({ cls: "mva-starter" });
         setIcon(row.createSpan({ cls: "mva-starter-icon" }), it.icon);
         row.createSpan({ text: it.label });
-        row.onclick = () => {
-          this.inputEl.value = it.prompt;
-          this.inputEl.focus();
-          this.autoGrow();
-        };
+        row.onclick = () => this.usePrompt(it.prompt);
       }
       if (n < items.length) {
         const more = list.createDiv({ cls: "mva-starter mva-es-more" });
