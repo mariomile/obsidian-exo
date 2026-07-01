@@ -308,11 +308,15 @@ export const claudeAdapter: ProviderAdapter = {
   brandColor: "#d97757",
 
   models(): ModelOption[] {
+    // Pinned, verified-accessible model IDs (checked 2026-07-01 against the
+    // installed `claude` CLI). Add newer ones here as they ship. Users can also
+    // type any custom model id in settings.
     return [
       { id: "", label: "Default" },
-      { id: "opus", label: "Opus" },
-      { id: "sonnet", label: "Sonnet" },
-      { id: "haiku", label: "Haiku" },
+      { id: "claude-opus-4-8", label: "Opus 4.8" },
+      { id: "claude-sonnet-5", label: "Sonnet 5" },
+      { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+      { id: "claude-haiku-4-5", label: "Haiku 4.5" },
     ];
   },
 
