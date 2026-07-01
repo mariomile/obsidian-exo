@@ -12,11 +12,11 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/kortex-convo.png" alt="Kortex — a vault-aware turn: native search, graph neighborhood, and a mini-graph of touched notes" /></td>
+    <td width="50%"><img src="assets/kortex-convo.png" alt="Exo — a vault-aware turn: native search, graph neighborhood, and the touched-notes footer" /></td>
     <td width="50%"><img src="assets/kortex-caps.png" alt="Kortex — Capabilities panel: live view of tools, MCP servers, sub-agents, skills and commands" /></td>
   </tr>
   <tr>
-    <td><em>A vault-aware turn — native search + graph neighborhood, with a mini-graph of the notes the turn touched.</em></td>
+    <td><em>A vault-aware turn — native search + graph neighborhood, with the grouped footer of notes the turn read and edited.</em></td>
     <td><em>The Capabilities panel — a live view of active tools, MCP servers, sub-agents, skills and commands.</em></td>
   </tr>
 </table>
@@ -28,7 +28,8 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 - **Agentic** — the agent can Read / Write / Edit / Bash / Search with the vault as its working directory.
 - **Permission gating** (Claude) — tool calls surface as cards; sensitive actions (Edit/Write/unlisted Bash) prompt with **Allow once / Always allow / Deny**, with a per-session allowlist and auto-allow for read-only tools. Codex is gated by its own sandbox (`workspace-write`).
 - **Tool-call cards** — running / success / error, with diff preview for edits and command + output for shell.
-- **Knowledge-work native** — answers stream with a live caret; assistant replies can be **inserted into the active note** or copied; tool cards link the **note they touched** (click to open it in the graph); a teaching empty state offers vault-aware starters.
+- **Knowledge-work native** — answers stream with a live caret; assistant replies can be **inserted into the active note** or copied; tool cards link the **note they touched** (click to open it in the graph); a Craft-style empty state offers **Suggestions** and **Your prompts** (your custom prompts), plus related notes.
+- **Unified composer** — one input box with the textarea and all controls inside; provider / model / effort / permission are compact popover chips (permission is risk-colored: Bypass red, Accept edits amber); the send button lives in the box. Colours follow the active theme — the provider brand colour only tints the identity mark.
 - **Persistent sessions** — Claude conversations keep one warm SDK process across turns (streaming-input), so follow-ups skip cold start and context is retained. A footer shows live **context-window usage**.
 - **Reasoning** — the model's thinking streams into a collapsible block.
 - **Fast startup** — skips global hooks + MCP per turn for snappier responses (toggle in settings).
@@ -38,9 +39,9 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 
 - **Native tools** — an in-process MCP server gives the agent graph- and metadata-aware tools alongside the standard ones: `search_vault`, `read_note`, `get_backlinks`, `get_neighborhood`, `list_notes`, `list_tags`, `get_active_context`, `create_note` (tag/frontmatter aware), `append_to_note`, `update_frontmatter`, `add_links`, `open_note`. `search_vault` uses the **Omnisearch** plugin's index (BM25 + fuzzy, attachments) when installed, and transparently falls back to a built-in scorer otherwise.
 - **Vault memory** — boots each conversation with context from `_system/` (vault-context, preferences, active rules, recent sessions), and can write back via gated tools: `capture_decision`, `log_session`, `capture_learning` (tagged `created_by: kortex`).
-- **Graph in the UI** — surface notes related to the active note in the empty state; **wikilink-ify** replies (mentions of touched notes become clickable `[[links]]`); a **mini-graph** of the notes each turn read/wrote.
-- **Composer power-ups** — `/` opens a palette of custom prompts + your vault's `.claude/` commands and skills; `@` mentions a file or folder to add it as context. Footer selectors for **effort** (low→max) and **permission mode**.
-- **Context** — the active note is auto-attached as a removable chip; attach more notes via the "+ Note" picker or `@`.
+- **Touched-notes footer** — after each turn, a grouped footer shows what the agent **Edited** (with an ×N edit count, plus per-note hover **diff** and two-step **revert** on live turns) and what it **Read**. Replies are **wikilink-ified** by default (mentions of existing notes become clickable `[[links]]`); related notes surface in the empty state.
+- **Composer power-ups** — `/` opens a palette of custom prompts + your vault's `.claude/` commands and skills; `@` mentions a file or folder to add it as context. Chip selectors for **provider**, **model**, **effort** (low→max) and **permission mode**.
+- **Context as document cards** — the active note and anything you attach (via `@` or "+ Note") appear as uniform cards above the composer: images preview as thumbnails, notes show a text preview, other files show an icon — each with a title, a *Current Document* / *Document* label, click-to-open and remove.
 - **History** — conversations **persist to disk** (survive reload, with session resume). The history button opens a **card gallery** with per-conversation previews (title, snippet, provider, message count, date); click a card to reopen it. Copy any reply.
 
 ## Requirements
