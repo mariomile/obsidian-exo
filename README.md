@@ -6,14 +6,12 @@
 
 An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** or the **Codex CLI**. Your vault is the agent's working directory. Custom-rendered, theme-aware chat UI — no terminal.
 
-> The plugin id is `kortex` (folder, settings, repo) for install continuity; the product name is **Exo**.
-
-![Exo — empty state](assets/kortex-empty.png)
+![Exo — empty state](assets/exo-hero.png)
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/kortex-convo.png" alt="Exo — a vault-aware turn: native search, graph neighborhood, and the touched-notes footer" /></td>
-    <td width="50%"><img src="assets/kortex-caps.png" alt="Kortex — Capabilities panel: live view of tools, MCP servers, sub-agents, skills and commands" /></td>
+    <td width="50%"><img src="assets/exo-convo.png" alt="Exo — a vault-aware turn: native search, graph neighborhood, and the touched-notes footer" /></td>
+    <td width="50%"><img src="assets/exo-caps.png" alt="Exo — Capabilities panel: live view of tools, MCP servers, sub-agents, skills and commands" /></td>
   </tr>
   <tr>
     <td><em>A vault-aware turn — native search + graph neighborhood, with the grouped footer of notes the turn read and edited.</em></td>
@@ -38,7 +36,7 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 ### Obsidian-native (Claude; all toggleable in settings)
 
 - **Native tools** — an in-process MCP server gives the agent graph- and metadata-aware tools alongside the standard ones: `search_vault`, `read_note`, `get_backlinks`, `get_neighborhood`, `list_notes`, `list_tags`, `get_active_context`, `create_note` (tag/frontmatter aware), `append_to_note`, `update_frontmatter`, `add_links`, `open_note`. `search_vault` uses the **Omnisearch** plugin's index (BM25 + fuzzy, attachments) when installed, and transparently falls back to a built-in scorer otherwise.
-- **Vault memory** — boots each conversation with context from `_system/` (vault-context, preferences, active rules, recent sessions), and can write back via gated tools: `capture_decision`, `log_session`, `capture_learning` (tagged `created_by: kortex`).
+- **Vault memory** — boots each conversation with context from `_system/` (vault-context, preferences, active rules, recent sessions), and can write back via gated tools: `capture_decision`, `log_session`, `capture_learning` (tagged `created_by: exo`).
 - **Touched-notes footer** — after each turn, a grouped footer shows what the agent **Edited** (with an ×N edit count, plus per-note hover **diff** and two-step **revert** on live turns) and what it **Read**. Replies are **wikilink-ified** by default (mentions of existing notes become clickable `[[links]]`); related notes surface in the empty state.
 - **Composer power-ups** — `/` opens a palette of custom prompts + your vault's `.claude/` commands and skills; `@` mentions a file or folder to add it as context. Chip selectors for **provider**, **model**, **effort** (low→max) and **permission mode**.
 - **Context as document cards** — the active note and anything you attach (via `@` or "+ Note") appear as uniform cards above the composer: images preview as thumbnails, notes show a text preview, other files show an icon — each with a title, a *Current Document* / *Document* label, click-to-open and remove.
@@ -55,10 +53,10 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 **Via [BRAT](https://github.com/TfTHacker/obsidian42-brat)** (recommended for now):
 
 1. Install the BRAT community plugin.
-2. *Add beta plugin* → `mariomile/obsidian-kortex`.
+2. *Add beta plugin* → `mariomile/obsidian-exo`.
 3. Enable **Exo** in Community Plugins, then open it from the ribbon or the command palette (*Exo: Open chat*).
 
-**Manual:** download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/mariomile/obsidian-kortex/releases/latest) into `<vault>/.obsidian/plugins/kortex/`, then enable it.
+**Manual:** download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/mariomile/obsidian-exo/releases/latest) into `<vault>/.obsidian/plugins/exo/`, then enable it.
 
 ## Develop
 
@@ -69,7 +67,7 @@ npm run build    # typecheck + production bundle
 ```
 
 Create a `.obsidian-plugin-dir` file containing the absolute path to your vault's
-`.obsidian/plugins/kortex` folder to auto-deploy on each build.
+`.obsidian/plugins/exo` folder to auto-deploy on each build.
 
 ## Architecture
 

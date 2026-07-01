@@ -6,7 +6,7 @@ import { resolveCli } from "./cli";
 import { InlineEditModal } from "./ui/inline-edit";
 import type { AgentEvent } from "./providers/types";
 
-export default class KortexPlugin extends Plugin {
+export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
 
   async onload(): Promise<void> {
