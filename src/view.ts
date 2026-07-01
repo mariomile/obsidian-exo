@@ -33,6 +33,9 @@ export const VIEW_TYPE = "kortex-view";
 const MAX_CONVOS = 30;
 const MAX_PERSIST_OUTPUT = 2000;
 
+/** Semantic risk modifier class for a toolbar selector option/chip ("" = neutral). */
+type RiskLevel = "" | "is-caution" | "is-danger";
+
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   let binary = "";
   const bytes = new Uint8Array(buf);
@@ -640,7 +643,7 @@ export class ChatView extends ItemView {
     const next = s.permissionMode === "plan" ? "default" : "plan";
     s.permissionMode = next;
     void this.plugin.saveSettings();
-    this.refreshPermChip();
+    this.refreshPermChipFn();
     this.active.session?.setPermissionMode?.(next);
     new Notice(next === "plan" ? "Plan mode on — the agent will propose before acting." : "Plan mode off.");
   }
@@ -1000,17 +1003,16 @@ export class ChatView extends ItemView {
     return out;
   }
 
-  private static readonly EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"];
-  private static readonly EFFORT_LABELS: Record<string, string> = {
-    default: "Default",
-    low: "Low",
-    medium: "Medium",
-    high: "High",
-    xhigh: "Extra high",
-    max: "Max",
-  };
+  private static readonly EFFORT_OPTS: [string, string][] = [
+    ["default", "Default"],
+    ["low", "Low"],
+    ["medium", "Medium"],
+    ["high", "High"],
+    ["xhigh", "Extra high"],
+    ["max", "Max"],
+  ];
   private static effortLabel(e: string): string {
-    return ChatView.EFFORT_LABELS[e] ?? e;
+    return ChatView.EFFORT_OPTS.find(([v]) => v === e)?.[1] ?? e;
   }
 
   private buildToolbar(bar: HTMLElement): void {
@@ -1047,7 +1049,7 @@ export class ChatView extends ItemView {
     this.buildSelectChip(tb, {
       ariaLabel: "Effort",
       getLabel: () => `Effort: ${ChatView.effortLabel(s.effort || "default")}`,
-      getOptions: () => ChatView.EFFORTS.map((e) => ({ value: e, label: ChatView.effortLabel(e) })),
+      getOptions: () => ChatView.EFFORT_OPTS.map(([value, label]) => ({ value, label })),
       getCurrent: () => s.effort || "default",
       onSelect: (v) => {
         s.effort = v;
@@ -1093,10 +1095,10 @@ export class ChatView extends ItemView {
     opts: {
       ariaLabel: string;
       getLabel: () => string;
-      getOptions: () => { value: string; label: string; risk?: "" | "is-caution" | "is-danger" }[];
+      getOptions: () => { value: string; label: string; risk?: RiskLevel }[];
       getCurrent: () => string;
       onSelect: (value: string) => void;
-      chipRisk?: () => "" | "is-caution" | "is-danger";
+      chipRisk?: () => RiskLevel;
     }
   ): () => void {
     const wrap = tb.createDiv({ cls: "mva-sel" });
@@ -1173,15 +1175,10 @@ export class ChatView extends ItemView {
     return ChatView.PERM_OPTS.find(([v]) => v === mode)?.[1] ?? mode;
   }
   /** Returns a CSS modifier class for risk coloring; empty string = safe mode. */
-  private static permRisk(mode: string): "" | "is-caution" | "is-danger" {
+  private static permRisk(mode: string): RiskLevel {
     if (mode === "bypassPermissions") return "is-danger";
     if (mode === "acceptEdits") return "is-caution";
     return "";
-  }
-
-  /** Sync the permission chip text + risk class after an external mode change (e.g. plan toggle). */
-  private refreshPermChip(): void {
-    this.refreshPermChipFn();
   }
 
   private activeNotePath(): string | null {
