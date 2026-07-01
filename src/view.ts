@@ -781,17 +781,33 @@ export class ChatView extends ItemView {
     const wrap = this.listWrap.createDiv({ cls: "mva-gallery-wrap" });
     this.galleryEl = wrap;
     wrap.createDiv({ cls: "mva-gallery-title", text: "Conversations" });
-    const grid = wrap.createDiv({ cls: "mva-gallery" });
 
     const sorted = [...this.convos]
       .filter((c) => c.messages.length > 0 || c === this.active)
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
     if (sorted.length === 0) {
-      grid.createDiv({ cls: "mva-empty-sub", text: "No conversations yet." });
+      wrap.createDiv({ cls: "mva-gallery" }).createDiv({ cls: "mva-empty-sub", text: "No conversations yet." });
       return;
     }
-    for (const c of sorted) this.renderCard(grid, c);
+
+    const search = wrap.createEl("input", {
+      cls: "mva-gallery-search",
+      attr: { type: "text", placeholder: "Search conversations…" },
+    });
+    const grid = wrap.createDiv({ cls: "mva-gallery" });
+    const renderGrid = (q: string) => {
+      grid.empty();
+      const ql = q.toLowerCase().trim();
+      const matches = ql ? sorted.filter((c) => this.convoMatches(c, ql)) : sorted;
+      if (matches.length === 0) {
+        grid.createDiv({ cls: "mva-empty-sub", text: "No matching conversations." });
+        return;
+      }
+      for (const c of matches) this.renderCard(grid, c);
+    };
+    search.addEventListener("input", () => renderGrid(search.value));
+    renderGrid("");
   }
 
   private renderCard(grid: HTMLElement, c: Convo): void {
@@ -831,6 +847,19 @@ export class ChatView extends ItemView {
       if (s.length > 320) break;
     }
     return s.trim();
+  }
+
+  /** True if the query matches a conversation's title or any of its message text. */
+  private convoMatches(c: Convo, ql: string): boolean {
+    if (c.title.toLowerCase().includes(ql)) return true;
+    for (const m of c.messages) {
+      const text =
+        m.role === "user"
+          ? m.text
+          : m.segments.map((s) => (s.t === "text" ? s.md : "")).join(" ");
+      if (text.toLowerCase().includes(ql)) return true;
+    }
+    return false;
   }
 
   private formatDate(ts: number): string {

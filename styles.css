@@ -1150,6 +1150,20 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-weight: 650;
   color: var(--text-normal);
 }
+.mva-gallery-search {
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+.mva-gallery-search:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
 .mva-gallery {
   flex: 1;
   overflow-y: auto;
