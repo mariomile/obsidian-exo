@@ -11,7 +11,7 @@ import {
   Keymap,
 } from "obsidian";
 import { Autocomplete, type AcItem } from "./ui/autocomplete";
-import type KortexPlugin from "./main";
+import type ExoPlugin from "./main";
 import { resolveCli, describeError, isAbort } from "./cli";
 import { ADAPTERS } from "./providers/registry";
 import type {
@@ -29,7 +29,7 @@ import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
 
-export const VIEW_TYPE = "kortex-view";
+export const VIEW_TYPE = "exo-view";
 /** Custom Obsidian icon id for the Exo brand mark (registered in main.ts). */
 export const EXO_ICON = "exo-star";
 
@@ -168,7 +168,7 @@ export class ChatView extends ItemView {
   private pendingImages: ImageAttachment[] = [];
   private imagesEl!: HTMLElement;
 
-  constructor(leaf: WorkspaceLeaf, private plugin: KortexPlugin) {
+  constructor(leaf: WorkspaceLeaf, private plugin: ExoPlugin) {
     super(leaf);
     this.provider = plugin.settings.provider;
     this.model = this.provider === "claude" ? plugin.settings.claudeModel : plugin.settings.codexModel;
@@ -2253,7 +2253,7 @@ export class ChatView extends ItemView {
   private openSettings(): void {
     const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
     setting?.open();
-    setting?.openTabById("kortex");
+    setting?.openTabById("exo");
   }
 
   private vaultPath(): string {

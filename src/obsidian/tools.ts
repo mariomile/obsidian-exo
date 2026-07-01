@@ -321,7 +321,7 @@ export function createObsidianToolServer(app: App, alwaysLoad = true) {
       const file = await app.vault.create(path, body);
       await app.fileManager.processFrontMatter(file, (f: Record<string, unknown>) => {
         f.type = "decision";
-        f.created_by = "kortex";
+        f.created_by = "exo";
         f.created = today();
         f.tags = ["type/decision", ...(args.domain ? [`domain/${args.domain.replace(/^#?domain\//, "")}`] : [])];
       });
@@ -365,7 +365,7 @@ export function createObsidianToolServer(app: App, alwaysLoad = true) {
       const file = await app.vault.create(path, body);
       await app.fileManager.processFrontMatter(file, (f: Record<string, unknown>) => {
         f.type = "memory";
-        f.created_by = "kortex";
+        f.created_by = "exo";
         f.created = today();
         f.tags = ["type/memory"];
       });

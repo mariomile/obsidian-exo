@@ -1,5 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import type KortexPlugin from "./main";
+import type ExoPlugin from "./main";
 import type { PermissionMode, ProviderId } from "./providers/types";
 
 export interface MVASettings {
@@ -69,7 +69,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
 };
 
 export class MVASettingTab extends PluginSettingTab {
-  constructor(app: App, private plugin: KortexPlugin) {
+  constructor(app: App, private plugin: ExoPlugin) {
     super(app, plugin);
   }
 
