@@ -45,6 +45,16 @@
   box-shadow: 0 0 6px 0 currentColor;
   flex-shrink: 0;
 }
+/* Header brand mark — the Exo star, tinted by the active provider */
+.mva-brand-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.mva-brand-icon .svg-icon {
+  width: 16px;
+  height: 16px;
+}
 
 .mva-select {
   font-size: 12.5px;

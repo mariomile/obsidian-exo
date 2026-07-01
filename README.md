@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/exo-logo.svg" width="96" height="96" alt="Exo logo" />
+</p>
+
 # Exo
 
 An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** or the **Codex CLI**. Your vault is the agent's working directory. Custom-rendered, theme-aware chat UI — no terminal.
