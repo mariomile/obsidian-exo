@@ -1,5 +1,5 @@
-import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, WorkspaceLeaf } from "obsidian";
-import { ChatView, VIEW_TYPE } from "./view";
+import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, WorkspaceLeaf, addIcon } from "obsidian";
+import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
 import { resolveCli } from "./cli";
@@ -12,9 +12,16 @@ export default class KortexPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
 
+    // Exo brand mark — a concave 4-point star (matches the product logo).
+    // addIcon wraps this in an svg with viewBox "0 0 100 100".
+    addIcon(
+      EXO_ICON,
+      '<path fill="currentColor" d="M50 3 Q 50 50 97 50 Q 50 50 50 97 Q 50 50 3 50 Q 50 50 50 3 Z"/>'
+    );
+
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
 
-    this.addRibbonIcon("sparkle", "Open Exo", () => this.activateView());
+    this.addRibbonIcon(EXO_ICON, "Open Exo", () => this.activateView());
 
     this.addCommand({
       id: "open-chat",

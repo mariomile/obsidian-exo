@@ -30,6 +30,8 @@ import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
 
 export const VIEW_TYPE = "kortex-view";
+/** Custom Obsidian icon id for the Exo brand mark (registered in main.ts). */
+export const EXO_ICON = "exo-star";
 
 const MAX_CONVOS = 30;
 const MAX_PERSIST_OUTPUT = 2000;
@@ -179,7 +181,7 @@ export class ChatView extends ItemView {
     return "Exo";
   }
   getIcon(): string {
-    return "sparkle";
+    return EXO_ICON;
   }
 
   private get listEl(): HTMLElement {
@@ -300,7 +302,8 @@ export class ChatView extends ItemView {
 
   private buildHeader(root: HTMLElement): void {
     const header = root.createDiv({ cls: "mva-header" });
-    this.brandDot = header.createSpan({ cls: "mva-dot" });
+    this.brandDot = header.createSpan({ cls: "mva-brand-icon" });
+    setIcon(this.brandDot, EXO_ICON);
     header.createSpan({ cls: "mva-brand-name", text: "Exo" });
     header.createDiv({ cls: "mva-spacer" }).style.flex = "1";
 
@@ -362,9 +365,8 @@ export class ChatView extends ItemView {
 
   private refreshProviderUI(): void {
     const a = ADAPTERS[this.provider];
-    // Provider identity lives ONLY on the brand dot. All interactive accents
-    // follow the theme (--mva-brand defaults to --interactive-accent in CSS).
-    this.brandDot.style.background = a.brandColor;
+    // Provider identity tints the brand star. All interactive accents follow
+    // the theme (--mva-brand defaults to --interactive-accent in CSS).
     this.brandDot.style.color = a.brandColor;
     this.refreshProviderChip();
     this.refreshModelChip();
