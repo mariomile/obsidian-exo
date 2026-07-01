@@ -193,6 +193,8 @@
 }
 .mva-assistant {
   align-items: stretch;
+  /* align assistant content (text + tool cards) with the composer's text column */
+  padding-inline-start: 12px;
 }
 
 .mva-bubble {
@@ -210,7 +212,7 @@
   border-bottom-right-radius: var(--mva-r1);
 }
 .mva-assistant .mva-bubble {
-  padding: 2px 2px;
+  padding: 2px 0;
 }
 
 /* render markdown like Obsidian's reading view (not a terminal) */
@@ -490,8 +492,12 @@
   flex-wrap: wrap;
   padding: 2px 5px 5px;
 }
-/* compact chips in the bottom toolbar */
-.mva-tb-chip {
+/* ---- toolbar selectors: chip + Permission-style popover (provider/model/effort/perm) ---- */
+.mva-sel {
+  position: relative;
+  display: inline-flex;
+}
+.mva-sel-chip {
   font-size: 11.5px;
   color: var(--text-muted);
   padding: 2px 6px;
@@ -500,161 +506,44 @@
   white-space: nowrap;
   transition: color var(--mva-t), background var(--mva-t);
 }
-.mva-tb-chip:hover {
+.mva-sel-chip:hover {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
 }
+/* risk coloring (permission chip only) — text color, no chrome */
+.mva-sel-chip.is-caution { color: var(--color-orange, #e0a341); }
+.mva-sel-chip.is-danger  { color: var(--color-red, #e05b5b); }
 
-/* effort popover (Faster → Smarter) */
-.mva-eff {
-  position: relative;
-  display: inline-flex;
-}
-.mva-eff-pop {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  z-index: 40;
-  width: 240px;
-  padding: 14px;
-  background: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r3);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
-}
-.mva-eff-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.mva-eff-h {
-  font-size: 13px;
-  color: var(--text-muted);
-}
-.mva-eff-v {
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--text-normal);
-}
-.mva-eff-help {
-  margin-left: auto;
-  display: inline-flex;
-  color: var(--text-faint);
-  cursor: help;
-}
-.mva-eff-help .svg-icon {
-  width: 14px;
-  height: 14px;
-}
-.mva-eff-ends {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 14px;
-  font-size: 11px;
-  color: var(--text-faint);
-}
-.mva-eff-dots {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
-  padding: 8px 6px;
-  border-radius: var(--mva-r2);
-  background: var(--background-modifier-hover);
-}
-.mva-eff-dots::before {
-  content: "";
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  height: 2px;
-  background: var(--background-modifier-border-hover);
-  border-radius: 2px;
-}
-.mva-eff-dot {
-  position: relative;
-  z-index: 1;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-faint);
-  cursor: pointer;
-  transition: transform var(--mva-t), background var(--mva-t);
-}
-.mva-eff-dot.is-on {
-  background: var(--mva-brand, var(--interactive-accent));
-}
-.mva-eff-dot.is-thumb {
-  width: 22px;
-  height: 16px;
-  border-radius: 6px;
-  background: var(--text-normal);
-}
-
-/* --------------------- permission chip (risk-aware) -------------------- */
-.mva-permsel {
-  position: relative;
-  display: inline-flex;
-}
-
-.mva-perm-chip {
-  font-size: 11.5px;
-  color: var(--text-muted);
-  padding: 2px 6px;
-  border-radius: var(--mva-r1);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--mva-t), background var(--mva-t);
-}
-.mva-perm-chip:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-}
-/* Caution (Accept edits) — amber text only */
-.mva-perm-chip.is-caution {
-  color: var(--color-orange, #e0a341);
-}
-.mva-perm-chip.is-caution:hover {
-  color: var(--color-orange, #e0a341);
-  background: var(--background-modifier-hover);
-}
-/* Danger (Bypass) — red text only */
-.mva-perm-chip.is-danger {
-  color: var(--color-red, #e05b5b);
-}
-.mva-perm-chip.is-danger:hover {
-  color: var(--color-red, #e05b5b);
-  background: var(--background-modifier-hover);
-}
-
-/* permission popover — bare list, no chrome */
-.mva-perm-pop {
+.mva-sel-pop {
   position: absolute;
   left: 0;
   bottom: calc(100% + 6px);
   z-index: 40;
   min-width: 150px;
+  max-height: 280px;
+  overflow-y: auto;
   padding: 4px;
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  scrollbar-width: thin;
 }
-.mva-perm-opt {
+.mva-sel-opt {
   padding: 6px 10px;
   border-radius: var(--mva-r1);
   cursor: pointer;
   font-size: 12.5px;
   color: var(--text-normal);
+  white-space: nowrap;
   transition: background var(--mva-t);
 }
-.mva-perm-opt:hover,
-.mva-perm-opt.is-active {
+.mva-sel-opt:hover,
+.mva-sel-opt.is-active {
   background: var(--background-modifier-hover);
 }
-.mva-perm-opt.is-danger  { color: var(--color-red, #e05b5b); }
-.mva-perm-opt.is-caution { color: var(--color-orange, #e0a341); }
+.mva-sel-opt.is-danger  { color: var(--color-red, #e05b5b); }
+.mva-sel-opt.is-caution { color: var(--color-orange, #e0a341); }
 
 /* ------------------------------ context ------------------------------- */
 .mva-context {
@@ -774,8 +663,9 @@
 .mva-input {
   flex: 1;
   resize: none;
-  min-height: 40px;
-  max-height: 220px;
+  /* room for ~3 lines before it grows; scrolls past max-height */
+  min-height: 74px;
+  max-height: 200px;
   padding: 9px 11px 4px;
   font-size: 14px;
   line-height: 1.45;
