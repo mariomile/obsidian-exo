@@ -143,6 +143,7 @@ export class ChatView extends ItemView {
   }
   private obsidianServer: unknown = null;
   private obsidianAlwaysLoad = true;
+  private obsidianMemoryWrite = true;
   private memoryPreamble = "";
 
   private convos: Convo[] = [];
@@ -240,6 +241,7 @@ export class ChatView extends ItemView {
       s.obsidianToolsEnabled,
       s.nativeFirst,
       s.memoryReadEnabled,
+      s.memoryWriteEnabled,
       s.autoCompactEnabled,
       s.contextSavingMode,
       s.codexSandbox,
@@ -258,11 +260,19 @@ export class ChatView extends ItemView {
 
     // Obsidian-native tools are Claude-only and require agentic (gated) mode.
     const useObsidian = s.obsidianToolsEnabled && s.toolsEnabled && c.provider === "claude";
-    // Rebuild the server if the always-load (context-saving) preference changed.
+    // Rebuild the server if the always-load (context-saving) preference or the
+    // memory-write toggle changed — memory-write tools are only registered when on.
     const wantAlwaysLoad = !s.contextSavingMode;
-    if (useObsidian && (!this.obsidianServer || this.obsidianAlwaysLoad !== wantAlwaysLoad)) {
-      this.obsidianServer = createObsidianToolServer(this.app, wantAlwaysLoad);
+    const wantMemoryWrite = s.memoryWriteEnabled;
+    if (
+      useObsidian &&
+      (!this.obsidianServer ||
+        this.obsidianAlwaysLoad !== wantAlwaysLoad ||
+        this.obsidianMemoryWrite !== wantMemoryWrite)
+    ) {
+      this.obsidianServer = createObsidianToolServer(this.app, wantAlwaysLoad, wantMemoryWrite);
       this.obsidianAlwaysLoad = wantAlwaysLoad;
+      this.obsidianMemoryWrite = wantMemoryWrite;
     }
 
     let memoryPreamble: string | undefined;
