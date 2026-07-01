@@ -198,7 +198,7 @@ export class MVASettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Custom prompts")
-      .setDesc('One per line as "Name | prompt text". Surfaced in the "/" menu in the composer.')
+      .setDesc('One per line as "Name | prompt text". Use {{variables}} to be prompted for values on use. Surfaced in the "/" menu in the composer.')
       .addTextArea((t) => {
         t.setPlaceholder("Summarize | Summarize the current note in 5 bullets")
           .setValue(this.plugin.settings.customPrompts.map((p) => `${p.name} | ${p.prompt}`).join("\n"))

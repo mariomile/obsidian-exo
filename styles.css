@@ -1383,6 +1383,24 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   to { transform: rotate(360deg); }
 }
 
+/* ----------------------- prompt variables modal ----------------------- */
+.mva-pv-row { margin-bottom: 12px; }
+.mva-pv-label {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.mva-pv-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+.mva-pv-input:focus { outline: none; border-color: var(--interactive-accent); }
+.mva-pv-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+
 /* --------------------------- image attachments ------------------------ */
 .mva-images {
   display: flex;
