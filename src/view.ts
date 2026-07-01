@@ -2125,6 +2125,11 @@ export class ChatView extends ItemView {
 
     // File snapshots taken before this turn's writes, for "Rewind code + conversation".
     const checkpoint: Checkpoint = new Map();
+    // Pre-write snapshots are async; collect them so we can guarantee they've all
+    // landed before we read/persist the checkpoint at turn end. (In acceptEdits /
+    // bypass modes this tool-call-start snapshot is the only one — best-effort, it
+    // races the write, but awaiting it keeps the checkpoint complete.)
+    const snapshots: Promise<void>[] = [];
 
     // Watchdog: reset on every event; fire if the turn stalls with no output.
     let timedOut = false;
@@ -2156,7 +2161,7 @@ export class ChatView extends ItemView {
           if (fp) {
             const kind = ChatView.WRITE_TOOLS.test(e.name) ? "write" : "read";
             if (kind === "read") ctx.sources.add(fp);
-            else void this.snapshot(checkpoint, fp); // checkpoint before the write runs
+            else snapshots.push(this.snapshot(checkpoint, fp).catch(() => {})); // checkpoint before the write runs
             const existing = ctx.touched.find((t) => t.path === fp);
             if (!existing) ctx.touched.push({ path: fp, kind, ...(kind === "write" ? { count: 1 } : {}) });
             else if (kind === "write") {
@@ -2232,6 +2237,7 @@ export class ChatView extends ItemView {
         watchdog = null;
       }
       this.flushRender(ctx);
+      await Promise.all(snapshots); // ensure every pre-write snapshot landed before we read the checkpoint
       if (timedOut && !ctx.fullText && ctx.cards.size === 0) {
         this.renderError(ctx, `No response — timed out after ${IDLE_TIMEOUT / 1000}s.`);
       }
@@ -2258,6 +2264,7 @@ export class ChatView extends ItemView {
       }
     } finally {
       if (watchdog !== null) window.clearTimeout(watchdog);
+      await Promise.all(snapshots); // finalize the checkpoint even if the turn errored
       c.pendingPerm = null;
       // Confirm a user-initiated stop when nothing substantive was rendered.
       if (
