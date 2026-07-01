@@ -14,6 +14,17 @@ export function wordDiff(a: string, b: string): DiffSeg[] {
   const bw = split(b);
   const n = aw.length;
   const m = bw.length;
+  // Guard: the LCS matrix is O(n*m). For very large inputs (e.g. diffing a whole
+  // big note) skip it and show a coarse whole-block replacement instead of
+  // freezing the UI allocating tens of millions of cells.
+  const MAX_DIFF_CELLS = 2_000_000;
+  if (n * m > MAX_DIFF_CELLS) {
+    if (a === b) return [{ type: "same", text: a }];
+    const out: DiffSeg[] = [];
+    if (a) out.push({ type: "del", text: a });
+    if (b) out.push({ type: "add", text: b });
+    return out;
+  }
   // LCS table
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
   for (let i = n - 1; i >= 0; i--) {
