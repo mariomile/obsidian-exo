@@ -35,6 +35,7 @@ export const EXO_ICON = "exo-star";
 
 const MAX_CONVOS = 30;
 const MAX_PERSIST_OUTPUT = 2000;
+const MAX_CHECKPOINT_FILE = 64_000; // don't persist a rewind snapshot larger than this (bloat guard)
 
 /** Semantic risk modifier class for a toolbar selector option/chip ("" = neutral). */
 type RiskLevel = "" | "is-caution" | "is-danger";
@@ -73,6 +74,11 @@ type Message =
   | { role: "user"; text: string }
   | { role: "assistant"; segments: Segment[]; checkpoint?: Checkpoint };
 
+/** On-disk form of a message: the checkpoint Map is stored as [path, content] entries. */
+type PersistedMessage =
+  | { role: "user"; text: string }
+  | { role: "assistant"; segments: Segment[]; checkpoint?: [string, string | null][] };
+
 interface ConvoData {
   id: string;
   title: string;
@@ -80,7 +86,7 @@ interface ConvoData {
   model: string;
   sessionId?: string;
   updatedAt?: number;
-  messages: Message[];
+  messages: PersistedMessage[];
 }
 
 interface Convo {
@@ -411,7 +417,7 @@ export class ChatView extends ItemView {
         model: d.model || "",
         allow: new Set(),
         updatedAt: d.updatedAt,
-        messages: d.messages,
+        messages: d.messages.map((m) => this.reviveMessage(m)),
         session: null,
         sessionSig: "",
         streaming: false,
@@ -468,10 +474,27 @@ export class ChatView extends ItemView {
                   ? { ...s, output: s.output.slice(0, MAX_PERSIST_OUTPUT) }
                   : s
               ),
+              ...(m.checkpoint && m.checkpoint.size
+                ? {
+                    checkpoint: [...m.checkpoint.entries()].filter(
+                      ([, v]) => v === null || v.length <= MAX_CHECKPOINT_FILE
+                    ),
+                  }
+                : {}),
             }
           : m
       ),
     }));
+  }
+
+  /** Convert a persisted message to its runtime form (checkpoint entries → Map). */
+  private reviveMessage(m: PersistedMessage): Message {
+    if (m.role === "user") return m;
+    return {
+      role: "assistant",
+      segments: m.segments,
+      ...(Array.isArray(m.checkpoint) ? { checkpoint: new Map(m.checkpoint) } : {}),
+    };
   }
 
   private persist(): void {
@@ -1486,7 +1509,7 @@ export class ChatView extends ItemView {
             }
           }
         }
-        this.attachTouched(el, touched);
+        this.attachTouched(el, touched, m.checkpoint);
         if (full.trim()) this.attachActions(el, full, lastUser || undefined, c);
       }
     }
