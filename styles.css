@@ -14,13 +14,15 @@
   padding: 0;
   background: transparent; /* inherit the native leaf background, like Claudian */
 }
-/* .mva-root IS the .view-content element (we add the class to contentEl), so
-   Obsidian's default `.workspace-leaf-content .view-content` padding-bottom
-   (max(safe-area, 32px)) wins over our `padding: 0` on specificity — leaving
-   dead space below the composer. Kill just the bottom; the composer owns its
-   own bottom spacing. Desktop-only plugin, so no safe-area inset needed. */
-.workspace-leaf-content .view-content.mva-root {
-  padding-bottom: 0;
+/* .mva-root IS the .view-content element (we add the class to contentEl).
+   Both core and themes pad .view-content differently in the main area vs the
+   sidebar (`.mod-sidedock ... .view-content { padding: 2px }`, plus a bottom
+   safe-area inset). To keep the chat flush and aligned to the main content
+   regardless of theme, force zero padding with a selector specific enough to
+   beat those. The composer owns its own spacing; desktop-only, no safe-area. */
+.workspace-leaf-content .view-content.mva-root,
+body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-root {
+  padding: 0;
 }
 
 /* ------------------------------- header ------------------------------- */
@@ -445,9 +447,9 @@
   border-radius: var(--mva-r3);
   transition: border-color var(--mva-t), box-shadow var(--mva-t);
 }
+/* Focus: a subtle neutral border only — no accent color highlight while typing */
 .mva-inputbox:focus-within {
-  border-color: var(--mva-brand);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mva-brand) 30%, transparent);
+  border-color: var(--background-modifier-border-hover);
 }
 
 /* --------------------------- autocomplete ----------------------------- */
@@ -614,12 +616,25 @@
   overflow: hidden;
   word-break: break-word;
 }
-.mva-doc-thumb .svg-icon {
+.mva-doc-thumb.is-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.mva-doc-thumb.is-icon .svg-icon {
   width: 16px;
   height: 16px;
-  margin: 8px auto;
-  display: block;
   color: var(--text-muted);
+}
+.mva-doc-thumb.is-image {
+  padding: 0;
+}
+.mva-doc-thumb.is-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 .mva-doc-body {
   flex: 1;
