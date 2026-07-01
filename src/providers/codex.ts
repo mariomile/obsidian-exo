@@ -29,8 +29,10 @@ class CodexSession implements AgentSession {
     const sandbox = o.toolsEnabled ? o.sandboxMode || "workspace-write" : "read-only";
     args.push("-s", sandbox);
     if (o.approvalPolicy) args.push("-a", o.approvalPolicy);
-    if (o.model && o.model !== "default") args.push("-m", o.model);
-    if (o.effort && o.effort !== "default") args.push("-c", `model_reasoning_effort="${o.effort}"`);
+    if (o.model && o.model !== "default" && /^[A-Za-z0-9._-]+$/.test(o.model)) args.push("-m", o.model);
+    if (o.effort && o.effort !== "default" && /^[a-z]+$/.test(o.effort)) {
+      args.push("-c", `model_reasoning_effort="${o.effort}"`);
+    }
     if (o.fastStartup) args.push("-c", "mcp_servers={}");
 
     return new Promise<void>((resolve, reject) => {
