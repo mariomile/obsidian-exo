@@ -8,7 +8,6 @@ import {
   TFolder,
   setIcon,
   Notice,
-  Menu,
   Keymap,
 } from "obsidian";
 import { Autocomplete, type AcItem } from "./ui/autocomplete";
@@ -153,9 +152,10 @@ export class ChatView extends ItemView {
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private brandDot!: HTMLElement;
-  private providerChip!: HTMLElement;
-  private modelChip!: HTMLElement;
-  private permChip!: HTMLElement;   // custom chip replacing native <select>
+  // Toolbar selector chips (Permission-style popovers) expose a refresh fn each.
+  private refreshProviderChip: () => void = () => {};
+  private refreshModelChip: () => void = () => {};
+  private refreshPermChipFn: () => void = () => {};
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
   private manualAttached: string[] = [];
@@ -351,8 +351,8 @@ export class ChatView extends ItemView {
     this.brandDot.style.background = a.brandColor;
     this.brandDot.style.color = a.brandColor;
     this.contentEl.style.setProperty("--mva-brand", a.brandColor);
-    if (this.providerChip) this.providerChip.setText(a.displayName);
-    if (this.modelChip) this.modelChip.setText(this.modelLabel());
+    this.refreshProviderChip();
+    this.refreshModelChip();
   }
 
   private persistModel(): void {
@@ -788,7 +788,7 @@ export class ChatView extends ItemView {
     const box = bar.createDiv({ cls: "mva-inputbox" });
     this.inputEl = box.createEl("textarea", {
       cls: "mva-input",
-      attr: { rows: "1", placeholder: "Message the agent…" },
+      attr: { rows: "3", placeholder: "Message the agent…" },
     });
     this.inputEl.addEventListener("input", () => this.autoGrow());
     this.inputEl.addEventListener("paste", (e) => this.onPaste(e));
@@ -994,45 +994,57 @@ export class ChatView extends ItemView {
 
   private buildToolbar(bar: HTMLElement): void {
     const tb = bar.createDiv({ cls: "mva-toolbar" });
+    const s = this.plugin.settings;
+    const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
 
-    // Provider — Obsidian menu (no native <select>).
-    this.providerChip = tb.createDiv({ cls: "mva-tb-chip", attr: { "aria-label": "Provider" } });
-    this.providerChip.setText(ADAPTERS[this.provider].displayName);
-    this.providerChip.onclick = (e) => {
-      const menu = new Menu();
-      for (const id of ["claude", "codex"] as ProviderId[]) {
-        menu.addItem((it) =>
-          it
-            .setTitle(ADAPTERS[id].displayName)
-            .setChecked(id === this.provider)
-            .onClick(() => this.onProviderChange(id))
-        );
-      }
-      menu.showAtMouseEvent(e);
-    };
+    // Provider — Permission-style popover.
+    this.refreshProviderChip = this.buildSelectChip(tb, {
+      ariaLabel: "Provider",
+      getLabel: () => ADAPTERS[this.provider].displayName,
+      getOptions: () =>
+        (["claude", "codex"] as ProviderId[]).map((id) => ({ value: id, label: ADAPTERS[id].displayName })),
+      getCurrent: () => this.provider,
+      onSelect: (v) => this.onProviderChange(v as ProviderId),
+    });
 
-    // Model — Obsidian menu.
-    this.modelChip = tb.createDiv({ cls: "mva-tb-chip", attr: { "aria-label": "Model" } });
-    this.modelChip.setText(this.modelLabel());
-    this.modelChip.onclick = (e) => {
-      const menu = new Menu();
-      for (const m of this.modelChoices()) {
-        menu.addItem((it) =>
-          it
-            .setTitle(m.label)
-            .setChecked(m.id === this.model)
-            .onClick(() => {
-              this.model = m.id;
-              this.modelChip.setText(this.modelLabel());
-              this.persistModel();
-            })
-        );
-      }
-      menu.showAtMouseEvent(e);
-    };
+    // Model — Permission-style popover (rebuilt on open; list depends on provider).
+    this.refreshModelChip = this.buildSelectChip(tb, {
+      ariaLabel: "Model",
+      getLabel: () => this.modelLabel(),
+      getOptions: () => this.modelChoices().map((m) => ({ value: m.id, label: m.label })),
+      getCurrent: () => this.model,
+      onSelect: (v) => {
+        this.model = v;
+        this.persistModel();
+      },
+    });
 
-    this.buildEffort(tb);
-    this.buildPerm(tb);
+    // Effort — Permission-style popover.
+    this.buildSelectChip(tb, {
+      ariaLabel: "Effort",
+      getLabel: () => `Effort: ${cap(s.effort || "default")}`,
+      getOptions: () => ChatView.EFFORTS.map((e) => ({ value: e, label: cap(e) })),
+      getCurrent: () => s.effort || "default",
+      onSelect: (v) => {
+        s.effort = v;
+        void this.plugin.saveSettings();
+      },
+    });
+
+    // Permission — Permission-style popover with risk coloring.
+    this.refreshPermChipFn = this.buildSelectChip(tb, {
+      ariaLabel: "Permission mode",
+      getLabel: () => `Perm: ${ChatView.permLabel(s.permissionMode)}`,
+      getOptions: () =>
+        ChatView.PERM_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.permRisk(v) })),
+      getCurrent: () => s.permissionMode,
+      chipRisk: () => ChatView.permRisk(s.permissionMode),
+      onSelect: (v) => {
+        s.permissionMode = v as typeof s.permissionMode;
+        void this.plugin.saveSettings();
+        this.active.session?.setPermissionMode?.(s.permissionMode);
+      },
+    });
 
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
     this.usageEl = tb.createDiv({
@@ -1047,45 +1059,50 @@ export class ChatView extends ItemView {
     this.sendBtn.onclick = () => (this.streaming ? this.stop() : void this.send());
   }
 
-  /** Effort control: a chip that opens a Faster→Smarter dotted popover. */
-  private buildEffort(tb: HTMLElement): void {
-    const s = this.plugin.settings;
-    const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
-    const wrap = tb.createDiv({ cls: "mva-eff" });
-    const trigger = wrap.createDiv({ cls: "mva-tb-chip", attr: { "aria-label": "Effort" } });
-    const pop = wrap.createDiv({ cls: "mva-eff-pop" });
+  /**
+   * Generic toolbar selector — a chip that opens a Permission-style popover list.
+   * Reused by provider / model / effort / permission. Returns a `refresh()` that
+   * re-syncs the chip label (and risk color) after external changes.
+   */
+  private buildSelectChip(
+    tb: HTMLElement,
+    opts: {
+      ariaLabel: string;
+      getLabel: () => string;
+      getOptions: () => { value: string; label: string; risk?: "" | "is-caution" | "is-danger" }[];
+      getCurrent: () => string;
+      onSelect: (value: string) => void;
+      chipRisk?: () => "" | "is-caution" | "is-danger";
+    }
+  ): () => void {
+    const wrap = tb.createDiv({ cls: "mva-sel" });
+    const chip = wrap.createDiv({ cls: "mva-sel-chip", attr: { "aria-label": opts.ariaLabel } });
+    const pop = wrap.createDiv({ cls: "mva-sel-pop" });
     pop.hide();
 
-    const head = pop.createDiv({ cls: "mva-eff-head" });
-    head.createSpan({ cls: "mva-eff-h", text: "Effort" });
-    head.createSpan({ cls: "mva-eff-v" });
-    const help = head.createSpan({ cls: "mva-eff-help", attr: { title: "Higher effort = more reasoning, slower replies." } });
-    setIcon(help, "help-circle");
-    const ends = pop.createDiv({ cls: "mva-eff-ends" });
-    ends.createSpan({ text: "Faster" });
-    ends.createSpan({ text: "Smarter" });
-    const dots = pop.createDiv({ cls: "mva-eff-dots" });
-
-    let idx = Math.max(0, ChatView.EFFORTS.indexOf(s.effort || "default"));
-    const render = () => {
-      const label = cap(ChatView.EFFORTS[idx]);
-      trigger.setText(`Effort: ${label}`);
-      (pop.querySelector(".mva-eff-v") as HTMLElement)?.setText(label);
-      Array.from(dots.children).forEach((d, i) => {
-        d.toggleClass("is-on", i < idx);
-        d.toggleClass("is-thumb", i === idx);
-      });
+    const refresh = () => {
+      const risk = opts.chipRisk ? opts.chipRisk() : "";
+      chip.className = `mva-sel-chip${risk ? ` ${risk}` : ""}`;
+      chip.setText(opts.getLabel());
     };
-    ChatView.EFFORTS.forEach((e, i) => {
-      const d = dots.createSpan({ cls: "mva-eff-dot", attr: { "aria-label": cap(e) } });
-      d.onclick = () => {
-        idx = i;
-        s.effort = ChatView.EFFORTS[i];
-        void this.plugin.saveSettings();
-        render();
-      };
-    });
-    render();
+
+    const buildPop = () => {
+      pop.empty();
+      const cur = opts.getCurrent();
+      for (const o of opts.getOptions()) {
+        const row = pop.createDiv({ cls: "mva-sel-opt" });
+        if (o.risk) row.addClass(o.risk);
+        if (o.value === cur) row.addClass("is-active");
+        row.setText(o.label);
+        row.onclick = () => {
+          opts.onSelect(o.value);
+          refresh();
+          close();
+        };
+      }
+    };
+
+    refresh();
 
     let open = false;
     const onDoc = (e: MouseEvent) => {
@@ -1096,15 +1113,16 @@ export class ChatView extends ItemView {
       pop.hide();
       document.removeEventListener("click", onDoc, true);
     };
-    trigger.onclick = (e) => {
+    chip.onclick = (e) => {
       e.stopPropagation();
       if (open) return close();
+      buildPop(); // rebuild fresh — option lists can change (e.g. model list per provider)
       open = true;
       pop.show();
       document.addEventListener("click", onDoc, true);
     };
-    // Ensure the document listener is dropped if the view unloads while open.
     this.register(() => close());
+    return refresh;
   }
 
   private updateUsage(u: ContextUsage | null): void {
@@ -1137,69 +1155,9 @@ export class ChatView extends ItemView {
     return "";
   }
 
-  /** Custom permission chip (replaces native <select>) with semantic risk color. */
-  private buildPerm(tb: HTMLElement): void {
-    const s = this.plugin.settings;
-    const wrap = tb.createDiv({ cls: "mva-permsel" });
-    const chip = wrap.createDiv({ cls: "mva-perm-chip", attr: { "aria-label": "Permission mode" } });
-    this.permChip = chip;
-    const pop = wrap.createDiv({ cls: "mva-perm-pop" });
-    pop.hide();
-
-    const render = () => {
-      const mode = s.permissionMode;
-      const risk = ChatView.permRisk(mode);
-      chip.className = `mva-perm-chip${risk ? ` ${risk}` : ""}`;
-      chip.setText(`Perm: ${ChatView.permLabel(mode)}`);
-      // Update option active states
-      pop.querySelectorAll<HTMLElement>("[data-perm-val]").forEach((el) => {
-        el.toggleClass("is-active", el.dataset.permVal === mode);
-      });
-    };
-
-    for (const [val, label] of ChatView.PERM_OPTS) {
-      const row = pop.createDiv({ cls: "mva-perm-opt" });
-      row.dataset.permVal = val;
-      const riskMod = ChatView.permRisk(val);
-      if (riskMod) row.addClass(riskMod);
-      row.setText(label);
-      row.onclick = () => {
-        s.permissionMode = val as typeof s.permissionMode;
-        void this.plugin.saveSettings();
-        this.active.session?.setPermissionMode?.(s.permissionMode);
-        render();
-        close();
-      };
-    }
-
-    render();
-
-    let open = false;
-    const onDoc = (e: MouseEvent) => {
-      if (!wrap.contains(e.target as Node)) close();
-    };
-    const close = () => {
-      open = false;
-      pop.hide();
-      document.removeEventListener("click", onDoc, true);
-    };
-    chip.onclick = (e) => {
-      e.stopPropagation();
-      if (open) return close();
-      open = true;
-      pop.show();
-      document.addEventListener("click", onDoc, true);
-    };
-    this.register(() => close());
-  }
-
-  /** Sync the permission chip text + risk class after an external mode change. */
+  /** Sync the permission chip text + risk class after an external mode change (e.g. plan toggle). */
   private refreshPermChip(): void {
-    if (!this.permChip) return;
-    const mode = this.plugin.settings.permissionMode;
-    const risk = ChatView.permRisk(mode);
-    this.permChip.className = `mva-perm-chip${risk ? ` ${risk}` : ""}`;
-    this.permChip.setText(`Perm: ${ChatView.permLabel(mode)}`);
+    this.refreshPermChipFn();
   }
 
   private activeNotePath(): string | null {
