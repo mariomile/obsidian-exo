@@ -34,6 +34,8 @@ export interface MVASettings {
   memoryWriteEnabled: boolean;
   featureSurfacing: boolean;
   featureWikilinkify: boolean;
+  /** Set once after seeding example custom prompts, so we never re-seed. */
+  seededPrompts: boolean;
   // Tab bar runtime state (not user-facing settings).
   openTabIds: string[];
   activeTabId: string;
@@ -64,6 +66,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   memoryWriteEnabled: true,
   featureSurfacing: true,
   featureWikilinkify: true,
+  seededPrompts: false,
   openTabIds: [],
   activeTabId: "",
 };

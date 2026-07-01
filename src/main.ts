@@ -142,6 +142,17 @@ export default class ExoPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // Seed a few example reusable prompts on first run (once) so "Your prompts"
+    // isn't empty. They're editable/deletable in Settings; never re-seeded.
+    if (!this.settings.seededPrompts && this.settings.customPrompts.length === 0) {
+      this.settings.customPrompts = [
+        { name: "Distill", prompt: "Distill this note to its 3 core ideas, each as one crisp sentence." },
+        { name: "Devil's advocate", prompt: "Argue the strongest case against the main claim in this note." },
+        { name: "Next actions", prompt: "Turn this note into a short checklist of concrete next actions." },
+      ];
+      this.settings.seededPrompts = true;
+      await this.saveSettings();
+    }
   }
 
   async saveSettings(): Promise<void> {
