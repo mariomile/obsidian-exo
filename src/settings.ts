@@ -20,6 +20,9 @@ export interface MVASettings {
   permissionMode: PermissionMode;
   autoAllowRead: boolean;
   fastStartup: boolean;
+  /** Start the CLI session in the background when Exo opens, so the first
+   *  message skips the cold start. Claude only. */
+  prewarmSession: boolean;
   /** Run Claude Code hooks (.claude/settings.json) — CC parity, on by default. */
   runHooks: boolean;
   /** Persistent allow rules — one per line: `Tool` or `Tool(argPrefix)`. */
@@ -74,6 +77,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   permissionMode: "default",
   autoAllowRead: true,
   fastStartup: true,
+  prewarmSession: true,
   runHooks: true,
   permAllowRules: "",
   permDenyRules: "",
@@ -251,6 +255,18 @@ export class MVASettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(this.plugin.settings.fastStartup).onChange(async (v) => {
           this.plugin.settings.fastStartup = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Pre-warm the agent session")
+      .setDesc(
+        "Start the CLI session in the background when Exo opens, so the first message skips the cold start. Claude only."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.prewarmSession).onChange(async (v) => {
+          this.plugin.settings.prewarmSession = v;
           await this.plugin.saveSettings();
         })
       );

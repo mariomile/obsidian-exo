@@ -205,6 +205,9 @@ export class ChatView extends ItemView {
   private obsidianAlwaysLoad = true;
   private obsidianMemoryWrite = true;
   private memoryPreamble = "";
+  /** In-flight session spawns, so a pre-warm and a real send don't double-spawn
+   *  (and leak) a CLI session for the same conversation. */
+  private sessionInit = new WeakMap<Convo, Promise<AgentSession>>();
   /** The assistant turn an ask_user card should render into (set per turn). */
   private askTargetCtx: AssistantCtx | null = null;
 
@@ -289,6 +292,7 @@ export class ChatView extends ItemView {
         this.refreshSurfacing();
       })
     );
+    this.prewarm();
   }
 
   async onClose(): Promise<void> {
@@ -326,9 +330,20 @@ export class ChatView extends ItemView {
     ].join("|");
   }
 
-  private async ensureSession(c: Convo): Promise<AgentSession> {
+  private ensureSession(c: Convo): Promise<AgentSession> {
     const sig = this.sessionSigOf(c);
-    if (c.session && sig === c.sessionSig) return c.session;
+    if (c.session && sig === c.sessionSig) return Promise.resolve(c.session);
+    const inflight = this.sessionInit.get(c);
+    if (inflight) return inflight;
+    const p = this.spawnSession(c, sig);
+    this.sessionInit.set(c, p);
+    void p.finally(() => {
+      if (this.sessionInit.get(c) === p) this.sessionInit.delete(c);
+    });
+    return p;
+  }
+
+  private async spawnSession(c: Convo, sig: string): Promise<AgentSession> {
     c.session?.dispose();
     const s = this.plugin.settings;
     const bin = c.provider === "claude" ? s.claudeBin : s.codexBin;
@@ -390,6 +405,17 @@ export class ChatView extends ItemView {
     c.sessionSig = "";
   }
 
+  /** Spin up the active conversation's CLI session in the background so the first
+   *  message skips the cold start. No-op if disabled, already warm, streaming, or
+   *  on Codex (spawn-per-turn model — nothing to warm). Errors are swallowed; a
+   *  real send surfaces them through the normal UX. */
+  private prewarm(): void {
+    if (!this.plugin.settings.prewarmSession) return;
+    const c = this.active;
+    if (!c || c.provider !== "claude" || c.session || c.streaming) return;
+    void this.ensureSession(c).catch(() => {});
+  }
+
   /* ----------------------------- header ----------------------------- */
 
   /** Make a non-button element keyboard- and screen-reader-operable: role=button,
@@ -446,6 +472,8 @@ export class ChatView extends ItemView {
     this.updateUsage(null);
     this.refreshProviderUI();
     this.refreshPermChipFn();
+    // Provider changed (e.g. back to Claude) — warm the new session.
+    this.prewarm();
   }
 
   /** All selectable model ids for the current provider (built-in + custom + current). */
@@ -663,6 +691,7 @@ export class ChatView extends ItemView {
     this.renderTabs();
     this.persistTabs();
     this.scrollConvo(c);
+    this.prewarm();
   }
 
   /* ----------------------------- tab bar ---------------------------- */
