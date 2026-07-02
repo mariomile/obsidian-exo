@@ -134,6 +134,15 @@ interface AssistantCtx {
   stableLen: number;
   /** Live tail element re-rendered each tick (holds the not-yet-stable suffix). */
   tailEl: HTMLElement | null;
+  /** The live streaming caret (at most one per turn), tracked so cleanup is O(1). */
+  caretEl: HTMLElement | null;
+  /** Incremental block-boundary scan state over curRaw (O(delta) per tick):
+   *  chars already scanned (complete lines only) … */
+  scanPos: number;
+  /** … whether scanPos sits inside a ``` fence … */
+  fenceOpen: boolean;
+  /** … and the last safe (non-fenced blank-line) boundary found so far. */
+  lastBoundary: number;
   curTextSeg: { t: "text"; md: string } | null;
   curRaw: string;
   fullText: string;
@@ -164,20 +173,33 @@ interface AssistantCtx {
 /** Abort a turn if no event arrives for this long (avoids infinite loading). */
 const IDLE_TIMEOUT = 120_000;
 
-/** Index just after the last blank-line block boundary that is not inside a
- * ``` fence, or 0. Rendering the prefix up to here is layout-stable. */
-function stableBoundary(md: string): number {
-  let fence = false,
-    last = 0;
-  const lines = md.split("\n");
-  let pos = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^(```|~~~)/.test(line.trim())) fence = !fence;
-    pos += line.length + 1;
-    if (!fence && line.trim() === "" && i < lines.length - 1) last = pos;
+/** Advance the incremental block-boundary scan over the not-yet-scanned suffix
+ * of `ctx.curRaw` and return the index just after the last blank-line boundary
+ * that is not inside a ``` fence (0 if none). Only complete (newline-terminated)
+ * lines are consumed — the trailing partial line waits for its newline — so each
+ * streaming tick costs O(new chars), not O(total). Rendering the prefix up to
+ * the returned boundary is layout-stable. */
+function advanceBoundary(ctx: AssistantCtx): number {
+  const raw = ctx.curRaw;
+  let nl: number;
+  while ((nl = raw.indexOf("\n", ctx.scanPos)) !== -1) {
+    const t = raw.slice(ctx.scanPos, nl).trim();
+    if (/^(```|~~~)/.test(t)) ctx.fenceOpen = !ctx.fenceOpen;
+    ctx.scanPos = nl + 1;
+    if (!ctx.fenceOpen && t === "") ctx.lastBoundary = ctx.scanPos;
   }
-  return last;
+  return ctx.lastBoundary;
+}
+
+/** Merge one tool-touched file into a touched list: reads dedupe; a write
+ * upgrades a read entry and bumps the per-note edit count. */
+function mergeTouched(list: TouchedNote[], path: string, kind: "read" | "write"): void {
+  const existing = list.find((t) => t.path === path);
+  if (!existing) list.push({ path, kind, ...(kind === "write" ? { count: 1 } : {}) });
+  else if (kind === "write") {
+    existing.kind = "write"; // read-then-written → show as written
+    existing.count = (existing.count ?? 0) + 1;
+  }
 }
 
 /** One rule per line: `Tool` or `Tool(argPrefix)`. `#` comments allowed. A bare
@@ -546,6 +568,11 @@ export class ChatView extends ItemView {
 
   private async restore(): Promise<void> {
     const raw = (await this.plugin.loadConversations()) as ConvoData[];
+    // Only build transcript DOM for conversations that will actually be shown
+    // (open tabs + the active one). Everything else renders lazily on first
+    // open (switchTo) — with dozens of stored conversations this is the bulk
+    // of the view's startup cost.
+    const wantDom = new Set([...(this.plugin.settings.openTabIds ?? []), this.plugin.settings.activeTabId]);
     for (const d of raw) {
       if (!d || !Array.isArray(d.messages)) continue;
       const c: Convo = {
@@ -568,7 +595,7 @@ export class ChatView extends ItemView {
         pendingEl: null,
         currentCtx: null,
       };
-      this.renderConvoDom(c);
+      if (wantDom.has(c.id)) this.renderConvoDom(c);
       this.wireScroll(c);
       this.convos.push(c);
     }
@@ -590,6 +617,11 @@ export class ChatView extends ItemView {
     if (!this.openTabs.includes(this.active.id)) this.openTabs.push(this.active.id);
     if (this.openTabs.length === 0) this.openTabs = [this.active.id];
 
+    // Safety: if the active fell back to a convo outside the saved tab set
+    // (stale activeTabId), its DOM wasn't pre-built above — build it now.
+    if (this.active.messages.length && this.active.listEl.childElementCount === 0) {
+      this.renderConvoDom(this.active);
+    }
     this.listWrap.empty();
     this.listWrap.appendChild(this.active.listEl);
     if (this.active.messages.length === 0) this.renderEmptyState();
@@ -708,6 +740,9 @@ export class ChatView extends ItemView {
     // A fresh tab should always start pinned so you see the latest content.
     this.pinnedToBottom = true;
     this.updateJumpPill();
+    // Lazily build the transcript DOM on first open (restore() skips convos
+    // that weren't in the saved tab set).
+    if (c.messages.length && c.listEl.childElementCount === 0) this.renderConvoDom(c);
     this.listWrap.empty();
     this.listWrap.appendChild(c.listEl);
     if (c.listEl.childElementCount === 0) this.renderEmptyState();
@@ -1740,15 +1775,7 @@ export class ChatView extends ItemView {
             const refs = this.createToolCard(body, s.name, s.input);
             this.finishToolCard(refs, s.ok !== false, s.output);
             const fp = toolFilePath(s.name, s.input);
-            if (fp) {
-              const kind = ChatView.WRITE_TOOLS.test(s.name) ? "write" : "read";
-              const existing = touched.find((t) => t.path === fp);
-              if (!existing) touched.push({ path: fp, kind, ...(kind === "write" ? { count: 1 } : {}) });
-              else if (kind === "write") {
-                existing.kind = "write";
-                existing.count = (existing.count ?? 0) + 1;
-              }
-            }
+            if (fp) mergeTouched(touched, fp, ChatView.WRITE_TOOLS.test(s.name) ? "write" : "read");
           }
         }
         this.attachTouched(el, touched, m.checkpoint);
@@ -1796,6 +1823,10 @@ export class ChatView extends ItemView {
       curTextEl: null,
       stableLen: 0,
       tailEl: null,
+      caretEl: null,
+      scanPos: 0,
+      fenceOpen: false,
+      lastBoundary: 0,
       curTextSeg: null,
       curRaw: "",
       fullText: "",
@@ -1846,6 +1877,9 @@ export class ChatView extends ItemView {
       ctx.curRaw = "";
       ctx.stableLen = 0;
       ctx.tailEl = null;
+      ctx.scanPos = 0;
+      ctx.fenceOpen = false;
+      ctx.lastBoundary = 0;
       ctx.curTextSeg = { t: "text", md: "" };
       ctx.segments.push(ctx.curTextSeg);
     }
@@ -1890,20 +1924,23 @@ export class ChatView extends ItemView {
       // wikilinkify), matching the pre-incremental semantics exactly.
       ctx.tailEl = null;
       ctx.stableLen = 0;
+      ctx.scanPos = 0;
+      ctx.fenceOpen = false;
+      ctx.lastBoundary = 0;
       el.empty();
       let md = raw;
       if (this.plugin.settings.featureWikilinkify) {
         md = wikilinkify(md, [...ctx.sources, ...ctx.touched.map((t) => t.path)]);
       }
       void MarkdownRenderer.render(this.app, md, el, "", this).then(() => {
-        this.clearCarets(ctx.convo.listEl);
+        this.clearCaret(ctx);
       });
       return;
     }
 
     // Streaming tick: promote any newly-completed blocks to a stable, render-once
     // child, then re-render only the live tail (O(tail) per tick).
-    const b = stableBoundary(raw);
+    const b = advanceBoundary(ctx);
     if (b > ctx.stableLen) {
       const block = ctx.curTextEl.createDiv({ cls: "mva-md-block markdown-rendered" });
       // Insert the stable block before the tail so ordering stays correct.
@@ -1919,14 +1956,15 @@ export class ChatView extends ItemView {
       // the segment was interrupted while this render was in flight (tailEl was
       // reset), so an in-flight tick can't resurrect an orphaned caret.
       if (ctx.tailEl !== tail || !tail.isConnected) return;
-      this.clearCarets(ctx.convo.listEl);
-      tail.createSpan({ cls: "mva-caret" });
+      this.clearCaret(ctx);
+      ctx.caretEl = tail.createSpan({ cls: "mva-caret" });
     });
   }
 
-  /** Remove every streaming caret in a conversation's list. */
-  private clearCarets(root: HTMLElement): void {
-    root.querySelectorAll(".mva-caret").forEach((c) => c.remove());
+  /** Remove the turn's tracked streaming caret (O(1) — no DOM query). */
+  private clearCaret(ctx: AssistantCtx): void {
+    ctx.caretEl?.remove();
+    ctx.caretEl = null;
   }
 
   /** End the current text segment: null the stream targets, reset the incremental
@@ -1936,8 +1974,11 @@ export class ChatView extends ItemView {
     ctx.curTextEl = null;
     ctx.stableLen = 0;
     ctx.tailEl = null;
+    ctx.scanPos = 0;
+    ctx.fenceOpen = false;
+    ctx.lastBoundary = 0;
     ctx.curTextSeg = null;
-    this.clearCarets(ctx.convo.listEl);
+    this.clearCaret(ctx);
   }
 
   private scheduleRender(ctx: AssistantCtx): void {
@@ -1960,8 +2001,10 @@ export class ChatView extends ItemView {
       ctx.renderTimer = null;
     }
     this.renderText(ctx, false);
-    // Turns that end on a tool call have no curTextEl to re-render — clear directly.
-    this.clearCarets(ctx.convo.listEl);
+    this.clearCaret(ctx);
+    // Final-cleanup fallback: the tracked ref covers every live path, but the
+    // turn is over — sweep the transcript so no caret can survive a desync.
+    ctx.convo.listEl.querySelectorAll(".mva-caret").forEach((el) => el.remove());
   }
 
   private attachActions(turnEl: HTMLElement, text: string, retryText?: string, convo?: Convo): void {
@@ -2051,8 +2094,9 @@ export class ChatView extends ItemView {
   }
 
   /** Code + conversation rewind: restore files touched after this turn to their
-   *  pre-turn state, then drop the later turns. Checkpoints are per-session
-   *  (in-memory), so this works until the view is reloaded. */
+   *  pre-turn state, then drop the later turns. Checkpoints are persisted with
+   *  the conversation (size-capped per file), so rewind survives reloads; only
+   *  oversized snapshots are dropped at persist time. */
   private async rewindCodeTo(c: Convo, turnEl: HTMLElement): Promise<void> {
     if (c.streaming) {
       new Notice("Stop the current turn before rewinding.");
@@ -2110,13 +2154,13 @@ export class ChatView extends ItemView {
     this.updateUsage(null);
     this.persist();
     const note = `Rewound. Restored ${changed} file${changed === 1 ? "" : "s"}; session reset.`;
-    new Notice(missingCheckpoints ? `${note} (some edits had no snapshot — reload clears checkpoints.)` : note);
+    new Notice(missingCheckpoints ? `${note} (some edits had no snapshot — e.g. oversized files are not checkpointed.)` : note);
   }
 
   /**
    * Footer listing the notes a turn touched, split into what it *changed*
    * (emphasized, with ×N edit count + diff/revert actions) and what it *read*
-   * (context). `checkpoint` (live turns only) enables per-note diff/revert.
+   * (context). `checkpoint` (live or restored from persistence) enables per-note diff/revert.
    */
   private attachTouched(turnEl: HTMLElement, touched: TouchedNote[], checkpoint?: Checkpoint): void {
     if (touched.length === 0) return;
@@ -2953,12 +2997,7 @@ export class ChatView extends ItemView {
             if (kind === "read") ctx.sources.add(fp);
             else snapshots.push(this.snapshot(checkpoint, fp).catch(() => {})); // checkpoint before the write runs
             if (kind === "write") ctx.writeById.set(e.id, fp);
-            const existing = ctx.touched.find((t) => t.path === fp);
-            if (!existing) ctx.touched.push({ path: fp, kind, ...(kind === "write" ? { count: 1 } : {}) });
-            else if (kind === "write") {
-              existing.kind = "write"; // read-then-written → show as written
-              existing.count = (existing.count ?? 0) + 1;
-            }
+            mergeTouched(ctx.touched, fp, kind);
           }
           // Feature 4: a subagent's tool call nests under its parent Task card
           // (ephemeral, live-only). Falls through to a flat card if the parent
