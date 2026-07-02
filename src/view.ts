@@ -128,6 +128,10 @@ interface AssistantCtx {
   reasonRaw: string;
   sources: Set<string>;
   touched: TouchedNote[];
+  /** Tool-use id → file path, for write tools (to reveal the note on result). */
+  writeById: Map<string, string>;
+  /** Notes already revealed this turn (dedupe). */
+  revealed: Set<string>;
   convo: Convo;
   /** Per-turn debounce timer, so parallel conversations don't fight over a shared one. */
   renderTimer: number | null;
@@ -1664,6 +1668,8 @@ export class ChatView extends ItemView {
       reasonRaw: "",
       sources: new Set(),
       touched: [],
+      writeById: new Map(),
+      revealed: new Set(),
       convo: c,
       renderTimer: null,
       todosEl: null,
@@ -2067,6 +2073,23 @@ export class ChatView extends ItemView {
     void this.app.workspace.openLinkText(p, "", false);
   }
 
+  /** Open a note the agent just edited in the main area — reuse its tab if it's
+   *  already open, else a new tab (non-destructive; never the sidebar). Verified:
+   *  openLinkText targets the main area even when Exo is the focused sidebar leaf. */
+  private revealNote(path: string): void {
+    const rel = this.relPath(path);
+    const file = this.app.vault.getAbstractFileByPath(rel);
+    if (!(file instanceof TFile)) return;
+    const open = this.app.workspace
+      .getLeavesOfType("markdown")
+      .find((l) => (l.view as unknown as { file?: TFile }).file?.path === file.path);
+    if (open) {
+      this.app.workspace.revealLeaf(open);
+      return;
+    }
+    void this.app.workspace.openLinkText(rel, "", "tab");
+  }
+
   /* ------------------------------ tools ----------------------------- */
 
   private createToolCard(parent: HTMLElement, name: string, input: unknown): ToolCard {
@@ -2339,6 +2362,7 @@ export class ChatView extends ItemView {
             const kind = ChatView.WRITE_TOOLS.test(e.name) ? "write" : "read";
             if (kind === "read") ctx.sources.add(fp);
             else snapshots.push(this.snapshot(checkpoint, fp).catch(() => {})); // checkpoint before the write runs
+            if (kind === "write") ctx.writeById.set(e.id, fp);
             const existing = ctx.touched.find((t) => t.path === fp);
             if (!existing) ctx.touched.push({ path: fp, kind, ...(kind === "write" ? { count: 1 } : {}) });
             else if (kind === "write") {
@@ -2348,9 +2372,15 @@ export class ChatView extends ItemView {
           }
           break;
         }
-        case "tool-call-result":
+        case "tool-call-result": {
           this.resolveToolCard(ctx, e.id, e.ok, e.output);
+          const wp = ctx.writeById.get(e.id);
+          if (e.ok && wp && this.plugin.settings.revealEditedNotes && !ctx.revealed.has(wp)) {
+            ctx.revealed.add(wp);
+            this.revealNote(wp);
+          }
           break;
+        }
         case "permission-request": {
           const isRead = READ_ONLY_TOOLS.has(e.tool) || OBSIDIAN_READ_TOOLS.has(e.tool);
           const fp = toolFilePath(e.tool, e.input);

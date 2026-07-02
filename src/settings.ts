@@ -34,6 +34,8 @@ export interface MVASettings {
   memoryWriteEnabled: boolean;
   featureSurfacing: boolean;
   featureWikilinkify: boolean;
+  /** Open notes the agent edits in a tab beside the chat, live. */
+  revealEditedNotes: boolean;
   /** Set once after seeding example custom prompts, so we never re-seed. */
   seededPrompts: boolean;
   // Tab bar runtime state (not user-facing settings).
@@ -74,6 +76,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   memoryWriteEnabled: true,
   featureSurfacing: true,
   featureWikilinkify: true,
+  revealEditedNotes: true,
   seededPrompts: false,
   openTabIds: [],
   activeTabId: "",
@@ -349,6 +352,11 @@ export class MVASettingTab extends PluginSettingTab {
     );
     toggle("Surface related notes", "Show notes related to the active note in the empty state.", "featureSurfacing");
     toggle("Wikilink-ify replies", "Turn mentions of existing note titles in replies into clickable [[wikilinks]].", "featureWikilinkify");
+    toggle(
+      "Reveal edited notes",
+      "When the agent edits or creates a note, open it in a tab beside the chat so you watch it update live.",
+      "revealEditedNotes"
+    );
 
     new Setting(containerEl)
       .setName("Memory dream pass")
