@@ -235,6 +235,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   scrollbar-width: thin;
 }
 
+/* Cap the reading column so wide panes don't stretch messages edge-to-edge.
+   No-op at narrow (sidebar) widths since 100% < 760px already. */
+.mva-list > * {
+  max-width: 760px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+
 .mva-turn {
   display: flex;
   flex-direction: column;
@@ -474,6 +484,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 10px 12px;
   background: transparent;
   flex-shrink: 0;
+  /* Same reading-column cap as the message list — stays centered on wide panes. */
+  max-width: 760px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
 }
 /* Unified input box — the only composer surface (textarea + controls inside). */
 .mva-inputbox {
@@ -608,6 +624,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Inherits the composer's 760px cap; stated explicitly since it's the
+     context strip named in the design spec. */
+  max-width: 760px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
 }
 .mva-context.is-empty {
   display: none;
