@@ -702,18 +702,19 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 12px;
   height: 12px;
 }
-/* trailing "add note" card */
+/* trailing "add note" affordance — a quiet ghost chip, not a dashed drop zone */
 .mva-doc-add {
   width: auto;
   justify-content: center;
   color: var(--text-muted);
   background: transparent;
-  border-style: dashed;
+  border: 1px solid transparent;
   font-size: 12px;
-  padding: 7px 12px;
 }
 .mva-doc-add:hover {
   color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border-color: transparent;
 }
 .mva-doc-add-ico {
   display: inline-flex;
