@@ -63,6 +63,14 @@ jobs:
         run: |
           ASSETS="main.js manifest.json"
           [ -f styles.css ] && ASSETS="$ASSETS styles.css"
-          gh release create "$GITHUB_REF_NAME" $ASSETS \
-            --title "$(node -p "require('./manifest.json').name") $GITHUB_REF_NAME" \
-            --generate-notes
+          # Idempotent: releases are usually cut manually (curated notes) before
+          # the tag lands here. If one exists, refresh its assets with this
+          # CI-built bundle instead of failing.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists — updating assets"
+            gh release upload "$GITHUB_REF_NAME" $ASSETS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" $ASSETS \
+              --title "$(node -p "require('./manifest.json').name") $GITHUB_REF_NAME" \
+              --generate-notes
+          fi
