@@ -323,6 +323,21 @@ export class ChatView extends ItemView {
 
   /* ----------------------------- header ----------------------------- */
 
+  /** Make a non-button element keyboard- and screen-reader-operable: role=button,
+   *  focusable, and Enter/Space fire the same handler as a click. Use for the div/
+   *  span controls that can't easily become <button> without losing their layout. */
+  private clickable(el: HTMLElement, handler: (e: Event) => void): void {
+    el.setAttribute("role", "button");
+    el.tabIndex = 0;
+    el.addEventListener("click", handler);
+    el.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        handler(e);
+      }
+    });
+  }
+
   private buildHeader(root: HTMLElement): void {
     const header = root.createDiv({ cls: "mva-header" });
     this.brandDot = header.createSpan({ cls: "mva-brand-icon" });
@@ -598,7 +613,7 @@ export class ChatView extends ItemView {
         e.stopPropagation();
         this.closeTab(c);
       };
-      tab.onclick = () => this.switchTo(c);
+      this.clickable(tab, () => this.switchTo(c));
     }
     const add = this.tabsEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
     setIcon(add, "plus");
@@ -829,10 +844,10 @@ export class ChatView extends ItemView {
     meta.createSpan({ text: `${count} message${count === 1 ? "" : "s"}` });
     if (c.updatedAt) meta.createSpan({ text: this.formatDate(c.updatedAt) });
 
-    card.onclick = () => {
+    this.clickable(card, () => {
       this.hideGallery();
       this.switchTo(c);
-    };
+    });
   }
 
   private convoPreview(c: Convo): string {
@@ -1251,14 +1266,14 @@ export class ChatView extends ItemView {
       pop.hide();
       document.removeEventListener("click", onDoc, true);
     };
-    chip.onclick = (e) => {
+    this.clickable(chip, (e) => {
       e.stopPropagation();
       if (open) return close();
       buildPop(); // rebuild fresh — option lists can change (e.g. model list per provider)
       open = true;
       pop.show();
       document.addEventListener("click", onDoc, true);
-    };
+    });
     this.register(() => close());
     return refresh;
   }
@@ -1336,7 +1351,7 @@ export class ChatView extends ItemView {
     const add = cards.createDiv({ cls: "mva-doc-card mva-doc-add", attr: { "aria-label": "Attach a note" } });
     setIcon(add.createSpan({ cls: "mva-doc-add-ico" }), "plus");
     add.createSpan({ text: "Add note" });
-    add.onclick = () => this.pickNote();
+    this.clickable(add, () => this.pickNote());
   }
 
   /** A uniform context card: text thumbnail + title + kind ("Current Document" / "Document"). */
@@ -1355,7 +1370,7 @@ export class ChatView extends ItemView {
       else this.manualAttached = this.manualAttached.filter((p) => p !== path);
       this.refreshContext();
     };
-    card.onclick = () => this.openNote(path);
+    this.clickable(card, () => this.openNote(path));
   }
 
   private static readonly IMAGE_EXT = /^(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
@@ -1511,7 +1526,7 @@ export class ChatView extends ItemView {
         const row = list.createDiv({ cls: "mva-starter" });
         setIcon(row.createSpan({ cls: "mva-starter-icon" }), it.icon);
         row.createSpan({ text: it.label });
-        row.onclick = () => this.usePrompt(it.prompt);
+        this.clickable(row, () => this.usePrompt(it.prompt));
       }
       if (n < items.length) {
         const more = list.createDiv({ cls: "mva-starter mva-es-more" });
@@ -1537,11 +1552,11 @@ export class ChatView extends ItemView {
       const chip = row.createDiv({ cls: "mva-chip mva-surface-chip" });
       setIcon(chip.createSpan({ cls: "mva-chip-icon" }), "file-text");
       chip.createSpan({ cls: "mva-chip-label", text: noteBasename(p) });
-      chip.onclick = () => {
+      this.clickable(chip, () => {
         if (!this.manualAttached.includes(p)) this.manualAttached.push(p);
         this.refreshContext();
         this.inputEl.focus();
-      };
+      });
     }
   }
 
@@ -1658,7 +1673,7 @@ export class ChatView extends ItemView {
       const head = block.createDiv({ cls: "mva-reason-head" });
       setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
       head.createSpan({ cls: "mva-reason-label", text: "Reasoning" });
-      head.onclick = () => block.toggleClass("is-collapsed", !block.hasClass("is-collapsed"));
+      this.clickable(head, () => block.toggleClass("is-collapsed", !block.hasClass("is-collapsed")));
       ctx.reasonBody = block.createDiv({ cls: "mva-reason-body" });
       ctx.reasonEl = block;
     }
@@ -2068,7 +2083,7 @@ export class ChatView extends ItemView {
     }
     const bodyEl = card.createDiv({ cls: "mva-tool-body" });
     renderToolDetail(bodyEl, name, input, null);
-    head.onclick = () => card.toggleClass("is-collapsed", !card.hasClass("is-collapsed"));
+    this.clickable(head, () => card.toggleClass("is-collapsed", !card.hasClass("is-collapsed")));
     return { card, statusEl, bodyEl };
   }
 
