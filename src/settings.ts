@@ -20,6 +20,14 @@ export interface MVASettings {
   permissionMode: PermissionMode;
   autoAllowRead: boolean;
   fastStartup: boolean;
+  /** Run Claude Code hooks (.claude/settings.json) — CC parity, on by default. */
+  runHooks: boolean;
+  /** Persistent allow rules — one per line: `Tool` or `Tool(argPrefix)`. */
+  permAllowRules: string;
+  /** Persistent deny rules — one per line; deny wins over allow. */
+  permDenyRules: string;
+  /** Persist "Always allow" card choices into permAllowRules across sessions. */
+  rememberAlwaysAllow: boolean;
   /** Codex sandbox + approval policy. */
   codexSandbox: string;
   codexApproval: string;
@@ -66,6 +74,10 @@ export const DEFAULT_SETTINGS: MVASettings = {
   permissionMode: "default",
   autoAllowRead: true,
   fastStartup: true,
+  runHooks: true,
+  permAllowRules: "",
+  permDenyRules: "",
+  rememberAlwaysAllow: false,
   codexSandbox: "workspace-write",
   codexApproval: "on-request",
   autoCompactEnabled: true,
@@ -235,13 +247,23 @@ export class MVASettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Fast startup")
-      .setDesc(
-        "Skip global SessionStart hooks and MCP servers on each turn for much faster responses. " +
-          "Turn off only if you need your MCP tools or hooks inside the chat."
-      )
+      .setDesc("Skips external MCP servers for snappier responses.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.fastStartup).onChange(async (v) => {
           this.plugin.settings.fastStartup = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Run Claude Code hooks")
+      .setDesc(
+        "Execute hooks configured in .claude/settings.json (vault and global) — PreToolUse guards, formatters, notifications. " +
+          "Matches Claude Code behavior. Turn off for a slightly faster cold start."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.runHooks).onChange(async (v) => {
+          this.plugin.settings.runHooks = v;
           await this.plugin.saveSettings();
         })
       );

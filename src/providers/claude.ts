@@ -93,8 +93,11 @@ class ClaudeSession implements AgentSession {
               },
             }
           : {}),
+        // Hooks are controlled solely by runHooks (CC parity — CC runs hooks by
+        // default). Fast startup now only skips external MCP servers.
+        ...(opts.runHooks ? {} : { disableAllHooks: true }),
         ...(opts.fastStartup
-          ? { disableAllHooks: true, strictMcpConfig: true, ...(opts.obsidianServer ? {} : { mcpServers: {} }) }
+          ? { strictMcpConfig: true, ...(opts.obsidianServer ? {} : { mcpServers: {} }) }
           : {}),
         ...(opts.toolsEnabled
           ? {
