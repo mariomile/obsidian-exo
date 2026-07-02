@@ -3036,8 +3036,23 @@ export class ChatView extends ItemView {
 
     try {
       bump();
-      const session = await this.ensureSession(c);
-      await session.send(message, onEvent, imgs);
+      let session = await this.ensureSession(c);
+      try {
+        await session.send(message, onEvent, imgs);
+      } catch (err) {
+        if ((err as Error | null)?.name !== "DegradedSession") throw err;
+        // The session booted without the Obsidian MCP tools (the SDK loads
+        // always-load MCP tools into the turn-1 prompt only if the server
+        // connects within a fixed 5s cap; slow startup — e.g. SessionStart
+        // hooks — trips it). Nothing user-visible ran, so respawn once and
+        // retry invisibly: the CLI is warm now and usually connects in time.
+        // acceptDegraded on the retry: if it's STILL degraded, proceed anyway
+        // (built-in tools work; the session warns) — never block the user.
+        this.dropSession(c);
+        c.sessionId = undefined;
+        session = await this.ensureSession(c);
+        await session.send(message, onEvent, imgs, { acceptDegraded: true });
+      }
       // Stop the watchdog before reading `timedOut` so a timer that fires in the
       // gap between send() resolving and `finally` can't trip a false timeout.
       if (watchdog !== null) {
