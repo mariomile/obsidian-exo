@@ -7,6 +7,7 @@ import {
   TFile,
   TFolder,
   setIcon,
+  setTooltip,
   Notice,
   Keymap,
 } from "obsidian";
@@ -347,14 +348,17 @@ export class ChatView extends ItemView {
 
     const caps = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "Capabilities" } });
     setIcon(caps, "blocks");
+    setTooltip(caps, "Capabilities");
     caps.onclick = () => this.toggleCapabilities();
 
     const histBtn = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "History" } });
     setIcon(histBtn, "history");
+    setTooltip(histBtn, "History");
     histBtn.onclick = () => this.toggleGallery();
 
     const newChat = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "New chat" } });
     setIcon(newChat, "plus");
+    setTooltip(newChat, "New chat");
     newChat.onclick = () => this.newConversation();
   }
 
@@ -743,6 +747,7 @@ export class ChatView extends ItemView {
     const on = this.streaming;
     this.sendBtn.empty();
     setIcon(this.sendBtn, on ? "square" : "arrow-up");
+    setTooltip(this.sendBtn, on ? "Stop" : "Send");
     this.sendBtn.toggleClass("is-streaming", on);
   }
 
@@ -1209,6 +1214,7 @@ export class ChatView extends ItemView {
     // Send button — lives inside the input box, right side.
     this.sendBtn = tb.createEl("button", { cls: "mva-send", attr: { "aria-label": "Send" } });
     setIcon(this.sendBtn, "arrow-up");
+    setTooltip(this.sendBtn, "Send");
     this.sendBtn.onclick = () => (this.streaming ? this.stop() : void this.send());
   }
 
