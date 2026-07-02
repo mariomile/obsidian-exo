@@ -151,6 +151,20 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.mva-tab-title.is-placeholder {
+  font-style: italic;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: normal;
+  overflow: visible;
+}
+.mva-tab-title.is-placeholder .svg-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
 .mva-tab-x {
   display: inline-flex;
   opacity: 0;

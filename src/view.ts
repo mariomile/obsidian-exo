@@ -790,7 +790,18 @@ export class ChatView extends ItemView {
       const dot = tab.createSpan({ cls: "mva-tab-dot" });
       dot.style.background = ADAPTERS[c.provider].brandColor;
       if (c.streaming) tab.addClass("is-streaming");
-      tab.createSpan({ cls: "mva-tab-title", text: c.title || "New chat" });
+
+      // Detect placeholder tabs (untitled, no messages yet) and render with distinct styling
+      const isPlaceholder = !c.title || (c.title === "New chat" && c.messages.length === 0);
+      const titleEl = tab.createSpan({ cls: "mva-tab-title" + (isPlaceholder ? " is-placeholder" : "") });
+
+      if (isPlaceholder) {
+        setIcon(titleEl, "pencil");
+        titleEl.append("New chat");
+      } else {
+        titleEl.setText(c.title || "New chat");
+      }
+
       const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
       setIcon(x, "x");
       x.onclick = (e) => {
@@ -1021,7 +1032,17 @@ export class ChatView extends ItemView {
     const dot = head.createSpan({ cls: "mva-dot" });
     dot.style.background = ADAPTERS[c.provider].brandColor;
     dot.style.color = ADAPTERS[c.provider].brandColor;
-    head.createSpan({ cls: "mva-card-title", text: c.title || "New chat" });
+
+    // Detect placeholder conversations and render with distinct styling for consistency
+    const isPlaceholder = !c.title || (c.title === "New chat" && c.messages.length === 0);
+    const titleEl = head.createSpan({ cls: "mva-card-title" + (isPlaceholder ? " is-placeholder" : "") });
+
+    if (isPlaceholder) {
+      setIcon(titleEl, "pencil");
+      titleEl.append("New chat");
+    } else {
+      titleEl.setText(c.title || "New chat");
+    }
 
     const preview = this.convoPreview(c);
     card.createDiv({ cls: "mva-card-preview", text: preview || "Empty conversation" });
