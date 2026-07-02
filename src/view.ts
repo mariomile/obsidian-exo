@@ -150,6 +150,20 @@ interface AssistantCtx {
 /** Abort a turn if no event arrives for this long (avoids infinite loading). */
 const IDLE_TIMEOUT = 120_000;
 
+/** One rule per line: `Tool` or `Tool(argPrefix)`. `#` comments allowed. A bare
+ *  `Tool` matches any invocation; a prefix matches when argText starts with it. */
+function matchPermRule(rules: string, tool: string, argText: string): boolean {
+  for (const raw of rules.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^([\w-]+(?:__[\w-]+)*)(?:\((.*?)\))?$/);
+    if (!m || m[1] !== tool) continue;
+    const prefix = (m[2] ?? "").replace(/\*+$/, "");
+    if (!prefix || argText.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 let convoSeed = 0;
 
 export class ChatView extends ItemView {
@@ -2204,6 +2218,30 @@ export class ChatView extends ItemView {
     return tool;
   }
 
+  /** The argument text a permission rule matches against — the full command for
+   *  Bash, the target file path for write tools, "" otherwise. Mirrors the
+   *  argument axis of allowKey so hand-written and card-created rules agree. */
+  private permArgText(tool: string, input: unknown): string {
+    const i = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    if (tool === "Bash") return typeof i.command === "string" ? i.command.trim() : "";
+    const fp = toolFilePath(tool, input);
+    if (fp && ChatView.WRITE_TOOLS.test(tool)) return fp;
+    return "";
+  }
+
+  /** The permission-rule line equivalent to an "Always allow" card choice —
+   *  `Tool(argPrefix)` scoped like allowKey (leading command token / target path). */
+  private permRuleLine(tool: string, input: unknown): string {
+    const i = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    if (tool === "Bash") {
+      const first = (typeof i.command === "string" ? i.command : "").trim().split(/\s+/)[0] ?? "";
+      return first ? `Bash(${first})` : "Bash";
+    }
+    const fp = toolFilePath(tool, input);
+    if (fp && ChatView.WRITE_TOOLS.test(tool)) return `${tool}(${fp})`;
+    return tool;
+  }
+
   private addPermissionCard(
     ctx: AssistantCtx,
     c: Convo,
@@ -2255,6 +2293,15 @@ export class ChatView extends ItemView {
     alwaysBtn.setAttr("title", `Always allow ${scope} in this conversation`);
     alwaysBtn.onclick = () => {
       c.allow.add(this.allowKey(tool, input));
+      // Durable across sessions when enabled: append the equivalent rule line.
+      if (this.plugin.settings.rememberAlwaysAllow) {
+        const line = this.permRuleLine(tool, input);
+        const rules = this.plugin.settings.permAllowRules;
+        if (!rules.split("\n").some((l) => l.trim() === line)) {
+          this.plugin.settings.permAllowRules = (rules.trimEnd() ? rules.trimEnd() + "\n" : "") + line;
+          void this.plugin.saveSettings();
+        }
+      }
       settle({ behavior: "allow", remember: true });
     };
     actions.createEl("button", { cls: "mva-btn mva-btn-danger", text: "Deny" }).onclick = () =>
@@ -2587,7 +2634,14 @@ export class ChatView extends ItemView {
             if (isWrite && fp) void this.snapshot(checkpoint, fp).finally(() => e.resolve(d));
             else e.resolve(d);
           };
-          if ((s.autoAllowRead && isRead) || c.allow.has(this.allowKey(e.tool, e.input))) {
+          const argText = this.permArgText(e.tool, e.input);
+          if (matchPermRule(s.permDenyRules, e.tool, argText)) {
+            e.resolve({ behavior: "deny", message: "Denied by an Exo permission rule (settings)." });
+          } else if (
+            (s.autoAllowRead && isRead) ||
+            c.allow.has(this.allowKey(e.tool, e.input)) ||
+            matchPermRule(s.permAllowRules, e.tool, argText)
+          ) {
             allow({ behavior: "allow" });
           } else if (OBSIDIAN_MEMORY_TOOLS.has(e.tool) && !s.memoryWriteEnabled) {
             e.resolve({ behavior: "deny", message: "Memory writing is disabled in Exo settings." });
