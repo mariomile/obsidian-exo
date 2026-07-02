@@ -67,9 +67,16 @@ interface ToolCard {
 }
 
 /* ----- persisted data model ----- */
+export interface AskQuestion {
+  question: string;
+  header: string;
+  options: { label: string; description?: string }[];
+  multiSelect?: boolean;
+}
 type Segment =
   | { t: "text"; md: string }
-  | { t: "tool"; name: string; input: unknown; ok: boolean | null; output: string };
+  | { t: "tool"; name: string; input: unknown; ok: boolean | null; output: string }
+  | { t: "ask"; questions: AskQuestion[]; answers: Record<string, string> };
 /** Per-turn file snapshot for code rewind: path → content before the turn (null = didn't exist). */
 type Checkpoint = Map<string, string | null>;
 type Message =
@@ -107,6 +114,7 @@ interface Convo {
   streaming: boolean;
   stopped: boolean; // set by stop() so the turn renders as "Stopped", not an error
   pendingPerm: (() => void) | null; // cancels an open permission card on stop
+  pendingAsk: (() => void) | null; // cancels an open ask card on stop
   queue: { text: string; images?: ImageAttachment[] }[];
   pendingEl: HTMLElement | null; // container for queued-message chips
 }
@@ -157,6 +165,8 @@ export class ChatView extends ItemView {
   private obsidianAlwaysLoad = true;
   private obsidianMemoryWrite = true;
   private memoryPreamble = "";
+  /** The assistant turn an ask_user card should render into (set per turn). */
+  private askTargetCtx: AssistantCtx | null = null;
 
   private convos: Convo[] = [];
   private active!: Convo;
@@ -288,7 +298,12 @@ export class ChatView extends ItemView {
         this.obsidianAlwaysLoad !== wantAlwaysLoad ||
         this.obsidianMemoryWrite !== wantMemoryWrite)
     ) {
-      this.obsidianServer = createObsidianToolServer(this.app, wantAlwaysLoad, wantMemoryWrite);
+      this.obsidianServer = createObsidianToolServer(
+        this.app,
+        wantAlwaysLoad,
+        wantMemoryWrite,
+        (qs) => this.askBridge(qs)
+      );
       this.obsidianAlwaysLoad = wantAlwaysLoad;
       this.obsidianMemoryWrite = wantMemoryWrite;
     }
@@ -447,6 +462,7 @@ export class ChatView extends ItemView {
         streaming: false,
         stopped: false,
         pendingPerm: null,
+        pendingAsk: null,
         queue: [],
         pendingEl: null,
       };
@@ -549,6 +565,7 @@ export class ChatView extends ItemView {
       streaming: false,
       stopped: false,
       pendingPerm: null,
+      pendingAsk: null,
       queue: [],
       pendingEl: null,
     };
@@ -866,7 +883,13 @@ export class ChatView extends ItemView {
         m.role === "user"
           ? m.text
           : m.segments
-              .map((seg) => (seg.t === "text" ? seg.md : `↳ ${toolMeta(seg.name, seg.input).label}`))
+              .map((seg) =>
+                seg.t === "text"
+                  ? seg.md
+                  : seg.t === "ask"
+                    ? "↳ asked: " + seg.questions.map((q) => q.header).join(", ")
+                    : `↳ ${toolMeta(seg.name, seg.input).label}`
+              )
               .join(" ");
       s += part.replace(/[#*`>_~]/g, "").replace(/\s+/g, " ").trim() + "  ";
       if (s.length > 320) break;
@@ -1600,6 +1623,14 @@ export class ChatView extends ItemView {
           if (s.t === "text") {
             void MarkdownRenderer.render(this.app, s.md, body.createDiv({ cls: "mva-bubble markdown-rendered" }), "", this);
             full += s.md;
+          } else if (s.t === "ask") {
+            const card = body.createDiv({ cls: "mva-ask is-resolved" });
+            for (const q of s.questions) {
+              const qEl = card.createDiv({ cls: "mva-ask-q" });
+              qEl.createSpan({ cls: "mva-src-label", text: q.header });
+              qEl.createDiv({ cls: "mva-ask-question", text: q.question });
+              qEl.createDiv({ cls: "mva-ask-answer", text: `→ ${s.answers[q.header] ?? "—"}` });
+            }
           } else {
             const refs = this.createToolCard(body, s.name, s.input);
             this.finishToolCard(refs, s.ok !== false, s.output);
@@ -1674,6 +1705,7 @@ export class ChatView extends ItemView {
       renderTimer: null,
       todosEl: null,
     };
+    this.askTargetCtx = ctx;
     this.scrollConvo(c);
     return ctx;
   }
@@ -2228,6 +2260,130 @@ export class ChatView extends ItemView {
     this.scrollConvo(c);
   }
 
+  /* -------------------------------- ask ----------------------------- */
+
+  /** Bridge invoked by the in-process `ask_user` tool: render an ask card in the
+   *  current assistant turn and resolve with the user's choices (header → answer).
+   *  Rejects if there's no live turn (the tool then reports a graceful dismissal). */
+  private askBridge(questions: AskQuestion[]): Promise<Record<string, string>> {
+    const ctx = this.askTargetCtx;
+    const c = ctx?.convo ?? this.active;
+    return new Promise((resolve, reject) => {
+      if (!ctx) {
+        reject(new Error("no active turn"));
+        return;
+      }
+      this.renderAskCard(ctx, c, questions, resolve, reject);
+    });
+  }
+
+  /** Render a structured question card (permission-card pattern). A single
+   *  single-select question resolves on click; anything else needs a Submit. */
+  private renderAskCard(
+    ctx: AssistantCtx,
+    c: Convo,
+    questions: AskQuestion[],
+    resolve: (a: Record<string, string>) => void,
+    reject: (e: Error) => void
+  ): void {
+    this.dropThinking(ctx);
+    ctx.curTextEl = null;
+    ctx.curTextSeg = null;
+    const card = ctx.bodyEl.createDiv({ cls: "mva-ask" });
+    const answers: Record<string, string> = {};
+    const seg: Segment = { t: "ask", questions, answers };
+    ctx.segments.push(seg);
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      c.pendingAsk = null;
+      card.addClass("is-resolved");
+      card
+        .querySelectorAll("button,input")
+        .forEach((el) => (el as HTMLElement).setAttribute("disabled", "true"));
+      resolve(answers);
+    };
+    // Stop (or turn teardown) cancels the card → the tool reports a dismissal.
+    c.pendingAsk = () => {
+      if (done) return;
+      done = true;
+      c.pendingAsk = null;
+      reject(new Error("cancelled"));
+    };
+
+    const selections = questions.map(() => new Set<string>());
+    const maybeSubmit = () => {
+      if (questions.every((q, i) => selections[i].size > 0)) {
+        questions.forEach((q, i) => (answers[q.header] = [...selections[i]].join(", ")));
+        finish();
+      }
+    };
+
+    questions.forEach((q, i) => {
+      const qEl = card.createDiv({ cls: "mva-ask-q" });
+      qEl.createSpan({ cls: "mva-src-label", text: q.header });
+      qEl.createDiv({ cls: "mva-ask-question", text: q.question });
+      const opts = qEl.createDiv({ cls: "mva-ask-opts" });
+      const single = questions.length === 1 && !q.multiSelect;
+      for (const o of q.options) {
+        const b = opts.createEl("button", { cls: "mva-ask-opt" });
+        b.createDiv({ cls: "mva-ask-opt-label", text: o.label });
+        if (o.description) b.createDiv({ cls: "mva-ask-opt-desc", text: o.description });
+        b.onclick = () => {
+          if (q.multiSelect) {
+            const sel = !b.hasClass("is-sel");
+            b.toggleClass("is-sel", sel);
+            if (sel) selections[i].add(o.label);
+            else selections[i].delete(o.label);
+          } else {
+            opts.querySelectorAll(".mva-ask-opt").forEach((x) => (x as HTMLElement).removeClass("is-sel"));
+            b.addClass("is-sel");
+            selections[i].clear();
+            selections[i].add(o.label);
+            if (single) maybeSubmit();
+          }
+        };
+      }
+      // Trailing free-form "Other…" — replaces the prior typed value on each edit.
+      const other = qEl.createEl("input", {
+        cls: "mva-ask-other",
+        attr: { type: "text", placeholder: "Other…" },
+      });
+      let otherVal = "";
+      other.addEventListener("input", () => {
+        if (otherVal) selections[i].delete(otherVal);
+        otherVal = other.value.trim();
+        if (otherVal) {
+          if (!q.multiSelect) {
+            opts.querySelectorAll(".mva-ask-opt").forEach((x) => (x as HTMLElement).removeClass("is-sel"));
+            selections[i].clear();
+          }
+          selections[i].add(otherVal);
+        }
+      });
+      // Single-question single-select has no Submit button — let Enter resolve it.
+      if (single) {
+        other.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") {
+            ev.preventDefault();
+            maybeSubmit();
+          }
+        });
+      }
+    });
+
+    if (!(questions.length === 1 && !questions[0].multiSelect)) {
+      const actions = card.createDiv({ cls: "mva-ask-actions" });
+      actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Submit" }).onclick = () => {
+        questions.forEach((q, i) => (answers[q.header] = [...selections[i]].join(", ")));
+        if (Object.values(answers).some((v) => v)) finish();
+      };
+    }
+    this.scrollConvo(c);
+  }
+
   /* ----------------------------- send ------------------------------- */
 
   private scrollToBottom(): void {
@@ -2251,6 +2407,7 @@ export class ChatView extends ItemView {
     c.queue = [];
     this.renderQueue(c);
     c.pendingPerm?.(); // cancel any open permission card
+    c.pendingAsk?.(); // cancel any open ask card
     c.session?.interrupt();
   }
 
@@ -2338,13 +2495,30 @@ export class ChatView extends ItemView {
     // re-errors. Track it here and reset the session at turn end.
     let poisoned = false;
     let watchdog: number | null = null;
+    // While an interactive card (permission or ask) is pending, the user may take
+    // arbitrarily long to answer — suspend the idle watchdog so it can't fire.
+    let pendingInteractive = 0;
     const bump = () => {
+      if (pendingInteractive > 0) return; // don't arm while awaiting a user card
       if (watchdog !== null) window.clearTimeout(watchdog);
       watchdog = window.setTimeout(() => {
         timedOut = true;
         c.session?.interrupt();
       }, IDLE_TIMEOUT);
     };
+    const suspendWatchdog = () => {
+      pendingInteractive++;
+      if (watchdog !== null) {
+        window.clearTimeout(watchdog);
+        watchdog = null;
+      }
+    };
+    const resumeWatchdog = () => {
+      if (pendingInteractive > 0) pendingInteractive--;
+      if (pendingInteractive === 0) bump();
+    };
+    // Tool-use ids of pending ask_user calls, so their result resumes the watchdog.
+    const askIds = new Set<string>();
 
     const onEvent = (e: AgentEvent) => {
       bump();
@@ -2358,6 +2532,12 @@ export class ChatView extends ItemView {
         case "tool-call-start": {
           if (e.name === "TodoWrite") {
             this.renderTodos(ctx, e.input);
+            break;
+          }
+          if (e.name === "mcp__obsidian__ask_user") {
+            // The card is rendered by askBridge; suspend the watchdog until answered.
+            askIds.add(e.id);
+            suspendWatchdog();
             break;
           }
           this.addToolCard(ctx, e.id, e.name, e.input);
@@ -2377,6 +2557,11 @@ export class ChatView extends ItemView {
           break;
         }
         case "tool-call-result": {
+          if (askIds.has(e.id)) {
+            askIds.delete(e.id);
+            resumeWatchdog(); // the ask card has been answered/dismissed
+            break;
+          }
           this.resolveToolCard(ctx, e.id, e.ok, e.output);
           const wp = ctx.writeById.get(e.id);
           if (e.ok && wp && this.plugin.settings.revealEditedNotes && !ctx.revealed.has(wp)) {
@@ -2386,6 +2571,11 @@ export class ChatView extends ItemView {
           break;
         }
         case "permission-request": {
+          // ask_user is a user interaction, not a gated action — never card it.
+          if (e.tool === "mcp__obsidian__ask_user") {
+            e.resolve({ behavior: "allow" });
+            break;
+          }
           const isRead = READ_ONLY_TOOLS.has(e.tool) || OBSIDIAN_READ_TOOLS.has(e.tool);
           const fp = toolFilePath(e.tool, e.input);
           const isWrite =
@@ -2400,9 +2590,13 @@ export class ChatView extends ItemView {
           } else if (OBSIDIAN_MEMORY_TOOLS.has(e.tool) && !s.memoryWriteEnabled) {
             e.resolve({ behavior: "deny", message: "Memory writing is disabled in Exo settings." });
           } else {
-            this.addPermissionCard(ctx, c, e.tool, e.input, (d) =>
-              d.behavior === "allow" ? allow(d) : e.resolve(d)
-            );
+            // An open permission card also suspends the watchdog while the user decides.
+            suspendWatchdog();
+            this.addPermissionCard(ctx, c, e.tool, e.input, (d) => {
+              resumeWatchdog();
+              if (d.behavior === "allow") allow(d);
+              else e.resolve(d);
+            });
           }
           break;
         }
@@ -2481,6 +2675,7 @@ export class ChatView extends ItemView {
       if (watchdog !== null) window.clearTimeout(watchdog);
       await Promise.all(snapshots); // finalize the checkpoint even if the turn errored
       c.pendingPerm = null;
+      c.pendingAsk = null;
       // Confirm a user-initiated stop when nothing substantive was rendered.
       if (
         c.stopped &&
