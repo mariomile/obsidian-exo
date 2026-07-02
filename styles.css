@@ -70,26 +70,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 16px;
 }
 
-.mva-select {
-  font-size: 12.5px;
-  font-weight: 550;
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r1);
-  padding: 3px 8px;
-  cursor: pointer;
-  max-width: 40%;
-  transition: border-color var(--mva-t), background var(--mva-t);
-}
-.mva-select:hover {
-  border-color: var(--background-modifier-border-hover);
-}
-.mva-select:focus {
-  outline: none;
-  border-color: var(--mva-brand);
-}
-
 .mva-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -447,9 +427,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   animation: mva-spin 0.9s linear infinite;
 }
 
-.mva-error .mva-bubble {
-  color: var(--text-error);
-}
 .mva-faint {
   color: var(--text-faint);
   font-size: 12.5px;
@@ -783,21 +760,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 12px;
   height: 12px;
 }
-.mva-chip-add {
-  cursor: pointer;
-  color: var(--text-muted);
-  background: transparent;
-  border-style: dashed;
-  transition: color var(--mva-t), border-color var(--mva-t);
-}
-.mva-chip-add:hover {
-  color: var(--text-normal);
-  border-color: var(--background-modifier-border-hover);
-}
-.mva-chip-add .mva-chip-label {
-  font-family: inherit;
-}
-
 /* --------------------------- message actions -------------------------- */
 .mva-actions {
   display: flex;
