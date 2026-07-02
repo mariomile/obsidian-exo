@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify manifest version matches tag
+        run: |
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
+          if [ "$MANIFEST_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::manifest.json version ($MANIFEST_VERSION) does not match tag ($GITHUB_REF_NAME)"
+            exit 1
+          fi
+
+      - name: Enable pnpm
+        if: hashFiles('pnpm-lock.yaml') != ''
+        uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || 'npm' }}
+
+      - name: Install dependencies
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Build
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm build
+          else
+            npm run build
+          fi
+
+      - name: Run tests
+        run: |
+          if ! node -p "require('./package.json').scripts.test" >/dev/null 2>&1; then
+            echo "no test script, skipping"
+          elif [ -f pnpm-lock.yaml ]; then
+            pnpm test
+          else
+            npm test
+          fi
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSETS="main.js manifest.json"
+          [ -f styles.css ] && ASSETS="$ASSETS styles.css"
+          gh release create "$GITHUB_REF_NAME" $ASSETS \
+            --title "$(node -p "require('./manifest.json').name") $GITHUB_REF_NAME" \
+            --generate-notes
