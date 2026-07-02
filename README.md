@@ -35,6 +35,20 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 - The `claude` and/or `codex` CLI installed and logged in. Paths auto-detect; override in settings if needed.
 - Optional: the [Omnisearch](https://github.com/scambier/obsidian-omnisearch) plugin — if present, `search_vault` uses its index for better ranking.
 
+## Privacy & Security
+
+**Network use.** Exo itself makes no network requests and sends no telemetry — it collects no data and does not phone home to the plugin author or anyone else. What Exo *does* is spawn the **`claude`** and/or **`codex`** CLI that you already have installed and authenticated on your machine, as a local child process (this is why the plugin is desktop-only — see `isDesktopOnly` in `manifest.json`). Those CLIs are the ones that talk to the network: `claude` calls Anthropic's API, `codex` calls OpenAI's API, each using **your own existing CLI login / API key** — never a key or account belonging to Exo or its author.
+
+**What leaves your machine, and to whom.** When you send a message, the prompt text plus whatever context Exo attaches (the active note, `@`-mentioned files/folders, tool results, and — if you enable the Obsidian-native layer — `_system/` memory content) is passed to the CLI process, which forwards it to Anthropic (Claude) or OpenAI (Codex) as part of your own authenticated session with them. That data goes only to the provider you're using, governed by your own account/agreement with them — **nothing is sent to, or visible to, the Exo author.**
+
+**Your vault is the agent's working directory.** The CLI is launched with your vault as its working directory, so the agent can read, write, and edit files in your vault (and run shell commands) as directed by your prompts and its own reasoning.
+
+**What gates what the agent can do:**
+- **Claude backend** — Exo's permission system surfaces each tool call (Read/Write/Edit/Bash/etc.) as a card before it runs; sensitive actions (Edit, Write, unlisted Bash commands) require **Allow once / Always allow / Deny**, with a per-session allowlist and auto-allow limited to read-only tools. You control the permission mode (e.g. more/less restrictive) from the composer.
+- **Codex backend** — gated by Codex's own sandbox (`workspace-write`); per-action approvals are not yet wired into Exo's UI, so Codex relies entirely on its CLI-level sandbox settings.
+
+In short: Exo is a thin, local UI over CLIs you already trust and are already signed into — it adds no new network surface of its own, but it does give the agent read/write access to your vault, scoped by the permission/sandbox settings above.
+
 ## Install
 
 **Via [BRAT](https://github.com/TfTHacker/obsidian42-brat)** (recommended for now):
