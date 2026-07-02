@@ -7,6 +7,15 @@ type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
 const ok = (text: string): Result => ({ content: [{ type: "text", text }] });
 const err = (text: string): Result => ({ content: [{ type: "text", text }], isError: true });
 
+/** Structured question shape for `ask_user`. Duplicated from view.ts to avoid a
+ *  view→tools import cycle (tools.ts must not import from view.ts). */
+interface AskQuestion {
+  question: string;
+  header: string;
+  options: { label: string; description?: string }[];
+  multiSelect?: boolean;
+}
+
 const MAX_CONTENT = 8000;
 const SKIP_LARGER_THAN = 200_000;
 const MAX_SCAN_FILES = 2000; // cap the built-in fallback scan (Omnisearch has no such limit)
@@ -59,7 +68,12 @@ async function ensureParentFolder(app: App, path: string): Promise<void> {
  * `_system/` memory capture. Handlers run in-process and use the Obsidian API
  * (metadataCache/vault/fileManager) — no shell, graph- and frontmatter-aware.
  */
-export function createObsidianToolServer(app: App, alwaysLoad = true, memoryWrite = true) {
+export function createObsidianToolServer(
+  app: App,
+  alwaysLoad = true,
+  memoryWrite = true,
+  askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>
+) {
   const need = (target: string): TFile => {
     const f = resolveLink(app, target);
     if (!f) throw new Error(`Note not found: ${target}`);
@@ -226,6 +240,36 @@ export function createObsidianToolServer(app: App, alwaysLoad = true, memoryWrit
           (sel ? `selection:\n${sel}\n` : "") +
           `related: ${[...n.related, ...n.backlinks].slice(0, 8).map(basename).join(", ") || "(none)"}`
       );
+    }
+  );
+
+  const askUser = tool(
+    "ask_user",
+    "Ask the user structured questions with selectable options. Use this to resolve a genuine choice you can't infer — approach, scope, ambiguity between concrete options. Prefer it over asking in free text. Up to 4 questions; 2–6 options each; set multiSelect for multi-choice.",
+    {
+      questions: z
+        .array(
+          z.object({
+            question: z.string(),
+            header: z.string(),
+            options: z
+              .array(z.object({ label: z.string(), description: z.string().optional() }))
+              .min(2)
+              .max(6),
+            multiSelect: z.boolean().optional(),
+          })
+        )
+        .min(1)
+        .max(4),
+    },
+    async (args) => {
+      if (!askBridge) return ok("No user is present (headless run) — proceed with your best judgment.");
+      try {
+        const answers = await askBridge(args.questions as AskQuestion[]);
+        return ok(JSON.stringify(answers));
+      } catch (e) {
+        return ok(`User dismissed the question — proceed with your best judgment. (${e instanceof Error ? e.message : ""})`);
+      }
     }
   );
 
@@ -450,6 +494,7 @@ export function createObsidianToolServer(app: App, alwaysLoad = true, memoryWrit
       "Obsidian-native tools. Prefer these over generic file/Bash tools for vault work — they respect links, tags, and frontmatter.",
     tools: [
       searchVault, readNote, getBacklinks, getNeighborhood, listNotes, listTags, getActiveContext,
+      askUser,
       createNote, appendToNote, updateFrontmatter, addLinks, openNote,
       editNote, insertAtCursor, renameNote,
       ...(memoryWrite ? [captureDecision, logSession, captureLearning] : []),
