@@ -208,7 +208,10 @@ export class ChatView extends ItemView {
   private memoryPreamble = "";
   /** In-flight session spawns, so a pre-warm and a real send don't double-spawn
    *  (and leak) a CLI session for the same conversation. */
-  private sessionInit = new WeakMap<Convo, Promise<AgentSession>>();
+  private sessionInit = new WeakMap<Convo, { sig: string; promise: Promise<AgentSession> }>();
+  /** Monotonic per-convo spawn counter: a spawn only installs its session if no
+   *  newer spawn (or dropSession) superseded it while it was awaiting. */
+  private spawnSeq = new WeakMap<Convo, number>();
 
   private convos: Convo[] = [];
   private active!: Convo;
@@ -295,6 +298,10 @@ export class ChatView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    if (this.scrollRaf !== null) {
+      cancelAnimationFrame(this.scrollRaf);
+      this.scrollRaf = null;
+    }
     // this.active is always within this.convos, so the loop covers it.
     for (const c of this.convos) this.dropSession(c);
   }
@@ -332,17 +339,24 @@ export class ChatView extends ItemView {
   private ensureSession(c: Convo): Promise<AgentSession> {
     const sig = this.sessionSigOf(c);
     if (c.session && sig === c.sessionSig) return Promise.resolve(c.session);
+    // Reuse an in-flight spawn ONLY if it was started for the same config
+    // signature — a stale-sig spawn (settings changed mid-prewarm) must not be
+    // handed to a send that expects the new config.
     const inflight = this.sessionInit.get(c);
-    if (inflight) return inflight;
-    const p = this.spawnSession(c, sig);
-    this.sessionInit.set(c, p);
-    void p.finally(() => {
-      if (this.sessionInit.get(c) === p) this.sessionInit.delete(c);
-    });
-    return p;
+    if (inflight && inflight.sig === sig) return inflight.promise;
+    const promise = this.spawnSession(c, sig);
+    this.sessionInit.set(c, { sig, promise });
+    const cleanup = () => {
+      if (this.sessionInit.get(c)?.promise === promise) this.sessionInit.delete(c);
+    };
+    promise.then(cleanup, cleanup);
+    return promise;
   }
 
   private async spawnSession(c: Convo, sig: string): Promise<AgentSession> {
+    // Claim a spawn slot: any older in-flight spawn is superseded from now on.
+    const seq = (this.spawnSeq.get(c) ?? 0) + 1;
+    this.spawnSeq.set(c, seq);
     c.session?.dispose();
     const s = this.plugin.settings;
     const bin = c.provider === "claude" ? s.claudeBin : s.codexBin;
@@ -369,7 +383,7 @@ export class ChatView extends ItemView {
       memoryPreamble = this.memoryPreamble || undefined;
     }
 
-    c.session = ADAPTERS[c.provider].createSession({
+    const session = ADAPTERS[c.provider].createSession({
       cli,
       model: c.model,
       effort: s.effort,
@@ -387,11 +401,21 @@ export class ChatView extends ItemView {
       sandboxMode: s.codexSandbox,
       approvalPolicy: s.codexApproval,
     });
+    // Superseded while awaiting (newer spawn or dropSession): don't install —
+    // dispose the fresh session so it can't leak as an orphaned CLI process.
+    if (this.spawnSeq.get(c) !== seq) {
+      session.dispose();
+      throw new Error("Session spawn superseded.");
+    }
+    c.session = session;
     c.sessionSig = sig;
-    return c.session;
+    return session;
   }
 
   private dropSession(c: Convo): void {
+    // Supersede any in-flight spawn so it can't install a session after the drop.
+    this.spawnSeq.set(c, (this.spawnSeq.get(c) ?? 0) + 1);
+    this.sessionInit.delete(c);
     c.session?.dispose();
     c.session = null;
     c.sessionSig = "";
