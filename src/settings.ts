@@ -335,6 +335,47 @@ export class MVASettingTab extends PluginSettingTab {
         })
       );
 
+    new Setting(containerEl).setName("Permissions").setHeading();
+
+    new Setting(containerEl)
+      .setName("Remember 'Always allow' across sessions")
+      .setDesc("When you pick 'Always allow' on a permission card, also save it as an allow rule below so it survives a reload.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.rememberAlwaysAllow).onChange(async (v) => {
+          this.plugin.settings.rememberAlwaysAllow = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    const rulesDesc = "One per line: ToolName or ToolName(argument prefix). Deny wins. These apply before the permission card.";
+    new Setting(containerEl)
+      .setName("Always-allow rules")
+      .setDesc(rulesDesc)
+      .addTextArea((t) => {
+        t.setPlaceholder("Bash(git status)\nread_note")
+          .setValue(this.plugin.settings.permAllowRules)
+          .onChange(async (v) => {
+            this.plugin.settings.permAllowRules = v;
+            await this.plugin.saveSettings();
+          });
+        t.inputEl.rows = 4;
+        t.inputEl.style.fontFamily = "var(--font-monospace)";
+      });
+
+    new Setting(containerEl)
+      .setName("Deny rules")
+      .setDesc(rulesDesc)
+      .addTextArea((t) => {
+        t.setPlaceholder("Bash(rm)\nWrite")
+          .setValue(this.plugin.settings.permDenyRules)
+          .onChange(async (v) => {
+            this.plugin.settings.permDenyRules = v;
+            await this.plugin.saveSettings();
+          });
+        t.inputEl.rows = 4;
+        t.inputEl.style.fontFamily = "var(--font-monospace)";
+      });
+
     new Setting(containerEl).setName("Obsidian-native").setHeading();
     containerEl.createEl("p", {
       cls: "setting-item-description",
