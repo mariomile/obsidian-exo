@@ -62,8 +62,10 @@ export interface SessionOpts {
   permissionMode: PermissionMode;
   /** Whether tools (Read/Write/Edit/Bash/…) are enabled at all. */
   toolsEnabled: boolean;
-  /** Skip global hooks + MCP servers for faster cold start. */
+  /** Skip external MCP servers for faster cold start. */
   fastStartup: boolean;
+  /** Run Claude Code hooks (.claude/settings.json). CC parity — on by default. */
+  runHooks?: boolean;
   /** Resume a prior on-disk session id when (re)creating the session. */
   resumeSessionId?: string;
   /** In-process Obsidian MCP server (createSdkMcpServer return). Claude only. */

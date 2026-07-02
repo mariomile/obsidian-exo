@@ -119,6 +119,26 @@ async function gatherMcpServers(app: App): Promise<string[]> {
   return [...names].sort();
 }
 
+interface HookSummary {
+  event: string; // PreToolUse, PostToolUse, SessionStart, Notification, …
+  count: number; // number of matcher entries under that event
+}
+
+/** Read the `hooks` object from a Claude settings.json, tolerating missing/invalid JSON. */
+async function gatherHooks(path: string): Promise<HookSummary[]> {
+  try {
+    const json = JSON.parse(await readFile(path, "utf8")) as { hooks?: Record<string, unknown> };
+    const out: HookSummary[] = [];
+    for (const [event, matchers] of Object.entries(json.hooks ?? {})) {
+      out.push({ event, count: Array.isArray(matchers) ? matchers.length : 0 });
+    }
+    return out;
+  } catch {
+    /* missing / unreadable / not JSON — ignore */
+    return [];
+  }
+}
+
 /* ----------------------------- rendering ------------------------------ */
 
 interface Ctx {
@@ -243,6 +263,29 @@ export async function renderCapabilitiesPanel(
     const skills = mergeByName(await gatherFromVault(app, "skills"), await gatherFromScopes("skills"));
     if (!skills.length) empty(b, "None found.");
     for (const sk of skills) chip(b, sk.name, true);
+  }
+
+  // Hooks
+  {
+    const b = card("Hooks", ".claude/settings.json");
+    if (!s.runHooks) chip(b, "Disabled in settings", false, "Turn on 'Run Claude Code hooks' in settings");
+    const base = (app.vault.adapter as unknown as { getBasePath?(): string }).getBasePath?.();
+    const vaultHooks = base ? await gatherHooks(`${base}/.claude/settings.json`) : [];
+    const globalHooks = await gatherHooks(`${homedir()}/.claude/settings.json`);
+    const addScope = (list: HookSummary[], scope: string) => {
+      if (!list.length) return;
+      b.createSpan({ cls: "mva-faint", text: scope });
+      for (const h of list) chip(b, `${h.event} ×${h.count}`, s.runHooks, scope);
+    };
+    if (!vaultHooks.length && !globalHooks.length) {
+      empty(
+        b,
+        "No hooks configured. Hooks in .claude/settings.json run automatically (PreToolUse guards, formatters, notifications)."
+      );
+    } else {
+      addScope(vaultHooks, "vault");
+      addScope(globalHooks, "global");
+    }
   }
 
   // Tools
