@@ -117,6 +117,10 @@ interface Convo {
   pendingAsk: (() => void) | null; // cancels an open ask card on stop
   queue: { text: string; images?: ImageAttachment[] }[];
   pendingEl: HTMLElement | null; // container for queued-message chips
+  /** The in-flight assistant turn of THIS conversation (null when idle) — the
+   *  target for its session's ask_user cards, so parallel conversations can't
+   *  cross-render into each other's transcripts. */
+  currentCtx: AssistantCtx | null;
 }
 
 interface AssistantCtx {
@@ -205,8 +209,6 @@ export class ChatView extends ItemView {
   /** In-flight session spawns, so a pre-warm and a real send don't double-spawn
    *  (and leak) a CLI session for the same conversation. */
   private sessionInit = new WeakMap<Convo, Promise<AgentSession>>();
-  /** The assistant turn an ask_user card should render into (set per turn). */
-  private askTargetCtx: AssistantCtx | null = null;
 
   private convos: Convo[] = [];
   private active!: Convo;
@@ -355,7 +357,9 @@ export class ChatView extends ItemView {
     // zod schemas), and the settings it depends on are read at creation time.
     const obsidianServer = useObsidian
       ? createObsidianToolServer(this.app, !s.contextSavingMode, s.memoryWriteEnabled, (qs) =>
-          this.askBridge(qs)
+          // Per-session server + per-convo closure: ask_user always renders into
+          // the conversation that owns this session, never a parallel one.
+          this.askBridge(c, qs)
         )
       : undefined;
 
@@ -530,6 +534,7 @@ export class ChatView extends ItemView {
         pendingAsk: null,
         queue: [],
         pendingEl: null,
+        currentCtx: null,
       };
       this.renderConvoDom(c);
       this.wireScroll(c);
@@ -634,6 +639,7 @@ export class ChatView extends ItemView {
       pendingAsk: null,
       queue: [],
       pendingEl: null,
+      currentCtx: null,
     };
     this.wireScroll(c);
     return c;
@@ -1777,7 +1783,6 @@ export class ChatView extends ItemView {
       taskCards: new Map(),
       nestedRows: new Map(),
     };
-    this.askTargetCtx = ctx;
     this.scrollConvo(c);
     return ctx;
   }
@@ -2500,13 +2505,14 @@ export class ChatView extends ItemView {
 
   /* -------------------------------- ask ----------------------------- */
 
-  /** Bridge invoked by the in-process `ask_user` tool: render an ask card in the
-   *  current assistant turn and resolve with the user's choices (header → answer).
+  /** Bridge invoked by the in-process `ask_user` tool: render an ask card into
+   *  the OWNING conversation's in-flight turn and resolve with the user's choices
+   *  (header → answer). The owning convo is captured by the per-session server
+   *  closure, so parallel conversations can't cross-render.
    *  Rejects if there's no live turn (the tool then reports a graceful dismissal). */
-  private askBridge(questions: AskQuestion[]): Promise<Record<string, string>> {
-    const ctx = this.askTargetCtx;
-    const c = ctx?.convo ?? this.active;
+  private askBridge(c: Convo, questions: AskQuestion[]): Promise<Record<string, string>> {
     return new Promise((resolve, reject) => {
+      const ctx = c.currentCtx;
       if (!ctx) {
         reject(new Error("no active turn"));
         return;
@@ -2840,6 +2846,7 @@ export class ChatView extends ItemView {
 
     this.addUserTurn(c, text, imgs);
     const ctx = this.addAssistantTurn(c, text);
+    c.currentCtx = ctx; // target for this conversation's ask_user cards
     c.stopped = false;
     this.setStreaming(c, true);
 
@@ -3069,6 +3076,7 @@ export class ChatView extends ItemView {
       c.pendingPerm = null;
       c.pendingAsk?.();
       c.pendingAsk = null;
+      c.currentCtx = null; // this turn is over — late ask_user calls reject cleanly
       // Confirm a user-initiated stop when nothing substantive was rendered.
       if (
         c.stopped &&
