@@ -1227,69 +1227,162 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 10px 12px;
 }
 .mva-ask-q {
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 .mva-ask-q:last-child {
   margin-bottom: 0;
 }
+/* Header chip — accent-tinted rounded pill on its own line. */
+.mva-ask-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.mva-ask-chip.is-answered::after {
+  content: "✓";
+  font-size: 10px;
+  color: var(--interactive-accent);
+}
 .mva-ask-question {
   font-weight: 600;
+  font-size: 13px;
   color: var(--text-normal);
-  margin: 2px 0 6px;
+  margin: 5px 0 7px;
 }
 .mva-ask-opts {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
+/* Selectable option row. Explicitly overrides Obsidian's global <button> rules
+   (centered text, fixed height, box-shadow) so long labels/descriptions wrap
+   left-aligned inside the card instead of spilling or truncating. */
 .mva-ask-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  height: auto;
   text-align: left;
-  padding: 7px 10px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r1);
+  border-radius: 6px;
   background: var(--background-primary);
+  color: var(--text-normal);
+  font: inherit;
   cursor: pointer;
   box-shadow: none;
+  transition: border-color 120ms ease, background-color 120ms ease;
 }
 .mva-ask-opt:hover {
   border-color: var(--background-modifier-border-hover);
+  background: var(--background-modifier-hover);
 }
 .mva-ask-opt.is-sel {
   border-color: var(--interactive-accent);
-  background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+  background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
+}
+/* Leading radio (single) / checkbox (multi) indicator drawn in CSS. */
+.mva-ask-ind {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  border: 1.5px solid var(--background-modifier-border);
+  box-sizing: border-box;
+}
+.mva-ask-opt.is-single .mva-ask-ind {
+  border-radius: 50%;
+}
+.mva-ask-opt.is-multi .mva-ask-ind {
+  border-radius: 3px;
+}
+.mva-ask-opt.is-sel .mva-ask-ind {
+  border-color: var(--interactive-accent);
+  background: var(--interactive-accent);
+  box-shadow: inset 0 0 0 2px var(--background-primary);
+}
+.mva-ask-ind-pencil {
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.mva-ask-ind-pencil .svg-icon {
+  width: 13px;
+  height: 13px;
+}
+/* Text column — min-width:0 lets long content wrap inside the card. */
+.mva-ask-opt-text {
+  min-width: 0;
+  flex: 1;
 }
 .mva-ask-opt-label {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--text-normal);
-  font-weight: 550;
+  font-weight: 600;
 }
 .mva-ask-opt-desc {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text-muted);
   margin-top: 2px;
+  font-weight: 400;
+}
+/* Ghost "Other…" row — dashed border, expands an inline input in place. */
+.mva-ask-other-row {
+  border-style: dashed;
+}
+.mva-ask-other-row .mva-ask-opt-label {
+  color: var(--text-muted);
+  font-weight: 500;
 }
 .mva-ask-other {
   width: 100%;
-  margin-top: 6px;
-  padding: 5px 8px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r1);
-  background: var(--background-primary);
+  min-width: 0;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
   color: var(--text-normal);
-  font-size: 12px;
+  font-size: 13px;
+  box-shadow: none;
+}
+.mva-ask-other:focus {
+  box-shadow: none;
+  outline: none;
 }
 .mva-ask-actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: 8px;
+  margin-top: 10px;
+}
+.mva-ask-actions .mva-btn.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
 .mva-ask-answer {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text-muted);
   margin-top: 4px;
+  overflow-wrap: anywhere;
 }
 .mva-ask.is-resolved {
-  opacity: 0.75;
+  opacity: 0.85;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mva-ask-opt {
+    transition: border-color 120ms ease;
+  }
 }
 
 /* ------------------------------ buttons ------------------------------- */
