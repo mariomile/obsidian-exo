@@ -1708,13 +1708,8 @@ export class ChatView extends ItemView {
             void MarkdownRenderer.render(this.app, s.md, body.createDiv({ cls: "mva-bubble markdown-rendered" }), "", this);
             full += s.md;
           } else if (s.t === "ask") {
-            const card = body.createDiv({ cls: "mva-ask is-resolved" });
-            for (const q of s.questions) {
-              const qEl = card.createDiv({ cls: "mva-ask-q" });
-              qEl.createSpan({ cls: "mva-src-label", text: q.header });
-              qEl.createDiv({ cls: "mva-ask-question", text: q.question });
-              qEl.createDiv({ cls: "mva-ask-answer", text: `→ ${s.answers[q.header] ?? "—"}` });
-            }
+            const card = body.createDiv({ cls: "mva-ask" });
+            this.renderAskSummary(card, s.questions, s.answers);
           } else {
             const refs = this.createToolCard(body, s.name, s.input);
             this.finishToolCard(refs, s.ok !== false, s.output);
@@ -2551,10 +2546,9 @@ export class ChatView extends ItemView {
       if (done) return;
       done = true;
       c.pendingAsk = null;
-      card.addClass("is-resolved");
-      card
-        .querySelectorAll("button,input")
-        .forEach((el) => (el as HTMLElement).setAttribute("disabled", "true"));
+      // Collapse to the same compact summary used when the transcript is restored,
+      // so live-resolved and reloaded cards look identical.
+      this.renderAskSummary(card, questions, answers);
       resolve(answers);
     };
     // Stop (or turn teardown) cancels the card → the tool reports a dismissal.
@@ -2573,67 +2567,150 @@ export class ChatView extends ItemView {
       }
     };
 
+    // Submit is enabled only once every question has a selection (multi-question
+    // cards); the single-question single-select case resolves without a Submit.
+    let submitBtn: HTMLButtonElement | null = null;
+    const allAnswered = () => questions.every((_, i) => selections[i].size > 0);
+    const updateSubmit = () => submitBtn?.toggleClass("is-disabled", !allAnswered());
+
     questions.forEach((q, i) => {
       const qEl = card.createDiv({ cls: "mva-ask-q" });
-      qEl.createSpan({ cls: "mva-src-label", text: q.header });
+      const chip = qEl.createSpan({ cls: "mva-ask-chip", text: q.header });
       qEl.createDiv({ cls: "mva-ask-question", text: q.question });
       const opts = qEl.createDiv({ cls: "mva-ask-opts" });
       const single = questions.length === 1 && !q.multiSelect;
+      // Only multi-question cards get the per-question answered check.
+      const markChip = () => {
+        if (questions.length > 1) chip.toggleClass("is-answered", selections[i].size > 0);
+      };
+
+      let otherVal = "";
+      let otherInput: HTMLInputElement | null = null;
+
       for (const o of q.options) {
-        const b = opts.createEl("button", { cls: "mva-ask-opt" });
-        b.createDiv({ cls: "mva-ask-opt-label", text: o.label });
-        if (o.description) b.createDiv({ cls: "mva-ask-opt-desc", text: o.description });
+        const b = opts.createEl("button", {
+          cls: `mva-ask-opt ${q.multiSelect ? "is-multi" : "is-single"}`,
+        });
+        b.createSpan({ cls: "mva-ask-ind" });
+        const txt = b.createDiv({ cls: "mva-ask-opt-text" });
+        txt.createDiv({ cls: "mva-ask-opt-label", text: o.label });
+        if (o.description) txt.createDiv({ cls: "mva-ask-opt-desc", text: o.description });
         b.onclick = () => {
           if (q.multiSelect) {
             const sel = !b.hasClass("is-sel");
             b.toggleClass("is-sel", sel);
             if (sel) selections[i].add(o.label);
             else selections[i].delete(o.label);
+            markChip();
+            updateSubmit();
           } else {
             opts.querySelectorAll(".mva-ask-opt").forEach((x) => (x as HTMLElement).removeClass("is-sel"));
             b.addClass("is-sel");
             selections[i].clear();
             selections[i].add(o.label);
-            if (single) maybeSubmit();
+            // Picking a preset option deselects any typed "Other" value.
+            if (otherVal) selections[i].delete(otherVal);
+            otherVal = "";
+            if (otherInput) otherInput.value = "";
+            markChip();
+            if (single) {
+              maybeSubmit();
+              return;
+            }
+            updateSubmit();
           }
         };
       }
-      // Trailing free-form "Other…" — replaces the prior typed value on each edit.
-      const other = qEl.createEl("input", {
-        cls: "mva-ask-other",
-        attr: { type: "text", placeholder: "Other…" },
-      });
-      let otherVal = "";
-      other.addEventListener("input", () => {
+
+      // Ghost "Other…" row at the end — expands an inline input; the typed value
+      // participates in the selection exactly like an option label.
+      const otherRow = opts.createEl("button", { cls: "mva-ask-opt mva-ask-other-row" });
+      setIcon(otherRow.createSpan({ cls: "mva-ask-ind mva-ask-ind-pencil" }), "pencil");
+      const otherTxt = otherRow.createDiv({ cls: "mva-ask-opt-text" });
+      const otherLabel = otherTxt.createDiv({ cls: "mva-ask-opt-label", text: "Other…" });
+      const onOtherInput = () => {
         if (otherVal) selections[i].delete(otherVal);
-        otherVal = other.value.trim();
+        otherVal = (otherInput?.value ?? "").trim();
         if (otherVal) {
           if (!q.multiSelect) {
             opts.querySelectorAll(".mva-ask-opt").forEach((x) => (x as HTMLElement).removeClass("is-sel"));
             selections[i].clear();
           }
           selections[i].add(otherVal);
+          otherRow.addClass("is-sel");
+        } else {
+          otherRow.removeClass("is-sel");
         }
-      });
-      // Single-question single-select has no Submit button — let Enter resolve it.
-      if (single) {
-        other.addEventListener("keydown", (ev) => {
-          if (ev.key === "Enter") {
-            ev.preventDefault();
-            maybeSubmit();
-          }
+        markChip();
+        updateSubmit();
+      };
+      const expandOther = () => {
+        if (otherInput) {
+          otherInput.focus();
+          return;
+        }
+        otherLabel.remove();
+        otherInput = otherTxt.createEl("input", {
+          cls: "mva-ask-other",
+          attr: { type: "text", placeholder: "Type your answer…" },
         });
-      }
+        // Clicks inside the input must not re-fire the row's expand handler.
+        otherInput.addEventListener("click", (ev) => ev.stopPropagation());
+        otherInput.addEventListener("input", onOtherInput);
+        // Single-question single-select has no Submit button — let Enter resolve it.
+        if (single) {
+          otherInput.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") {
+              ev.preventDefault();
+              maybeSubmit();
+            }
+          });
+        }
+        otherInput.focus();
+      };
+      otherRow.onclick = () => expandOther();
+
+      // Arrow-key navigation within a question's option rows (Enter/Space are
+      // native button activation).
+      opts.addEventListener("keydown", (ev) => {
+        if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+        const rows = Array.from(opts.querySelectorAll<HTMLElement>(".mva-ask-opt"));
+        const idx = rows.indexOf(document.activeElement as HTMLElement);
+        if (idx < 0) return;
+        ev.preventDefault();
+        const next = ev.key === "ArrowDown" ? (idx + 1) % rows.length : (idx - 1 + rows.length) % rows.length;
+        rows[next].focus();
+      });
     });
 
     if (!(questions.length === 1 && !questions[0].multiSelect)) {
       const actions = card.createDiv({ cls: "mva-ask-actions" });
-      actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Submit" }).onclick = () => {
+      submitBtn = actions.createEl("button", { cls: "mva-btn mva-btn-primary is-disabled", text: "Submit" });
+      submitBtn.onclick = () => {
+        if (!allAnswered()) return;
         questions.forEach((q, i) => (answers[q.header] = [...selections[i]].join(", ")));
         if (Object.values(answers).some((v) => v)) finish();
       };
+      updateSubmit();
     }
     this.scrollConvo(c);
+  }
+
+  /** Compact resolved view of an ask card: header chip + question + chosen answer
+   *  per question. Shared by live-resolve and transcript restore so they match. */
+  private renderAskSummary(
+    card: HTMLElement,
+    questions: AskQuestion[],
+    answers: Record<string, string>
+  ): void {
+    card.empty();
+    card.addClass("is-resolved");
+    for (const q of questions) {
+      const qEl = card.createDiv({ cls: "mva-ask-q" });
+      qEl.createSpan({ cls: "mva-ask-chip", text: q.header });
+      qEl.createDiv({ cls: "mva-ask-question", text: q.question });
+      qEl.createDiv({ cls: "mva-ask-answer", text: `→ ${answers[q.header] ?? "—"}` });
+    }
   }
 
   /* ----------------------------- send ------------------------------- */
