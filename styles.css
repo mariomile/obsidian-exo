@@ -248,6 +248,15 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-bubble > :last-child {
   margin-bottom: 0;
 }
+/* Incremental streaming: the bubble is split into stable block divs + a live
+   tail during a turn. Zero the leading margin of each fragment's first child so
+   the top of the bubble and the inter-block rhythm match a single render (the
+   previous block's bottom margin still provides the gap via margin collapsing).
+   The turn-end flush renders one clean pass directly into the bubble. */
+.mva-md-block > :first-child,
+.mva-md-tail > :first-child {
+  margin-top: 0;
+}
 .mva-bubble p {
   margin: 0.5em 0;
 }

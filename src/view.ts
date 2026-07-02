@@ -126,6 +126,10 @@ interface AssistantCtx {
   segById: Map<string, Segment>;
   segments: Segment[];
   curTextEl: HTMLElement | null;
+  /** Chars of curRaw already rendered into stable (final) blocks. */
+  stableLen: number;
+  /** Live tail element re-rendered each tick (holds the not-yet-stable suffix). */
+  tailEl: HTMLElement | null;
   curTextSeg: { t: "text"; md: string } | null;
   curRaw: string;
   fullText: string;
@@ -155,6 +159,22 @@ interface AssistantCtx {
 
 /** Abort a turn if no event arrives for this long (avoids infinite loading). */
 const IDLE_TIMEOUT = 120_000;
+
+/** Index just after the last blank-line block boundary that is not inside a
+ * ``` fence, or 0. Rendering the prefix up to here is layout-stable. */
+function stableBoundary(md: string): number {
+  let fence = false,
+    last = 0;
+  const lines = md.split("\n");
+  let pos = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^(```|~~~)/.test(line.trim())) fence = !fence;
+    pos += line.length + 1;
+    if (!fence && line.trim() === "" && i < lines.length - 1) last = pos;
+  }
+  return last;
+}
 
 /** One rule per line: `Tool` or `Tool(argPrefix)`. `#` comments allowed. A bare
  *  `Tool` matches any invocation; a prefix matches when argText starts with it. */
@@ -1711,6 +1731,8 @@ export class ChatView extends ItemView {
       segById: new Map(),
       segments: [],
       curTextEl: null,
+      stableLen: 0,
+      tailEl: null,
       curTextSeg: null,
       curRaw: "",
       fullText: "",
@@ -1760,6 +1782,8 @@ export class ChatView extends ItemView {
     if (!ctx.curTextEl) {
       ctx.curTextEl = ctx.bodyEl.createDiv({ cls: "mva-bubble markdown-rendered" });
       ctx.curRaw = "";
+      ctx.stableLen = 0;
+      ctx.tailEl = null;
       ctx.curTextSeg = { t: "text", md: "" };
       ctx.segments.push(ctx.curTextSeg);
     }
@@ -1775,6 +1799,8 @@ export class ChatView extends ItemView {
     if (!Array.isArray(todos)) return;
     this.dropThinking(ctx);
     ctx.curTextEl = null;
+    ctx.stableLen = 0;
+    ctx.tailEl = null;
     ctx.curTextSeg = null;
     if (!ctx.todosEl) ctx.todosEl = ctx.bodyEl.createDiv({ cls: "mva-todos" });
     const el = ctx.todosEl;
@@ -1798,16 +1824,41 @@ export class ChatView extends ItemView {
   private renderText(ctx: AssistantCtx, streaming = false): void {
     if (!ctx.curTextEl) return;
     const el = ctx.curTextEl;
-    let md = ctx.curRaw || "";
-    // Wikilink-ify only on the final render, scoped to the notes touched this turn.
-    if (!streaming && this.plugin.settings.featureWikilinkify) {
-      md = wikilinkify(md, [...ctx.sources, ...ctx.touched.map((t) => t.path)]);
+    const raw = ctx.curRaw || "";
+
+    if (!streaming) {
+      // Final render: one full, clean re-render of the whole reply (with
+      // wikilinkify), matching the pre-incremental semantics exactly.
+      ctx.tailEl = null;
+      ctx.stableLen = 0;
+      el.empty();
+      let md = raw;
+      if (this.plugin.settings.featureWikilinkify) {
+        md = wikilinkify(md, [...ctx.sources, ...ctx.touched.map((t) => t.path)]);
+      }
+      void MarkdownRenderer.render(this.app, md, el, "", this).then(() => {
+        this.clearCarets(ctx.convo.listEl);
+      });
+      return;
     }
-    el.empty();
-    void MarkdownRenderer.render(this.app, md, el, "", this).then(() => {
-      // Keep at most one caret — on the element that's currently streaming.
+
+    // Streaming tick: promote any newly-completed blocks to a stable, render-once
+    // child, then re-render only the live tail (O(tail) per tick).
+    const b = stableBoundary(raw);
+    if (b > ctx.stableLen) {
+      const block = ctx.curTextEl.createDiv({ cls: "mva-md-block markdown-rendered" });
+      // Insert the stable block before the tail so ordering stays correct.
+      if (ctx.tailEl) ctx.curTextEl.insertBefore(block, ctx.tailEl);
+      void MarkdownRenderer.render(this.app, raw.slice(ctx.stableLen, b), block, "", this);
+      ctx.stableLen = b;
+    }
+    if (!ctx.tailEl) ctx.tailEl = ctx.curTextEl.createDiv({ cls: "mva-md-tail markdown-rendered" });
+    const tail = ctx.tailEl;
+    tail.empty();
+    void MarkdownRenderer.render(this.app, raw.slice(ctx.stableLen), tail, "", this).then(() => {
+      // Keep at most one caret — on the tail that's currently streaming.
       this.clearCarets(ctx.convo.listEl);
-      if (streaming && el.isConnected) el.createSpan({ cls: "mva-caret" });
+      if (tail.isConnected) tail.createSpan({ cls: "mva-caret" });
     });
   }
 
@@ -1818,11 +1869,11 @@ export class ChatView extends ItemView {
 
   private scheduleRender(ctx: AssistantCtx): void {
     if (ctx.renderTimer !== null) return;
-    // Each streamed render re-parses the whole accumulated markdown, so the cost
-    // grows with length. Stretch the debounce as the reply grows to keep long
-    // replies smooth (the turn-end flushRender always does the final full render).
+    // Per-tick work is now O(tail) (stable blocks render once), so length matters
+    // far less — keep only a mild ladder for very chatty streams. The turn-end
+    // flushRender always does the final full clean re-render.
     const len = ctx.curRaw.length;
-    const delay = len > 8000 ? 400 : len > 3000 ? 200 : len > 1000 ? 120 : 60;
+    const delay = len > 8000 ? 150 : len > 3000 ? 100 : 60;
     ctx.renderTimer = window.setTimeout(() => {
       ctx.renderTimer = null;
       this.renderText(ctx, true);
@@ -2188,6 +2239,8 @@ export class ChatView extends ItemView {
   private addToolCard(ctx: AssistantCtx, id: string, name: string, input: unknown): void {
     this.dropThinking(ctx);
     ctx.curTextEl = null;
+    ctx.stableLen = 0;
+    ctx.tailEl = null;
     ctx.curTextSeg = null;
     const refs = this.createToolCard(ctx.bodyEl, name, input);
     ctx.cards.set(id, refs);
@@ -2355,6 +2408,8 @@ export class ChatView extends ItemView {
   ): void {
     this.dropThinking(ctx);
     ctx.curTextEl = null;
+    ctx.stableLen = 0;
+    ctx.tailEl = null;
     ctx.curTextSeg = null;
     const meta = toolMeta(tool, input);
     const card = ctx.bodyEl.createDiv({ cls: "mva-perm" });
@@ -2441,6 +2496,8 @@ export class ChatView extends ItemView {
   ): void {
     this.dropThinking(ctx);
     ctx.curTextEl = null;
+    ctx.stableLen = 0;
+    ctx.tailEl = null;
     ctx.curTextSeg = null;
     const card = ctx.bodyEl.createDiv({ cls: "mva-ask" });
     const answers: Record<string, string> = {};
