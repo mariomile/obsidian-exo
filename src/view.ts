@@ -2333,6 +2333,10 @@ export class ChatView extends ItemView {
 
     // Watchdog: reset on every event; fire if the turn stalls with no output.
     let timedOut = false;
+    // An error_during_execution result resolves the turn (no throw), so the catch's
+    // dropSession never runs — the CLI session stays poisoned and every later turn
+    // re-errors. Track it here and reset the session at turn end.
+    let poisoned = false;
     let watchdog: number | null = null;
     const bump = () => {
       if (watchdog !== null) window.clearTimeout(watchdog);
@@ -2427,7 +2431,11 @@ export class ChatView extends ItemView {
               ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
             }
           } else {
+            // An execution error poisons the CLI session — resuming/reusing it
+            // re-errors on every subsequent turn. Reset it at turn end (below).
+            poisoned = true;
             this.renderError(ctx, e.message);
+            ctx.bodyEl.createSpan({ cls: "mva-faint", text: "The next message starts a fresh session." });
           }
           break;
       }
@@ -2490,6 +2498,12 @@ export class ChatView extends ItemView {
         });
       }
       c.updatedAt = Date.now();
+      // A poisoned session is reused by ensureSession and re-errors forever; drop it
+      // (object + resume id) so the next message in this conversation starts clean.
+      if (poisoned && !c.stopped) {
+        this.dropSession(c);
+        c.sessionId = undefined;
+      }
       this.setStreaming(c, false);
       this.persist();
       this.scrollConvo(c);
