@@ -408,8 +408,15 @@ export function createObsidianToolServer(app: App, alwaysLoad = true, memoryWrit
 
   const captureLearning = tool(
     "capture_learning",
-    "Record a learning/pattern into _system/memory/learnings/.",
-    { title: z.string(), observation: z.string(), evidence: z.string().optional(), context: z.string().optional() },
+    "Record a learning/pattern into _system/memory/learnings/. Set provenance='stated' when the user explicitly told you this (trusted higher than 'inferred').",
+    {
+      title: z.string(),
+      observation: z.string(),
+      evidence: z.string().optional(),
+      context: z.string().optional(),
+      provenance: z.enum(["stated", "inferred"]).optional(),
+      confidence: z.enum(["low", "med", "high"]).optional(),
+    },
     async (args) => {
       const path = `_system/memory/learnings/${today()}-${slugify(args.title)}.md`;
       if (app.vault.getAbstractFileByPath(path)) return err(`Already exists: ${path}`);
@@ -424,6 +431,11 @@ export function createObsidianToolServer(app: App, alwaysLoad = true, memoryWrit
         f.type = "memory";
         f.created_by = "exo";
         f.created = today();
+        f.provenance = args.provenance ?? "inferred";
+        f.confidence = args.confidence ?? "med";
+        f.evidence = 1;
+        f.status = "candidate";
+        f.last_confirmed = today();
         f.tags = ["type/memory"];
       });
       return ok(`Captured learning → [[${path}]]`);
