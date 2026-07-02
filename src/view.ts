@@ -1835,10 +1835,7 @@ export class ChatView extends ItemView {
     const todos = (input as { todos?: Array<{ content?: string; status?: string }> })?.todos;
     if (!Array.isArray(todos)) return;
     this.dropThinking(ctx);
-    ctx.curTextEl = null;
-    ctx.stableLen = 0;
-    ctx.tailEl = null;
-    ctx.curTextSeg = null;
+    this.resetTextStream(ctx);
     if (!ctx.todosEl) ctx.todosEl = ctx.bodyEl.createDiv({ cls: "mva-todos" });
     const el = ctx.todosEl;
     el.empty();
@@ -1893,15 +1890,29 @@ export class ChatView extends ItemView {
     const tail = ctx.tailEl;
     tail.empty();
     void MarkdownRenderer.render(this.app, raw.slice(ctx.stableLen), tail, "", this).then(() => {
-      // Keep at most one caret — on the tail that's currently streaming.
+      // Keep at most one caret — on the tail that's currently streaming. Skip if
+      // the segment was interrupted while this render was in flight (tailEl was
+      // reset), so an in-flight tick can't resurrect an orphaned caret.
+      if (ctx.tailEl !== tail || !tail.isConnected) return;
       this.clearCarets(ctx.convo.listEl);
-      if (tail.isConnected) tail.createSpan({ cls: "mva-caret" });
+      tail.createSpan({ cls: "mva-caret" });
     });
   }
 
   /** Remove every streaming caret in a conversation's list. */
   private clearCarets(root: HTMLElement): void {
     root.querySelectorAll(".mva-caret").forEach((c) => c.remove());
+  }
+
+  /** End the current text segment: null the stream targets, reset the incremental
+   *  renderer state, and clear the caret left on the abandoned tail. Call at every
+   *  site that interrupts a text segment (todos, tool card, permission, ask, error). */
+  private resetTextStream(ctx: AssistantCtx): void {
+    ctx.curTextEl = null;
+    ctx.stableLen = 0;
+    ctx.tailEl = null;
+    ctx.curTextSeg = null;
+    this.clearCarets(ctx.convo.listEl);
   }
 
   private scheduleRender(ctx: AssistantCtx): void {
@@ -2275,10 +2286,7 @@ export class ChatView extends ItemView {
 
   private addToolCard(ctx: AssistantCtx, id: string, name: string, input: unknown): void {
     this.dropThinking(ctx);
-    ctx.curTextEl = null;
-    ctx.stableLen = 0;
-    ctx.tailEl = null;
-    ctx.curTextSeg = null;
+    this.resetTextStream(ctx);
     const refs = this.createToolCard(ctx.bodyEl, name, input);
     ctx.cards.set(id, refs);
     const seg: Segment = { t: "tool", name, input, ok: null, output: "" };
@@ -2444,10 +2452,7 @@ export class ChatView extends ItemView {
     resolve: (d: { behavior: "allow"; remember?: boolean } | { behavior: "deny"; message?: string }) => void
   ): void {
     this.dropThinking(ctx);
-    ctx.curTextEl = null;
-    ctx.stableLen = 0;
-    ctx.tailEl = null;
-    ctx.curTextSeg = null;
+    this.resetTextStream(ctx);
     const meta = toolMeta(tool, input);
     const card = ctx.bodyEl.createDiv({ cls: "mva-perm" });
     const head = card.createDiv({ cls: "mva-perm-head" });
@@ -2532,10 +2537,7 @@ export class ChatView extends ItemView {
     reject: (e: Error) => void
   ): void {
     this.dropThinking(ctx);
-    ctx.curTextEl = null;
-    ctx.stableLen = 0;
-    ctx.tailEl = null;
-    ctx.curTextSeg = null;
+    this.resetTextStream(ctx);
     const card = ctx.bodyEl.createDiv({ cls: "mva-ask" });
     const answers: Record<string, string> = {};
     const seg: Segment = { t: "ask", questions, answers };
@@ -3013,8 +3015,7 @@ export class ChatView extends ItemView {
           break;
         case "error":
           this.dropThinking(ctx);
-          ctx.curTextEl = null;
-          ctx.curTextSeg = null;
+          this.resetTextStream(ctx);
           if (c.stopped) {
             // User pressed Stop — the provider reports an execution error as it
             // unwinds; render it as a clean stop, not a scary error.
