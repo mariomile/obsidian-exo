@@ -3550,7 +3550,13 @@ export class ChatView extends ItemView {
     // A recovery retry reuses the user bubble the poisoned turn already rendered —
     // don't render (or re-persist) a duplicate. The original message is still the
     // only "user" entry in c.messages for this turn.
-    if (!opts?.isRecoveryRetry) this.addUserTurn(c, text, imgs);
+    if (!opts?.isRecoveryRetry) {
+      this.addUserTurn(c, text, imgs);
+      // Flush the user's message to disk immediately: it lives only in RAM until
+      // the turn's finally otherwise, so an Obsidian crash mid-turn would lose the
+      // exchange from the UI. The atomic write keeps this cheap and safe.
+      this.persist();
+    }
     const ctx = this.addAssistantTurn(c, text);
     c.currentCtx = ctx; // target for this conversation's ask_user cards
     c.stopped = false;

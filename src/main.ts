@@ -8,6 +8,7 @@ import type { AgentEvent } from "./providers/types";
 import { computePlan, applyPlan, undoPlan, type DreamSnapshot } from "./obsidian/dream";
 import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport } from "./headless";
+import { parseConversationsSource } from "./core/persistence";
 
 export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
@@ -219,27 +220,79 @@ export default class ExoPlugin extends Plugin {
     return `${this.manifest.dir}/conversations.json`;
   }
 
-  /** Persisted conversation history (separate from settings/data.json). */
+  /**
+   * Persisted conversation history (separate from settings/data.json).
+   *
+   * Recovery-aware: reads the main file AND its `.bak` rotation, then defers the
+   * trust decision to the pure `parseConversationsSource`. When the main file
+   * exists but is corrupt it is NEVER deleted — it's renamed aside as
+   * `<file>.corrupt-<epoch>` for forensics, and the user is told whether history
+   * was recovered from backup or lost.
+   */
   async loadConversations(): Promise<unknown[]> {
-    try {
-      const p = this.convoFile();
-      if (await this.app.vault.adapter.exists(p)) {
-        const raw = await this.app.vault.adapter.read(p);
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
+    const adapter = this.app.vault.adapter;
+    const p = this.convoFile();
+    const bak = `${p}.bak`;
+    const readOrNull = async (path: string): Promise<string | null> => {
+      try {
+        return (await adapter.exists(path)) ? await adapter.read(path) : null;
+      } catch {
+        return null;
       }
-    } catch {
-      /* corrupt/missing → start fresh */
+    };
+    const mainRaw = await readOrNull(p);
+    const bakRaw = await readOrNull(bak);
+    const { data, source, mainCorrupt } = parseConversationsSource(mainRaw, bakRaw);
+    if (mainCorrupt) {
+      // Preserve the corrupt file — never start silently empty over a bad file.
+      try {
+        if (await adapter.exists(p)) await adapter.rename(p, `${p}.corrupt-${Date.now()}`);
+      } catch {
+        /* best effort — recovery still proceeds */
+      }
+      new Notice(
+        source === "bak"
+          ? "Exo recovered conversation history from a backup — the main file was corrupted (kept for recovery)."
+          : "Exo couldn't read conversation history — the file was corrupted and no usable backup existed (kept for recovery)."
+      );
     }
-    return [];
+    return data;
   }
 
-  /** Returns false (never throws) if the write failed, so callers can surface it. */
+  /**
+   * Atomic, backup-rotating write. Returns false (never throws) if it failed, so
+   * callers can surface it. Sequence — at no intermediate step are BOTH the main
+   * file and its `.bak` missing/incomplete:
+   *   1. write the payload to `<file>.tmp` (main + bak stay intact)
+   *   2. rotate the current main file to `<file>.bak` (one generation)
+   *   3. rename `.tmp` over the main path
+   */
   async saveConversations(data: unknown[]): Promise<boolean> {
+    const adapter = this.app.vault.adapter;
+    const p = this.convoFile();
+    const tmp = `${p}.tmp`;
+    const bak = `${p}.bak`;
     try {
-      await this.app.vault.adapter.write(this.convoFile(), JSON.stringify(data));
+      const json = JSON.stringify(data);
+      // 1. Stage the new content. A crash here leaves main (and bak) untouched.
+      await adapter.write(tmp, json);
+      // 2. Rotate the live main file to .bak before replacing it. Rename can't
+      //    overwrite an existing target on every platform, so clear the old bak
+      //    first. Main is still present throughout this step.
+      if (await adapter.exists(p)) {
+        if (await adapter.exists(bak)) await adapter.remove(bak);
+        await adapter.rename(p, bak);
+      }
+      // 3. Move the staged file over the (now absent) main path.
+      await adapter.rename(tmp, p);
       return true;
     } catch {
+      // Drop a stray tmp so a half-written file can't be mistaken for real data.
+      try {
+        if (await adapter.exists(tmp)) await adapter.remove(tmp);
+      } catch {
+        /* ignore */
+      }
       return false;
     }
   }
