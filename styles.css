@@ -533,6 +533,20 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-inputbox:focus-within {
   border-color: var(--background-modifier-border-hover);
 }
+/* The composer must never repaint on hover or focus — some themes tint
+   generic inputs/containers; pin every state to the resting surface. */
+.mva-inputbox,
+.mva-inputbox:hover,
+.mva-inputbox:focus-within {
+  background: var(--background-primary);
+}
+.mva-inputbox .mva-input,
+.mva-inputbox .mva-input:hover,
+.mva-inputbox .mva-input:focus {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
 
 /* --------------------------- autocomplete ----------------------------- */
 .mva-ac {
@@ -1548,6 +1562,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-gallery-search-wrap {
   position: relative;
   margin: 0 14px 14px;
+  max-width: 380px;
 }
 .mva-gallery-search-ico {
   position: absolute;
