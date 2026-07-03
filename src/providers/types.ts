@@ -86,12 +86,28 @@ export interface SessionOpts {
   approvalPolicy?: string;
 }
 
+/** Capability snapshot from the CLI's `system/init` message — the real skills /
+ *  commands / agents / MCP servers this session sees (global + plugin + vault),
+ *  far beyond what a vault-folder scan can discover. Emitted by CLI ≥2.1.199 in
+ *  streaming-input mode too; older CLIs never deliver it (treat as enrichment,
+ *  never a gate). */
+export interface SessionCaps {
+  skills: string[];
+  commands: string[];
+  agents: string[];
+  mcpServers: { name: string; status: string }[];
+}
+
 /**
  * A live conversation. For Claude this wraps a single long-lived SDK `query()`
  * in streaming-input mode — follow-up turns reuse the same process/context
  * (no per-message cold start). For Codex it spawns `codex exec` per turn.
  */
 export interface AgentSession {
+  /** Latest capability snapshot (see SessionCaps); null until init arrives. */
+  caps?: SessionCaps | null;
+  /** Invoked once when the init snapshot lands (may be before the first send). */
+  onCaps?: ((caps: SessionCaps) => void) | null;
   /** Send one user turn; resolves when that turn completes. */
   send(message: string, onEvent: (e: AgentEvent) => void, images?: ImageAttachment[]): Promise<void>;
   /** Inject a user message into the in-flight turn (mid-turn steering, Claude

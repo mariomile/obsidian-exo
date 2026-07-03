@@ -37,6 +37,9 @@ class ClaudeSession implements AgentSession {
    *  parking forever (the view drops the session and the next message starts fresh). */
   private ended = false;
   private onEvent: ((e: AgentEvent) => void) | null = null;
+  /** Latest system/init capability snapshot (skills/commands/agents/MCP). */
+  caps: import("./types").SessionCaps | null = null;
+  onCaps: ((caps: import("./types").SessionCaps) => void) | null = null;
   private resolveTurn: (() => void) | null = null;
   private rejectTurn: ((e: unknown) => void) | null = null;
   private sessionId?: string;
@@ -208,6 +211,22 @@ class ClaudeSession implements AgentSession {
 
   private route(msg: ClaudeMsg): void {
     if (msg.session_id) this.sessionId = msg.session_id;
+
+    // Capability snapshot — arrives at process start, typically BEFORE the first
+    // send (prewarm), so it must be captured ahead of the onEvent guard below.
+    if (msg.type === "system" && msg.subtype === "init") {
+      this.caps = {
+        skills: msg.skills ?? [],
+        commands: msg.slash_commands ?? [],
+        agents: msg.agents ?? [],
+        mcpServers: (msg.mcp_servers ?? []).flatMap((s) =>
+          s?.name ? [{ name: s.name, status: s.status ?? "unknown" }] : []
+        ),
+      };
+      this.onCaps?.(this.caps);
+      return;
+    }
+
     const emit = this.onEvent;
     if (!emit) return;
 
@@ -476,6 +495,11 @@ interface ClaudeMsg {
   parent_tool_use_id?: string | null;
   result?: string;
   compact_summary?: string;
+  // system/init capability snapshot (CLI ≥2.1.199 emits it in streaming-input too)
+  skills?: string[];
+  slash_commands?: string[];
+  agents?: string[];
+  mcp_servers?: Array<{ name?: string; status?: string }>;
   event?: { type?: string; delta?: { type?: string; text?: string; thinking?: string } };
   message?: {
     content?: Array<{

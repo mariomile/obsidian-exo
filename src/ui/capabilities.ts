@@ -145,6 +145,18 @@ interface Ctx {
   provider: string;
   model: string;
   onOpenNote: (path: string) => void;
+  /** Live capability snapshot from the session's system/init (CLI ≥2.1.199):
+   *  the REAL skills/commands/agents/MCP — global + plugins + vault. When
+   *  present it supersedes the filesystem scans below (which only ever see a
+   *  couple of scopes). Null on older CLIs or before the first session spawns. */
+  caps?: {
+    skills: string[];
+    commands: string[];
+    agents: string[];
+    mcpServers: { name: string; status: string }[];
+  } | null;
+  /** Insert text into the composer (used by clickable skill/command/agent chips). */
+  onInsert?: (text: string) => void;
 }
 
 export async function renderCapabilitiesPanel(
@@ -168,7 +180,7 @@ export async function renderCapabilitiesPanel(
     if (sub) h.createSpan({ cls: "mva-caps-sub", text: sub });
     return c.createDiv({ cls: "mva-caps-body" });
   };
-  const chip = (parent: HTMLElement, label: string, active: boolean, desc?: string, onClick?: () => void) => {
+  const chip = (parent: HTMLElement, label: string, active: boolean, desc?: string, onClick?: () => void): HTMLElement => {
     const el = parent.createSpan({ cls: `mva-caps-chip ${active ? "is-on" : "is-off"}` });
     el.createSpan({ cls: "mva-caps-dot" });
     el.createSpan({ text: label });
@@ -177,6 +189,7 @@ export async function renderCapabilitiesPanel(
       el.addClass("is-clickable");
       el.onclick = onClick;
     }
+    return el;
   };
   const empty = (parent: HTMLElement, text: string) => parent.createDiv({ cls: "mva-faint", text });
   const tier = (label: string) => {
@@ -239,30 +252,65 @@ export async function renderCapabilitiesPanel(
     }
   }
 
+  // Live-vs-scan: with a session snapshot, chips are the CLI's real inventory
+  // (global + plugins + vault) and clicking one inserts it into the composer.
+  // Long lists cap at 24 chips + a "+N" expander so 240 skills stay scannable.
+  const MAX_CHIPS = 24;
+  const chipList = (b: HTMLElement, names: string[], insertPrefix: string, insertSuffix = " ") => {
+    const render = (n: string) =>
+      chip(
+        b,
+        `${insertPrefix}${n}`,
+        true,
+        ctx.onInsert ? "Click to insert in the composer" : undefined,
+        ctx.onInsert ? () => ctx.onInsert?.(`${insertPrefix}${n}${insertSuffix}`) : undefined
+      );
+    for (const n of names.slice(0, MAX_CHIPS)) render(n);
+    const rest = names.slice(MAX_CHIPS);
+    if (rest.length) {
+      const more = chip(b, `+${rest.length} more`, false, "Show all", () => {
+        more.remove();
+        for (const n of rest) render(n);
+      });
+    }
+  };
+
   // Commands
   {
-    const b = card("Commands", ".claude/commands");
-    const cmds = mergeByName(await gatherFromVault(app, "commands"), await gatherFromScopes("commands"));
-    if (!cmds.length) empty(b, "None found.");
-    for (const cm of cmds) chip(b, `/${cm.name}`, true);
+    const live = ctx.caps?.commands;
+    const b = card("Commands", live ? `${live.length} — live from this session` : ".claude/commands");
+    if (live?.length) chipList(b, live, "/");
+    else {
+      const cmds = mergeByName(await gatherFromVault(app, "commands"), await gatherFromScopes("commands"));
+      if (!cmds.length) empty(b, "None found.");
+      for (const cm of cmds) chip(b, `/${cm.name}`, true);
+    }
   }
 
   // Sub-agents
   {
-    const b = card("Sub-agents", ".claude/agents");
-    const agents = mergeByName(await gatherFromVault(app, "agents"), await gatherFromScopes("agents"));
-    if (!agents.length) empty(b, "None found.");
-    for (const a of agents) chip(b, a.name, true, a.desc);
+    const live = ctx.caps?.agents;
+    const b = card("Sub-agents", live ? `${live.length} — live from this session` : ".claude/agents");
+    if (live?.length) chipList(b, live, "@");
+    else {
+      const agents = mergeByName(await gatherFromVault(app, "agents"), await gatherFromScopes("agents"));
+      if (!agents.length) empty(b, "None found.");
+      for (const a of agents) chip(b, a.name, true, a.desc);
+    }
   }
 
   // Skills & Tools
   tier("Skills & Tools");
   // Skills
   {
-    const b = card("Skills", ".claude/skills");
-    const skills = mergeByName(await gatherFromVault(app, "skills"), await gatherFromScopes("skills"));
-    if (!skills.length) empty(b, "None found.");
-    for (const sk of skills) chip(b, sk.name, true);
+    const live = ctx.caps?.skills;
+    const b = card("Skills", live ? `${live.length} — live from this session` : ".claude/skills");
+    if (live?.length) chipList(b, live, "$");
+    else {
+      const skills = mergeByName(await gatherFromVault(app, "skills"), await gatherFromScopes("skills"));
+      if (!skills.length) empty(b, "None found.");
+      for (const sk of skills) chip(b, sk.name, true);
+    }
   }
 
   // Hooks
@@ -308,14 +356,20 @@ export async function renderCapabilitiesPanel(
 
   // MCP
   {
-    const b = card("MCP servers");
-    chip(b, "obsidian (in-process)", nativeOn);
-    const external = await gatherMcpServers(app);
-    if (external.length) {
-      for (const n of external) chip(b, n, !s.fastStartup, s.fastStartup ? "disabled by Fast startup" : "active");
-    } else if (!nativeOn) {
-      empty(b, "No MCP servers active.");
+    const live = ctx.caps?.mcpServers;
+    const b = card("MCP servers", live ? `${live.length} — live from this session` : undefined);
+    if (live?.length) {
+      // Real per-server status straight from the session's init snapshot.
+      for (const srv of live) chip(b, srv.name, srv.status === "connected", srv.status);
+    } else {
+      chip(b, "obsidian (in-process)", nativeOn);
+      const external = await gatherMcpServers(app);
+      if (external.length) {
+        for (const n of external) chip(b, n, !s.fastStartup, s.fastStartup ? "disabled by Fast startup" : "active");
+      } else if (!nativeOn) {
+        empty(b, "No MCP servers active.");
+      }
+      if (s.fastStartup && external.length) b.createDiv({ cls: "mva-faint", text: "External MCP is off while Fast startup is on." });
     }
-    if (s.fastStartup && external.length) b.createDiv({ cls: "mva-faint", text: "External MCP is off while Fast startup is on." });
   }
 }

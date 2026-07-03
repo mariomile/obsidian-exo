@@ -4,6 +4,7 @@ import {
   MarkdownRenderer,
   FileSystemAdapter,
   FuzzySuggestModal,
+  Menu,
   TFile,
   TFolder,
   setIcon,
@@ -21,6 +22,7 @@ import type {
   ContextUsage,
   ImageAttachment,
   ProviderId,
+  SessionCaps,
 } from "./providers/types";
 import { toolMeta, toolFilePath, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
 import { createObsidianToolServer, OBSIDIAN_READ_TOOLS, OBSIDIAN_MEMORY_TOOLS } from "./obsidian/tools";
@@ -283,6 +285,10 @@ export class ChatView extends ItemView {
   private outlineRaf: number | null = null;
   /** Anti-flicker collapse timer for the outline panel (Notion pattern). */
   private outlineCollapseTimer: number | null = null;
+  /** Latest capability snapshot from any session's system/init (CLI ≥2.1.199):
+   *  the REAL skills/commands/agents/MCP the CLI sees (global + plugins + vault),
+   *  used to enrich the autocomplete menus and the Capabilities panel. */
+  private sessionCaps: SessionCaps | null = null;
   /** Whether we've already lazily asked for OS notification permission (once). */
   private notifyPermAsked = false;
 
@@ -466,6 +472,17 @@ export class ChatView extends ItemView {
       sandboxMode: s.codexSandbox,
       approvalPolicy: s.codexApproval,
     });
+    // Capability snapshot (system/init, CLI ≥2.1.199): the real skills/commands/
+    // agents/MCP this session sees. Cache view-wide for the autocomplete menus
+    // and the Capabilities panel; older CLIs simply never fire this (no gate).
+    session.onCaps = (caps) => {
+      this.sessionCaps = caps;
+      this.slashCache = null; // menus rebuild with the enriched lists
+      if (this.capsEl) {
+        this.hideCapabilities();
+        this.showCapabilities(); // live panel refresh if it's open
+      }
+    };
     // Superseded while awaiting (newer spawn or dropSession): don't install —
     // dispose the fresh session so it can't leak as an orphaned CLI process.
     if (this.spawnSeq.get(c) !== seq) {
@@ -1044,6 +1061,12 @@ export class ChatView extends ItemView {
     void renderCapabilitiesPanel(wrap, this.app, this.plugin.settings, {
       provider: this.provider,
       model: this.model,
+      caps: this.sessionCaps,
+      onInsert: (text) => {
+        this.hideCapabilities();
+        this.inputEl.value += (this.inputEl.value && !this.inputEl.value.endsWith(" ") ? " " : "") + text;
+        this.inputEl.focus();
+      },
       onOpenNote: (p) => {
         this.hideCapabilities();
         this.openNote(p);
@@ -1416,6 +1439,18 @@ export class ChatView extends ItemView {
       for (const f of a.files) if (f.endsWith(".md")) agents.push(base(f));
     } catch {
       /* no agents dir */
+    }
+    // Union with the session's live init snapshot (global + plugin + vault —
+    // the vault scan above only ever saw the vault's own .claude/). Dedup keeps
+    // the menus stable when both sources know the same name.
+    if (this.sessionCaps) {
+      const add = (into: string[], names: string[]) => {
+        const seen = new Set(into);
+        for (const n of names) if (!seen.has(n)) (seen.add(n), into.push(n));
+      };
+      add(commands, this.sessionCaps.commands);
+      add(skills, this.sessionCaps.skills);
+      add(agents, this.sessionCaps.agents);
     }
     this.slashCache = { commands, skills, agents, ts: Date.now() };
     return this.slashCache;
@@ -1812,16 +1847,77 @@ export class ChatView extends ItemView {
     setIcon(add.createSpan({ cls: "mva-doc-add-ico" }), "plus");
     add.createSpan({ text: "Add note" });
     this.clickable(add, () => this.pickNote());
+    // "Attach external" card — files or a whole folder from outside the vault
+    // (the CLI reads any absolute path; only the vault is its cwd, not a wall).
+    const ext = cards.createDiv({ cls: "mva-doc-card mva-doc-add", attr: { "aria-label": "Attach external file or folder" } });
+    setIcon(ext.createSpan({ cls: "mva-doc-add-ico" }), "paperclip");
+    ext.createSpan({ text: "External" });
+    this.clickable(ext, (e) => {
+      const menu = new Menu();
+      menu.addItem((i) => i.setTitle("Attach file…").setIcon("file-plus").onClick(() => this.pickExternal(false)));
+      menu.addItem((i) => i.setTitle("Attach folder…").setIcon("folder-plus").onClick(() => this.pickExternal(true)));
+      menu.showAtMouseEvent(e as MouseEvent);
+    });
   }
 
-  /** A uniform context card: text thumbnail + title + kind ("Current Document" / "Document"). */
+  /** Electron file picker for paths OUTSIDE the vault. A hidden <input type=file>
+   *  is enough — in Electron, picked File objects expose an absolute `.path`
+   *  (no @electron/remote needed). Folder mode uses webkitdirectory and derives
+   *  the folder root from the first entry's path minus its relative suffix. */
+  private pickExternal(directory: boolean): void {
+    const input = document.createElement("input");
+    input.type = "file";
+    if (directory) input.webkitdirectory = true;
+    else input.multiple = true;
+    input.onchange = () => {
+      const files = Array.from(input.files ?? []) as Array<File & { path?: string; webkitRelativePath?: string }>;
+      if (!files.length) return;
+      if (directory) {
+        const first = files[0];
+        const abs = first.path ?? "";
+        const rel = first.webkitRelativePath ?? "";
+        if (!abs || !rel) return;
+        // abs = /Users/x/proj/sub/file.ts, rel = proj/sub/file.ts → root = /Users/x/proj
+        const root = abs.slice(0, abs.length - rel.length) + rel.split("/")[0];
+        this.addExternalPath(root);
+      } else {
+        for (const f of files) if (f.path) this.addExternalPath(f.path);
+      }
+    };
+    input.click();
+  }
+
+  private addExternalPath(p: string): void {
+    if (!this.manualAttached.includes(p)) this.manualAttached.push(p);
+    this.refreshContext();
+  }
+
+  /** Absolute (out-of-vault) context path? Vault attachments are vault-relative. */
+  private static isExternalPath(p: string): boolean {
+    return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p);
+  }
+
+  /** A uniform context card: text thumbnail + title + kind ("Current Document" /
+   *  "Document" / "External"). External (absolute) paths open via the OS. */
   private renderContextCard(parent: HTMLElement, path: string, isActive: boolean): void {
+    const external = ChatView.isExternalPath(path);
     const card = parent.createDiv({ cls: "mva-doc-card" });
     const thumb = card.createDiv({ cls: "mva-doc-thumb" });
-    void this.fillThumb(thumb, path);
+    if (external) {
+      thumb.addClass("is-icon");
+      let isDir = false;
+      try {
+        isDir = (require("fs") as typeof import("fs")).statSync(path).isDirectory();
+      } catch {
+        /* unreadable — treat as file */
+      }
+      setIcon(thumb, isDir ? "folder" : "file");
+    } else {
+      void this.fillThumb(thumb, path);
+    }
     const body = card.createDiv({ cls: "mva-doc-body" });
     body.createDiv({ cls: "mva-doc-title", text: noteBasename(path), attr: { title: path } });
-    body.createDiv({ cls: "mva-doc-kind", text: isActive ? "Current Document" : "Document" });
+    body.createDiv({ cls: "mva-doc-kind", text: isActive ? "Current Document" : external ? "External" : "Document" });
     const x = card.createSpan({ cls: "mva-doc-x", attr: { "aria-label": "Remove from context" } });
     setIcon(x, "x");
     x.onclick = (e) => {
@@ -1830,7 +1926,7 @@ export class ChatView extends ItemView {
       else this.manualAttached = this.manualAttached.filter((p) => p !== path);
       this.refreshContext();
     };
-    this.clickable(card, () => this.openNote(path));
+    this.clickable(card, () => (external ? this.openArtifactExternally(path) : this.openNote(path)));
   }
 
   private static readonly IMAGE_EXT = /^(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
