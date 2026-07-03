@@ -123,7 +123,7 @@ interface Convo {
   stopped: boolean; // set by stop() so the turn renders as "Stopped", not an error
   pendingPerm: (() => void) | null; // cancels an open permission card on stop
   pendingAsk: (() => void) | null; // cancels an open ask card on stop
-  queue: { text: string; images?: ImageAttachment[] }[];
+  queue: { text: string; images?: ImageAttachment[]; sendPrefix?: string; isRecoveryRetry?: boolean }[];
   pendingEl: HTMLElement | null; // container for queued-message chips
   /** The in-flight assistant turn of THIS conversation (null when idle) — the
    *  target for its session's ask_user cards, so parallel conversations can't
@@ -135,6 +135,11 @@ interface Convo {
   /** True once the proactive ≥75% compaction nudge has been shown for this
    *  conversation — one-shot, so it never re-appears after dismiss or compaction. */
   compactNudged?: boolean;
+  /** Runtime-only (never persisted): set when a turn ended poisoned but its
+   *  on-disk sessionId was KEPT for a resume-first recovery. If a turn started
+   *  with this true also poisons, recovery escalates to a fresh session + recap
+   *  (see runTurn's two-stage recovery). Cleared on any healthy turn. */
+  resumeRisky?: boolean;
 }
 
 interface AssistantCtx {
@@ -3514,7 +3519,12 @@ export class ChatView extends ItemView {
     this.scrollConvo(c);
   }
 
-  private async runTurn(c: Convo, text: string, images?: ImageAttachment[]): Promise<void> {
+  private async runTurn(
+    c: Convo,
+    text: string,
+    images?: ImageAttachment[],
+    opts?: { sendPrefix?: string; isRecoveryRetry?: boolean }
+  ): Promise<void> {
     const paths = c === this.active ? this.contextPaths() : [];
     const message = paths.length
       ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${text}`
@@ -3532,7 +3542,10 @@ export class ChatView extends ItemView {
       if (embedded.length) imgs = [...(imgs ?? []), ...embedded];
     }
 
-    this.addUserTurn(c, text, imgs);
+    // A recovery retry reuses the user bubble the poisoned turn already rendered —
+    // don't render (or re-persist) a duplicate. The original message is still the
+    // only "user" entry in c.messages for this turn.
+    if (!opts?.isRecoveryRetry) this.addUserTurn(c, text, imgs);
     const ctx = this.addAssistantTurn(c, text);
     c.currentCtx = ctx; // target for this conversation's ask_user cards
     c.stopped = false;
@@ -3755,11 +3768,21 @@ export class ChatView extends ItemView {
               ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
             }
           } else {
-            // An execution error poisons the CLI session — resuming/reusing it
-            // re-errors on every subsequent turn. Reset it at turn end (below).
+            // An execution error crashes the CLI process — reusing the live
+            // session re-errors forever, so the turn end (below) drops it. But the
+            // on-disk transcript survives and a fresh process can resume it, so we
+            // recover in two stages. The footer reflects which stage this is.
             poisoned = true;
             this.renderError(ctx, e.message);
-            ctx.bodyEl.createSpan({ cls: "mva-faint", text: "The next message starts a fresh session." });
+            const footer = opts?.isRecoveryRetry
+              ? // Stage-2 retry itself crashed → nuclear reset (today's behavior).
+                "The next message starts a fresh session."
+              : c.resumeRisky
+                ? // The resume attempt re-errored → escalate to fresh + recap (below).
+                  "Resume failed — restarting fresh with a recap of this conversation."
+                : // First crash → next message resumes the transcript in a fresh process.
+                  "Session process crashed — your next message resumes it.";
+            ctx.bodyEl.createSpan({ cls: "mva-faint", text: footer });
             this.notifyOnce(ctx, "error", "Exo — error", e.message.slice(0, 80));
           }
           break;
@@ -3769,7 +3792,11 @@ export class ChatView extends ItemView {
     try {
       bump();
       const session = await this.ensureSession(c);
-      await session.send(message, onEvent, imgs);
+      // sendPrefix (recovery recap) is prepended to the OUTBOUND provider message
+      // only — never to the rendered/persisted user text, so it can't leak into the
+      // transcript, c.messages, or serialize().
+      const outbound = opts?.sendPrefix ? `${opts.sendPrefix}\n\n${message}` : message;
+      await session.send(outbound, onEvent, imgs);
       // Stop the watchdog before reading `timedOut` so a timer that fires in the
       // gap between send() resolving and `finally` can't trip a false timeout.
       if (watchdog !== null) {
@@ -3860,25 +3887,97 @@ export class ChatView extends ItemView {
         });
       }
       c.updatedAt = Date.now();
-      // A poisoned session is reused by ensureSession and re-errors forever; drop it
-      // (object + resume id) so the next message in this conversation starts clean.
+      // Two-stage session recovery (Claude-Code-style resume). A poisoned live
+      // session re-errors if reused, so we always dropSession(c) — but the on-disk
+      // transcript can be resumed by a fresh process, so we keep the sessionId until
+      // a resume also fails.
       if (poisoned && !c.stopped) {
-        this.dropSession(c);
-        c.sessionId = undefined;
+        if (opts?.isRecoveryRetry) {
+          // The recap retry itself poisoned — stop escalating (loop guard) and fall
+          // back to today's nuclear reset: drop everything, next message is fresh.
+          this.dropSession(c);
+          c.sessionId = undefined;
+          c.resumeRisky = false;
+        } else if (c.resumeRisky) {
+          // Stage 2: this turn already resumed a prior crash and re-errored. Go fully
+          // fresh AND auto-retry the SAME user message once, with a private recap
+          // threaded to the provider only (never rendered, queued as a chip, or
+          // persisted). Route via the queue FIRST so it can't race queued messages.
+          this.dropSession(c);
+          c.sessionId = undefined;
+          c.resumeRisky = false;
+          const recap = this.buildRecap(c);
+          c.queue.unshift({ text, images, sendPrefix: recap, isRecoveryRetry: true });
+        } else {
+          // Stage 1 (resume-first): drop only the crashed live session object; KEEP
+          // the sessionId so the next message resumes the transcript in a fresh
+          // process (full context, zero cost). Mark the convo resume-risky so a
+          // second consecutive poison escalates to Stage 2.
+          this.dropSession(c);
+          c.resumeRisky = true;
+        }
+      } else if (!poisoned) {
+        // Healthy (or user-stopped) turn — the session didn't crash; clear recovery
+        // state so a future isolated crash starts the ladder from Stage 1.
+        c.resumeRisky = false;
       }
       this.setStreaming(c, false);
       this.persist();
       this.scrollConvo(c);
-      // Drain the queue: run the next message in this conversation.
+      // Drain the queue: run the next message in this conversation. A recovery
+      // retry item carries sendPrefix/isRecoveryRetry — forward them so the recap
+      // reaches the provider and no duplicate user bubble is rendered.
       if (c.queue.length) {
         const next = c.queue.shift()!;
         this.renderQueue(c);
-        void this.runTurn(c, next.text, next.images);
+        const retryOpts =
+          next.isRecoveryRetry || next.sendPrefix
+            ? { sendPrefix: next.sendPrefix, isRecoveryRetry: next.isRecoveryRetry }
+            : undefined;
+        void this.runTurn(c, next.text, next.images, retryOpts);
       } else {
         // Turn (and any queue) is fully settled — safe to surface related notes again.
         this.renderTailSurfacing(c);
       }
     }
+  }
+
+  /** Build a compact plaintext recap of the recent transcript, used to re-seed a
+   *  FRESH session after a resume also failed (Stage 2 recovery). Threaded to the
+   *  provider only — never rendered, queued, or persisted. Takes the last ≤8
+   *  entries: user messages truncated to 400 chars, assistant messages as their
+   *  concatenated text (≤600 chars) with tool activity summarized as [N tool
+   *  calls]. The whole recap is capped at ~5000 chars, dropping oldest first. */
+  private buildRecap(c: Convo): string {
+    const lines: string[] = [];
+    for (const m of c.messages.slice(-8)) {
+      if (m.role === "user") {
+        lines.push(`[user] ${m.text.slice(0, 400)}`);
+      } else {
+        let toolCount = 0;
+        const texts: string[] = [];
+        for (const seg of m.segments) {
+          if (seg.t === "text") texts.push(seg.md);
+          else if (seg.t === "tool") toolCount++;
+        }
+        let body = texts.join("").slice(0, 600);
+        if (toolCount > 0) body += (body ? " " : "") + `[${toolCount} tool calls]`;
+        lines.push(`[assistant] ${body}`);
+      }
+    }
+    // Cap the body at ~5000 chars, dropping the oldest lines first.
+    let body = lines.join("\n");
+    while (body.length > 5000 && lines.length > 1) {
+      lines.shift();
+      body = lines.join("\n");
+    }
+    return (
+      "<conversation-recap>\n" +
+      "The previous session process crashed (error_during_execution); this fresh " +
+      "session continues an ongoing conversation. Recent transcript (oldest first):\n" +
+      body +
+      "\n</conversation-recap>"
+    );
   }
 
   /** Inline error, upgraded to a setup card when the CLI isn't ready. */
