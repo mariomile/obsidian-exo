@@ -36,6 +36,7 @@ import { planPersistedConvos } from "./core/persistence";
 import { buildRecap, isRecoverableSessionError } from "./core/recovery";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched } from "./core/touched";
+import { describeCliFailure } from "./core/errors";
 
 export type { AskQuestion } from "./core/model";
 
@@ -4046,6 +4047,18 @@ export class ChatView extends ItemView {
       steps.createEl("li", { text: "If it's installed elsewhere, set the binary path in settings." });
       const btn = card.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Open settings" });
       btn.onclick = () => this.openSettings();
+      return;
+    }
+    // Friendly, actionable copy for known engine failures (crash mid-turn, exit,
+    // missing binary, auth). The raw text stays as a muted secondary line + tooltip
+    // so debugging is never lost. Unknown errors fall through to the raw message.
+    const friendly = describeCliFailure(message);
+    if (friendly) {
+      const box = ctx.bodyEl.createDiv({ cls: "mva-inline-error" });
+      box.createDiv({ text: `⚠️ ${friendly.message}` });
+      if (friendly.hint) box.createDiv({ cls: "mva-faint", text: friendly.hint });
+      const rawShort = message.length > 200 ? `${message.slice(0, 200)}…` : message;
+      box.createDiv({ cls: "mva-faint", text: rawShort }).setAttribute("title", message);
       return;
     }
     ctx.bodyEl.createDiv({ cls: "mva-inline-error", text: `⚠️ ${message}` });
