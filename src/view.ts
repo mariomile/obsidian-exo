@@ -192,6 +192,11 @@ interface AssistantCtx {
 
 /** Abort a turn if no event arrives for this long (avoids infinite loading). */
 const IDLE_TIMEOUT = 120_000;
+/** While ≥1 tool is in-flight, a long-running tool (e.g. a multi-minute Bash)
+ *  legitimately emits NO events between its start and result — so the watchdog
+ *  waits this much longer before reaping. Not a full suspension: a silently-dead
+ *  session must still be caught. Claude Code just waits on such tools. */
+const TOOL_TIMEOUT = 600_000;
 
 /** One rule per line: `Tool` or `Tool(argPrefix)`. `#` comments allowed. A bare
  *  `Tool` matches any invocation. For `Bash` the prefix matches on a TOKEN
@@ -3491,8 +3496,27 @@ export class ChatView extends ItemView {
     this.pinnedToBottom = true;
     this.updateJumpPill();
     if (c.streaming) {
-      c.queue.push({ text, images }); // queue while a turn is running
-      this.renderQueue(c);
+      // Mid-turn steering (Claude only, Claude Code parity): inject the message
+      // into the live turn instead of queuing it for after. Text-only — steer
+      // carries no images. A false return, a throw, Codex, or attached images all
+      // fall back to today's queue behavior, unchanged.
+      let steered = false;
+      if (c.provider === "claude" && !images) {
+        try {
+          steered = c.session?.steer?.(text) ?? false;
+        } catch {
+          steered = false;
+        }
+      }
+      if (steered) {
+        // Render the user bubble now and flush it; the working row stays and the
+        // turn continues folding this in — nothing is enqueued.
+        this.addUserTurn(c, text, images);
+        this.persist();
+      } else {
+        c.queue.push({ text, images }); // queue while a turn is running
+        this.renderQueue(c);
+      }
     } else {
       void this.runTurn(c, text, images);
     }
@@ -3584,6 +3608,11 @@ export class ChatView extends ItemView {
 
     // Watchdog: reset on every event; fire if the turn stalls with no output.
     let timedOut = false;
+    // True when the timeout that fired was the longer tool window (a tool ran
+    // silently past TOOL_TIMEOUT) rather than the plain idle window — drives the
+    // error copy. A boolean (not a literal union) so it survives the deferred
+    // assignment inside the watchdog callback without control-flow narrowing.
+    let timedOutByTool = false;
     // An error_during_execution result resolves the turn (no throw), so the catch's
     // dropSession never runs — the CLI session stays poisoned and every later turn
     // re-errors. Track it here and reset the session at turn end.
@@ -3592,13 +3621,20 @@ export class ChatView extends ItemView {
     // While an interactive card (permission or ask) is pending, the user may take
     // arbitrarily long to answer — suspend the idle watchdog so it can't fire.
     let pendingInteractive = 0;
+    // Tool-call ids currently in flight. A long-running tool (multi-minute Bash)
+    // emits no events between start and result, so while this is non-empty the
+    // watchdog uses the longer TOOL_TIMEOUT instead of interrupting a live turn.
+    const inFlightTools = new Set<string>();
     const bump = () => {
       if (pendingInteractive > 0) return; // don't arm while awaiting a user card
       if (watchdog !== null) window.clearTimeout(watchdog);
+      // Capture the guard at arm time so the fired callback reports what it waited on.
+      const toolBusy = inFlightTools.size > 0;
       watchdog = window.setTimeout(() => {
         timedOut = true;
+        timedOutByTool = toolBusy;
         c.session?.interrupt();
-      }, IDLE_TIMEOUT);
+      }, toolBusy ? TOOL_TIMEOUT : IDLE_TIMEOUT);
     };
     const suspendWatchdog = () => {
       pendingInteractive++;
@@ -3639,6 +3675,11 @@ export class ChatView extends ItemView {
             this.hideWorking(ctx); // the ask card is the feedback
             break;
           }
+          // A real (non-interactive) tool is now running. Track it and re-arm the
+          // watchdog on the longer tool window — a legit multi-minute tool emits no
+          // events until its result, and must not be mistaken for a dead session.
+          inFlightTools.add(e.id);
+          bump();
           // File tracking runs before the nesting branch: subagent writes must stay
           // rewindable (checkpoint) and visible in the touched-notes footer.
           const fp = toolFilePath(e.name, e.input);
@@ -3680,6 +3721,9 @@ export class ChatView extends ItemView {
             this.ensureWorking(ctx); // the turn continues
             break;
           }
+          // A tracked tool resolved (delete is a no-op for unknown/duplicate ids).
+          // Re-arm on the idle window once the last tool drains.
+          if (inFlightTools.delete(e.id)) bump();
           // Feature 4: a nested subagent result updates its mini-row, not a card —
           // but the reveal path below still runs for nested writes.
           const nested = this.resolveSubagentRow(ctx, e.id, e.ok);
@@ -3812,7 +3856,12 @@ export class ChatView extends ItemView {
       this.flushRender(ctx);
       await Promise.all(snapshots); // ensure every pre-write snapshot landed before we read the checkpoint
       if (timedOut && !ctx.fullText && ctx.cards.size === 0) {
-        this.renderError(ctx, `No response — timed out after ${IDLE_TIMEOUT / 1000}s.`);
+        this.renderError(
+          ctx,
+          timedOutByTool
+            ? `No response — a tool ran ${TOOL_TIMEOUT / 1000}s with no output and was stopped.`
+            : `No response — timed out after ${IDLE_TIMEOUT / 1000}s.`
+        );
       }
       this.attachTouched(ctx.el, ctx.touched, checkpoint);
       // The footer above now carries every note this turn touched — drop the
@@ -3872,6 +3921,7 @@ export class ChatView extends ItemView {
       }
     } finally {
       if (watchdog !== null) window.clearTimeout(watchdog);
+      inFlightTools.clear(); // turn is over — drop any unresolved tool ids
       window.clearInterval(workingTimer); // stop the elapsed ticker
       this.removeWorking(ctx); // drop the working row for good
       await Promise.all(snapshots); // finalize the checkpoint even if the turn errored
@@ -3961,6 +4011,11 @@ export class ChatView extends ItemView {
       } else {
         // Turn (and any queue) is fully settled — safe to surface related notes again.
         this.renderTailSurfacing(c);
+        // Warm session after Esc: a user stop dropped the (possibly mid-tool) live
+        // session, so respawn+resume its transcript in the background right now.
+        // The next message is warm instead of paying respawn+resume. Only for the
+        // active convo (prewarm targets it) with nothing queued behind the stop.
+        if (c.stopped && c === this.active) this.prewarm();
       }
     }
   }
