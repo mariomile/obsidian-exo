@@ -2205,6 +2205,9 @@ export class ChatView extends ItemView {
   private renderConvoDom(c: Convo): void {
     c.listEl.empty();
     let lastUser = "";
+    // Only the LAST assistant turn keeps its touched-notes footer expanded —
+    // older ones collapse to a one-line toggle (03-07 feedback).
+    const lastAssistant = [...c.messages].reverse().find((m) => m.role === "assistant");
     for (const m of c.messages) {
       if (m.role === "user") {
         lastUser = m.text;
@@ -2239,7 +2242,7 @@ export class ChatView extends ItemView {
           }
         }
         this.groupToolRows(body); // restored transcripts fold long tool runs too
-        this.attachTouched(el, touched, m.checkpoint);
+        this.attachTouched(el, touched, m.checkpoint, m !== lastAssistant);
         if (full.trim()) this.attachActions(el, full, lastUser || undefined, c);
       }
     }
@@ -2727,9 +2730,22 @@ export class ChatView extends ItemView {
    * (emphasized, with ×N edit count + diff/revert actions) and what it *read*
    * (context). `checkpoint` (live or restored from persistence) enables per-note diff/revert.
    */
-  private attachTouched(turnEl: HTMLElement, touched: TouchedNote[], checkpoint?: Checkpoint): void {
+  private attachTouched(
+    turnEl: HTMLElement,
+    touched: TouchedNote[],
+    checkpoint?: Checkpoint,
+    collapsed = false
+  ): void {
     if (touched.length === 0) return;
-    const bar = turnEl.createDiv({ cls: "mva-sources" });
+    const bar = turnEl.createDiv({ cls: "mva-sources" + (collapsed ? " is-collapsed" : "") });
+    // Collapsed form (every turn but the latest — 03-07 feedback: old turns'
+    // full chip rows pile up and crowd the transcript): one quiet toggle row.
+    // Both forms live in the DOM and CSS swaps them, so collapsing older
+    // footers when a new turn lands is a class flip with no state loss.
+    const head = bar.createDiv({ cls: "mva-sources-head" });
+    setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
+    head.createSpan({ text: `${touched.length} note${touched.length === 1 ? "" : "s"}` });
+    this.clickable(head, () => bar.removeClass("is-collapsed"));
     // No "EDITED"/"READ" text headers — the accent border + accent icon color on
     // write chips already distinguish them from muted read chips three ways over
     // (icon shape, border, color); a third, textual signal was pure redundancy
@@ -4050,6 +4066,11 @@ export class ChatView extends ItemView {
             ? `No response — a tool ran ${TOOL_TIMEOUT / 1000}s with no output and was stopped.`
             : `No response — timed out after ${IDLE_TIMEOUT / 1000}s.`
         );
+      }
+      // A new settled turn owns the expanded footer — fold every older one down
+      // to its one-line toggle first (03-07 feedback: old footers pile up).
+      for (const old of Array.from(c.listEl.querySelectorAll(".mva-sources:not(.is-collapsed)"))) {
+        old.classList.add("is-collapsed");
       }
       this.attachTouched(ctx.el, ctx.touched, checkpoint);
       // The footer above now carries every note this turn touched — drop the
