@@ -193,6 +193,11 @@ export default class ExoPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // Migrate the old "Default" model option (empty id — silently let the CLI's
+    // own default apply): the picker no longer offers an ambiguous unlabeled
+    // state, so an empty saved id resolves to that provider's first real model.
+    if (!this.settings.claudeModel) this.settings.claudeModel = ADAPTERS.claude.models()[0].id;
+    if (!this.settings.codexModel) this.settings.codexModel = ADAPTERS.codex.models()[0].id;
     // Seed a few example reusable prompts on first run (once) so "Your prompts"
     // isn't empty. They're editable/deletable in Settings; never re-seeded.
     if (!this.settings.seededPrompts && this.settings.customPrompts.length === 0) {

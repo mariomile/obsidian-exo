@@ -395,7 +395,6 @@ export const claudeAdapter: ProviderAdapter = {
     // reference). Add newer ones here as they ship. Users can also type any
     // custom model id in settings.
     return [
-      { id: "", label: "Default" },
       { id: "claude-fable-5", label: "Fable 5" },
       { id: "claude-opus-4-8", label: "Opus 4.8" },
       { id: "claude-opus-4-7", label: "Opus 4.7" },
