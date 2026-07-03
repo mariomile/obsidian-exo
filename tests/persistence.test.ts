@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planPersistedConvos } from "../src/core/persistence";
+import { planPersistedConvos, parseConversationsSource } from "../src/core/persistence";
 
 type C = { id: string; messages: unknown[]; updatedAt?: number };
 
@@ -77,5 +77,59 @@ describe("planPersistedConvos", () => {
     // b (empty, unpinned) is filtered out; a and c stay, in order, no eviction.
     const kept = planPersistedConvos(all, "z", [], 30);
     expect(kept.map((c) => c.id)).toEqual(["a", "c"]);
+  });
+});
+
+describe("parseConversationsSource", () => {
+  const arr = (n: number) => JSON.stringify(Array.from({ length: n }, (_, i) => ({ id: `c${i}` })));
+
+  it("uses a valid main file and reports it not corrupt", () => {
+    const r = parseConversationsSource(arr(3), null);
+    expect(r.source).toBe("main");
+    expect(r.mainCorrupt).toBe(false);
+    expect(r.data).toHaveLength(3);
+  });
+
+  it("falls back to a valid .bak when main is corrupt, flagging mainCorrupt", () => {
+    const r = parseConversationsSource("{ not json", arr(2));
+    expect(r.source).toBe("bak");
+    expect(r.mainCorrupt).toBe(true);
+    expect(r.data).toHaveLength(2);
+  });
+
+  it("returns empty + mainCorrupt when BOTH main and bak are corrupt", () => {
+    const r = parseConversationsSource("{ broken", "also [broken");
+    expect(r.source).toBe("empty");
+    expect(r.mainCorrupt).toBe(true);
+    expect(r.data).toEqual([]);
+  });
+
+  it("returns empty and NOT corrupt when both files are missing (fresh install)", () => {
+    const r = parseConversationsSource(null, null);
+    expect(r.source).toBe("empty");
+    expect(r.mainCorrupt).toBe(false);
+    expect(r.data).toEqual([]);
+  });
+
+  it("recovers from bak for a truncated-JSON main (the classic crash-mid-write)", () => {
+    // A write interrupted partway leaves valid-prefix-but-unterminated JSON.
+    const truncated = arr(5).slice(0, arr(5).length - 10);
+    const r = parseConversationsSource(truncated, arr(4));
+    expect(r.source).toBe("bak");
+    expect(r.mainCorrupt).toBe(true);
+    expect(r.data).toHaveLength(4);
+  });
+
+  it("treats valid JSON that isn't an array as corrupt and tries bak", () => {
+    const r = parseConversationsSource('{"conversations":[]}', arr(1));
+    expect(r.source).toBe("bak");
+    expect(r.mainCorrupt).toBe(true);
+    expect(r.data).toHaveLength(1);
+  });
+
+  it("uses main even when a stale bak is also present (main wins)", () => {
+    const r = parseConversationsSource(arr(2), arr(9));
+    expect(r.source).toBe("main");
+    expect(r.data).toHaveLength(2);
   });
 });
