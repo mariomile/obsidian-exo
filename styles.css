@@ -281,6 +281,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-user {
   align-items: flex-end;
 }
+/* Send time under the user bubble — quiet, always visible (feedback 03-07). */
+.mva-msg-time {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  margin-top: 2px;
+  padding-right: 2px;
+  user-select: none;
+}
 .mva-assistant {
   align-items: stretch;
   /* align assistant content (text + tool cards) with the composer's text column */
@@ -1182,6 +1190,48 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   opacity: 0.85;
 }
 /* Background Bash tasks (F3): accent border-tint + badge chip. */
+/* Progressive-disclosure group for runs of ≥3 settled tool rows: closed by
+   default, "N steps" header in the Reasoning-block grammar (chevron rotates
+   when open). Rows inside are the original cards, re-parented untouched. */
+.mva-tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 3px 6px;
+  border-radius: var(--mva-r1);
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.mva-tool-group-head:hover {
+  background: color-mix(in srgb, var(--background-modifier-hover) 60%, transparent);
+}
+.mva-tool-group:not(.is-collapsed) .mva-reason-chevron {
+  transform: rotate(90deg);
+}
+.mva-tool-group.is-collapsed .mva-tool-group-rows {
+  display: none;
+}
+.mva-tool-group-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 14px;
+}
+/* "+N" expander chip on crowded touched-notes groups. */
+.mva-src-more {
+  color: var(--text-faint);
+  font-weight: 600;
+}
+.mva-src-more:hover {
+  color: var(--text-normal);
+}
+/* Artifact-card header opens the file — show it. */
+.mva-artifact-head.is-openable {
+  cursor: pointer;
+}
 .mva-tool-bg {
   border-color: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 45%, var(--background-modifier-border));
 }

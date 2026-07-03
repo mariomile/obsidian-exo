@@ -32,6 +32,7 @@ import { renderCapabilitiesPanel } from "./ui/capabilities";
 import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
+import { groupRuns } from "./core/group-runs";
 import { planPersistedConvos } from "./core/persistence";
 import { buildRecap, isRecoverableSessionError, resolveRecovery } from "./core/recovery";
 import { TurnWatchdog } from "./core/turn-watchdog";
@@ -2097,6 +2098,7 @@ export class ChatView extends ItemView {
         lastUser = m.text;
         const el = c.listEl.createDiv({ cls: "mva-turn mva-user" });
         void MarkdownRenderer.render(this.app, m.text, el.createDiv({ cls: "mva-bubble markdown-rendered" }), "", this);
+        this.appendMsgTime(el, m.at);
       } else {
         const el = c.listEl.createDiv({ cls: "mva-turn mva-assistant" });
         const body = el.createDiv({ cls: "mva-assistant-body" });
@@ -2110,7 +2112,7 @@ export class ChatView extends ItemView {
             const card = body.createDiv({ cls: "mva-ask" });
             this.renderAskSummary(card, s.questions, s.answers);
           } else if (s.t === "artifact") {
-            this.buildArtifactCard(body, s.path);
+            this.buildArtifactCard(body, s.path, m.checkpoint);
           } else {
             const fp = toolFilePath(s.name, s.input);
             if (fp) {
@@ -2124,6 +2126,7 @@ export class ChatView extends ItemView {
             }
           }
         }
+        this.groupToolRows(body); // restored transcripts fold long tool runs too
         this.attachTouched(el, touched, m.checkpoint);
         if (full.trim()) this.attachActions(el, full, lastUser || undefined, c);
       }
@@ -2142,7 +2145,8 @@ export class ChatView extends ItemView {
       c.title = derived || (images?.length ? "Image" : "New chat");
       this.renderTabs(); // reflect the new title in the tab
     }
-    c.messages.push({ role: "user", text });
+    const at = Date.now();
+    c.messages.push({ role: "user", text, at });
     const el = c.listEl.createDiv({ cls: "mva-turn mva-user" });
     const bubble = el.createDiv({ cls: "mva-bubble" });
     if (images?.length) {
@@ -2155,8 +2159,18 @@ export class ChatView extends ItemView {
       }
     }
     if (text) void MarkdownRenderer.render(this.app, text, bubble.createDiv({ cls: "markdown-rendered" }), "", this);
+    this.appendMsgTime(el, at);
     this.scrollConvo(c);
     if (c === this.active) this.rebuildOutline();
+  }
+
+  /** Small muted HH:MM under a user bubble. No-op when `at` is absent (pre-0.14 messages). */
+  private appendMsgTime(turnEl: HTMLElement, at?: number): void {
+    if (!at) return;
+    const d = new Date(at);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    turnEl.createDiv({ cls: "mva-msg-time", text: `${hh}:${mm}` });
   }
 
   private addAssistantTurn(c: Convo, userText: string): AssistantCtx {
@@ -2612,7 +2626,7 @@ export class ChatView extends ItemView {
       const items = touched.filter((t) => t.kind === kind);
       if (!items.length) return;
       const g = bar.createDiv({ cls: "mva-src-group" });
-      for (const t of items) {
+      const makeChip = (t: TouchedNote) => {
         const chip = g.createSpan({ cls: `mva-src-chip is-${kind}` });
         setIcon(chip.createSpan({ cls: "mva-src-ico" }), icon);
         chip.createSpan({ cls: "mva-src-name", text: noteBasename(t.path) });
@@ -2620,6 +2634,7 @@ export class ChatView extends ItemView {
           chip.createSpan({ cls: "mva-src-count", text: `×${t.count}` });
         }
         chip.onclick = () => this.openNote(t.path);
+        this.addHoverPreview(chip, t.path);
         // Inline diff + revert — only when we hold this turn's pre-write snapshot.
         const rel = this.relPath(t.path);
         if (kind === "write" && checkpoint?.has(rel)) {
@@ -2628,6 +2643,21 @@ export class ChatView extends ItemView {
         if (kind === "read") {
           this.addReadActions(chip, t.path);
         }
+        return chip;
+      };
+      // Crowded groups collapse to the first 3 chips + a "+N" expander (03-07
+      // feedback: the full row of 5+ chips reads as noise under every turn).
+      const MAX_VISIBLE = 4;
+      const visible = items.length > MAX_VISIBLE ? items.slice(0, 3) : items;
+      for (const t of visible) makeChip(t);
+      const rest = items.slice(visible.length);
+      if (rest.length) {
+        const more = g.createSpan({ cls: "mva-src-chip mva-src-more", text: `+${rest.length}` });
+        more.setAttribute("aria-label", `Show ${rest.length} more note${rest.length === 1 ? "" : "s"}`);
+        more.onclick = () => {
+          more.remove();
+          for (const t of rest) makeChip(t);
+        };
       }
     };
     group("write", "file-pen"); // changes first — the actionable output
@@ -2740,6 +2770,52 @@ export class ChatView extends ItemView {
     void this.app.workspace.openLinkText(p, "", false);
   }
 
+  /** Progressive disclosure for a settled transcript: runs of ≥3 consecutive
+   *  collapsed generic tool rows fold into a closed "N steps" accordion (03-07
+   *  feedback — a stack of "Run command" rows is noise once the turn is over).
+   *  Streaming keeps rows flat (live visibility); this runs at turn end and on
+   *  restore. Re-parents the original row elements, so their click handlers and
+   *  expanded bodies survive. Rows the user expanded, and background-task cards
+   *  (their badge is live status), break the run and stay visible. */
+  private groupToolRows(bodyEl: HTMLElement): void {
+    const children = Array.from(bodyEl.children) as HTMLElement[];
+    const flags = children.map(
+      (el) =>
+        el.classList.contains("mva-tool") &&
+        el.classList.contains("is-collapsed") &&
+        !el.classList.contains("mva-tool-bg")
+    );
+    for (const [start, end] of groupRuns(flags, 3).reverse()) {
+      const rows = children.slice(start, end + 1);
+      const group = createDiv({ cls: "mva-tool-group is-collapsed" });
+      const head = group.createDiv({ cls: "mva-tool-group-head" });
+      setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
+      head.createSpan({ cls: "mva-tool-group-label", text: `${rows.length} steps` });
+      this.clickable(head, () => group.toggleClass("is-collapsed", !group.hasClass("is-collapsed")));
+      const rowsEl = group.createDiv({ cls: "mva-tool-group-rows" });
+      bodyEl.insertBefore(group, rows[0]);
+      for (const row of rows) rowsEl.appendChild(row);
+    }
+  }
+
+  /** Obsidian-native page preview on hover (same popover as wikilinks). Fires the
+   *  `hover-link` event the Page Preview core plugin listens for; degrades to a
+   *  no-op when that plugin is disabled. Markdown files only. */
+  private addHoverPreview(el: HTMLElement, path: string): void {
+    const rel = this.relPath(path);
+    if (!/\.md$/i.test(rel)) return;
+    el.addEventListener("mouseover", (event) => {
+      this.app.workspace.trigger("hover-link", {
+        event,
+        source: "exo",
+        hoverParent: this,
+        targetEl: el,
+        linktext: rel,
+        sourcePath: rel,
+      });
+    });
+  }
+
   /** Open a note the agent just edited in the main area — reuse its tab if it's
    *  already open, else a new tab (non-destructive; never the sidebar). Verified:
    *  openLinkText targets the main area even when Exo is the focused sidebar leaf. */
@@ -2765,8 +2841,11 @@ export class ChatView extends ItemView {
 
   /** Render a preview card for a generated file. HTML → sandboxed iframe preview;
    *  markdown → a capped, faded MarkdownRenderer preview. Resolves the resource /
-   *  file fresh so restored transcripts reflect the current on-disk state. */
-  private buildArtifactCard(parent: HTMLElement, path: string): void {
+   *  file fresh so restored transcripts reflect the current on-disk state.
+   *  `checkpoint` (restore path only) enables "Restore" on a deleted note when we
+   *  hold pre-write content for it — for a note *created* this turn the snapshot
+   *  is null (it didn't exist), so no restore is offered there. */
+  private buildArtifactCard(parent: HTMLElement, path: string, checkpoint?: Checkpoint): void {
     const lower = path.toLowerCase();
     const isHtml = lower.endsWith(".html") || lower.endsWith(".htm");
     const file = this.app.vault.getAbstractFileByPath(path);
@@ -2775,7 +2854,7 @@ export class ChatView extends ItemView {
     const card = parent.createDiv({ cls: "mva-artifact" });
     const head = card.createDiv({ cls: "mva-artifact-head" });
     setIcon(head.createSpan({ cls: "mva-artifact-ico" }), isHtml ? "file-code-2" : "file-text");
-    head.createSpan({ cls: "mva-artifact-name", text: noteBasename(path) });
+    const nameEl = head.createSpan({ cls: "mva-artifact-name", text: noteBasename(path) });
     head.createDiv({ cls: "mva-artifact-spacer" });
     const openAction = () => (isHtml ? this.openArtifactExternally(path) : this.revealNote(path));
     const openBtn = head.createSpan({ cls: "mva-artifact-open", attr: { "aria-label": "Open" } });
@@ -2784,11 +2863,38 @@ export class ChatView extends ItemView {
       e.stopPropagation();
       openAction();
     };
+    // The whole header opens the file (03-07 feedback: "a che servono se poi
+    // neanche si aprono?"), and the name hover-previews like a wikilink.
+    if (exists) {
+      head.addClass("is-openable");
+      this.clickable(head, () => openAction());
+      if (!isHtml) this.addHoverPreview(nameEl, path);
+    }
 
     // File gone (deleted since the card was created, or an out-of-vault HTML path):
     // markdown shows an explicit note; HTML falls back to a header-only card.
     if (!exists) {
-      if (!isHtml) card.createDiv({ cls: "mva-artifact-missing", text: "File deleted" });
+      if (!isHtml) {
+        const missing = card.createDiv({ cls: "mva-artifact-missing", text: "File deleted" });
+        const rel = this.relPath(path);
+        const before = checkpoint?.get(rel);
+        if (typeof before === "string") {
+          const restore = missing.createEl("button", { cls: "mva-btn", text: "Restore" });
+          restore.onclick = async () => {
+            try {
+              await this.app.vault.create(rel, before);
+              new Notice(`Restored ${noteBasename(path)} from this turn's snapshot.`);
+              // Re-render the card in place, now that the file exists again.
+              const holder = createDiv();
+              this.buildArtifactCard(holder, path, checkpoint);
+              const fresh = holder.firstElementChild;
+              if (fresh) card.replaceWith(fresh);
+            } catch {
+              new Notice(`Couldn't restore ${noteBasename(path)}.`);
+            }
+          };
+        }
+      }
       return;
     }
 
@@ -3838,6 +3944,8 @@ export class ChatView extends ItemView {
       // matching live tool-call rows so the same file isn't shown twice (the
       // #1 finding of the 2026-07-03 impeccable critique on this surface).
       for (const id of ctx.noteTouchIds) ctx.cards.get(id)?.card.remove();
+      // Turn settled: fold long runs of remaining tool rows into a closed accordion.
+      this.groupToolRows(ctx.bodyEl);
       if (ctx.fullText.trim()) {
         this.attachActions(ctx.el, ctx.fullText, text, c);
         // Turn duration (Feature 2): live-only, only when it's worth showing.
