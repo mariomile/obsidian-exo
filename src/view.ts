@@ -33,7 +33,7 @@ import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { planPersistedConvos } from "./core/persistence";
-import { buildRecap } from "./core/recovery";
+import { buildRecap, isRecoverableSessionError } from "./core/recovery";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched } from "./core/touched";
 
@@ -3782,15 +3782,7 @@ export class ChatView extends ItemView {
             // recover in two stages. The footer reflects which stage this is.
             poisoned = true;
             this.renderError(ctx, e.message);
-            const footer = opts?.isRecoveryRetry
-              ? // Stage-2 retry itself crashed → nuclear reset (today's behavior).
-                "The next message starts a fresh session."
-              : c.resumeRisky
-                ? // The resume attempt re-errored → escalate to fresh + recap (below).
-                  "Resume failed — restarting fresh with a recap of this conversation."
-                : // First crash → next message resumes the transcript in a fresh process.
-                  "Session process crashed — your next message resumes it.";
-            ctx.bodyEl.createSpan({ cls: "mva-faint", text: footer });
+            ctx.bodyEl.createSpan({ cls: "mva-faint", text: this.recoveryFooter(c, !!opts?.isRecoveryRetry) });
             this.notifyOnce(ctx, "error", "Exo — error", e.message.slice(0, 80));
           }
           break;
@@ -3850,13 +3842,26 @@ export class ChatView extends ItemView {
       } else {
         this.dropThinking(ctx);
         const msg = describeError(err, adapter.displayName);
-        if (!ctx.bodyEl.querySelector(".mva-inline-error, .mva-onboard")) this.renderError(ctx, msg);
-        new Notice(msg);
-        this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
-        // Don't replay queued messages into a broken session — they'd just re-fail.
-        if (c.queue.length) {
-          c.queue = [];
-          this.renderQueue(c);
+        if (isRecoverableSessionError(msg) && !c.stopped) {
+          // A thrown session-death error (session expired/not found, "process
+          // exited with code …", a failed resume) is the same failure class as an
+          // in-band error_during_execution — route it into the SAME two-stage
+          // recovery instead of surfacing a generic error. Mark poisoned so the
+          // finally keeps c.sessionId and sets resumeRisky (stage 1); it does NOT
+          // auto-retry here — that's stage 2's job on the next poisoned turn.
+          poisoned = true;
+          if (!ctx.bodyEl.querySelector(".mva-inline-error, .mva-onboard")) this.renderError(ctx, msg);
+          ctx.bodyEl.createSpan({ cls: "mva-faint", text: this.recoveryFooter(c, !!opts?.isRecoveryRetry) });
+          this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
+        } else {
+          if (!ctx.bodyEl.querySelector(".mva-inline-error, .mva-onboard")) this.renderError(ctx, msg);
+          new Notice(msg);
+          this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
+          // Don't replay queued messages into a broken session — they'd just re-fail.
+          if (c.queue.length) {
+            c.queue = [];
+            this.renderQueue(c);
+          }
         }
       }
     } finally {
@@ -3952,6 +3957,20 @@ export class ChatView extends ItemView {
         this.renderTailSurfacing(c);
       }
     }
+  }
+
+  /** Recovery footer text for a poisoned/recoverable turn — reflects which
+   *  stage of the two-stage session recovery this failure sits at. Shared by the
+   *  in-band error event and the thrown-error catch path so they can't diverge. */
+  private recoveryFooter(c: Convo, isRecoveryRetry: boolean): string {
+    return isRecoveryRetry
+      ? // Stage-2 retry itself crashed → nuclear reset (next message is fresh).
+        "The next message starts a fresh session."
+      : c.resumeRisky
+        ? // The resume attempt re-errored → escalate to fresh + recap (below).
+          "Resume failed — restarting fresh with a recap of this conversation."
+        : // First crash → next message resumes the transcript in a fresh process.
+          "Session process crashed — your next message resumes it.";
   }
 
   /** Inline error, upgraded to a setup card when the CLI isn't ready. */

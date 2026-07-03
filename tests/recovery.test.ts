@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRecap } from "../src/core/recovery";
+import { buildRecap, isRecoverableSessionError } from "../src/core/recovery";
 import type { Message, Segment } from "../src/core/model";
 
 const user = (text: string): Message => ({ role: "user", text });
@@ -71,5 +71,37 @@ describe("buildRecap", () => {
     // Oldest surviving lines kept, the earliest dropped: L0 gone, later ones present.
     expect(recap).not.toContain("L0-");
     expect(recap).toContain("L7-");
+  });
+});
+
+describe("isRecoverableSessionError", () => {
+  it.each([
+    "Session expired, please start a new one",
+    "SESSION NOT FOUND",
+    "Error: invalid session id abc123",
+    "the session invalid — reauthenticate",
+    "process exited with code 1",
+    "Process exited with code 143 (SIGTERM)",
+    "Failed to resume session",
+    "resume attempt returned an error",
+  ])("matches recoverable session death: %s", (msg) => {
+    expect(isRecoverableSessionError(msg)).toBe(true);
+  });
+
+  it.each([
+    "API error 400: bad request",
+    "Invalid request: missing field 'model'",
+    "rate limit exceeded",
+    "ENOENT: no such file or directory",
+    "you are not logged in",
+    "resume", // "resume" alone (no failed/error) must not match
+    "",
+  ])("does NOT match a generic/non-session error: %s", (msg) => {
+    expect(isRecoverableSessionError(msg)).toBe(false);
+  });
+
+  it("requires 'session' adjacency — a bare 'invalid' does not match", () => {
+    expect(isRecoverableSessionError("invalid model name")).toBe(false);
+    expect(isRecoverableSessionError("invalid session")).toBe(true);
   });
 });

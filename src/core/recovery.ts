@@ -3,6 +3,25 @@
  */
 import type { Message } from "./model";
 
+/**
+ * True when an error message signals a *recoverable* session death — the kind
+ * the two-stage resume/fresh+recap machine can heal, as opposed to a generic
+ * API/usage error that should just surface.
+ *
+ * Matches (case-insensitive): an expired / missing / invalid session, a crashed
+ * CLI process ("process exited with code …"), and a failed/errored resume
+ * attempt. A plain API error (e.g. "API error 400: bad request") must NOT match.
+ */
+export function isRecoverableSessionError(msg: string): boolean {
+  const m = (msg || "").toLowerCase();
+  if (/session expired|session not found|invalid session|session invalid|process exited with code/.test(m)) {
+    return true;
+  }
+  // A resume that itself failed/errored is recoverable (escalates to fresh+recap).
+  if (m.includes("resume") && (m.includes("failed") || m.includes("error"))) return true;
+  return false;
+}
+
 /** Build a compact plaintext recap of the recent transcript, used to re-seed a
  *  FRESH session after a resume also failed (Stage 2 recovery). Threaded to the
  *  provider only — never rendered, queued, or persisted. Takes the last ≤8
