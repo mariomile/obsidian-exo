@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type ExoPlugin from "./main";
 import type { PermissionMode, ProviderId } from "./providers/types";
+import { cliDiagnostics } from "./cli";
 
 export interface MVASettings {
   provider: ProviderId;
@@ -142,6 +143,7 @@ export class MVASettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.renderCliDiagnostics(containerEl, "claude", this.plugin.settings.claudeBin);
 
     new Setting(containerEl)
       .setName("Codex binary path")
@@ -155,6 +157,7 @@ export class MVASettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.renderCliDiagnostics(containerEl, "codex", this.plugin.settings.codexBin);
 
     new Setting(containerEl)
       .setName("Codex sandbox")
@@ -544,5 +547,22 @@ export class MVASettingTab extends PluginSettingTab {
           })
       );
     });
+  }
+
+  /** Muted line under a binary-path field showing the RESOLVED path + CLI
+   *  version (async, never blocks render). Turns future binary-drift debugging
+   *  into a 5-second glance. */
+  private renderCliDiagnostics(containerEl: HTMLElement, name: string, configured: string): void {
+    const el = containerEl.createDiv({ cls: "setting-item-description mva-cli-diag" });
+    el.setText("Resolving…");
+    void cliDiagnostics(name, configured)
+      .then((d) => {
+        el.setText(
+          d.found
+            ? `Resolved: ${d.bin}${d.version ? ` — ${d.version}` : ""}`
+            : "Not found — set the path explicitly"
+        );
+      })
+      .catch(() => el.setText("Not found — set the path explicitly"));
   }
 }

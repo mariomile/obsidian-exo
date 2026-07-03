@@ -13,10 +13,22 @@ export interface ResolvedCli {
  * Resolve a CLI binary (`claude` or `codex`) + a usable PATH.
  *
  * GUI apps (Obsidian) don't inherit the shell PATH, and tools like nvm only
- * export PATH from `.zshrc` (interactive shells). So we (1) honor an explicit
- * setting, (2) probe the filesystem directly — no shell needed, most reliable —
- * then (3) fall back to an *interactive* login-shell lookup, and finally (4) the
- * bare command name.
+ * export PATH from `.zshrc` (interactive shells). Resolution order (highest to
+ * lowest priority):
+ *
+ *   1. explicit setting
+ *   2. fixed well-known install paths (~/.claude/local, ~/.local, homebrew, /usr/local)
+ *   3. the live npm global prefix from the login shell (`npm prefix -g`)
+ *   4. version-manager / fallback dirs (volta, asdf, npm-global, $npm_config_prefix,
+ *      the Obsidian-app-adjacent dir on macOS, then nvm)
+ *   5. an interactive login-shell `command -v` lookup
+ *   6. the bare command name
+ *
+ * Why the live npm prefix (3) beats the version-manager dirs (4): a stale,
+ * orphaned copy can linger in an nvm version dir long after the user's real npm
+ * prefix moved elsewhere. Updates land in the login shell's prefix, so it must
+ * win over those version-manager hits — but still lose to explicit well-known
+ * install paths (2), which are canonical.
  *
  * Adapted from obsidian-selection-toolbar/src/ai/client.ts, generalized for any
  * binary name.
@@ -28,9 +40,17 @@ export async function resolveCli(name: string, configured: string): Promise<Reso
   const key = `${name} ${configured.trim()}`;
   const cached = cliCache.get(key);
   if (cached) return cached;
+  const home = homedir();
   const bin =
     (configured && configured.trim()) ||
-    probeFilesystem(name) ||
+    firstExisting(fixedPathCandidates(name, home)) ||
+    (await probeNpmPrefix(name)) ||
+    firstExisting(
+      versionManagerCandidates(name, home, {
+        npmConfigPrefix: process.env.npm_config_prefix,
+        nvmVersions: nvmVersionDirs(home),
+      })
+    ) ||
     (await probeLoginShell(name)) ||
     name;
   const resolved = { bin, pathEnv: buildPathEnv(bin) };
@@ -38,65 +58,130 @@ export async function resolveCli(name: string, configured: string): Promise<Reso
   return resolved;
 }
 
-function probeFilesystem(name: string): string | null {
-  const home = homedir();
-  const fixed = [
+/* --------------------------- path candidates -------------------------- */
+
+/** Canonical, well-known install locations — checked first (they beat the live
+ *  npm prefix and every version-manager dir). Pure/injectable for tests. */
+export function fixedPathCandidates(name: string, home: string): string[] {
+  return [
     `${home}/.${name}/local/${name}`, // e.g. ~/.claude/local/claude
     `${home}/.local/bin/${name}`,
     `${home}/.local/node/bin/${name}`,
     `/opt/homebrew/bin/${name}`,
     `/usr/local/bin/${name}`,
   ];
-  for (const c of fixed) {
-    if (safeExists(c)) return c;
-  }
-  // nvm: newest version dir that ships the binary.
-  try {
-    const nvmRoot = `${home}/.nvm/versions/node`;
-    const versions = readdirSync(nvmRoot).sort().reverse();
-    for (const v of versions) {
-      const p = `${nvmRoot}/${v}/bin/${name}`;
-      if (safeExists(p)) return p;
-    }
-  } catch {
-    /* no nvm */
+}
+
+/** Version-manager + fallback locations — checked AFTER the live npm prefix, so
+ *  a stale copy here can't beat a freshly-updated global install. Order: volta,
+ *  asdf, npm-global, $npm_config_prefix (if set), the Obsidian-app-adjacent dir
+ *  (macOS only), then nvm version dirs (newest first). Pure/injectable. */
+export function versionManagerCandidates(
+  name: string,
+  home: string,
+  opts: {
+    npmConfigPrefix?: string;
+    nvmVersions?: string[];
+    platform?: NodeJS.Platform;
+    execPath?: string;
+  } = {}
+): string[] {
+  const platform = opts.platform ?? process.platform;
+  const execPath = opts.execPath ?? process.execPath;
+  const out = [
+    `${home}/.volta/bin/${name}`,
+    `${home}/.asdf/shims/${name}`,
+    `${home}/.npm-global/bin/${name}`,
+  ];
+  if (opts.npmConfigPrefix) out.push(`${opts.npmConfigPrefix}/bin/${name}`);
+  if (platform === "darwin" && execPath) out.push(`${dirname(execPath)}/${name}`);
+  for (const v of opts.nvmVersions ?? []) out.push(`${home}/.nvm/versions/node/${v}/bin/${name}`);
+  return out;
+}
+
+/** Return the first candidate path that exists on disk (null if none). The
+ *  `exists` predicate is injectable so ordering can be unit-tested without fs. */
+export function firstExisting(candidates: string[], exists: (p: string) => boolean = safeExists): string | null {
+  for (const c of candidates) {
+    if (exists(c)) return c;
   }
   return null;
 }
 
-function probeLoginShell(name: string): Promise<string | null> {
+/** nvm version dirs (newest first), or [] if nvm isn't installed. */
+function nvmVersionDirs(home: string): string[] {
+  try {
+    return readdirSync(`${home}/.nvm/versions/node`).sort().reverse();
+  } catch {
+    return []; // no nvm
+  }
+}
+
+/* ----------------------------- shell probes --------------------------- */
+
+/** Run a command in an *interactive* login shell (sources .zshrc, where nvm /
+ *  PATH setup usually lives) and resolve its raw stdout. Interactive rc files
+ *  can stall, so we hard-kill after `timeoutMs`. Never rejects — resolves "". */
+function loginShellExec(cmd: string, timeoutMs = 6000): Promise<string> {
   return new Promise((resolve) => {
     try {
       const shell = process.env.SHELL || "/bin/zsh";
-      // `-i` so the shell sources .zshrc (where nvm/path setup usually lives).
-      const c = spawn(shell, ["-ilc", `command -v ${name}`], { env: process.env });
+      const c = spawn(shell, ["-ilc", cmd], { env: process.env });
       let out = "";
-      const done = (val: string | null) => resolve(val);
       c.stdout.on("data", (d: Buffer | string) => (out += d.toString()));
-      c.on("error", () => done(null));
-      c.on("close", () => {
-        const lines = out
-          .split("\n")
-          .map((s) => s.trim())
-          .filter(Boolean);
-        for (const l of lines.reverse()) {
-          if (l.startsWith("/") && safeExists(l)) return done(l);
-        }
-        done(null);
-      });
-      // Safety: interactive rc files can stall — give up after 6s.
+      c.on("error", () => resolve(""));
+      c.on("close", () => resolve(out));
       setTimeout(() => {
         try {
           c.kill("SIGKILL");
         } catch {
           /* ignore */
         }
-        done(null);
-      }, 6000);
+        resolve("");
+      }, timeoutMs);
     } catch {
-      resolve(null);
+      resolve("");
     }
   });
+}
+
+/** The user's global npm prefix, queried once via the login shell (cached).
+ *  This is where `npm i -g` updates actually land, so it's a reliable pointer
+ *  to the *live* binary even when a version manager holds a stale copy. */
+let npmPrefixQuery: Promise<string | null> | null = null;
+function getNpmPrefix(): Promise<string | null> {
+  if (!npmPrefixQuery) {
+    npmPrefixQuery = loginShellExec("npm prefix -g").then((out) => {
+      const line = out
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .find((l) => l.startsWith("/"));
+      return line ?? null;
+    });
+  }
+  return npmPrefixQuery;
+}
+
+/** Probe `<npm prefix -g>/bin/<name>` (cached prefix lookup). */
+async function probeNpmPrefix(name: string): Promise<string | null> {
+  const prefix = await getNpmPrefix();
+  if (!prefix) return null;
+  const p = `${prefix}/bin/${name}`;
+  return safeExists(p) ? p : null;
+}
+
+/** Last-resort `command -v <name>` in the interactive login shell. */
+async function probeLoginShell(name: string): Promise<string | null> {
+  const out = await loginShellExec(`command -v ${name}`);
+  const lines = out
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const l of lines.reverse()) {
+    if (l.startsWith("/") && safeExists(l)) return l;
+  }
+  return null;
 }
 
 function buildPathEnv(bin: string): string {
@@ -118,6 +203,60 @@ function safeExists(p: string): boolean {
   } catch {
     return false;
   }
+}
+
+/* --------------------------- diagnostics ------------------------------ */
+
+/** What Settings shows under a binary-path field. `found` is true when we could
+ *  confirm a real binary (a `--version` reply, or the resolved path exists). */
+export interface CliDiagnostics {
+  bin: string;
+  version: string | null;
+  found: boolean;
+}
+
+const diagCache = new Map<string, Promise<CliDiagnostics>>();
+
+/** Resolve a CLI and read its `--version`, for the Settings diagnostics line.
+ *  Cached per (name, configured); never blocks — the caller fills the UI async. */
+export function cliDiagnostics(name: string, configured: string): Promise<CliDiagnostics> {
+  const key = `${name} ${configured.trim()}`;
+  const cached = diagCache.get(key);
+  if (cached) return cached;
+  const p = (async (): Promise<CliDiagnostics> => {
+    const { bin, pathEnv } = await resolveCli(name, configured);
+    const version = await probeVersion(bin, pathEnv);
+    return { bin, version, found: version !== null || safeExists(bin) };
+  })();
+  diagCache.set(key, p);
+  return p;
+}
+
+/** Spawn `<bin> --version` with the enriched PATH; parse a semver → "vX.Y.Z".
+ *  5s timeout, resolves null on any failure. */
+function probeVersion(bin: string, pathEnv: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      const c = spawn(bin, ["--version"], { env: { ...process.env, PATH: pathEnv } });
+      let out = "";
+      c.stdout.on("data", (d: Buffer | string) => (out += d.toString()));
+      c.on("error", () => resolve(null));
+      c.on("close", () => {
+        const m = out.match(/\d+\.\d+\.\d+[\w.-]*/);
+        resolve(m ? `v${m[0]}` : null);
+      });
+      setTimeout(() => {
+        try {
+          c.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+        resolve(null);
+      }, 5000);
+    } catch {
+      resolve(null);
+    }
+  });
 }
 
 /* ------------------------------ errors -------------------------------- */
