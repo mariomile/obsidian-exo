@@ -679,7 +679,18 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-size: 12.5px;
   color: var(--text-normal);
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   transition: background var(--mva-t);
+}
+/* Brand-color dot on combined-provider popovers (e.g. the unified model picker) —
+   same visual language as the tab bar / gallery card provider dots. */
+.mva-sel-opt-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .mva-sel-opt:hover,
 .mva-sel-opt.is-active {

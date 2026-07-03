@@ -297,7 +297,6 @@ export class ChatView extends ItemView {
   private sendBtn!: HTMLButtonElement;
   private brandDot!: HTMLElement;
   // Toolbar selector chips (Permission-style popovers) expose a refresh fn each.
-  private refreshProviderChip: () => void = () => {};
   private refreshModelChip: () => void = () => {};
   private refreshPermChipFn: () => void = () => {};
   private contextEl!: HTMLElement;
@@ -573,16 +572,21 @@ export class ChatView extends ItemView {
     newChat.onclick = () => this.newConversation();
   }
 
-  private onProviderChange(next: ProviderId): void {
+  /** Switch provider (and, when the model picker jumps to another backend,
+   *  the exact model chosen there — not just that provider's remembered
+   *  default). No separate Provider chip exists; this is reached only from
+   *  the unified model picker's onSelect when the chosen model belongs to a
+   *  different provider than the active one. */
+  private onProviderChange(next: ProviderId, explicitModel?: string): void {
     if (next === this.provider) return;
     if (this.streaming) {
       new Notice("Can't switch provider while a reply is streaming.");
       return;
     }
     this.provider = next;
-    this.model = next === "claude" ? this.plugin.settings.claudeModel : this.plugin.settings.codexModel;
+    this.model = explicitModel ?? (next === "claude" ? this.plugin.settings.claudeModel : this.plugin.settings.codexModel);
     this.active.provider = next;
-    this.active.model = this.model;
+    this.persistModel(); // writes this.model into the right provider's settings slot + active.model
     this.active.sessionId = undefined;
     this.active.allow.clear();
     this.dropSession(this.active);
@@ -593,29 +597,34 @@ export class ChatView extends ItemView {
     this.prewarm();
   }
 
-  /** All selectable model ids for the current provider (built-in + custom + current). */
-  private modelChoices(): { id: string; label: string }[] {
-    const a = ADAPTERS[this.provider];
-    const out: { id: string; label: string }[] = [];
-    const seen = new Set<string>();
-    for (const m of a.models()) {
-      out.push({ id: m.id, label: m.label });
-      seen.add(m.id);
+  /** All selectable models across BOTH providers (built-in + custom + current),
+   *  for the unified model picker — selecting one implicitly picks its provider. */
+  private allModelChoices(): { id: string; label: string; provider: ProviderId }[] {
+    const out: { id: string; label: string; provider: ProviderId }[] = [];
+    for (const provider of ["claude", "codex"] as ProviderId[]) {
+      const a = ADAPTERS[provider];
+      const seen = new Set<string>();
+      for (const m of a.models()) {
+        out.push({ id: m.id, label: m.label, provider });
+        seen.add(m.id);
+      }
+      const custom = provider === "claude"
+        ? this.plugin.settings.claudeCustomModels
+        : this.plugin.settings.codexCustomModels;
+      for (const id of custom.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push({ id, label: id, provider });
+      }
+      if (provider === this.provider && this.model && !seen.has(this.model)) {
+        out.push({ id: this.model, label: this.model, provider });
+      }
     }
-    const custom = this.provider === "claude"
-      ? this.plugin.settings.claudeCustomModels
-      : this.plugin.settings.codexCustomModels;
-    for (const id of custom.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      out.push({ id, label: id });
-    }
-    if (this.model && !seen.has(this.model)) out.push({ id: this.model, label: this.model });
     return out;
   }
 
   private modelLabel(): string {
-    const found = this.modelChoices().find((m) => m.id === this.model);
+    const found = this.allModelChoices().find((m) => m.id === this.model);
     return found?.label || this.model || "Model";
   }
 
@@ -624,7 +633,6 @@ export class ChatView extends ItemView {
     // Provider identity tints the brand star. All interactive accents follow
     // the theme (--mva-brand defaults to --interactive-accent in CSS).
     this.brandDot.style.color = a.brandColor;
-    this.refreshProviderChip();
     this.refreshModelChip();
   }
 
@@ -1552,25 +1560,26 @@ export class ChatView extends ItemView {
     const tb = bar.createDiv({ cls: "mva-toolbar" });
     const s = this.plugin.settings;
 
-    // Provider — Permission-style popover.
-    this.refreshProviderChip = this.buildSelectChip(tb, {
-      ariaLabel: "Provider",
-      getLabel: () => ADAPTERS[this.provider].displayName,
-      getOptions: () =>
-        (["claude", "codex"] as ProviderId[]).map((id) => ({ value: id, label: ADAPTERS[id].displayName })),
-      getCurrent: () => this.provider,
-      onSelect: (v) => this.onProviderChange(v as ProviderId),
-    });
-
-    // Model — Permission-style popover (rebuilt on open; list depends on provider).
+    // Model — unified picker across BOTH providers (no separate Provider chip).
+    // Options are rebuilt on open; each row carries a brand-color dot (same
+    // language as tab/gallery provider dots) so Claude vs Codex models stay
+    // visually distinct in one flat list. Picking a model from the other
+    // backend switches provider + model together as one action.
     this.refreshModelChip = this.buildSelectChip(tb, {
       ariaLabel: "Model",
       getLabel: () => this.modelLabel(),
-      getOptions: () => this.modelChoices().map((m) => ({ value: m.id, label: m.label })),
+      getOptions: () =>
+        this.allModelChoices().map((m) => ({ value: m.id, label: m.label, dotColor: ADAPTERS[m.provider].brandColor })),
       getCurrent: () => this.model,
       onSelect: (v) => {
         if (this.streaming) {
           new Notice("Can't switch model while a reply is streaming.");
+          return;
+        }
+        const found = this.allModelChoices().find((m) => m.id === v);
+        if (!found) return;
+        if (found.provider !== this.provider) {
+          this.onProviderChange(found.provider, v);
           return;
         }
         this.model = v;
@@ -1646,7 +1655,7 @@ export class ChatView extends ItemView {
     opts: {
       ariaLabel: string;
       getLabel: () => string;
-      getOptions: () => { value: string; label: string; risk?: RiskLevel }[];
+      getOptions: () => { value: string; label: string; risk?: RiskLevel; dotColor?: string }[];
       getCurrent: () => string;
       onSelect: (value: string) => void;
       chipRisk?: () => RiskLevel;
@@ -1670,7 +1679,11 @@ export class ChatView extends ItemView {
         const row = pop.createDiv({ cls: "mva-sel-opt" });
         if (o.risk) row.addClass(o.risk);
         if (o.value === cur) row.addClass("is-active");
-        row.setText(o.label);
+        if (o.dotColor) {
+          const dot = row.createSpan({ cls: "mva-sel-opt-dot" });
+          dot.style.background = o.dotColor;
+        }
+        row.createSpan({ text: o.label });
         row.onclick = () => {
           opts.onSelect(o.value);
           refresh();
