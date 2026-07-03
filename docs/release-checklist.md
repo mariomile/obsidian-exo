@@ -36,6 +36,14 @@ reason). Timeout is 120s.
 
 ## Version bump
 
-- `manifest.json`, `package.json`, `versions.json` (add `"<version>": "<minAppVersion>"`)
-- keep `minAppVersion` at `1.7.2`
-- `npm run build` to refresh `main.js`
+Run the bump script — it updates `manifest.json`, `package.json`,
+`package-lock.json` (both project version fields), and `versions.json` (adds
+`"<version>": "<minAppVersion>"`, reusing the previous latest `minAppVersion`) in
+lockstep:
+
+```bash
+npm run bump -- 0.x.y
+npm run build   # refresh main.js
+```
+
+`minAppVersion` stays at `1.7.2` (the script carries it forward automatically).
