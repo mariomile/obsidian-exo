@@ -44,6 +44,14 @@ import { describeCliFailure } from "./core/errors";
 
 export type { AskQuestion } from "./core/model";
 
+/** Prompt surface for the Memory Union Store — appended to the boot preamble only
+ *  when the store tools are registered. Kept short: the tool descriptions carry
+ *  the detail. */
+const MEMORY_STORE_NOTE =
+  "### Memory union store\n" +
+  "A persistent, append-only memory store lives in `_system/memory/store/` — verbatim preferences, facts, decisions, and lessons from past sessions. " +
+  "Call `recall` before answering anything that may depend on prior sessions instead of guessing, and use `remember` to store new durable statements in the user's exact words (never summarized).";
+
 export const VIEW_TYPE = "exo-view";
 /** Custom Obsidian icon id for the Exo brand mark (registered in main.ts). */
 export const EXO_ICON = "exo-star";
@@ -441,10 +449,15 @@ export class ChatView extends ItemView {
     // obsidian tools. Build a FRESH server per spawn; it's cheap (plain object +
     // zod schemas), and the settings it depends on are read at creation time.
     const obsidianServer = useObsidian
-      ? createObsidianToolServer(this.app, !s.contextSavingMode, s.memoryWriteEnabled, (qs) =>
-          // Per-session server + per-convo closure: ask_user always renders into
-          // the conversation that owns this session, never a parallel one.
-          this.askBridge(c, qs)
+      ? createObsidianToolServer(
+          this.app,
+          !s.contextSavingMode,
+          s.memoryWriteEnabled,
+          (qs) =>
+            // Per-session server + per-convo closure: ask_user always renders into
+            // the conversation that owns this session, never a parallel one.
+            this.askBridge(c, qs),
+          s.memoryReadEnabled
         )
       : undefined;
 
@@ -452,6 +465,9 @@ export class ChatView extends ItemView {
     if (s.memoryReadEnabled && c.provider === "claude") {
       if (!this.memoryPreamble) this.memoryPreamble = await readBootContext(this.app);
       memoryPreamble = this.memoryPreamble || undefined;
+      // Tell the agent the union store exists whenever its tools are registered
+      // (obsidian tools on + memory read on ⇒ `recall`, +write ⇒ `remember`).
+      if (useObsidian) memoryPreamble = (memoryPreamble ? `${memoryPreamble}\n\n` : "") + MEMORY_STORE_NOTE;
     }
 
     const session = ADAPTERS[c.provider].createSession({

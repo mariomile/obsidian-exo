@@ -2,6 +2,17 @@ import { App, TFile, prepareSimpleSearch, getAllTags } from "obsidian";
 import { z } from "zod";
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { resolveLink, neighborhood, basename } from "./graph";
+import {
+  formatEntry,
+  parseStoreFile,
+  monthFileName,
+  scoreEntries,
+  resolveSupersedence,
+  type MemoryEntry,
+} from "../core/memory-store";
+
+/** Folder holding the append-only Memory Union Store (monthly markdown files). */
+const MEMORY_STORE_DIR = "_system/memory/store";
 
 type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
 const ok = (text: string): Result => ({ content: [{ type: "text", text }] });
@@ -72,7 +83,8 @@ export function createObsidianToolServer(
   app: App,
   alwaysLoad = true,
   memoryWrite = true,
-  askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>
+  askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>,
+  memoryRead = true
 ) {
   const need = (target: string): TFile => {
     const f = resolveLink(app, target);
@@ -486,6 +498,75 @@ export function createObsidianToolServer(
     }
   );
 
+  /* ------------------- memory union store (v1) -------------------- */
+
+  const remember = tool(
+    "remember",
+    "Call this when the user states a durable preference, fact, or decision, or corrects something you got wrong. Store their exact words — do not summarize. If it contradicts an earlier memory, pass that memory's id as supersedes instead of rewording history.",
+    {
+      text: z.string().describe("The user's exact words, stored verbatim."),
+      kind: z.enum(["preference", "fact", "decision", "lesson"]),
+      tags: z.array(z.string()).optional(),
+      supersedes: z.string().optional().describe("Id (mem-…) of an earlier memory this one replaces."),
+    },
+    async (args) => {
+      const at = Date.now();
+      const entry: MemoryEntry = {
+        id: `mem-${at}`,
+        kind: args.kind,
+        at,
+        session: "unknown",
+        tags: args.tags ?? [],
+        ...(args.supersedes ? { supersedes: args.supersedes } : {}),
+        text: args.text,
+      };
+      const path = `${MEMORY_STORE_DIR}/${monthFileName(at)}`;
+      const block = formatEntry(entry);
+      const existing = app.vault.getAbstractFileByPath(path);
+      if (existing instanceof TFile) {
+        const cur = await app.vault.read(existing);
+        await app.vault.modify(existing, `${cur.replace(/\s+$/, "")}\n\n${block}\n`);
+      } else {
+        await ensureParentFolder(app, path);
+        await app.vault.create(path, `${block}\n`);
+      }
+      return ok(
+        `Remembered ${entry.id} (${entry.kind})${entry.supersedes ? `, supersedes ${entry.supersedes}` : ""}.`
+      );
+    }
+  );
+
+  const recall = tool(
+    "recall",
+    "Call this before answering anything that may depend on prior sessions — user preferences, past decisions, project facts. Returns stored memories verbatim.",
+    { query: z.string(), k: z.number().optional() },
+    async (args) => {
+      const k = Math.min(Math.max(args.k ?? 5, 1), 12);
+      const files = app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${MEMORY_STORE_DIR}/`));
+      const all: MemoryEntry[] = [];
+      for (const f of files) {
+        try {
+          all.push(...parseStoreFile(await app.vault.cachedRead(f)));
+        } catch {
+          /* skip unreadable file */
+        }
+      }
+      if (all.length === 0) return ok("No memories stored yet.");
+      const scored = scoreEntries(args.query, resolveSupersedence(all))
+        .filter((s) => s.score > 0)
+        .slice(0, k);
+      if (scored.length === 0) return ok(`No stored memories match "${args.query}".`);
+      const body = scored
+        .map(({ entry }) => {
+          const date = new Date(entry.at).toISOString().slice(0, 10);
+          const tags = entry.tags.length ? ` · tags: ${entry.tags.join(", ")}` : "";
+          return `${entry.id} · ${entry.kind} · ${date}${tags}\n${entry.text}`;
+        })
+        .join("\n\n");
+      return ok(body);
+    }
+  );
+
   return createSdkMcpServer({
     name: "obsidian",
     version: "1.0.0",
@@ -497,7 +578,8 @@ export function createObsidianToolServer(
       askUser,
       createNote, appendToNote, updateFrontmatter, addLinks, openNote,
       editNote, insertAtCursor, renameNote,
-      ...(memoryWrite ? [captureDecision, logSession, captureLearning] : []),
+      ...(memoryRead ? [recall] : []),
+      ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember] : []),
     ],
   });
 }
@@ -511,6 +593,7 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__list_notes",
   "mcp__obsidian__list_tags",
   "mcp__obsidian__get_active_context",
+  "mcp__obsidian__recall",
 ]);
 
 /** Memory-write tool names (gated separately by the memoryWrite setting). */
@@ -518,4 +601,5 @@ export const OBSIDIAN_MEMORY_TOOLS = new Set([
   "mcp__obsidian__capture_decision",
   "mcp__obsidian__log_session",
   "mcp__obsidian__capture_learning",
+  "mcp__obsidian__remember",
 ]);
