@@ -292,6 +292,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   line-height: 1.55;
   color: var(--text-normal);
   word-break: break-word;
+  /* Obsidian's frameless-window chrome sets `user-select: none` on <body> (so
+     dragging the title bar doesn't select text) and it inherits all the way
+     down into this view — message text must opt back in, the same way
+     Obsidian's own editor/reading surfaces do, or it can't be selected/copied. */
+  user-select: text;
 }
 .mva-user .mva-bubble {
   max-width: 85%;
@@ -1246,6 +1251,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-secondary);
   border-radius: var(--mva-r1);
   padding: 8px 10px;
+  user-select: text; /* copyable tool output — see .mva-bubble for why this is needed */
 }
 .mva-tool-note {
   color: var(--text-muted);
@@ -1707,6 +1713,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   line-height: 1.5;
   max-height: 240px;
   overflow-y: auto;
+  user-select: text; /* copyable reasoning text — see .mva-bubble for why this is needed */
 }
 .mva-reason.is-collapsed .mva-reason-body {
   display: none;

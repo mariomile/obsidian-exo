@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-exo",
-	"version": "0.11.3",
+	"version": "0.11.4",
 	"description": "Exo — an agentic AI assistant in your Obsidian sidebar, powered by the Claude or Codex CLI, with a custom theme-aware chat UI.",
 	"main": "main.js",
 	"scripts": {
