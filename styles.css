@@ -1220,6 +1220,33 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   gap: 8px;
   padding-left: 14px;
 }
+/* Touched-notes footer: only the LATEST turn keeps its chips expanded — every
+   older turn collapses to a one-line "N notes ▸" toggle (03-07 feedback: old
+   footers pile up and crowd the transcript). Both forms are in the DOM; the
+   class flip swaps them without re-rendering. */
+.mva-sources-head {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  padding: 2px 6px;
+  border-radius: var(--mva-r1);
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+.mva-sources-head:hover {
+  background: color-mix(in srgb, var(--background-modifier-hover) 60%, transparent);
+  color: var(--text-muted);
+}
+.mva-sources.is-collapsed .mva-sources-head {
+  display: flex;
+}
+.mva-sources.is-collapsed .mva-src-group {
+  display: none;
+}
+
 /* "+N" expander chip on crowded touched-notes groups. */
 .mva-src-more {
   color: var(--text-faint);
