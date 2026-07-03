@@ -1,0 +1,155 @@
+import { describe, it, expect } from "vitest";
+import {
+  formatEntry,
+  parseStoreFile,
+  monthFileName,
+  scoreEntries,
+  resolveSupersedence,
+  type MemoryEntry,
+} from "../src/core/memory-store";
+
+/** A timestamp with a whole-ms ISO representation (round-trips through toISOString). */
+const T = Date.UTC(2024, 6, 3, 12, 0, 0); // 2024-07-03T12:00:00.000Z
+
+function entry(over: Partial<MemoryEntry> = {}): MemoryEntry {
+  return {
+    id: `mem-${T}`,
+    kind: "preference",
+    at: T,
+    session: "sess-1",
+    tags: [],
+    text: "verbatim text",
+    ...over,
+  };
+}
+
+describe("formatEntry / parseStoreFile round-trip", () => {
+  it("round-trips a minimal entry (no tags, no supersedes)", () => {
+    const e = entry();
+    const parsed = parseStoreFile(formatEntry(e));
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toEqual(e);
+  });
+
+  it("round-trips tags and supersedes when present", () => {
+    const e = entry({ tags: ["product", "roadmap"], supersedes: "mem-100" });
+    const parsed = parseStoreFile(formatEntry(e));
+    expect(parsed[0]).toEqual(e);
+  });
+
+  it("omits the tags and supersedes lines when absent", () => {
+    const block = formatEntry(entry());
+    expect(block).not.toContain("tags:");
+    expect(block).not.toContain("supersedes:");
+  });
+
+  it("preserves multi-line verbatim text including internal blank lines", () => {
+    const e = entry({ text: "line one\n\n- a bullet\n- another\n\nfinal para" });
+    const parsed = parseStoreFile(formatEntry(e));
+    expect(parsed[0].text).toBe(e.text);
+  });
+
+  it("round-trips several entries concatenated into one file", () => {
+    const a = entry({ id: "mem-1", at: 1, text: "first" });
+    const b = entry({ id: "mem-2", at: 2, text: "second\nmore", tags: ["x"] });
+    const file = [formatEntry(a), formatEntry(b)].join("\n\n");
+    expect(parseStoreFile(file)).toEqual([a, b]);
+  });
+
+  it("tolerates junk around blocks: ignores leading prose, recovers every block", () => {
+    const a = entry({ id: "mem-1", at: 1, text: "first" });
+    const b = entry({ id: "mem-2", at: 2, text: "second" });
+    const file =
+      "# a human heading someone typed\n\nsome loose prose\n\n" +
+      formatEntry(a) +
+      "\n\n" +
+      formatEntry(b) +
+      "\n\ntrailing junk\n";
+    const parsed = parseStoreFile(file);
+    // Leading prose is ignored; both real blocks are recovered with correct metadata.
+    expect(parsed.map((e) => e.id)).toEqual(["mem-1", "mem-2"]);
+    expect(parsed[0].kind).toBe("preference");
+    expect(parsed[0].text).toBe("first");
+    // Trailing junk after the last block is absorbed into its verbatim text (no terminator exists).
+    expect(parsed[1].text.startsWith("second")).toBe(true);
+  });
+
+  it("falls back to the id epoch when the at: line is missing", () => {
+    const file = `## mem-42 fact\n- session: unknown\n\nhello`;
+    const parsed = parseStoreFile(file);
+    expect(parsed[0].at).toBe(42);
+    expect(parsed[0].session).toBe("unknown");
+  });
+
+  it("returns [] for an empty store", () => {
+    expect(parseStoreFile("")).toEqual([]);
+    expect(parseStoreFile("just prose, no blocks\n")).toEqual([]);
+  });
+});
+
+describe("monthFileName", () => {
+  it("names the monthly file YYYY-MM.md", () => {
+    expect(monthFileName(Date.UTC(2024, 0, 15))).toBe("2024-01.md");
+    expect(monthFileName(Date.UTC(2024, 6, 3))).toBe("2024-07.md");
+    expect(monthFileName(Date.UTC(2026, 11, 31))).toBe("2026-12.md");
+  });
+});
+
+describe("scoreEntries", () => {
+  it("ranks an exact multi-term match above a partial one", () => {
+    const both = entry({ id: "mem-both", text: "product roadmap planning" });
+    const partial = entry({ id: "mem-partial", text: "product only note" });
+    const noise = entry({ id: "mem-noise", text: "unrelated grocery list" });
+    const ranked = scoreEntries("product roadmap", [partial, noise, both]);
+    expect(ranked[0].entry.id).toBe("mem-both");
+    expect(ranked[1].entry.id).toBe("mem-partial");
+    expect(ranked.find((r) => r.entry.id === "mem-noise")!.score).toBe(0);
+  });
+
+  it("matches against tags and kind, not just text", () => {
+    const byTag = entry({ id: "mem-tag", text: "nothing here", tags: ["pricing"] });
+    const miss = entry({ id: "mem-miss", text: "nothing here", tags: ["other"] });
+    const ranked = scoreEntries("pricing", [miss, byTag]);
+    expect(ranked[0].entry.id).toBe("mem-tag");
+    expect(ranked[0].score).toBeGreaterThan(0);
+  });
+
+  it("breaks score ties by recency (newest first)", () => {
+    const older = entry({ id: "mem-old", at: 1000, text: "same words here" });
+    const newer = entry({ id: "mem-new", at: 2000, text: "same words here" });
+    const ranked = scoreEntries("same words", [older, newer]);
+    expect(ranked[0].entry.id).toBe("mem-new");
+    expect(ranked[1].entry.id).toBe("mem-old");
+    expect(ranked[0].score).toBe(ranked[1].score);
+  });
+
+  it("returns [] for an empty corpus", () => {
+    expect(scoreEntries("anything", [])).toEqual([]);
+  });
+});
+
+describe("resolveSupersedence", () => {
+  it("excludes an entry that another supersedes", () => {
+    const old = entry({ id: "mem-1", text: "old" });
+    const neu = entry({ id: "mem-2", text: "new", supersedes: "mem-1" });
+    expect(resolveSupersedence([old, neu]).map((e) => e.id)).toEqual(["mem-2"]);
+  });
+
+  it("excludes every link in a supersedence chain", () => {
+    const c = entry({ id: "mem-c", text: "c" });
+    const b = entry({ id: "mem-b", text: "b", supersedes: "mem-c" });
+    const a = entry({ id: "mem-a", text: "a", supersedes: "mem-b" });
+    expect(resolveSupersedence([a, b, c]).map((e) => e.id)).toEqual(["mem-a"]);
+  });
+
+  it("ignores unknown supersedes ids", () => {
+    const only = entry({ id: "mem-1", text: "x", supersedes: "mem-does-not-exist" });
+    expect(resolveSupersedence([only]).map((e) => e.id)).toEqual(["mem-1"]);
+  });
+
+  it("returns all entries when none supersede", () => {
+    const a = entry({ id: "mem-1", text: "a" });
+    const b = entry({ id: "mem-2", text: "b" });
+    expect(resolveSupersedence([a, b])).toEqual([a, b]);
+  });
+});
