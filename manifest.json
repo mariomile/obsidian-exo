@@ -1,10 +1,10 @@
 {
-  "id": "exo",
-  "name": "Exo",
-  "version": "0.11.0",
-  "minAppVersion": "1.7.2",
-  "description": "An agentic AI assistant in your sidebar, powered by the Claude or Codex CLI. Your vault becomes its working directory — with a refined, theme-aware chat UI.",
-  "author": "Mario Miletta",
-  "authorUrl": "https://github.com/mariomile",
-  "isDesktopOnly": true
+	"id": "exo",
+	"name": "Exo",
+	"version": "0.11.1",
+	"minAppVersion": "1.7.2",
+	"description": "An agentic AI assistant in your sidebar, powered by the Claude or Codex CLI. Your vault becomes its working directory — with a refined, theme-aware chat UI.",
+	"author": "Mario Miletta",
+	"authorUrl": "https://github.com/mariomile",
+	"isDesktopOnly": true
 }

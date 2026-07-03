@@ -313,6 +313,8 @@ export class ChatView extends ItemView {
   private outlineEl: HTMLElement | null = null;
   /** Coalesces outline active-item updates into one rAF per scroll frame. */
   private outlineRaf: number | null = null;
+  /** Anti-flicker collapse timer for the outline panel (Notion pattern). */
+  private outlineCollapseTimer: number | null = null;
   /** Whether we've already lazily asked for OS notification permission (once). */
   private notifyPermAsked = false;
 
@@ -3362,39 +3364,69 @@ export class ChatView extends ItemView {
     });
   }
 
-  /** Rebuild the Notion-style outline rail from the ACTIVE conversation's DOM.
+  /** Rebuild the Notion-style outline from the ACTIVE conversation's DOM.
+   *  Ported from Mario's `notion-outline` plugin: a full-height tick STRIP at the
+   *  right edge that expands, on hover, into a floating PANEL of labelled rows —
+   *  a JS `is-expanded` toggle with an anti-flicker collapse delay, not a bare
+   *  CSS `:hover` (which snapped shut the moment the cursor left the thin strip).
    *  Derived from `.mva-user` turns (always in sync with what's rendered). Shown
    *  only with >=2 user messages and never over the gallery/capabilities panel.
    *  Idempotent — safe to call on any lifecycle transition. */
   private rebuildOutline(): void {
     this.outlineEl?.remove();
     this.outlineEl = null;
+    if (this.outlineCollapseTimer !== null) {
+      window.clearTimeout(this.outlineCollapseTimer);
+      this.outlineCollapseTimer = null;
+    }
     if (this.galleryEl || this.capsEl) return; // hidden behind full-pane overlays
     const turns = Array.from(this.listEl.querySelectorAll<HTMLElement>(".mva-user"));
     if (turns.length < 2) return; // no rail for a single-message conversation
 
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const rail = this.listWrap.createDiv({ cls: "mva-outline" });
+    // Root spans the full right edge but is click-through (pointer-events:none in
+    // CSS); only the strip and the expanded panel capture the pointer, so the rest
+    // of the conversation edge stays free for scrolling and the jump pill.
+    const root = this.listWrap.createDiv({ cls: "mva-outline" });
+    const strip = root.createDiv({ cls: "mva-outline-strip" });
+    const panel = root.createDiv({ cls: "mva-outline-panel" });
     for (const turn of turns) {
-      const item = rail.createDiv({ cls: "mva-outline-item" });
-      item.createDiv({ cls: "mva-outline-tick" });
       const raw = (turn.textContent || "").replace(/\s+/g, " ").trim();
-      const label = raw.length > 42 ? raw.slice(0, 41).trimEnd() + "…" : raw || "(empty message)";
-      item.createDiv({ cls: "mva-outline-label", text: label });
-      item.setAttribute("aria-label", `Jump to message: ${label}`);
-      this.clickable(item, () => this.jumpToTurn(turn, reduce));
+      const label = raw.length > 60 ? raw.slice(0, 59).trimEnd() + "…" : raw || "(empty message)";
+      const tick = strip.createDiv({ cls: "mva-outline-tick" });
+      tick.setAttribute("aria-hidden", "true");
+      tick.addEventListener("click", () => this.jumpToTurn(turn, reduce));
+      const row = panel.createDiv({ cls: "mva-outline-row", text: label });
+      row.setAttribute("aria-label", `Jump to message: ${label}`);
+      this.clickable(row, () => this.jumpToTurn(turn, reduce));
     }
-    this.outlineEl = rail;
+    // Expand/collapse with a collapse delay so crossing the strip→panel gap (during
+    // the opacity swap) doesn't flicker the panel shut mid-interaction.
+    root.addEventListener("mouseenter", () => {
+      if (this.outlineCollapseTimer !== null) {
+        window.clearTimeout(this.outlineCollapseTimer);
+        this.outlineCollapseTimer = null;
+      }
+      root.addClass("is-expanded");
+    });
+    root.addEventListener("mouseleave", () => {
+      this.outlineCollapseTimer = window.setTimeout(() => {
+        root.removeClass("is-expanded");
+        this.outlineCollapseTimer = null;
+      }, 160);
+    });
+    this.outlineEl = root;
     this.updateOutlineActive();
   }
 
-  /** Mark the outline item whose user turn is nearest the top of the viewport. */
+  /** Mark the tick + row whose user turn is nearest the top of the viewport. */
   private updateOutlineActive(): void {
-    const rail = this.outlineEl;
-    if (!rail) return;
+    const root = this.outlineEl;
+    if (!root) return;
     const turns = Array.from(this.listEl.querySelectorAll<HTMLElement>(".mva-user"));
-    const items = Array.from(rail.children) as HTMLElement[];
-    if (turns.length !== items.length) return; // out of sync — a rebuild will fix it
+    const ticks = Array.from(root.querySelectorAll<HTMLElement>(".mva-outline-tick"));
+    const rows = Array.from(root.querySelectorAll<HTMLElement>(".mva-outline-row"));
+    if (turns.length !== ticks.length) return; // out of sync — a rebuild will fix it
     const refTop = this.listEl.getBoundingClientRect().top;
     let activeIdx = 0;
     for (let i = 0; i < turns.length; i++) {
@@ -3402,7 +3434,8 @@ export class ChatView extends ItemView {
       if (turns[i].getBoundingClientRect().top - refTop <= 8) activeIdx = i;
       else break;
     }
-    items.forEach((it, i) => it.toggleClass("is-active", i === activeIdx));
+    ticks.forEach((t, i) => t.toggleClass("is-active", i === activeIdx));
+    rows.forEach((r, i) => r.toggleClass("is-active", i === activeIdx));
   }
 
   /** Smooth-scroll a user turn to near the top and flash it briefly. Instant

@@ -2512,48 +2512,36 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 
 /* ---------------------------- chat outline ---------------------------- */
-/* Notion-style navigator for the user's own messages. A quiet rail of ticks
-   at the right edge of the conversation wrap (position:relative context);
-   hovering the rail expands it into a floating panel of labelled rows. The
-   collapsed→expanded swap is pure CSS (opacity/max-width), gated by
-   prefers-reduced-motion. Sits below the jump-to-bottom pill (z 5) and inset
-   from the scrollbar so neither is blocked. */
+/* Notion-style navigator for the user's own messages, ported from the
+   notion-outline plugin. A full-height, click-through root pinned to the right
+   edge of the conversation wrap (position:relative context) holds two children:
+   a resting STRIP of ticks (the hover target), and a floating PANEL of labelled
+   rows that slides in when the root is hovered (JS `is-expanded` toggle, with an
+   anti-flicker collapse delay). Sits below the jump-to-bottom pill (z 5). */
 .mva-outline {
   position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
+  top: 0;
+  right: 0;
+  height: 100%;
   z-index: 4;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-  padding: 8px 6px;
-  max-height: 70%;
-  overflow: hidden;
-  border: 1px solid transparent;
-  border-radius: var(--mva-r2);
-  background: transparent;
-  box-shadow: none;
-  /* Only the rail's own box is interactive — the rest of the edge stays free
-     for scrolling and the jump pill. */
-  pointer-events: auto;
-  transition: background-color 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
-}
-.mva-outline:hover {
-  background: var(--background-secondary);
-  border-color: var(--background-modifier-border);
-  box-shadow: var(--shadow-s);
-}
-.mva-outline-item {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  min-height: 16px;
-  padding: 1px 4px;
-  border-radius: var(--mva-r1);
-  cursor: pointer;
+  /* Click-through: only the strip and expanded panel capture the pointer, so
+     the rest of the conversation edge stays free for scrolling and the pill. */
+  pointer-events: none;
+}
+/* Resting tick strip — the always-visible hover target. */
+.mva-outline-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 8px 10px;
+  max-height: 80%;
+  overflow: hidden;
+  pointer-events: auto;
+  transition: opacity 150ms ease-out;
 }
 .mva-outline-tick {
   flex-shrink: 0;
@@ -2561,40 +2549,60 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 2px;
   border-radius: 999px;
   background: var(--text-faint);
-  transition: width 150ms ease-out, opacity 150ms ease-out, background-color 150ms ease-out;
+  cursor: pointer;
+  transition: width 150ms ease-out, background-color 150ms ease-out;
 }
-.mva-outline-item.is-active .mva-outline-tick {
-  width: 20px;
-  background: var(--text-normal);
+.mva-outline-tick.is-active {
+  width: 22px;
+  background: var(--interactive-accent);
 }
-.mva-outline-label {
-  max-width: 0;
+/* Floating hover panel — labelled rows, hidden until expanded. */
+.mva-outline-panel {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%) translateX(8px);
+  min-width: 200px;
+  max-width: 280px;
+  max-height: 70%;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: var(--mva-r2);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: var(--shadow-l);
   opacity: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--text-muted);
-  transition: max-width 150ms ease-out, opacity 150ms ease-out;
+  visibility: hidden;
+  pointer-events: none;
+  scrollbar-width: thin;
+  transition: opacity 150ms ease-out, transform 150ms ease-out, visibility 150ms;
 }
-/* Expanded (panel) state: ticks collapse away, labels reveal as rows. */
-.mva-outline:hover .mva-outline-tick {
-  width: 0;
+.mva-outline.is-expanded .mva-outline-strip {
   opacity: 0;
 }
-.mva-outline:hover .mva-outline-label {
-  max-width: 240px;
+.mva-outline.is-expanded .mva-outline-panel {
   opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(-50%) translateX(0);
 }
-.mva-outline:hover .mva-outline-item:hover {
+.mva-outline-row {
+  font-size: var(--font-ui-small);
+  line-height: 1.4;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: var(--mva-r1);
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.mva-outline-row:hover {
   background: var(--background-modifier-hover);
-}
-.mva-outline:hover .mva-outline-item:hover .mva-outline-label {
   color: var(--text-normal);
 }
-.mva-outline:hover .mva-outline-item.is-active .mva-outline-label {
+.mva-outline-row.is-active {
   color: var(--text-accent);
+  font-weight: 600;
 }
 /* Brief highlight when a turn is jumped to from the outline. */
 .mva-user.is-flash {
@@ -2605,9 +2613,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   to { background: transparent; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .mva-outline,
+  .mva-outline-strip,
   .mva-outline-tick,
-  .mva-outline-label {
+  .mva-outline-panel {
     transition: none;
   }
   .mva-user.is-flash {
