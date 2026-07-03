@@ -33,7 +33,8 @@ import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { planPersistedConvos } from "./core/persistence";
-import { buildRecap, isRecoverableSessionError } from "./core/recovery";
+import { buildRecap, isRecoverableSessionError, resolveRecovery } from "./core/recovery";
+import { TurnWatchdog } from "./core/turn-watchdog";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched } from "./core/touched";
 import { describeCliFailure } from "./core/errors";
@@ -3497,17 +3498,17 @@ export class ChatView extends ItemView {
     this.pinnedToBottom = true;
     this.updateJumpPill();
     if (c.streaming) {
-      // Mid-turn steering (Claude only, Claude Code parity): inject the message
-      // into the live turn instead of queuing it for after. Text-only — steer
-      // carries no images. A false return, a throw, Codex, or attached images all
-      // fall back to today's queue behavior, unchanged.
+      // Mid-turn steering (Claude Code parity): inject the message into the live
+      // turn instead of queuing it for after. The provider's steer() owns the
+      // capability contract — Codex has no steer (→ undefined → false), and
+      // Claude's steer returns false when images are attached — so the shared
+      // path stays provider-agnostic. A false return or a throw falls back to
+      // today's queue behavior, unchanged.
       let steered = false;
-      if (c.provider === "claude" && !images) {
-        try {
-          steered = c.session?.steer?.(text) ?? false;
-        } catch {
-          steered = false;
-        }
+      try {
+        steered = c.session?.steer?.(text, images) ?? false;
+      } catch {
+        steered = false;
       }
       if (steered) {
         // Render the user bubble now and flush it; the working row stays and the
@@ -3607,52 +3608,23 @@ export class ChatView extends ItemView {
     // races the write, but awaiting it keeps the checkpoint complete.)
     const snapshots: Promise<void>[] = [];
 
-    // Watchdog: reset on every event; fire if the turn stalls with no output.
-    let timedOut = false;
-    // True when the timeout that fired was the longer tool window (a tool ran
-    // silently past TOOL_TIMEOUT) rather than the plain idle window — drives the
-    // error copy. A boolean (not a literal union) so it survives the deferred
-    // assignment inside the watchdog callback without control-flow narrowing.
-    let timedOutByTool = false;
     // An error_during_execution result resolves the turn (no throw), so the catch's
     // dropSession never runs — the CLI session stays poisoned and every later turn
     // re-errors. Track it here and reset the session at turn end.
     let poisoned = false;
-    let watchdog: number | null = null;
-    // While an interactive card (permission or ask) is pending, the user may take
-    // arbitrarily long to answer — suspend the idle watchdog so it can't fire.
-    let pendingInteractive = 0;
-    // Tool-call ids currently in flight. A long-running tool (multi-minute Bash)
-    // emits no events between start and result, so while this is non-empty the
-    // watchdog uses the longer TOOL_TIMEOUT instead of interrupting a live turn.
-    const inFlightTools = new Set<string>();
-    const bump = () => {
-      if (pendingInteractive > 0) return; // don't arm while awaiting a user card
-      if (watchdog !== null) window.clearTimeout(watchdog);
-      // Capture the guard at arm time so the fired callback reports what it waited on.
-      const toolBusy = inFlightTools.size > 0;
-      watchdog = window.setTimeout(() => {
-        timedOut = true;
-        timedOutByTool = toolBusy;
-        c.session?.interrupt();
-      }, toolBusy ? TOOL_TIMEOUT : IDLE_TIMEOUT);
-    };
-    const suspendWatchdog = () => {
-      pendingInteractive++;
-      if (watchdog !== null) {
-        window.clearTimeout(watchdog);
-        watchdog = null;
-      }
-    };
-    const resumeWatchdog = () => {
-      if (pendingInteractive > 0) pendingInteractive--;
-      if (pendingInteractive === 0) bump();
-    };
+    // Watchdog: re-armed on every event; fires (interrupting the turn) if it stalls
+    // with no output. Owns the idle-vs-tool window, in-flight tool tracking, and
+    // card-suspend bookkeeping — see core/turn-watchdog.ts.
+    const wd = new TurnWatchdog({
+      idleMs: IDLE_TIMEOUT,
+      toolMs: TOOL_TIMEOUT,
+      onTimeout: () => c.session?.interrupt(),
+    });
     // Tool-use ids of pending ask_user calls, so their result resumes the watchdog.
     const askIds = new Set<string>();
 
     const onEvent = (e: AgentEvent) => {
-      bump();
+      wd.bump();
       switch (e.kind) {
         case "text-delta":
           this.hideWorking(ctx); // the streaming caret takes over
@@ -3672,15 +3644,14 @@ export class ChatView extends ItemView {
           if (e.name === "mcp__obsidian__ask_user") {
             // The card is rendered by askBridge; suspend the watchdog until answered.
             askIds.add(e.id);
-            suspendWatchdog();
+            wd.suspendCard();
             this.hideWorking(ctx); // the ask card is the feedback
             break;
           }
           // A real (non-interactive) tool is now running. Track it and re-arm the
           // watchdog on the longer tool window — a legit multi-minute tool emits no
           // events until its result, and must not be mistaken for a dead session.
-          inFlightTools.add(e.id);
-          bump();
+          wd.toolStart(e.id);
           // File tracking runs before the nesting branch: subagent writes must stay
           // rewindable (checkpoint) and visible in the touched-notes footer.
           const fp = toolFilePath(e.name, e.input);
@@ -3717,14 +3688,14 @@ export class ChatView extends ItemView {
         case "tool-call-result": {
           if (askIds.has(e.id)) {
             askIds.delete(e.id);
-            resumeWatchdog(); // the ask card has been answered/dismissed
+            wd.resumeCard(); // the ask card has been answered/dismissed
             this.setWorkingLabel(ctx, "Thinking…");
             this.ensureWorking(ctx); // the turn continues
             break;
           }
-          // A tracked tool resolved (delete is a no-op for unknown/duplicate ids).
-          // Re-arm on the idle window once the last tool drains.
-          if (inFlightTools.delete(e.id)) bump();
+          // A tracked tool resolved (no-op for unknown/duplicate ids). Re-arm on
+          // the idle window once the last tool drains.
+          wd.toolEnd(e.id);
           // Feature 4: a nested subagent result updates its mini-row, not a card —
           // but the reveal path below still runs for nested writes.
           const nested = this.resolveSubagentRow(ctx, e.id, e.ok);
@@ -3785,7 +3756,7 @@ export class ChatView extends ItemView {
             e.resolve({ behavior: "deny", message: "Memory writing is disabled in Exo settings." });
           } else {
             // An open permission card also suspends the watchdog while the user decides.
-            suspendWatchdog();
+            wd.suspendCard();
             this.hideWorking(ctx); // the card waiting for the user is the feedback
             this.notifyOnce(
               ctx,
@@ -3794,7 +3765,7 @@ export class ChatView extends ItemView {
               "The agent asked a question / needs permission."
             );
             this.addPermissionCard(ctx, c, e.tool, e.input, (d) => {
-              resumeWatchdog();
+              wd.resumeCard();
               this.ensureWorking(ctx); // the turn continues once resolved
               if (d.behavior === "allow") allow(d);
               else e.resolve(d);
@@ -3841,25 +3812,22 @@ export class ChatView extends ItemView {
     };
 
     try {
-      bump();
+      wd.bump();
       const session = await this.ensureSession(c);
       // sendPrefix (recovery recap) is prepended to the OUTBOUND provider message
       // only — never to the rendered/persisted user text, so it can't leak into the
       // transcript, c.messages, or serialize().
       const outbound = opts?.sendPrefix ? `${opts.sendPrefix}\n\n${message}` : message;
       await session.send(outbound, onEvent, imgs);
-      // Stop the watchdog before reading `timedOut` so a timer that fires in the
+      // Stop the watchdog before reading `wd.fired` so a timer that fires in the
       // gap between send() resolving and `finally` can't trip a false timeout.
-      if (watchdog !== null) {
-        window.clearTimeout(watchdog);
-        watchdog = null;
-      }
+      wd.clear();
       this.flushRender(ctx);
       await Promise.all(snapshots); // ensure every pre-write snapshot landed before we read the checkpoint
-      if (timedOut && !ctx.fullText && ctx.cards.size === 0) {
+      if (wd.fired && !ctx.fullText && ctx.cards.size === 0) {
         this.renderError(
           ctx,
-          timedOutByTool
+          wd.firedByTool
             ? `No response — a tool ran ${TOOL_TIMEOUT / 1000}s with no output and was stopped.`
             : `No response — timed out after ${IDLE_TIMEOUT / 1000}s.`
         );
@@ -3890,10 +3858,10 @@ export class ChatView extends ItemView {
     } catch (err) {
       this.flushRender(ctx);
       this.dropSession(c); // a failed turn likely poisoned the session
-      if (isAbort(err) || timedOut) {
+      if (isAbort(err) || wd.fired) {
         ctx.el.addClass("mva-aborted");
         if (!ctx.fullText && ctx.cards.size === 0) {
-          ctx.bodyEl.createSpan({ cls: "mva-faint", text: timedOut ? "Timed out." : "Stopped." });
+          ctx.bodyEl.createSpan({ cls: "mva-faint", text: wd.fired ? "Timed out." : "Stopped." });
         }
       } else {
         this.dropThinking(ctx);
@@ -3921,8 +3889,7 @@ export class ChatView extends ItemView {
         }
       }
     } finally {
-      if (watchdog !== null) window.clearTimeout(watchdog);
-      inFlightTools.clear(); // turn is over — drop any unresolved tool ids
+      wd.clear(); // turn is over — cancel the timer and drop unresolved tool ids
       window.clearInterval(workingTimer); // stop the elapsed ticker
       this.removeWorking(ctx); // drop the working row for good
       await Promise.all(snapshots); // finalize the checkpoint even if the turn errored
@@ -3961,39 +3928,26 @@ export class ChatView extends ItemView {
         });
       }
       c.updatedAt = Date.now();
-      // Two-stage session recovery (Claude-Code-style resume). A poisoned live
-      // session re-errors if reused, so we always dropSession(c) — but the on-disk
-      // transcript can be resumed by a fresh process, so we keep the sessionId until
-      // a resume also fails.
-      if (poisoned && !c.stopped) {
-        if (opts?.isRecoveryRetry) {
-          // The recap retry itself poisoned — stop escalating (loop guard) and fall
-          // back to today's nuclear reset: drop everything, next message is fresh.
-          this.dropSession(c);
-          c.sessionId = undefined;
-          c.resumeRisky = false;
-        } else if (c.resumeRisky) {
-          // Stage 2: this turn already resumed a prior crash and re-errored. Go fully
-          // fresh AND auto-retry the SAME user message once, with a private recap
-          // threaded to the provider only (never rendered, queued as a chip, or
-          // persisted). Route via the queue FIRST so it can't race queued messages.
-          this.dropSession(c);
-          c.sessionId = undefined;
-          c.resumeRisky = false;
-          const recap = buildRecap(c.messages);
-          c.queue.unshift({ text, images, sendPrefix: recap, isRecoveryRetry: true });
-        } else {
-          // Stage 1 (resume-first): drop only the crashed live session object; KEEP
-          // the sessionId so the next message resumes the transcript in a fresh
-          // process (full context, zero cost). Mark the convo resume-risky so a
-          // second consecutive poison escalates to Stage 2.
-          this.dropSession(c);
-          c.resumeRisky = true;
-        }
-      } else if (!poisoned) {
-        // Healthy (or user-stopped) turn — the session didn't crash; clear recovery
-        // state so a future isolated crash starts the ladder from Stage 1.
-        c.resumeRisky = false;
+      // Two-stage session recovery (Claude-Code-style resume). The pure reducer
+      // decides the session action + flags from the turn's state so this ladder,
+      // the error-render footers, and recoveryFooter can never drift apart. A
+      // poisoned live session re-errors if reused, so we drop it — but the on-disk
+      // transcript can be resumed by a fresh process, so stage 1 keeps the sessionId.
+      const plan = resolveRecovery({
+        poisoned,
+        stopped: c.stopped,
+        isRecoveryRetry: !!opts?.isRecoveryRetry,
+        resumeRisky: !!c.resumeRisky,
+      });
+      if (plan.session !== "none") this.dropSession(c);
+      if (plan.session === "drop-clear-id") c.sessionId = undefined;
+      c.resumeRisky = plan.nextResumeRisky;
+      if (plan.enqueueRecapRetry) {
+        // Stage 2: auto-retry the SAME user message once with a private recap
+        // threaded to the provider only (never rendered, queued as a chip, or
+        // persisted). Route via the queue FIRST so it can't race queued messages.
+        const recap = buildRecap(c.messages);
+        c.queue.unshift({ text, images, sendPrefix: recap, isRecoveryRetry: true });
       }
       this.setStreaming(c, false);
       this.persist();
@@ -4021,18 +3975,16 @@ export class ChatView extends ItemView {
     }
   }
 
-  /** Recovery footer text for a poisoned/recoverable turn — reflects which
-   *  stage of the two-stage session recovery this failure sits at. Shared by the
-   *  in-band error event and the thrown-error catch path so they can't diverge. */
+  /** Recovery footer text for a poisoned/recoverable turn — reflects which stage
+   *  of the two-stage session recovery this failure sits at. Both call sites (the
+   *  in-band error event and the thrown-error catch path) render this only when
+   *  the turn is poisoned and NOT stopped, so those inputs are fixed here; the
+   *  footer text is single-sourced in the recovery reducer. */
   private recoveryFooter(c: Convo, isRecoveryRetry: boolean): string {
-    return isRecoveryRetry
-      ? // Stage-2 retry itself crashed → nuclear reset (next message is fresh).
-        "The next message starts a fresh session."
-      : c.resumeRisky
-        ? // The resume attempt re-errored → escalate to fresh + recap (below).
-          "Resume failed — restarting fresh with a recap of this conversation."
-        : // First crash → next message resumes the transcript in a fresh process.
-          "Session process crashed — your next message resumes it.";
+    return (
+      resolveRecovery({ poisoned: true, stopped: false, isRecoveryRetry, resumeRisky: !!c.resumeRisky }).footer ??
+      ""
+    );
   }
 
   /** Inline error, upgraded to a setup card when the CLI isn't ready. */

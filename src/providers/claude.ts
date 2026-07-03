@@ -1,4 +1,4 @@
-import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent,
   AgentSession,
@@ -70,8 +70,13 @@ class ClaudeSession implements AgentSession {
     }
 
     this.q = query({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prompt: input() as any,
+      // The generator yields structurally-valid SDKUserMessages, but our internal
+      // UserContent (`Array<Record<string, unknown>>`, built in send() where image
+      // blocks carry `media_type: string`) is intentionally looser than the SDK's
+      // strict `MessageParam.content` (`ContentBlockParam[]` with a media-type
+      // union) — so it's a downcast to the streaming-input type the SDK expects,
+      // not `any`.
+      prompt: input() as AsyncIterable<SDKUserMessage>,
       options: {
         cwd: opts.cwd,
         ...(opts.model && opts.model !== "default" ? { model: opts.model } : {}),
@@ -312,8 +317,12 @@ class ClaudeSession implements AgentSession {
    *  messages during a turn (SDKUserMessage carries a `priority: 'now'|'next'|
    *  'later'` field for precisely this). The in-flight turn's single `result`
    *  still settles the original send()'s promise. */
-  steer(text: string): boolean {
+  steer(text: string, images?: import("./types").ImageAttachment[]): boolean {
     if (this.disposed || this.ended) return false;
+    // Steering is text-only — decline when images are attached so the caller falls
+    // back to queuing (which sends them as a normal multimodal turn). Keeping this
+    // here makes the shared send() path provider-agnostic.
+    if (images?.length) return false;
     // Only steer when a turn is actually running; otherwise the caller should
     // send() normally (which opens a fresh turn and tracks its resolve/reject).
     if (!this.resolveTurn) return false;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRecap, isRecoverableSessionError } from "../src/core/recovery";
+import { buildRecap, isRecoverableSessionError, resolveRecovery } from "../src/core/recovery";
 import type { Message, Segment } from "../src/core/model";
 
 const user = (text: string): Message => ({ role: "user", text });
@@ -103,5 +103,89 @@ describe("isRecoverableSessionError", () => {
   it("requires 'session' adjacency — a bare 'invalid' does not match", () => {
     expect(isRecoverableSessionError("invalid model name")).toBe(false);
     expect(isRecoverableSessionError("invalid session")).toBe(true);
+  });
+});
+
+describe("resolveRecovery", () => {
+  const STAGE1 = "Session process crashed — your next message resumes it.";
+  const STAGE2 = "Resume failed — restarting fresh with a recap of this conversation.";
+  const NUCLEAR = "The next message starts a fresh session.";
+
+  it("stage 1: first poison → keep the id, arm resumeRisky, resume-first footer", () => {
+    expect(
+      resolveRecovery({ poisoned: true, stopped: false, isRecoveryRetry: false, resumeRisky: false })
+    ).toEqual({
+      footer: STAGE1,
+      session: "drop-keep-id",
+      nextResumeRisky: true,
+      enqueueRecapRetry: false,
+    });
+  });
+
+  it("stage 2: poison while resume-risky → clear id, enqueue recap retry, drop the flag", () => {
+    expect(
+      resolveRecovery({ poisoned: true, stopped: false, isRecoveryRetry: false, resumeRisky: true })
+    ).toEqual({
+      footer: STAGE2,
+      session: "drop-clear-id",
+      nextResumeRisky: false,
+      enqueueRecapRetry: true,
+    });
+  });
+
+  it("nuclear: the recap retry itself poisoned → clear id, no retry, fresh-session footer", () => {
+    // isRecoveryRetry wins even when resumeRisky is also set (loop guard).
+    expect(
+      resolveRecovery({ poisoned: true, stopped: false, isRecoveryRetry: true, resumeRisky: true })
+    ).toEqual({
+      footer: NUCLEAR,
+      session: "drop-clear-id",
+      nextResumeRisky: false,
+      enqueueRecapRetry: false,
+    });
+  });
+
+  it("nuclear also applies when the retry poisons without a prior resume-risky flag", () => {
+    expect(
+      resolveRecovery({ poisoned: true, stopped: false, isRecoveryRetry: true, resumeRisky: false })
+    ).toEqual({
+      footer: NUCLEAR,
+      session: "drop-clear-id",
+      nextResumeRisky: false,
+      enqueueRecapRetry: false,
+    });
+  });
+
+  it("healthy turn: no poison → clear resumeRisky, no footer, no session action", () => {
+    expect(
+      resolveRecovery({ poisoned: false, stopped: false, isRecoveryRetry: false, resumeRisky: true })
+    ).toEqual({
+      footer: null,
+      session: "none",
+      nextResumeRisky: false,
+      enqueueRecapRetry: false,
+    });
+  });
+
+  it("user-stopped-without-poison turn also clears resumeRisky", () => {
+    expect(
+      resolveRecovery({ poisoned: false, stopped: true, isRecoveryRetry: false, resumeRisky: true })
+    ).toEqual({
+      footer: null,
+      session: "none",
+      nextResumeRisky: false,
+      enqueueRecapRetry: false,
+    });
+  });
+
+  it("poisoned + stopped: the ladder is NOT entered — resumeRisky is left as-is", () => {
+    // Gated `poisoned && !stopped` in the original — neither branch ran, so the
+    // flag stays whatever it was. Assert both values pass through unchanged.
+    expect(
+      resolveRecovery({ poisoned: true, stopped: true, isRecoveryRetry: false, resumeRisky: true })
+    ).toEqual({ footer: null, session: "none", nextResumeRisky: true, enqueueRecapRetry: false });
+    expect(
+      resolveRecovery({ poisoned: true, stopped: true, isRecoveryRetry: false, resumeRisky: false })
+    ).toEqual({ footer: null, session: "none", nextResumeRisky: false, enqueueRecapRetry: false });
   });
 });

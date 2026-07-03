@@ -96,8 +96,11 @@ export interface AgentSession {
   send(message: string, onEvent: (e: AgentEvent) => void, images?: ImageAttachment[]): Promise<void>;
   /** Inject a user message into the in-flight turn (mid-turn steering, Claude
    *  Code parity). Returns true when it was accepted into a running turn, false
-   *  when there's nothing to steer (caller should queue instead). Claude only. */
-  steer?(text: string): boolean;
+   *  when there's nothing to steer or the provider can't steer this input (caller
+   *  should queue instead). The provider owns the capability contract: Codex has
+   *  no steer at all, and Claude declines when `images` are attached (steer is
+   *  text-only). Claude only. */
+  steer?(text: string, images?: ImageAttachment[]): boolean;
   /** Interrupt the in-flight turn. */
   interrupt(): void;
   /** Compact the conversation context (best-effort; Claude supports /compact).
