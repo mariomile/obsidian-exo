@@ -6,7 +6,9 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"typecheck": "tsc -noEmit -skipLibCheck"
+		"typecheck": "tsc -noEmit -skipLibCheck",
+		"lint": "eslint src tests",
+		"test": "vitest run"
 	},
 	"keywords": [
 		"obsidian",
@@ -18,11 +20,15 @@
 	"author": "Mario Miletta",
 	"license": "MIT",
 	"devDependencies": {
+		"@eslint/js": "^9.39.4",
 		"@types/node": "^22.0.0",
 		"builtin-modules": "^4.0.0",
 		"esbuild": "^0.25.0",
+		"eslint": "^9.39.4",
 		"obsidian": "latest",
-		"typescript": "^5.8.0"
+		"typescript": "^5.8.0",
+		"typescript-eslint": "^8.62.1",
+		"vitest": "^3.2.6"
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.3.195",
