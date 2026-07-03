@@ -26,7 +26,10 @@ type UserContent = string | Array<Record<string, unknown>>;
 
 class ClaudeSession implements AgentSession {
   private q: Query;
-  private queue: { role: "user"; content: UserContent }[] = [];
+  // Pending user messages fed into the live streaming-input generator. `priority:
+  // "now"` marks a mid-turn steer (injected into the running turn) vs a normal
+  // message that opens a fresh turn.
+  private queue: { role: "user"; content: UserContent; priority?: "now" }[] = [];
   private wake: (() => void) | null = null;
   private disposed = false;
   /** True once the SDK message stream has ended (CLI process gone). A dead session
@@ -52,14 +55,17 @@ class ClaudeSession implements AgentSession {
       type: "user";
       message: { role: "user"; content: UserContent };
       parent_tool_use_id: null;
+      priority?: "now" | "next" | "later";
     }> {
       while (!self.disposed) {
         if (self.queue.length === 0) {
           await new Promise<void>((r) => (self.wake = r));
           if (self.disposed) return;
         }
-        const message = self.queue.shift()!;
-        yield { type: "user", message, parent_tool_use_id: null };
+        // Split the SDK-visible message from Exo's private `priority` marker so
+        // the marker never leaks into MessageParam.
+        const { priority, ...message } = self.queue.shift()!;
+        yield { type: "user", message, parent_tool_use_id: null, ...(priority ? { priority } : {}) };
       }
     }
 
@@ -292,6 +298,30 @@ class ClaudeSession implements AgentSession {
       this.wake = null;
       w?.();
     });
+  }
+
+  /** Mid-turn steering (Claude Code parity): inject a user message into the turn
+   *  that's currently in flight instead of opening a new one. Pushes onto the same
+   *  streaming-input generator the SDK is actively draining, tagged `priority:
+   *  "now"` so the CLI folds it into the running turn. Returns false (caller falls
+   *  back to queuing) when there's no in-flight turn or the session can't accept
+   *  input — a dead/disposed stream, or no turn to steer.
+   *
+   *  Safe because this is exactly how `compact()` already pushes a mid-turn user
+   *  message, and the SDK's streaming-input contract accepts multiple user
+   *  messages during a turn (SDKUserMessage carries a `priority: 'now'|'next'|
+   *  'later'` field for precisely this). The in-flight turn's single `result`
+   *  still settles the original send()'s promise. */
+  steer(text: string): boolean {
+    if (this.disposed || this.ended) return false;
+    // Only steer when a turn is actually running; otherwise the caller should
+    // send() normally (which opens a fresh turn and tracks its resolve/reject).
+    if (!this.resolveTurn) return false;
+    this.queue.push({ role: "user", content: [{ type: "text", text }], priority: "now" });
+    const w = this.wake;
+    this.wake = null;
+    w?.();
+    return true;
   }
 
   /** Change the permission mode live (e.g. toggling plan mode). */

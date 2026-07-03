@@ -94,6 +94,10 @@ export interface SessionOpts {
 export interface AgentSession {
   /** Send one user turn; resolves when that turn completes. */
   send(message: string, onEvent: (e: AgentEvent) => void, images?: ImageAttachment[]): Promise<void>;
+  /** Inject a user message into the in-flight turn (mid-turn steering, Claude
+   *  Code parity). Returns true when it was accepted into a running turn, false
+   *  when there's nothing to steer (caller should queue instead). Claude only. */
+  steer?(text: string): boolean;
   /** Interrupt the in-flight turn. */
   interrupt(): void;
   /** Compact the conversation context (best-effort; Claude supports /compact).
