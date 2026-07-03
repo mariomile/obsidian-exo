@@ -1754,6 +1754,7 @@ export class ChatView extends ItemView {
     ["default", "Ask"],
     ["acceptEdits", "Accept edits"],
     ["plan", "Plan"],
+    ["auto", "Auto"],
     ["bypassPermissions", "Bypass"],
   ];
   private static permLabel(mode: string): string {
@@ -1762,7 +1763,7 @@ export class ChatView extends ItemView {
   /** Returns a CSS modifier class for risk coloring; empty string = safe mode. */
   private static permRisk(mode: string): RiskLevel {
     if (mode === "bypassPermissions") return "is-danger";
-    if (mode === "acceptEdits") return "is-caution";
+    if (mode === "acceptEdits" || mode === "auto") return "is-caution";
     return "";
   }
 

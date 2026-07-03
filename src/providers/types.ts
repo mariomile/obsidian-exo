@@ -12,7 +12,7 @@ export type PermissionDecision =
   | { behavior: "allow"; remember?: boolean }
   | { behavior: "deny"; message?: string };
 
-export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
+export type PermissionMode = "default" | "acceptEdits" | "plan" | "auto" | "bypassPermissions";
 
 /**
  * Normalized event stream produced by every provider adapter, so the chat UI is
