@@ -30,6 +30,14 @@ import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
 import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
+import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
+import { maxIdSuffix, makeIdAllocator } from "./core/ids";
+import { planPersistedConvos } from "./core/persistence";
+import { buildRecap } from "./core/recovery";
+import { advanceBoundary } from "./core/stream-scan";
+import { mergeTouched } from "./core/touched";
+
+export type { AskQuestion } from "./core/model";
 
 export const VIEW_TYPE = "exo-view";
 /** Custom Obsidian icon id for the Exo brand mark (registered in main.ts). */
@@ -73,29 +81,7 @@ interface ToolCard {
   bodyEl: HTMLElement;
 }
 
-/* ----- persisted data model ----- */
-export interface AskQuestion {
-  question: string;
-  header: string;
-  options: { label: string; description?: string }[];
-  multiSelect?: boolean;
-}
-type Segment =
-  | { t: "text"; md: string }
-  | { t: "tool"; name: string; input: unknown; ok: boolean | null; output: string }
-  | { t: "ask"; questions: AskQuestion[]; answers: Record<string, string> }
-  | { t: "artifact"; path: string };
-/** Per-turn file snapshot for code rewind: path → content before the turn (null = didn't exist). */
-type Checkpoint = Map<string, string | null>;
-type Message =
-  | { role: "user"; text: string }
-  | { role: "assistant"; segments: Segment[]; checkpoint?: Checkpoint };
-
-/** On-disk form of a message: the checkpoint Map is stored as [path, content] entries. */
-type PersistedMessage =
-  | { role: "user"; text: string }
-  | { role: "assistant"; segments: Segment[]; checkpoint?: [string, string | null][] };
-
+/* ----- persisted data model (types in ./core/model) ----- */
 interface ConvoData {
   id: string;
   title: string;
@@ -206,35 +192,6 @@ interface AssistantCtx {
 
 /** Abort a turn if no event arrives for this long (avoids infinite loading). */
 const IDLE_TIMEOUT = 120_000;
-
-/** Advance the incremental block-boundary scan over the not-yet-scanned suffix
- * of `ctx.curRaw` and return the index just after the last blank-line boundary
- * that is not inside a ``` fence (0 if none). Only complete (newline-terminated)
- * lines are consumed — the trailing partial line waits for its newline — so each
- * streaming tick costs O(new chars), not O(total). Rendering the prefix up to
- * the returned boundary is layout-stable. */
-function advanceBoundary(ctx: AssistantCtx): number {
-  const raw = ctx.curRaw;
-  let nl: number;
-  while ((nl = raw.indexOf("\n", ctx.scanPos)) !== -1) {
-    const t = raw.slice(ctx.scanPos, nl).trim();
-    if (/^(```|~~~)/.test(t)) ctx.fenceOpen = !ctx.fenceOpen;
-    ctx.scanPos = nl + 1;
-    if (!ctx.fenceOpen && t === "") ctx.lastBoundary = ctx.scanPos;
-  }
-  return ctx.lastBoundary;
-}
-
-/** Merge one tool-touched file into a touched list: reads dedupe; a write
- * upgrades a read entry and bumps the per-note edit count. */
-function mergeTouched(list: TouchedNote[], path: string, kind: "read" | "write"): void {
-  const existing = list.find((t) => t.path === path);
-  if (!existing) list.push({ path, kind, ...(kind === "write" ? { count: 1 } : {}) });
-  else if (kind === "write") {
-    existing.kind = "write"; // read-then-written → show as written
-    existing.count = (existing.count ?? 0) + 1;
-  }
-}
 
 /** One rule per line: `Tool` or `Tool(argPrefix)`. `#` comments allowed. A bare
  *  `Tool` matches any invocation. For `Bash` the prefix matches on a TOKEN
@@ -655,19 +612,17 @@ export class ChatView extends ItemView {
     // First pass: seed the id counter from the highest numeric id suffix present,
     // NOT the conversation count — ids climb past the count after deletions and
     // MAX_CONVOS trimming, so a count-based seed produces colliding ids.
-    for (const d of raw) {
-      const m = d && typeof d.id === "string" ? /^c(\d+)$/.exec(d.id) : null;
-      if (m) convoSeed = Math.max(convoSeed, Number(m[1]));
-    }
+    convoSeed = Math.max(convoSeed, maxIdSuffix(Array.isArray(raw) ? raw.map((d) => d?.id) : []));
     // Second pass: build convos, reassigning any duplicate id to a fresh unique one
     // so distinct conversations never collide in id-keyed lookups. First occurrence
-    // keeps the original id (so openTabIds/activeTabId still resolve to it).
+    // keeps the original id (so openTabIds/activeTabId still resolve to it). The
+    // allocator owns the counter; sync it back into the module-global convoSeed
+    // (shared with makeConvo across view instances) after the pass.
+    const idAlloc = makeIdAllocator(convoSeed);
     const seenIds = new Set<string>();
     for (const d of raw) {
       if (!d || !Array.isArray(d.messages)) continue;
-      let id = d.id || `c${++convoSeed}`;
-      if (seenIds.has(id)) id = `c${++convoSeed}`;
-      seenIds.add(id);
+      const id = idAlloc.assign(d.id, seenIds);
       const provider: ProviderId = d.provider === "codex" ? "codex" : "claude";
       // Pre-0.11.2 conversations persisted an empty model id (the old, now-removed
       // "Default" option — silently let the CLI pick). Repair to a real model so
@@ -699,6 +654,7 @@ export class ChatView extends ItemView {
       this.wireScroll(c);
       this.convos.push(c);
     }
+    convoSeed = idAlloc.seed; // keep the module-global counter in step with the allocator
 
     const byId = new Map(this.convos.map((c) => [c.id, c]));
     const s = this.plugin.settings;
@@ -734,26 +690,10 @@ export class ChatView extends ItemView {
   private serialize(): ConvoData[] {
     this.saveActive();
     const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
-    // A conversation must survive restore if it's active or an open (possibly empty)
-    // placeholder tab — otherwise those tabs vanish on reload.
-    const pinned = new Set<string>([this.active.id, ...this.openTabs]);
-    // Drop empty "New chat" husks that aren't pinned so they don't waste slots.
-    const filtered = all.filter((c) => c.messages.length > 0 || pinned.has(c.id));
-    // Evict by recency (not array/creation order): always keep pinned, then fill the
-    // remaining slots by updatedAt desc. Emit in ORIGINAL array order (restore() falls
-    // back to the LAST element as active, so stable order matters).
-    let kept = filtered;
-    if (filtered.length > MAX_CONVOS) {
-      const keptIds = new Set<string>(filtered.filter((c) => pinned.has(c.id)).map((c) => c.id));
-      const rest = filtered
-        .filter((c) => !pinned.has(c.id))
-        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-      for (const c of rest) {
-        if (keptIds.size >= MAX_CONVOS) break;
-        keptIds.add(c.id);
-      }
-      kept = filtered.filter((c) => keptIds.has(c.id));
-    }
+    // Drop empty "New chat" husks (unless pinned: active/open tab) and evict by
+    // recency (updatedAt desc), keeping pinned always and preserving original
+    // array order. See core/persistence for the full contract.
+    const kept = planPersistedConvos(all, this.active.id, this.openTabs, MAX_CONVOS);
     return kept.map((c) => ({
       id: c.id,
       title: c.title,
@@ -3978,7 +3918,7 @@ export class ChatView extends ItemView {
           this.dropSession(c);
           c.sessionId = undefined;
           c.resumeRisky = false;
-          const recap = this.buildRecap(c);
+          const recap = buildRecap(c.messages);
           c.queue.unshift({ text, images, sendPrefix: recap, isRecoveryRetry: true });
         } else {
           // Stage 1 (resume-first): drop only the crashed live session object; KEEP
@@ -4012,44 +3952,6 @@ export class ChatView extends ItemView {
         this.renderTailSurfacing(c);
       }
     }
-  }
-
-  /** Build a compact plaintext recap of the recent transcript, used to re-seed a
-   *  FRESH session after a resume also failed (Stage 2 recovery). Threaded to the
-   *  provider only — never rendered, queued, or persisted. Takes the last ≤8
-   *  entries: user messages truncated to 400 chars, assistant messages as their
-   *  concatenated text (≤600 chars) with tool activity summarized as [N tool
-   *  calls]. The whole recap is capped at ~5000 chars, dropping oldest first. */
-  private buildRecap(c: Convo): string {
-    const lines: string[] = [];
-    for (const m of c.messages.slice(-8)) {
-      if (m.role === "user") {
-        lines.push(`[user] ${m.text.slice(0, 400)}`);
-      } else {
-        let toolCount = 0;
-        const texts: string[] = [];
-        for (const seg of m.segments) {
-          if (seg.t === "text") texts.push(seg.md);
-          else if (seg.t === "tool") toolCount++;
-        }
-        let body = texts.join("").slice(0, 600);
-        if (toolCount > 0) body += (body ? " " : "") + `[${toolCount} tool calls]`;
-        lines.push(`[assistant] ${body}`);
-      }
-    }
-    // Cap the body at ~5000 chars, dropping the oldest lines first.
-    let body = lines.join("\n");
-    while (body.length > 5000 && lines.length > 1) {
-      lines.shift();
-      body = lines.join("\n");
-    }
-    return (
-      "<conversation-recap>\n" +
-      "The previous session process crashed (error_during_execution); this fresh " +
-      "session continues an ongoing conversation. Recent transcript (oldest first):\n" +
-      body +
-      "\n</conversation-recap>"
-    );
   }
 
   /** Inline error, upgraded to a setup card when the CLI isn't ready. */

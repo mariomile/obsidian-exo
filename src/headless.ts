@@ -1,4 +1,4 @@
-import { App, FileSystemAdapter, TFile } from "obsidian";
+import { App, FileSystemAdapter } from "obsidian";
 import { resolveCli, describeError } from "./cli";
 import { ADAPTERS } from "./providers/registry";
 import type { AgentEvent } from "./providers/types";
