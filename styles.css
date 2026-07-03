@@ -157,8 +157,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: flex;
   align-items: center;
   gap: 4px;
-  white-space: normal;
-  overflow: visible;
+  white-space: nowrap;
+  overflow: hidden;
 }
 .mva-tab-title.is-placeholder .svg-icon {
   width: 12px;

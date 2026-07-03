@@ -656,13 +656,18 @@ export class ChatView extends ItemView {
       let id = d.id || `c${++convoSeed}`;
       if (seenIds.has(id)) id = `c${++convoSeed}`;
       seenIds.add(id);
+      const provider: ProviderId = d.provider === "codex" ? "codex" : "claude";
+      // Pre-0.11.2 conversations persisted an empty model id (the old, now-removed
+      // "Default" option — silently let the CLI pick). Repair to a real model so
+      // the chip never falls back to displaying an unlabeled/empty selection.
+      const model = d.model || ADAPTERS[provider].models()[0].id;
       const c: Convo = {
         id,
         listEl: createDiv({ cls: "mva-list" }),
         title: d.title || "New chat",
         sessionId: d.sessionId,
-        provider: d.provider === "codex" ? "codex" : "claude",
-        model: d.model || "",
+        provider,
+        model,
         allow: new Set(),
         updatedAt: d.updatedAt,
         messages: d.messages.map((m) => this.reviveMessage(m)),
