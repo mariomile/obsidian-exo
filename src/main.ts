@@ -1,4 +1,4 @@
-import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Plugin, WorkspaceLeaf, addIcon } from "obsidian";
+import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Plugin, WorkspaceLeaf, addIcon, requestUrl } from "obsidian";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
@@ -116,6 +116,34 @@ export default class ExoPlugin extends Plugin {
     this.registerInterval(window.setInterval(() => void this.checkScheduledRuns(), 30 * 60 * 1000));
 
     this.addSettingTab(new MVASettingTab(this.app, this));
+
+    // Daily, non-blocking Claude-CLI update check (failures silent).
+    void this.maybeCheckCliUpdate();
+  }
+
+  /**
+   * Check npm for a newer Claude CLI, at most once per day. Caches the result in
+   * settings (`cliLatestKnown` + `cliUpdateCheckAt`) so the settings tab can show
+   * an update button without a network round-trip on every render. Uses
+   * Obsidian's `requestUrl` (not node fetch — desktop CSP/proxy safe). Never
+   * throws; a failed check just records the attempt so we don't hammer the API.
+   */
+  async maybeCheckCliUpdate(force = false): Promise<void> {
+    const DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    if (!force && this.settings.cliUpdateCheckAt && now - this.settings.cliUpdateCheckAt < DAY) return;
+    try {
+      const res = await requestUrl({
+        url: "https://registry.npmjs.org/@anthropic-ai/claude-code/latest",
+      });
+      const version = (res.json as { version?: unknown } | undefined)?.version;
+      if (typeof version === "string" && version) this.settings.cliLatestKnown = version;
+    } catch {
+      /* offline / registry down — silent */
+    } finally {
+      this.settings.cliUpdateCheckAt = now;
+      await this.saveSettings();
+    }
   }
 
   async activateView(): Promise<void> {

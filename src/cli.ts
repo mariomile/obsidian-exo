@@ -259,6 +259,51 @@ function probeVersion(bin: string, pathEnv: string): Promise<string | null> {
   });
 }
 
+/* ------------------------------ update -------------------------------- */
+
+/** Install the latest Claude CLI via `npm i -g` in the user's *login* shell, so
+ *  it lands in the same real npm prefix our resolution probes read (not some
+ *  GUI-inherited PATH). Never rejects. On success clears the resolution + diag
+ *  caches so the next probe re-resolves the freshly-installed binary. Output is
+ *  a bounded tail of combined stdout/stderr for surfacing in a Notice. */
+export function updateClaudeCli(): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    let out = "";
+    const append = (d: Buffer | string) => {
+      out += d.toString();
+      if (out.length > 8000) out = out.slice(-8000); // bounded ring
+    };
+    try {
+      const shell = process.env.SHELL || "/bin/zsh";
+      const c = spawn(shell, ["-ilc", "npm install -g @anthropic-ai/claude-code@latest"], {
+        env: process.env,
+      });
+      c.stdout.on("data", append);
+      c.stderr.on("data", append);
+      c.on("error", (e: Error) => resolve({ ok: false, output: e.message }));
+      c.on("close", (code: number | null) => {
+        const ok = code === 0;
+        if (ok) {
+          cliCache.clear();
+          diagCache.clear();
+        }
+        resolve({ ok, output: out.trim() });
+      });
+      // npm installs can be slow; give it up to 3 minutes before giving up.
+      setTimeout(() => {
+        try {
+          c.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+        resolve({ ok: false, output: out.trim() || "Update timed out." });
+      }, 180_000);
+    } catch (e) {
+      resolve({ ok: false, output: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
 /* ------------------------------ errors -------------------------------- */
 
 export function makeAbortError(): Error {
