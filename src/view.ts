@@ -174,6 +174,10 @@ interface AssistantCtx {
   touched: TouchedNote[];
   /** Tool-use id → file path, for write tools (to reveal the note on result). */
   writeById: Map<string, string>;
+  /** Tool-call ids that touched a note (top-level, non-subagent-nested). Their
+   *  live `.mva-tool` row is streaming-only feedback — removed once the turn
+   *  settles, since the touched-notes footer then carries the same fact. */
+  noteTouchIds: Set<string>;
   /** Notes already revealed this turn (dedupe). */
   revealed: Set<string>;
   /** Vault-relative paths that got a preview card this turn (dedupe, first write wins). */
@@ -2147,10 +2151,16 @@ export class ChatView extends ItemView {
           } else if (s.t === "artifact") {
             this.buildArtifactCard(body, s.path);
           } else {
-            const refs = this.createToolCard(body, s.name, s.input);
-            this.finishToolCard(refs, s.ok !== false, s.output);
             const fp = toolFilePath(s.name, s.input);
-            if (fp) mergeTouched(touched, fp, ChatView.WRITE_TOOLS.test(s.name) ? "write" : "read");
+            if (fp) {
+              // Note-touching calls dissolve into the touched-notes footer below
+              // instead of also rendering their own row — this is a restored (not
+              // live) turn, so there's no streaming status to show in the first place.
+              mergeTouched(touched, fp, ChatView.WRITE_TOOLS.test(s.name) ? "write" : "read");
+            } else {
+              const refs = this.createToolCard(body, s.name, s.input);
+              this.finishToolCard(refs, s.ok !== false, s.output);
+            }
           }
         }
         this.attachTouched(el, touched, m.checkpoint);
@@ -2220,6 +2230,7 @@ export class ChatView extends ItemView {
       sources: new Set(),
       touched: [],
       writeById: new Map(),
+      noteTouchIds: new Set(),
       revealed: new Set(),
       artifacts: new Set(),
       createdPaths: new Set(),
@@ -2632,11 +2643,14 @@ export class ChatView extends ItemView {
   private attachTouched(turnEl: HTMLElement, touched: TouchedNote[], checkpoint?: Checkpoint): void {
     if (touched.length === 0) return;
     const bar = turnEl.createDiv({ cls: "mva-sources" });
-    const group = (label: string, kind: "read" | "write", icon: string) => {
+    // No "EDITED"/"READ" text headers — the accent border + accent icon color on
+    // write chips already distinguish them from muted read chips three ways over
+    // (icon shape, border, color); a third, textual signal was pure redundancy
+    // (2026-07-03 impeccable critique, P2).
+    const group = (kind: "read" | "write", icon: string) => {
       const items = touched.filter((t) => t.kind === kind);
       if (!items.length) return;
       const g = bar.createDiv({ cls: "mva-src-group" });
-      g.createSpan({ cls: "mva-src-label", text: label });
       for (const t of items) {
         const chip = g.createSpan({ cls: `mva-src-chip is-${kind}` });
         setIcon(chip.createSpan({ cls: "mva-src-ico" }), icon);
@@ -2655,8 +2669,8 @@ export class ChatView extends ItemView {
         }
       }
     };
-    group("Edited", "write", "file-pen"); // changes first — the actionable output
-    group("Read", "read", "file-text");
+    group("write", "file-pen"); // changes first — the actionable output
+    group("read", "file-text");
   }
 
   /** Hover actions on an edited-note chip: view diff, and a two-step revert. */
@@ -3689,6 +3703,9 @@ export class ChatView extends ItemView {
             this.addToolCard(ctx, e.id, e.name, e.input);
             if (e.name === "Task") this.registerTaskCard(ctx, e.id);
             this.trackBackgroundTask(ctx, e.id, e.name, e.input);
+            // A flat, note-touching card is streaming-only feedback — dropped at
+            // turn end once the touched-notes footer carries the same fact.
+            if (fp) ctx.noteTouchIds.add(e.id);
           }
           // Working row: phase verb from the tool metadata, re-appended last so it
           // stays visible below the tool card during execution.
@@ -3847,6 +3864,10 @@ export class ChatView extends ItemView {
         this.renderError(ctx, `No response — timed out after ${IDLE_TIMEOUT / 1000}s.`);
       }
       this.attachTouched(ctx.el, ctx.touched, checkpoint);
+      // The footer above now carries every note this turn touched — drop the
+      // matching live tool-call rows so the same file isn't shown twice (the
+      // #1 finding of the 2026-07-03 impeccable critique on this surface).
+      for (const id of ctx.noteTouchIds) ctx.cards.get(id)?.card.remove();
       if (ctx.fullText.trim()) {
         this.attachActions(ctx.el, ctx.fullText, text, c);
         // Turn duration (Feature 2): live-only, only when it's worth showing.

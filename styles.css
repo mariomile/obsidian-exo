@@ -902,15 +902,19 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   animation: mva-blink 1s steps(2, start) infinite;
 }
 
-/* clickable note target inside a tool card */
+/* clickable note target inside a tool card — the whole row is already
+   clickable, so the underline (a "this is the important interactive bit"
+   signal) only needs to show on hover, not sit permanently on secondary
+   metadata (2026-07-03 impeccable critique, P2). */
 .mva-link {
   cursor: pointer;
-  text-decoration-line: underline;
+  text-decoration-line: none;
   text-decoration-style: dotted;
   text-underline-offset: 2px;
 }
 .mva-link:hover {
   color: var(--text-accent, var(--interactive-accent));
+  text-decoration-line: underline;
 }
 .mva-input {
   flex: 1;
@@ -1153,7 +1157,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-tool.is-collapsed .mva-tool-name {
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--text-muted);
 }
 .mva-tool.is-collapsed .mva-tool-target {
@@ -1934,12 +1938,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   align-items: center;
   gap: 6px;
 }
-.mva-src-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
-}
 .mva-src-chip {
   display: inline-flex;
   align-items: center;
@@ -1975,6 +1973,25 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-src-chip.is-write:hover {
   border-color: var(--interactive-accent);
+}
+/* Faint persistent hint that diff/revert live behind hover — without it, revert
+   (the one action you reach for in a panic) was only discoverable by accident
+   (2026-07-03 impeccable critique, P3). A single low-opacity dot, same visual
+   vocabulary as the tool-card status dot; fades out as the real actions fade in. */
+.mva-src-chip.is-write::after {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-left: 3px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  opacity: 0.6;
+  transition: opacity var(--mva-t);
+}
+.mva-src-chip.is-write:hover::after,
+.mva-src-chip.is-write:focus-within::after {
+  opacity: 0;
 }
 /* ×N edit-count badge */
 .mva-src-count {
@@ -2028,7 +2045,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   opacity: 0.5;
   text-decoration: line-through;
 }
-.mva-src-chip.is-reverted .mva-src-acts {
+.mva-src-chip.is-reverted .mva-src-acts,
+.mva-src-chip.is-reverted::after {
   display: none;
 }
 .mva-src-diff-note {
