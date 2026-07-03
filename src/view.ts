@@ -353,6 +353,24 @@ export class ChatView extends ItemView {
       }
     });
     this.buildComposer(root);
+    // View-level Esc-to-stop: the composer's own Escape handler only fires while the
+    // textarea is focused, but clicking into the transcript blurs it — so "esc to stop"
+    // silently stopped working. A capture-phase listener on the whole view catches Esc
+    // wherever focus is. Guard: if an Esc-consuming overlay (e.g. a visible autocomplete
+    // popup) is open, let it handle Esc itself instead of stopping the stream.
+    this.registerDomEvent(
+      this.containerEl,
+      "keydown",
+      (e: KeyboardEvent) => {
+        if (e.key !== "Escape" || !this.streaming) return;
+        const ac = this.containerEl.querySelector<HTMLElement>(".mva-ac");
+        if (ac && ac.offsetParent !== null) return; // overlay open — it wins
+        e.preventDefault();
+        e.stopPropagation();
+        this.stop();
+      },
+      true
+    );
     await this.restore();
     this.refreshContext();
     this.registerEvent(
@@ -615,10 +633,24 @@ export class ChatView extends ItemView {
     // open (switchTo) — with dozens of stored conversations this is the bulk
     // of the view's startup cost.
     const wantDom = new Set([...(this.plugin.settings.openTabIds ?? []), this.plugin.settings.activeTabId]);
+    // First pass: seed the id counter from the highest numeric id suffix present,
+    // NOT the conversation count — ids climb past the count after deletions and
+    // MAX_CONVOS trimming, so a count-based seed produces colliding ids.
+    for (const d of raw) {
+      const m = d && typeof d.id === "string" ? /^c(\d+)$/.exec(d.id) : null;
+      if (m) convoSeed = Math.max(convoSeed, Number(m[1]));
+    }
+    // Second pass: build convos, reassigning any duplicate id to a fresh unique one
+    // so distinct conversations never collide in id-keyed lookups. First occurrence
+    // keeps the original id (so openTabIds/activeTabId still resolve to it).
+    const seenIds = new Set<string>();
     for (const d of raw) {
       if (!d || !Array.isArray(d.messages)) continue;
+      let id = d.id || `c${++convoSeed}`;
+      if (seenIds.has(id)) id = `c${++convoSeed}`;
+      seenIds.add(id);
       const c: Convo = {
-        id: d.id || `c${++convoSeed}`,
+        id,
         listEl: createDiv({ cls: "mva-list" }),
         title: d.title || "New chat",
         sessionId: d.sessionId,
@@ -643,7 +675,6 @@ export class ChatView extends ItemView {
       this.wireScroll(c);
       this.convos.push(c);
     }
-    convoSeed = Math.max(convoSeed, this.convos.length);
 
     const byId = new Map(this.convos.map((c) => [c.id, c]));
     const s = this.plugin.settings;
@@ -679,7 +710,27 @@ export class ChatView extends ItemView {
   private serialize(): ConvoData[] {
     this.saveActive();
     const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
-    return all.slice(-MAX_CONVOS).map((c) => ({
+    // A conversation must survive restore if it's active or an open (possibly empty)
+    // placeholder tab — otherwise those tabs vanish on reload.
+    const pinned = new Set<string>([this.active.id, ...this.openTabs]);
+    // Drop empty "New chat" husks that aren't pinned so they don't waste slots.
+    const filtered = all.filter((c) => c.messages.length > 0 || pinned.has(c.id));
+    // Evict by recency (not array/creation order): always keep pinned, then fill the
+    // remaining slots by updatedAt desc. Emit in ORIGINAL array order (restore() falls
+    // back to the LAST element as active, so stable order matters).
+    let kept = filtered;
+    if (filtered.length > MAX_CONVOS) {
+      const keptIds = new Set<string>(filtered.filter((c) => pinned.has(c.id)).map((c) => c.id));
+      const rest = filtered
+        .filter((c) => !pinned.has(c.id))
+        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+      for (const c of rest) {
+        if (keptIds.size >= MAX_CONVOS) break;
+        keptIds.add(c.id);
+      }
+      kept = filtered.filter((c) => keptIds.has(c.id));
+    }
+    return kept.map((c) => ({
       id: c.id,
       title: c.title,
       provider: c.provider,
