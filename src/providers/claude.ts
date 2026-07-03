@@ -84,6 +84,12 @@ class ClaudeSession implements AgentSession {
           ? { effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max" }
           : {}),
         ...(opts.autoCompact ? { autoCompactEnabled: true } : {}),
+        // Adaptive thinking is already the default for supporting models (Opus
+        // 4.6+/Fable 5), but those models default the *display* to `omitted`, so
+        // thinking-delta events arrive with EMPTY text and the Reasoning block
+        // renders blank. Setting `display: "summarized"` only unhides the summary
+        // — it does not change whether the model thinks. Harmless on older models.
+        thinking: { type: "adaptive", display: "summarized" },
         ...(() => {
           // Use Claude Code's OWN default system prompt (tool discipline,
           // conciseness — which keeps token use down — plan/todo behavior, and a
