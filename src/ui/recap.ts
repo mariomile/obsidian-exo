@@ -19,8 +19,7 @@ const SECTION_CAP = 8;
 export class RecapPanel {
   constructor(
     private app: App,
-    private onOpenNote: (path: string) => void,
-    private onClose?: () => void
+    private onOpenNote: (path: string) => void
   ) {}
 
   /** Render the recap into `container`, replacing any previous content. Sections
@@ -29,17 +28,8 @@ export class RecapPanel {
   render(container: HTMLElement, recap: Recap): void {
     container.empty();
     const total = recap.web.length + recap.read.length + recap.written.length + recap.skills.length;
-    // Title row: label + a close "×" that hides the panel (also toggled from the
-    // header button). The row is always present so the panel is dismissible even
-    // when empty.
     const titleRow = container.createDiv({ cls: "mva-recap-title" });
     titleRow.createSpan({ cls: "mva-recap-title-text", text: "Context" });
-    if (this.onClose) {
-      const x = titleRow.createSpan({ cls: "mva-recap-x", attr: { "aria-label": "Close context" } });
-      setIcon(x, "x");
-      setTooltip(x, "Close");
-      clickable(x, () => this.onClose?.());
-    }
     if (total === 0) {
       container.createDiv({
         cls: "mva-recap-empty",
