@@ -255,10 +255,33 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   overflow-y: auto;
   padding: 14px 12px;
   border-radius: var(--mva-r2);
-  border: 1px solid var(--background-modifier-border);
+  /* Barely-there edge — depth comes from the shadow, not a hard line. */
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 40%, transparent);
   box-shadow: var(--shadow-s);
   background: var(--background-secondary);
   scrollbar-width: thin;
+}
+/* Light frosted depth on the elevated surfaces — a subtle translucent blur only
+   where backdrop-filter is supported; otherwise the solid theme backgrounds above
+   stand. Kept mostly-opaque (82-86%) so text stays fully readable on any theme. */
+@supports (backdrop-filter: blur(1px)) {
+  .mva-inputbox,
+  .mva-inputbox:hover,
+  .mva-inputbox:focus-within {
+    background: color-mix(in srgb, var(--background-primary) 86%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .mva-tabs {
+    background: color-mix(in srgb, var(--background-primary) 82%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .mva-root.is-wide .mva-recap {
+    background: color-mix(in srgb, var(--background-secondary) 85%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
 }
 .mva-recap-title {
   font-size: 11px;
@@ -701,6 +724,19 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   margin-left: auto;
   margin-right: auto;
   box-sizing: border-box;
+}
+/* Soft dissolve: the transcript fades into the composer as it approaches, rather
+   than hard-cutting under it (the "content melt" look). Sits in the band directly
+   above the composer, non-interactive. */
+.mva-composer::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 36px;
+  background: linear-gradient(to top, var(--background-primary), transparent);
+  pointer-events: none;
 }
 /* Unified input box — the only composer surface (textarea + controls inside). */
 .mva-inputbox {
