@@ -2464,28 +2464,40 @@ export class ChatView extends ItemView {
 
   private renderEmptyState(): void {
     const empty = this.listEl.createDiv({ cls: "mva-empty" });
-    empty.createDiv({ cls: "mva-empty-title", text: "What are we working on?" });
-    this.renderPromptList(
+    // The Exo star is the still centre; the prompt clusters settle in around it.
+    // Each block gets a --i so it eases up in a gentle stagger (reduced-motion off).
+    const staggered: HTMLElement[] = [];
+    const hero = empty.createDiv({ cls: "mva-empty-hero" });
+    setIcon(hero.createDiv({ cls: "mva-empty-star", attr: { "aria-hidden": "true" } }), EXO_ICON);
+    hero.createDiv({ cls: "mva-empty-title", text: "What are we working on?" });
+    staggered.push(hero);
+    const sugg = this.renderPromptList(
       empty,
       "Suggestions",
       ChatView.STARTERS.map(([icon, label, prompt]) => ({ icon, label, prompt }))
     );
-    this.renderPromptList(
+    if (sugg) staggered.push(sugg);
+    const yours = this.renderPromptList(
       empty,
       "Your prompts",
       this.plugin.settings.customPrompts.map((p) => ({ icon: "message-square", label: p.name, prompt: p.prompt }))
     );
-    this.renderSurfacing(empty);
+    if (yours) staggered.push(yours);
+    const related = this.renderSurfacing(empty);
+    if (related) staggered.push(related);
+    staggered.forEach((el, i) => el.style.setProperty("--i", String(i)));
   }
 
-  /** A labelled, tappable prompt list (Suggestions / Your prompts) with "Show N more". */
+  /** A labelled, tappable prompt list (Suggestions / Your prompts) with "Show N
+   *  more". Returns the section element (or null when there's nothing to show) so
+   *  the empty state can stagger its entrance. */
   private renderPromptList(
     parent: HTMLElement,
     label: string,
     items: { icon: string; label: string; prompt: string }[],
     limit = 3
-  ): void {
-    if (!items.length) return;
+  ): HTMLElement | null {
+    if (!items.length) return null;
     const sec = parent.createDiv({ cls: "mva-es-section" });
     sec.createDiv({ cls: "mva-es-label", text: label });
     const list = sec.createDiv({ cls: "mva-starters" });
@@ -2505,6 +2517,7 @@ export class ChatView extends ItemView {
       }
     };
     render(Math.min(limit, items.length));
+    return sec;
   }
 
   /** Build a labelled row of "related note" chips inside `container`. Clicking a
@@ -2533,14 +2546,15 @@ export class ChatView extends ItemView {
     return wrap;
   }
 
-  /** Surface notes related to the active note (toggleable). */
-  private renderSurfacing(empty: HTMLElement): void {
-    if (!this.plugin.settings.featureSurfacing) return;
+  /** Surface notes related to the active note (toggleable). Returns the wrapper
+   *  (or null when nothing surfaces) so the empty state can stagger it in. */
+  private renderSurfacing(empty: HTMLElement): HTMLElement | null {
+    if (!this.plugin.settings.featureSurfacing) return null;
     const file = this.app.workspace.getActiveFile();
-    if (!file) return;
+    if (!file) return null;
     const related = relatedNotes(this.app, file, 5);
-    if (!related.length) return;
-    this.buildRelatedChips(empty, related, {
+    if (!related.length) return null;
+    return this.buildRelatedChips(empty, related, {
       wrapCls: "mva-surface",
       labelCls: "mva-surface-label",
       labelText: `Related to ${noteBasename(file.path)}`,
