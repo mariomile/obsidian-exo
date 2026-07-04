@@ -50,6 +50,30 @@ describe("describeCliFailure", () => {
     expect(describeCliFailure("ERROR_DURING_EXECUTION")?.message).toMatch(/crashed mid-turn/i);
   });
 
+  it("maps a Claude-plan usage limit to a plan-limit message", () => {
+    for (const raw of [
+      "Claude AI usage limit reached",
+      "You've hit your session limit for the 5-hour window",
+      "reached your weekly limit",
+    ]) {
+      const r = describeCliFailure(raw);
+      expect(r?.message).toMatch(/hit your Claude plan's usage limit/i);
+    }
+  });
+
+  it("threads a reset clock into the usage-limit hint when present", () => {
+    const withClock = describeCliFailure("You've hit your usage limit — resets at 14:30");
+    expect(withClock?.hint).toMatch(/14:30/);
+    const withoutClock = describeCliFailure("usage limit reached");
+    expect(withoutClock?.hint).toMatch(/rolling window/i);
+  });
+
+  it("does NOT treat a bare API rate-limit 429 as a plan limit", () => {
+    // API-key throughput 429 stays benign (surfaces raw) — only plan-usage
+    // phrasings map to the plan-limit message.
+    expect(describeCliFailure("rate limit exceeded")).toBeNull();
+  });
+
   it("returns null for unknown / benign strings", () => {
     for (const raw of [
       "",

@@ -33,8 +33,23 @@ export type AgentEvent =
     }
   | { kind: "usage"; usage: ContextUsage }
   | { kind: "compact"; summary?: string }
+  | { kind: "rate-limit"; status: RateStatus; utilization?: number; resetsAt?: number; windowType?: string }
   | { kind: "turn-end"; sessionId?: string }
   | { kind: "error"; message: string };
+
+export type RateStatus = "allowed" | "allowed_warning" | "rejected";
+
+/** Latest Claude-plan quota snapshot, derived from the SDK's `rate_limit_event`
+ *  (claude.ai subscription sessions only — API-key users never receive one).
+ *  `utilization` is passed through as the SDK reports it (a 0-1 fraction in
+ *  practice); `core/rate-limit.ts` normalizes it. `resetsAt` is the SDK's raw
+ *  epoch (seconds in practice), also normalized downstream. */
+export interface RateLimitInfo {
+  status: RateStatus;
+  utilization?: number;
+  resetsAt?: number;
+  windowType?: string;
+}
 
 export interface ContextUsage {
   used: number;
@@ -106,6 +121,10 @@ export interface SessionCaps {
 export interface AgentSession {
   /** Latest capability snapshot (see SessionCaps); null until init arrives. */
   caps?: SessionCaps | null;
+  /** Latest Claude-plan quota snapshot (see RateLimitInfo); null until (and
+   *  unless) a `rate_limit_event` arrives — only claude.ai subscription
+   *  sessions ever get one. Stored so a view can read it after switching tabs. */
+  rateLimit?: RateLimitInfo | null;
   /** Invoked once when the init snapshot lands (may be before the first send). */
   onCaps?: ((caps: SessionCaps) => void) | null;
   /** Send one user turn; resolves when that turn completes. */

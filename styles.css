@@ -1851,6 +1851,48 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   }
 }
 
+/* --------------------------- quota badge ------------------------------ */
+/* Claude-plan usage badge beside the context ring. Quiet by default (hidden
+   below 80%); a small colored dot + percent when the plan nears its window,
+   escalating to a danger "limit" label when the plan rejects. Theme colors
+   only — orange for caution, red for danger. */
+.mva-rate-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
+  cursor: default;
+  user-select: none;
+}
+.mva-rate-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+.mva-rate-badge.is-caution {
+  color: var(--color-orange, #e0a341);
+}
+.mva-rate-badge.is-caution .mva-rate-dot {
+  background: var(--color-orange, #e0a341);
+}
+.mva-rate-badge.is-danger {
+  color: var(--color-red, #e05b5b);
+}
+.mva-rate-badge.is-danger .mva-rate-dot {
+  background: var(--color-red, #e05b5b);
+}
+.mva-rate-badge:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  border-radius: var(--mva-r1);
+}
+
 /* --------------------------- compact divider -------------------------- */
 .mva-compact-divider {
   display: flex;

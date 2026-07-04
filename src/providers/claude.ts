@@ -40,6 +40,9 @@ class ClaudeSession implements AgentSession {
   /** Latest system/init capability snapshot (skills/commands/agents/MCP). */
   caps: import("./types").SessionCaps | null = null;
   onCaps: ((caps: import("./types").SessionCaps) => void) | null = null;
+  /** Latest Claude-plan quota snapshot from `rate_limit_event`. Stored so a late
+   *  reader (tab switch) can render the badge without a fresh event. */
+  rateLimit: import("./types").RateLimitInfo | null = null;
   private resolveTurn: (() => void) | null = null;
   private rejectTurn: ((e: unknown) => void) | null = null;
   private sessionId?: string;
@@ -224,6 +227,29 @@ class ClaudeSession implements AgentSession {
         ),
       };
       this.onCaps?.(this.caps);
+      return;
+    }
+
+    // Rate-limit snapshot (claude.ai subscription only). Can arrive during
+    // prewarm before the first send (onEvent null), so — like the init snapshot —
+    // store it unconditionally and emit only when a listener is attached.
+    if (msg.type === "rate_limit_event") {
+      const info = msg.rate_limit_info;
+      if (info && typeof info.status === "string") {
+        this.rateLimit = {
+          status: info.status,
+          utilization: info.utilization,
+          resetsAt: info.resetsAt,
+          windowType: info.rateLimitType,
+        };
+        this.onEvent?.({
+          kind: "rate-limit",
+          status: info.status,
+          utilization: info.utilization,
+          resetsAt: info.resetsAt,
+          windowType: info.rateLimitType,
+        });
+      }
       return;
     }
 
@@ -495,6 +521,13 @@ interface ClaudeMsg {
   parent_tool_use_id?: string | null;
   result?: string;
   compact_summary?: string;
+  // rate_limit_event payload (claude.ai subscription sessions only).
+  rate_limit_info?: {
+    status: import("./types").RateStatus;
+    utilization?: number;
+    resetsAt?: number;
+    rateLimitType?: string;
+  };
   // system/init capability snapshot (CLI ≥2.1.199 emits it in streaming-input too)
   skills?: string[];
   slash_commands?: string[];
