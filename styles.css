@@ -812,7 +812,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   cursor: pointer;
   transition: color var(--mva-t), background var(--mva-t);
 }
-.mva-tb-btn:hover {
+.mva-tb-btn:hover,
+.mva-tb-btn.is-open {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
 }
@@ -908,6 +909,23 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-sel-opt.is-danger  { color: var(--color-red, #e05b5b); }
 .mva-sel-opt.is-caution { color: var(--color-orange, #e0a341); }
+/* The row label takes the free space; a check sits at the trailing edge to mark
+   the current value (used by the tune dialog, which stays open after a pick). */
+.mva-sel-opt-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mva-sel-opt-check {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--interactive-accent);
+}
+.mva-sel-opt-check .svg-icon {
+  width: 14px;
+  height: 14px;
+}
 
 /* Grouped popover (model picker): quiet group headers separating provider
    sections in the flat rows list. Quiet 11px marker, not a tracked eyebrow. */
@@ -916,6 +934,47 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-size: 11px;
   color: var(--text-faint);
 }
+
+/* ---- tune dialog: model + effort + permission in one popover ---- */
+.mva-tune-pop {
+  /* Anchored to the right edge (the tune icon lives on the toolbar's right) so a
+     200px popover opens inward, never off the composer. */
+  left: auto;
+  right: 0;
+  min-width: 200px;
+  max-height: 420px;
+}
+.mva-tune-group + .mva-tune-group {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 50%, transparent);
+}
+.mva-tune-label {
+  padding: 2px 10px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.mva-tune-rows:focus,
+.mva-tune-rows:focus-visible {
+  outline: none;
+}
+
+/* Always-visible permission dot in the toolbar — a small colored disc whose color
+   reflects the active permission/sandbox risk. Reuses the risk palette. */
+.mva-perm-dot {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  margin: 0 2px;
+  cursor: pointer;
+  background: var(--color-green, #3fb950);
+}
+.mva-perm-dot.is-caution { background: var(--color-orange, #e0a341); }
+.mva-perm-dot.is-danger  { background: var(--color-red, #e05b5b); }
 
 /* ------------------------------ context ------------------------------- */
 .mva-context {

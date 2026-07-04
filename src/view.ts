@@ -54,6 +54,7 @@ import {
   windowLabel,
 } from "./core/rate-limit";
 import { buildOptionRows, type SelectOption } from "./core/option-filter";
+import { permDotRisk } from "./core/perm-dot";
 
 export type { AskQuestion } from "./core/model";
 
@@ -310,9 +311,12 @@ export class ChatView extends ItemView {
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private brandDot!: HTMLElement;
-  // Toolbar selector chips (Permission-style popovers) expose a refresh fn each.
+  // The tune dialog (model + effort + permission) exposes these refresh fns:
+  // refreshModelChip re-renders the open dialog's model group; refreshPermChipFn
+  // re-renders the permission/sandbox group AND the always-visible permission dot.
   private refreshModelChip: () => void = () => {};
   private refreshPermChipFn: () => void = () => {};
+  private permDotEl: HTMLElement | null = null;
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
   private manualAttached: string[] = [];
@@ -1653,7 +1657,6 @@ export class ChatView extends ItemView {
 
   private buildToolbar(bar: HTMLElement): void {
     const tb = bar.createDiv({ cls: "mva-toolbar" });
-    const s = this.plugin.settings;
 
     // Attach "+" — the single entry point for adding context (note / file /
     // folder / image). Leftmost in the toolbar; opens a native themed Menu.
@@ -1661,85 +1664,6 @@ export class ChatView extends ItemView {
     setIcon(attach, "plus");
     setTooltip(attach, "Attach note, file, folder, or image");
     this.clickable(attach, (e) => this.openAttachMenu(e as MouseEvent));
-
-    // Model — unified picker across BOTH providers (no separate Provider chip).
-    // Options are rebuilt on open; each row carries a brand-color dot (same
-    // language as tab/gallery provider dots) so Claude vs Codex models stay
-    // visually distinct in one flat list. Picking a model from the other
-    // backend switches provider + model together as one action.
-    this.refreshModelChip = this.buildSelectChip(tb, {
-      ariaLabel: "Model",
-      getLabel: () => this.modelLabel(),
-      getOptions: () =>
-        this.allModelChoices().map((m) => ({
-          value: m.id,
-          label: m.label,
-          dotColor: ADAPTERS[m.provider].brandColor,
-          group: m.provider === "claude" ? "Claude" : "Codex",
-        })),
-      getCurrent: () => this.model,
-      onSelect: (v) => {
-        if (this.streaming) {
-          new Notice("Can't switch model while a reply is streaming.");
-          return;
-        }
-        const found = this.allModelChoices().find((m) => m.id === v);
-        if (!found) return;
-        if (found.provider !== this.provider) {
-          this.onProviderChange(found.provider, v);
-          return;
-        }
-        this.model = v;
-        this.persistModel();
-        // Re-render the statusline's model label immediately — no new usage
-        // event fires just from a model switch, so refresh with cached data.
-        this.updateUsage(this.lastUsage);
-      },
-    });
-
-    // Effort — Permission-style popover.
-    this.buildSelectChip(tb, {
-      ariaLabel: "Effort",
-      getLabel: () => `Effort: ${ChatView.effortLabel(s.effort || "default")}`,
-      getOptions: () => ChatView.EFFORT_OPTS.map(([value, label]) => ({ value, label })),
-      getCurrent: () => s.effort || "default",
-      onSelect: (v) => {
-        s.effort = v;
-        void this.plugin.saveSettings();
-      },
-    });
-
-    // Permission — Permission-style popover with risk coloring.
-    // Provider-aware: Claude has canUseTool (permission mode gates tool calls);
-    // Codex has no canUseTool — its sandbox setting is the actual gate, so in
-    // Codex mode this chip shows and controls codexSandbox instead.
-    this.refreshPermChipFn = this.buildSelectChip(tb, {
-      ariaLabel: "Permission mode",
-      getLabel: () =>
-        this.provider === "codex"
-          ? `Sandbox: ${ChatView.codexSandboxLabel(s.codexSandbox)}`
-          : `Perm: ${ChatView.permLabel(s.permissionMode)}`,
-      getOptions: () =>
-        this.provider === "codex"
-          ? ChatView.CODEX_SANDBOX_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.codexSandboxRisk(v) }))
-          : ChatView.PERM_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.permRisk(v) })),
-      getCurrent: () => (this.provider === "codex" ? s.codexSandbox : s.permissionMode),
-      chipRisk: () =>
-        this.provider === "codex" ? ChatView.codexSandboxRisk(s.codexSandbox) : ChatView.permRisk(s.permissionMode),
-      onSelect: (v) => {
-        if (this.provider === "codex") {
-          s.codexSandbox = v;
-          void this.plugin.saveSettings();
-        } else {
-          // Entering plan mode via the chip records the mode we came from, so a
-          // later plan approval restores it (mirrors togglePlanMode).
-          if (v === "plan" && s.permissionMode !== "plan") this.prePlanMode = s.permissionMode;
-          s.permissionMode = v as typeof s.permissionMode;
-          void this.plugin.saveSettings();
-          this.active.session?.setPermissionMode?.(s.permissionMode);
-        }
-      },
-    });
 
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
     // Context usage as a compact circular counter (donut ring). Hover for the
@@ -1754,11 +1678,202 @@ export class ChatView extends ItemView {
     this.rateBadgeEl.hide();
     this.updateRateBadge();
 
+    // Tune dialog + permission dot — model / effort / permission collapsed into
+    // one icon and a single always-visible risk dot (03-07: the three chips were
+    // too heavy). buildTuneDialog also wires refreshModelChip/refreshPermChipFn to
+    // re-render the open dialog and the dot on external changes.
+    this.buildTuneDialog(tb);
+
     // Send button — lives inside the input box, right side.
     this.sendBtn = tb.createEl("button", { cls: "mva-send", attr: { "aria-label": "Send" } });
     setIcon(this.sendBtn, "arrow-up");
     setTooltip(this.sendBtn, "Send");
     this.sendBtn.onclick = () => (this.streaming ? this.stop() : void this.send());
+  }
+
+  /**
+   * The consolidated tune control: one `sliders-horizontal` icon opens a single
+   * popover (same `.mva-sel-pop` look as the chips) with three labeled groups —
+   * Model, Effort, and Permission (Claude) or Sandbox (Codex). Each group renders
+   * via the shared renderOptionRows; picking applies immediately and the popover
+   * stays open (close on outside-click / Escape). A small always-visible permission
+   * dot sits beside the icon (color = active risk) and also opens the dialog.
+   */
+  private buildTuneDialog(tb: HTMLElement): void {
+    const s = this.plugin.settings;
+    const wrap = tb.createDiv({ cls: "mva-sel mva-tune" });
+    const btn = wrap.createDiv({ cls: "mva-tb-btn", attr: { "aria-label": "Model, effort & permissions" } });
+    setIcon(btn, "sliders-horizontal");
+    setTooltip(btn, "Model, effort & permissions");
+    const pop = wrap.createDiv({ cls: "mva-sel-pop mva-tune-pop" });
+    pop.hide();
+
+    // Always-visible permission dot — reflects the active permission/sandbox risk.
+    const dot = tb.createDiv({ cls: "mva-perm-dot", attr: { "aria-label": "Permission mode" } });
+    this.permDotEl = dot;
+    this.refreshPermDot();
+
+    // Render (or re-render) the three groups. Kept as a closure so external
+    // changes (provider switch, plan toggle) can refresh the open dialog.
+    const renderGroups = () => {
+      pop.empty();
+      // Model — unified across BOTH providers; each row carries the brand dot, and
+      // picking a model from the other backend switches provider + model together.
+      this.tuneGroup(
+        pop,
+        "Model",
+        this.allModelChoices().map((m) => ({
+          value: m.id,
+          label: m.label,
+          dotColor: ADAPTERS[m.provider].brandColor,
+          group: m.provider === "claude" ? "Claude" : "Codex",
+        })),
+        this.model,
+        (v) => {
+          this.applyModelChoice(v);
+          // Switching provider flips Permission↔Sandbox — rebuild if still open.
+          if (open) renderGroups();
+        },
+        () => close()
+      );
+      // Effort.
+      this.tuneGroup(
+        pop,
+        "Effort",
+        ChatView.EFFORT_OPTS.map(([value, label]) => ({ value, label })),
+        s.effort || "default",
+        (v) => {
+          s.effort = v;
+          void this.plugin.saveSettings();
+        },
+        () => close()
+      );
+      // Permission (Claude) or Sandbox (Codex) — the actual tool gate per provider.
+      if (this.provider === "codex") {
+        this.tuneGroup(
+          pop,
+          "Sandbox",
+          ChatView.CODEX_SANDBOX_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.codexSandboxRisk(v) })),
+          s.codexSandbox,
+          (v) => this.applyPermChoice(v),
+          () => close()
+        );
+      } else {
+        this.tuneGroup(
+          pop,
+          "Permission",
+          ChatView.PERM_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.permRisk(v) })),
+          s.permissionMode,
+          (v) => this.applyPermChoice(v),
+          () => close()
+        );
+      }
+    };
+
+    let open = false;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrap.contains(e.target as Node) && e.target !== dot) close();
+    };
+    const close = () => {
+      open = false;
+      pop.hide();
+      btn.removeClass("is-open");
+      document.removeEventListener("click", onDoc, true);
+    };
+    const doOpen = () => {
+      if (open) return close();
+      renderGroups();
+      open = true;
+      btn.addClass("is-open");
+      pop.show();
+      document.addEventListener("click", onDoc, true);
+      setTimeout(() => pop.querySelector<HTMLElement>(".mva-tune-rows")?.focus(), 0);
+    };
+    this.clickable(btn, (e) => {
+      e.stopPropagation();
+      doOpen();
+    });
+    this.clickable(dot, (e) => {
+      e.stopPropagation();
+      doOpen();
+    });
+    this.register(() => close());
+
+    // External-change hooks: model group re-renders on provider change; the perm
+    // hook re-renders the perm/sandbox group and the dot (plan toggle, restore).
+    this.refreshModelChip = () => {
+      if (open) renderGroups();
+    };
+    this.refreshPermChipFn = () => {
+      this.refreshPermDot();
+      if (open) renderGroups();
+    };
+  }
+
+  /** One labeled group inside the tune dialog: a quiet label + a rows container
+   *  rendered by the shared renderOptionRows (immediate-apply, stays open). */
+  private tuneGroup(
+    pop: HTMLElement,
+    label: string,
+    options: SelectOption[],
+    current: string,
+    onPick: (value: string) => void,
+    onEscape: () => void
+  ): void {
+    const group = pop.createDiv({ cls: "mva-tune-group" });
+    group.createDiv({ cls: "mva-tune-label", text: label });
+    const rows = group.createDiv({ cls: "mva-tune-rows" });
+    this.renderOptionRows(rows, options, current, { onPick, onEscape });
+  }
+
+  /** Apply a model pick from the tune dialog (mirrors the old model chip's
+   *  onSelect): guard while streaming, switch provider+model together when the
+   *  chosen model belongs to the other backend. */
+  private applyModelChoice(v: string): void {
+    if (this.streaming) {
+      new Notice("Can't switch model while a reply is streaming.");
+      return;
+    }
+    const found = this.allModelChoices().find((m) => m.id === v);
+    if (!found) return;
+    if (found.provider !== this.provider) {
+      this.onProviderChange(found.provider, v);
+      return;
+    }
+    this.model = v;
+    this.persistModel();
+    // Re-render the statusline's model label immediately — no new usage event
+    // fires just from a model switch, so refresh with cached data.
+    this.updateUsage(this.lastUsage);
+  }
+
+  /** Apply a permission (Claude) or sandbox (Codex) pick; keeps setting, live
+   *  session, and the permission dot in sync (mirrors the old perm chip). */
+  private applyPermChoice(v: string): void {
+    const s = this.plugin.settings;
+    if (this.provider === "codex") {
+      s.codexSandbox = v;
+      void this.plugin.saveSettings();
+    } else {
+      // Entering plan mode records the mode we came from, so a later plan approval
+      // restores it (mirrors togglePlanMode).
+      if (v === "plan" && s.permissionMode !== "plan") this.prePlanMode = s.permissionMode;
+      s.permissionMode = v as typeof s.permissionMode;
+      void this.plugin.saveSettings();
+      this.active.session?.setPermissionMode?.(s.permissionMode);
+    }
+    this.refreshPermDot();
+  }
+
+  /** Repaint the always-visible permission dot: risk class drives the color, the
+   *  tooltip names the current mode. Provider-aware (permission vs sandbox). */
+  private refreshPermDot(): void {
+    if (!this.permDotEl) return;
+    const s = this.plugin.settings;
+    const mode = this.provider === "codex" ? s.codexSandbox : s.permissionMode;
+    const label = this.provider === "codex" ? ChatView.codexSandboxLabel(s.codexSandbox) : ChatView.permLabel(s.permissionMode);
+    this.permDotEl.className = `mva-perm-dot ${permDotRisk(this.provider, mode)}`;
+    setTooltip(this.permDotEl, this.provider === "codex" ? `Sandbox: ${label}` : `Permission: ${label}`);
   }
 
   /**
@@ -1789,92 +1904,20 @@ export class ChatView extends ItemView {
     };
 
     const buildPop = () => {
-      pop.empty();
-      const cur = opts.getCurrent();
-      const allOpts = opts.getOptions();
-
-      // Roving-highlight keyboard handler: Arrow keys move the `is-active` cursor,
-      // Enter picks the highlighted row, Escape closes (the optional onEscape hook
-      // is unused now but kept for callers that want a pre-close step). Rows never
-      // take focus themselves — focus lives on the popover container.
-      const keyNav =
-        (
-          getEls: () => { el: HTMLElement; value: string }[],
-          getActive: () => number,
-          setActive: (i: number) => void,
-          onEscape?: () => boolean
-        ) =>
-        (ev: KeyboardEvent) => {
-          if (ev.key === "ArrowDown") {
-            ev.preventDefault();
-            setActive(getActive() + 1);
-          } else if (ev.key === "ArrowUp") {
-            ev.preventDefault();
-            setActive(getActive() - 1);
-          } else if (ev.key === "Enter") {
-            ev.preventDefault();
-            const o = getEls()[getActive()];
-            if (o) {
-              opts.onSelect(o.value);
-              refresh();
-              close();
-            }
-          } else if (ev.key === "Escape") {
-            ev.preventDefault();
-            if (onEscape?.()) return;
-            close();
-          }
-        };
-
-      // One rendering path for every picker: roving `is-active` rows driven by
-      // ArrowUp/Down + Enter + Escape. Grouped pickers (the model list) get quiet
-      // group headers from buildOptionRows; flat pickers (effort/perm) emit none
-      // (their options carry no `group`). The popover container takes focus so the
-      // keyboard works immediately — no search box (with ~8 models it was overhead).
-      const optionEls: { el: HTMLElement; value: string }[] = [];
-      let activeIdx = -1;
-      const setActive = (idx: number) => {
-        if (!optionEls.length) {
-          activeIdx = -1;
-          return;
-        }
-        activeIdx = ((idx % optionEls.length) + optionEls.length) % optionEls.length;
-        optionEls.forEach((o, i) => o.el.toggleClass("is-active", i === activeIdx));
-        optionEls[activeIdx].el.scrollIntoView({ block: "nearest" });
-      };
-      for (const r of buildOptionRows(allOpts as SelectOption[], "")) {
-        if (r.kind === "header") {
-          pop.createDiv({ cls: "mva-sel-group", text: r.group });
-          continue;
-        }
-        const o = r.option;
-        const row = pop.createDiv({ cls: "mva-sel-opt" });
-        if (o.risk) row.addClass(o.risk as string);
-        if (o.dotColor) row.createSpan({ cls: "mva-sel-opt-dot" }).style.background = o.dotColor;
-        row.createSpan({ text: o.label });
-        const idx = optionEls.length;
-        optionEls.push({ el: row, value: o.value });
-        row.addEventListener("mouseenter", () => setActive(idx));
-        row.onclick = () => {
-          opts.onSelect(o.value);
+      // One rendering path for every picker (chips + tune dialog): the shared
+      // renderOptionRows draws grouped/flat rows with roving ArrowUp/Down + Enter +
+      // Escape. Here picking closes the popover and re-syncs the chip label; Escape
+      // closes too. The overflow options can change per open (e.g. model list per
+      // provider), so we rebuild fresh each time.
+      const focus = this.renderOptionRows(pop, opts.getOptions() as SelectOption[], opts.getCurrent(), {
+        onPick: (value) => {
+          opts.onSelect(value);
           refresh();
           close();
-        };
-      }
-      // Seed the cursor on the current value (or the first row), then focus the
-      // popover so ArrowUp/Down and Enter/Escape work without a click.
-      const curIdx = optionEls.findIndex((o) => o.value === cur);
-      setActive(curIdx >= 0 ? curIdx : 0);
-      pop.tabIndex = -1;
-      pop.addEventListener(
-        "keydown",
-        keyNav(
-          () => optionEls,
-          () => activeIdx,
-          setActive
-        )
-      );
-      setTimeout(() => pop.focus(), 0);
+        },
+        onEscape: () => close(),
+      });
+      setTimeout(() => focus(), 0);
     };
 
     refresh();
@@ -1900,6 +1943,85 @@ export class ChatView extends ItemView {
     });
     this.register(() => close());
     return refresh;
+  }
+
+  /**
+   * Shared option-row renderer for BOTH the toolbar select chips and the tune
+   * dialog — the single source of truth for grouped/flat option rows. Draws quiet
+   * group headers (from buildOptionRows), an optional provider brand-dot, risk
+   * coloring, and a check on the current value; wires roving ArrowUp/Down + Enter +
+   * Escape keyboard nav onto `container` (focus lives on the container, never the
+   * rows). Picking a row fires `onPick` and moves the check to it — chips close
+   * afterwards; the dialog stays open, so the moved check reflects the new value.
+   * Returns a `focus()` that seeds the keyboard cursor on the current row.
+   */
+  private renderOptionRows(
+    container: HTMLElement,
+    options: SelectOption[],
+    current: string,
+    cb: { onPick: (value: string) => void; onEscape?: () => void }
+  ): () => void {
+    container.empty();
+    const optionEls: { el: HTMLElement; value: string; check: HTMLElement }[] = [];
+    let activeIdx = -1;
+    const setActive = (idx: number) => {
+      if (!optionEls.length) {
+        activeIdx = -1;
+        return;
+      }
+      activeIdx = ((idx % optionEls.length) + optionEls.length) % optionEls.length;
+      optionEls.forEach((o, i) => o.el.toggleClass("is-active", i === activeIdx));
+      optionEls[activeIdx].el.scrollIntoView({ block: "nearest" });
+    };
+    const markSelected = (value: string) => {
+      for (const o of optionEls) {
+        const sel = o.value === value;
+        o.el.toggleClass("is-selected", sel);
+        o.check.style.visibility = sel ? "visible" : "hidden";
+      }
+    };
+    const pick = (value: string) => {
+      cb.onPick(value);
+      markSelected(value);
+    };
+    for (const r of buildOptionRows(options, "")) {
+      if (r.kind === "header") {
+        container.createDiv({ cls: "mva-sel-group", text: r.group });
+        continue;
+      }
+      const o = r.option;
+      const row = container.createDiv({ cls: "mva-sel-opt" });
+      if (o.risk) row.addClass(o.risk);
+      if (o.dotColor) row.createSpan({ cls: "mva-sel-opt-dot" }).style.background = o.dotColor;
+      row.createSpan({ cls: "mva-sel-opt-label", text: o.label });
+      const check = row.createSpan({ cls: "mva-sel-opt-check" });
+      setIcon(check, "check");
+      const idx = optionEls.length;
+      optionEls.push({ el: row, value: o.value, check });
+      row.addEventListener("mouseenter", () => setActive(idx));
+      row.onclick = () => pick(o.value);
+    }
+    markSelected(current);
+    const curIdx = optionEls.findIndex((o) => o.value === current);
+    setActive(curIdx >= 0 ? curIdx : 0);
+    container.tabIndex = 0;
+    container.addEventListener("keydown", (ev: KeyboardEvent) => {
+      if (ev.key === "ArrowDown") {
+        ev.preventDefault();
+        setActive(activeIdx + 1);
+      } else if (ev.key === "ArrowUp") {
+        ev.preventDefault();
+        setActive(activeIdx - 1);
+      } else if (ev.key === "Enter") {
+        ev.preventDefault();
+        const o = optionEls[activeIdx];
+        if (o) pick(o.value);
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        cb.onEscape?.();
+      }
+    });
+    return () => container.focus();
   }
 
   /**
