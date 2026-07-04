@@ -707,61 +707,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-sel-opt.is-danger  { color: var(--color-red, #e05b5b); }
 .mva-sel-opt.is-caution { color: var(--color-orange, #e0a341); }
 
-/* Searchable popover (model picker v2): a small theme-native search box pinned
-   at the top, quiet group headers, and a scrollable rows region. */
-.mva-sel-search-wrap {
-  position: sticky;
-  top: -4px;
-  z-index: 1;
-  margin: -4px -4px 4px;
-  padding: 6px 6px 4px;
-  background: var(--background-secondary);
-}
-.mva-sel-search-ico {
-  position: absolute;
-  left: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: inline-flex;
-  color: var(--text-faint);
-  pointer-events: none;
-}
-.mva-sel-search-ico .svg-icon {
-  width: 13px;
-  height: 13px;
-}
-.mva-sel-search {
-  display: block;
-  width: 100%;
-  height: 28px;
-  margin: 0;
-  padding: 0 10px 0 28px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r1);
-  background: var(--background-primary);
-  color: var(--text-normal);
-  font-size: 12px;
-  box-sizing: border-box;
-  transition: border-color var(--mva-t), box-shadow var(--mva-t);
-}
-.mva-sel-search::placeholder {
-  color: var(--text-faint);
-}
-.mva-sel-search:focus {
-  outline: none;
-  border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
-}
-/* Quiet group label — a simple faint 11px marker, not a tracked eyebrow. */
+/* Grouped popover (model picker): quiet group headers separating provider
+   sections in the flat rows list. Quiet 11px marker, not a tracked eyebrow. */
 .mva-sel-group {
   padding: 6px 10px 2px;
   font-size: 11px;
   color: var(--text-faint);
-}
-@media (prefers-reduced-motion: reduce) {
-  .mva-sel-search {
-    transition: none;
-  }
 }
 
 /* ------------------------------ context ------------------------------- */
@@ -882,14 +833,18 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 12px;
   height: 12px;
 }
-/* trailing "add note" affordance — a quiet ghost chip, not a dashed drop zone */
+/* trailing add-note / external affordances — quiet square icon buttons, centered
+   against the taller doc cards (icon-only since 0.18.0; meaning is in the tooltip) */
 .mva-doc-add {
-  width: auto;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  align-self: center;
   justify-content: center;
+  padding: 0;
   color: var(--text-muted);
   background: transparent;
   border: 1px solid transparent;
-  font-size: 12px;
 }
 .mva-doc-add:hover {
   color: var(--text-normal);
@@ -2689,7 +2644,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-artifact-frame {
   position: relative;
-  height: 220px;
+  height: 132px;
   overflow: hidden;
   cursor: pointer;
   background: var(--background-primary);
@@ -2703,18 +2658,32 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: #fff;
 }
 .mva-artifact-frame.is-md {
-  padding: 10px 12px;
+  padding: 6px 10px;
 }
+/* Denser preview so the shorter (132px) card still shows meaningful content:
+   smaller type + tighter block spacing than the full rendered note. */
 .mva-artifact-md {
   pointer-events: none;
-  font-size: 12.5px;
+  font-size: var(--font-smaller);
+}
+.mva-artifact-md > :first-child {
+  margin-top: 0;
+}
+.mva-artifact-md p,
+.mva-artifact-md ul,
+.mva-artifact-md ol,
+.mva-artifact-md h1,
+.mva-artifact-md h2,
+.mva-artifact-md h3 {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
 }
 .mva-artifact-fade {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 40px;
+  height: 28px;
   pointer-events: none;
   background: linear-gradient(transparent, var(--background-primary));
 }
