@@ -42,21 +42,30 @@ function asStr(v: unknown): string | undefined {
 
 /** Aggregate a conversation's assistant turns into a single recap. First-seen
  *  order is preserved; web sources and skills dedupe; file writes upgrade reads
- *  and accumulate an edit count (via the shared `mergeTouched`). */
-export function buildRecap(messages: Message[]): Recap {
+ *  and accumulate an edit count (via the shared `mergeTouched`).
+ *
+ *  `normalize` collapses the same file referenced through different tool families
+ *  to one key — the Claude CLI reports absolute `file_path`s while Obsidian-native
+ *  tools and `{t:"artifact"}` segments carry vault-relative paths, so without it a
+ *  created note and its backing Write would list twice (or inflate an edit count).
+ *  Callers pass a relPath-style normalizer; the default identity keeps it pure. */
+export function buildRecap(messages: Message[], normalize: (p: string) => string = (p) => p): Recap {
   const web: RecapWeb[] = [];
   const webSeen = new Set<string>();
   const skills: string[] = [];
   const skillSeen = new Set<string>();
   const touched: TouchedNote[] = [];
+  const artifacts: string[] = [];
 
   for (const m of messages) {
     if (m.role !== "assistant") continue;
     for (const seg of m.segments) {
       if (seg.t === "artifact") {
-        // Artifacts are a produced file — fold into writes (dedupes against a
-        // matching Write tool call on the same path).
-        mergeTouched(touched, seg.path, "write");
+        // Deferred: an artifact is a produced file that's normally ALSO reported by
+        // a backing Write tool call. Folding it as another write here would double the
+        // edit count on the same path, so we collect it and reconcile after the tool
+        // pass — adding it only when no write already covers it (see below).
+        artifacts.push(normalize(seg.path));
         continue;
       }
       if (seg.t !== "tool") continue;
@@ -86,8 +95,14 @@ export function buildRecap(messages: Message[]): Recap {
         continue;
       }
       const fp = toolFilePath(name, input);
-      if (fp) mergeTouched(touched, fp, WRITE_TOOLS.test(name) ? "write" : "read");
+      if (fp) mergeTouched(touched, normalize(fp), WRITE_TOOLS.test(name) ? "write" : "read");
     }
+  }
+
+  // Reconcile artifacts: register one only if no tool call already touched its path
+  // (a backing Write owns the entry + its count); an unbacked artifact still lists.
+  for (const a of artifacts) {
+    if (!touched.some((t) => t.path === a && t.kind === "write")) mergeTouched(touched, a, "write");
   }
 
   const read = touched.filter((t) => t.kind === "read").map((t) => t.path);

@@ -79,6 +79,18 @@ describe("buildRecap — artifacts & skills", () => {
     ]);
     expect(r.skills).toEqual(["defuddle", "search"]);
   });
+
+  it("collapses an artifact and its backing Write to one entry when a normalizer is given", () => {
+    // The CLI reports the Write with an absolute path; the artifact segment carries
+    // the vault-relative one. Without normalization these list twice (or the count
+    // inflates to ×2). A relPath-style normalizer must fold them to a single write.
+    const stripBase = (p: string) => (p.startsWith("/vault/") ? p.slice("/vault/".length) : p);
+    const r = buildRecap(
+      [assistant(tool("Write", { file_path: "/vault/Resources/deck.html" }), { t: "artifact", path: "Resources/deck.html" })],
+      stripBase
+    );
+    expect(r.written).toEqual([{ path: "Resources/deck.html" }]); // one entry, no count
+  });
 });
 
 describe("buildRecap — aggregation & empty", () => {

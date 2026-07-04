@@ -296,6 +296,7 @@ export class ChatView extends ItemView {
   private recapHost: HTMLElement | null = null;
   private recapPanel: RecapPanel | null = null;
   private recapResizeObserver: ResizeObserver | null = null;
+  private wasWide = false;
   private composerEl!: HTMLElement;
   /** One-shot "context is filling up" row under the composer (null when hidden). */
   private compactNudgeEl: HTMLElement | null = null;
@@ -431,19 +432,23 @@ export class ChatView extends ItemView {
     return this.leaf.getRoot() === this.app.workspace.rootSplit && this.contentEl.clientWidth > 900;
   }
 
-  /** Toggle the `is-wide` layout class and (re)build or clear the recap to match. */
+  /** Toggle the `is-wide` layout class and (re)build or clear the recap to match.
+   *  Only builds on the narrow→wide transition — while already wide, content
+   *  changes drive updateRecap() from turn-end/switch/restore, so we don't rebuild
+   *  the panel on every ResizeObserver tick during a drag. */
   private applyWideMode(): void {
     const wide = this.isWideMain();
     this.contentEl.toggleClass("is-wide", wide);
-    if (wide) this.updateRecap();
-    else this.recapHost?.empty();
+    if (wide && !this.wasWide) this.updateRecap();
+    else if (!wide) this.recapHost?.empty();
+    this.wasWide = wide;
   }
 
   /** Rebuild the recap for the active conversation. No-op unless wide, so no work
    *  happens in the sidebar. Called at turn end, on switch, and on restore/rewind. */
   private updateRecap(): void {
     if (!this.recapHost || !this.recapPanel || !this.isWideMain()) return;
-    this.recapPanel.render(this.recapHost, buildConvoRecap(this.active.messages));
+    this.recapPanel.render(this.recapHost, buildConvoRecap(this.active.messages, (p) => this.relPath(p)));
   }
 
   async onClose(): Promise<void> {
@@ -4543,21 +4548,6 @@ export class ChatView extends ItemView {
       }
       // Turn finalized — refresh the conversation recap (full-page rail only).
       if (c === this.active) this.updateRecap();
-      // First assistant turn just landed → refine the auto-derived tab title with
-      // a Haiku-generated one (fire-and-forget, once per conversation). Gated to
-      // exactly one user + one assistant message so a user-renamed or later turn
-      // can never be overwritten; the placeholder stays if the call fails.
-      if (
-        this.plugin.settings.aiTitles &&
-        !c.titledByAi &&
-        c.messages.length === 2 &&
-        c.messages[0].role === "user" &&
-        c.messages[1].role === "assistant" &&
-        ctx.fullText.trim()
-      ) {
-        c.titledByAi = true; // fire once, even if the call later fails
-        this.aiTitle(c, ctx.userText, ctx.fullText);
-      }
       // Background shells can outlive the turn (Exo can't poll them) — note them
       // honestly as "started this turn" rather than claiming a live running count.
       if (ctx.bgTasks.size) {
@@ -4582,6 +4572,23 @@ export class ChatView extends ItemView {
       if (plan.session !== "none") this.dropSession(c);
       if (plan.session === "drop-clear-id") c.sessionId = undefined;
       c.resumeRisky = plan.nextResumeRisky;
+      // First assistant turn just landed → refine the auto-derived tab title with a
+      // Haiku-generated one (fire-and-forget, once per conversation). Placed AFTER the
+      // recovery ladder so a recoverable-but-poisoned first turn (which triggers
+      // dropSession → aborts titleAbort) still gets titled — the exchange is valid.
+      // Gated to exactly one user + one assistant message so a user-renamed or later
+      // turn can never be overwritten; the placeholder stays if the call fails.
+      if (
+        this.plugin.settings.aiTitles &&
+        !c.titledByAi &&
+        c.messages.length === 2 &&
+        c.messages[0].role === "user" &&
+        c.messages[1].role === "assistant" &&
+        ctx.fullText.trim()
+      ) {
+        c.titledByAi = true; // fire once, even if the call later fails
+        this.aiTitle(c, ctx.userText, ctx.fullText);
+      }
       if (plan.enqueueRecapRetry) {
         // Stage 2: auto-retry the SAME user message once with a private recap
         // threaded to the provider only (never rendered, queued as a chip, or
