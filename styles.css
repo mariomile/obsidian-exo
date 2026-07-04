@@ -36,6 +36,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   outline-offset: 2px;
   border-radius: var(--mva-r1);
 }
+/* …but text fields never wear the glowing accent ring — clicking into an input,
+   textarea, or select triggers :focus-visible, and a ring there reads as noise.
+   Give form controls a quiet, theme-consistent focus (border only); the caret
+   already signals focus. Buttons/[role=button] are handled elsewhere — untouched. */
+.mva-root :is(input, textarea, select):focus,
+.mva-root :is(input, textarea, select):focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-color: var(--background-modifier-border-focus, var(--interactive-accent));
+}
 
 /* ------------------------------- header ------------------------------- */
 .mva-header {
@@ -1148,7 +1158,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 12px 4px;
 }
 .mva-empty-title {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 650;
   letter-spacing: -0.015em;
   color: var(--text-normal);
@@ -1171,47 +1181,45 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-muted);
   margin-bottom: 7px;
 }
+/* Prompt lists read as tight rows of wrapping chips, not stacked full-width rows. */
 .mva-starters {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 6px;
   width: 100%;
 }
-/* "Show N more" row — quieter than a real starter */
-.mva-es-more {
-  color: var(--text-muted);
-  font-size: 12px;
-  background: transparent;
-  border-style: dashed;
-}
-.mva-es-more:hover {
-  transform: none;
-}
+/* Compact inline chip: icon + label, muted, darkens on hover. */
 .mva-starter {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 9px 11px;
-  font-size: 13px;
-  color: var(--text-normal);
-  background: color-mix(in srgb, var(--text-normal) 3%, transparent);
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+  background: transparent;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
   cursor: pointer;
-  transition: background var(--mva-t), border-color var(--mva-t), transform var(--mva-t);
+  transition: background var(--mva-t), border-color var(--mva-t), color var(--mva-t);
 }
 .mva-starter:hover {
+  color: var(--text-normal);
   background: var(--background-modifier-hover);
   border-color: var(--background-modifier-border-hover);
-  transform: translateX(2px);
+}
+/* "Show N more" — a quieter chip than a real starter */
+.mva-es-more {
+  border-style: dashed;
+  opacity: 0.85;
 }
 .mva-starter-icon {
   display: inline-flex;
   color: var(--text-muted);
+  opacity: 0.8;
 }
 .mva-starter-icon .svg-icon {
-  width: 15px;
-  height: 15px;
+  width: 12px;
+  height: 12px;
 }
 
 /* --------------------------- assistant body --------------------------- */

@@ -147,6 +147,13 @@ interface Convo {
   /** True once the proactive ≥75% compaction nudge has been shown for this
    *  conversation — one-shot, so it never re-appears after dismiss or compaction. */
   compactNudged?: boolean;
+  /** True once an AI-title generation has been fired for this conversation —
+   *  one-shot guard so the Haiku title call runs at most once (after the first
+   *  assistant turn). Runtime-only (never persisted). */
+  titledByAi?: boolean;
+  /** Controller for the in-flight AI-title call, so disposing the conversation
+   *  (close/delete/reset) aborts it. Runtime-only. */
+  titleAbort?: AbortController | null;
   /** Runtime-only (never persisted): set when a turn ended poisoned but its
    *  on-disk sessionId was KEPT for a resume-first recovery. If a turn started
    *  with this true also poisons, recovery escalates to a fresh session + recap
@@ -580,6 +587,10 @@ export class ChatView extends ItemView {
     c.session?.dispose();
     c.session = null;
     c.sessionSig = "";
+    // Abort any in-flight AI-title call for this conversation (dropSession is the
+    // teardown path for close/delete/reset — the title becomes moot).
+    c.titleAbort?.abort();
+    c.titleAbort = null;
   }
 
   /** Spin up the active conversation's CLI session in the background so the first
@@ -2432,6 +2443,35 @@ export class ChatView extends ItemView {
     }
     // Rebuilt DOM (restore / rewind / gallery-open) → refresh the recap too.
     if (c === this.active) this.updateRecap();
+  }
+
+  /** Fire-and-forget: ask Haiku for a concise title and swap it into the tab once
+   *  it lands. Never blocks the turn and never throws. Skips applying if the
+   *  conversation was disposed, re-titled, or the call came back empty. */
+  private aiTitle(c: Convo, userText: string, assistantText: string): void {
+    const ctrl = new AbortController();
+    c.titleAbort?.abort();
+    c.titleAbort = ctrl;
+    void this.plugin
+      .generateTitle(userText, assistantText, ctrl.signal)
+      .then((title) => {
+        if (ctrl.signal.aborted || !title) return; // aborted/failed → keep placeholder
+        if (!this.convos.includes(c)) return; // conversation removed meanwhile
+        c.title = title;
+        this.renderTabs();
+        if (this.galleryEl) {
+          // Rebuild the open gallery so its card shows the refreshed title.
+          this.hideGallery();
+          this.showGallery();
+        }
+        this.persist();
+      })
+      .catch(() => {
+        /* never surface into the turn */
+      })
+      .finally(() => {
+        if (c.titleAbort === ctrl) c.titleAbort = null;
+      });
   }
 
   private addUserTurn(c: Convo, text: string, images?: ImageAttachment[]): void {
@@ -4503,6 +4543,21 @@ export class ChatView extends ItemView {
       }
       // Turn finalized — refresh the conversation recap (full-page rail only).
       if (c === this.active) this.updateRecap();
+      // First assistant turn just landed → refine the auto-derived tab title with
+      // a Haiku-generated one (fire-and-forget, once per conversation). Gated to
+      // exactly one user + one assistant message so a user-renamed or later turn
+      // can never be overwritten; the placeholder stays if the call fails.
+      if (
+        this.plugin.settings.aiTitles &&
+        !c.titledByAi &&
+        c.messages.length === 2 &&
+        c.messages[0].role === "user" &&
+        c.messages[1].role === "assistant" &&
+        ctx.fullText.trim()
+      ) {
+        c.titledByAi = true; // fire once, even if the call later fails
+        this.aiTitle(c, ctx.userText, ctx.fullText);
+      }
       // Background shells can outlive the turn (Exo can't poll them) — note them
       // honestly as "started this turn" rather than claiming a live running count.
       if (ctx.bgTasks.size) {

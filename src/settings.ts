@@ -53,6 +53,8 @@ export interface MVASettings {
   systemNotifications: boolean;
   /** Set once after seeding example custom prompts, so we never re-seed. */
   seededPrompts: boolean;
+  /** Refine the first-message tab title with a Haiku-generated 3-6 word title. */
+  aiTitles: boolean;
   // Tab bar runtime state (not user-facing settings).
   openTabIds: string[];
   activeTabId: string;
@@ -103,6 +105,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   revealEditedNotes: true,
   systemNotifications: true,
   seededPrompts: false,
+  aiTitles: true,
   openTabIds: [],
   activeTabId: "",
   dreamPassSchedule: "off",
@@ -446,6 +449,11 @@ export class MVASettingTab extends PluginSettingTab {
       "memoryWriteEnabled"
     );
     toggle("Surface related notes", "Show notes related to the active note in the empty state.", "featureSurfacing");
+    toggle(
+      "Generate chat titles with AI (Haiku)",
+      "After the first reply, refine the tab title into a concise 3-6 word summary using Claude Haiku. When off, the title stays the truncated first message.",
+      "aiTitles"
+    );
     toggle("Wikilink-ify replies", "Turn mentions of existing note titles in replies into clickable [[wikilinks]].", "featureWikilinkify");
     toggle(
       "Reveal edited notes",

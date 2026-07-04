@@ -9,6 +9,7 @@ import { computePlan, applyPlan, undoPlan, type DreamSnapshot } from "./obsidian
 import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport } from "./headless";
 import { parseConversationsSource } from "./core/persistence";
+import { sanitizeTitle } from "./core/title";
 
 export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
@@ -198,6 +199,62 @@ export default class ExoPlugin extends Plugin {
       session.dispose();
     }
     return out.trim();
+  }
+
+  /** Generate a concise 3-6 word chat title with Haiku. ALWAYS runs on the Claude
+   *  CLI (its own model), regardless of the conversation's provider — a cheap,
+   *  latency-sensitive one-liner. Transient, tool-less session (same shape as
+   *  `oneShot`). Never throws: if the Claude CLI can't be resolved or the call
+   *  errors/aborts/times out it resolves to "" and the caller keeps the truncated
+   *  placeholder. An internal 15s timeout (plus the caller's `signal`) guarantees
+   *  a hung call can't leak. */
+  async generateTitle(userText: string, assistantText: string, signal: AbortSignal): Promise<string> {
+    const ctrl = new AbortController();
+    const onAbort = () => ctrl.abort();
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener("abort", onAbort);
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    try {
+      const cli = await resolveCli("claude", this.settings.claudeBin);
+      const session = ADAPTERS.claude.createSession({
+        cli,
+        model: "claude-haiku-4-5", // explicit Mario directive — cheap/fast one-liner
+        effort: "default",
+        cwd: this.vaultPath(),
+        permissionMode: "default",
+        toolsEnabled: false, // title only — no tools
+        fastStartup: true,
+      });
+      ctrl.signal.addEventListener("abort", () => {
+        try {
+          session.dispose();
+        } catch {
+          /* already torn down */
+        }
+      });
+      // Cap the input (~1500 chars total) so the call stays cheap and fast.
+      const user = userText.replace(/\s+/g, " ").trim().slice(0, 800);
+      const asst = assistantText.replace(/\s+/g, " ").trim().slice(0, 700);
+      const prompt =
+        "Write a short, specific title for this chat. Rules: 3-6 words, plain text only, " +
+        "no surrounding quotes, no backticks, no trailing punctuation, and no preamble " +
+        '(never "Chat about…", "Title:", etc). Return ONLY the title.\n\n' +
+        `User: ${user}\n\nAssistant: ${asst}`;
+      let out = "";
+      try {
+        await session.send(prompt, (e: AgentEvent) => {
+          if (e.kind === "text-delta") out += e.text;
+        });
+      } finally {
+        session.dispose();
+      }
+      return sanitizeTitle(out);
+    } catch {
+      return ""; // CLI missing / errored / aborted — keep the placeholder
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 
   private inlineEdit(editor: Editor): void {
