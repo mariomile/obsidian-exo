@@ -60,6 +60,8 @@ export interface MVASettings {
   seededPrompts: boolean;
   /** Refine the first-message tab title with a Haiku-generated 3-6 word title. */
   aiTitles: boolean;
+  /** Show the wide-mode Context panel (the right-hand recap rail). */
+  contextPanelOpen: boolean;
   // Tab bar runtime state (not user-facing settings).
   openTabIds: string[];
   activeTabId: string;
@@ -112,6 +114,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   systemNotifications: true,
   seededPrompts: false,
   aiTitles: true,
+  contextPanelOpen: true,
   openTabIds: [],
   activeTabId: "",
   dreamPassSchedule: "off",

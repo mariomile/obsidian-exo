@@ -302,7 +302,12 @@ export class ChatView extends ItemView {
   private recapHost: HTMLElement | null = null;
   private recapPanel: RecapPanel | null = null;
   private recapResizeObserver: ResizeObserver | null = null;
-  private wasWide = false;
+  /** Whether the Context panel is shown (persisted as settings.contextPanelOpen). */
+  private contextOpen = true;
+  /** Header toggle for the Context panel; reflects contextOpen via is-active. */
+  private contextToggleBtn: HTMLElement | null = null;
+  /** Last computed "recap actually visible" state (wide AND contextOpen). */
+  private wasRecapShown = false;
   private composerEl!: HTMLElement;
   /** One-shot "context is filling up" row under the composer (null when hidden). */
   private compactNudgeEl: HTMLElement | null = null;
@@ -367,6 +372,7 @@ export class ChatView extends ItemView {
     const root = this.contentEl;
     root.empty();
     root.addClass("mva-root");
+    this.contextOpen = this.plugin.settings.contextPanelOpen;
     this.buildHeader(root);
     this.tabsEl = root.createDiv({ cls: "mva-tabs" });
     // Chat column + Recap Rail as flex-row siblings. In the sidebar (not wide)
@@ -379,7 +385,11 @@ export class ChatView extends ItemView {
     // SAME column as the messages — aligned even with the recap rail open.
     this.listHost = this.listWrap.createDiv({ cls: "mva-list-host" });
     this.recapHost = mainRow.createDiv({ cls: "mva-recap" });
-    this.recapPanel = new RecapPanel(this.app, (p) => this.openNote(p));
+    this.recapPanel = new RecapPanel(
+      this.app,
+      (p) => this.openNote(p),
+      () => this.setContextOpen(false)
+    );
     // Wire up link clicks in rendered markdown (MarkdownRenderer doesn't do this for custom views).
     this.registerDomEvent(this.listWrap, "click", (e) => {
       const a = (e.target as HTMLElement).closest("a") as HTMLAnchorElement | null;
@@ -446,21 +456,36 @@ export class ChatView extends ItemView {
   }
 
   /** Toggle the `is-wide` layout class and (re)build or clear the recap to match.
-   *  Only builds on the narrow→wide transition — while already wide, content
+   *  The panel shows only when wide AND the user hasn't closed it (contextOpen).
+   *  Only builds on the transition into "shown" — while already shown, content
    *  changes drive updateRecap() from turn-end/switch/restore, so we don't rebuild
    *  the panel on every ResizeObserver tick during a drag. */
   private applyWideMode(): void {
     const wide = this.isWideMain();
     this.contentEl.toggleClass("is-wide", wide);
-    if (wide && !this.wasWide) this.updateRecap();
-    else if (!wide) this.recapHost?.empty();
-    this.wasWide = wide;
+    // CSS hides .mva-recap when closed so the chat column reflows to full width.
+    this.contentEl.toggleClass("is-context-closed", !this.contextOpen);
+    const show = wide && this.contextOpen;
+    if (show && !this.wasRecapShown) this.updateRecap();
+    else if (!show) this.recapHost?.empty();
+    this.wasRecapShown = show;
   }
 
-  /** Rebuild the recap for the active conversation. No-op unless wide, so no work
-   *  happens in the sidebar. Called at turn end, on switch, and on restore/rewind. */
+  /** Show/hide the Context panel; persists the choice so it survives reloads. */
+  private setContextOpen(open: boolean): void {
+    if (this.contextOpen === open) return;
+    this.contextOpen = open;
+    this.plugin.settings.contextPanelOpen = open;
+    void this.plugin.saveSettings();
+    this.contextToggleBtn?.toggleClass("is-active", open);
+    this.applyWideMode();
+  }
+
+  /** Rebuild the recap for the active conversation. No-op unless the panel is
+   *  actually shown (wide AND open), so no work happens in the sidebar or when
+   *  closed. Called at turn end, on switch, and on restore/rewind. */
   private updateRecap(): void {
-    if (!this.recapHost || !this.recapPanel || !this.isWideMain()) return;
+    if (!this.recapHost || !this.recapPanel || !this.isWideMain() || !this.contextOpen) return;
     this.recapPanel.render(this.recapHost, buildConvoRecap(this.active.messages, (p) => this.relPath(p)));
   }
 
@@ -647,6 +672,13 @@ export class ChatView extends ItemView {
     setIcon(histBtn, "history");
     setTooltip(histBtn, "History");
     histBtn.onclick = () => this.toggleGallery();
+
+    const ctx = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "Context" } });
+    setIcon(ctx, "panel-right");
+    setTooltip(ctx, "Context");
+    ctx.toggleClass("is-active", this.contextOpen);
+    ctx.onclick = () => this.setContextOpen(!this.contextOpen);
+    this.contextToggleBtn = ctx;
 
     const newChat = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "New chat" } });
     setIcon(newChat, "plus");
