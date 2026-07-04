@@ -21,7 +21,9 @@ import type {
   AgentSession,
   ContextUsage,
   ImageAttachment,
+  PermissionMode,
   ProviderId,
+  RateLimitInfo,
   SessionCaps,
 } from "./providers/types";
 import { toolMeta, toolFilePath, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
@@ -41,6 +43,12 @@ import { TurnWatchdog } from "./core/turn-watchdog";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched } from "./core/touched";
 import { describeCliFailure } from "./core/errors";
+import {
+  badgeState,
+  formatClock,
+  normalizeResetEpochMs,
+  windowLabel,
+} from "./core/rate-limit";
 
 export type { AskQuestion } from "./core/model";
 
@@ -243,6 +251,14 @@ export class ChatView extends ItemView {
   /** Last usage payload received (or null) — cached so a model/provider change
    *  alone (no new 'usage' event) can still re-render the counter. */
   private lastUsage: ContextUsage | null = null;
+  /** Claude-plan quota badge next to the context ring (null until built). */
+  private rateBadgeEl: HTMLElement | null = null;
+  /** Last rate-limit snapshot for the active convo (null when none / API-key). */
+  private lastRateLimit: RateLimitInfo | null = null;
+  /** Also record the view-level prePlanMode so a plan-mode entry (Shift+Tab or
+   *  the perm chip) can be restored to the exact prior mode once a plan is
+   *  approved. Defaults to "default" — the safe post-approval build mode. */
+  private prePlanMode: PermissionMode = "default";
 
   /** Active conversation is streaming (drives the send/stop button). */
   private get streaming(): boolean {
@@ -853,6 +869,9 @@ export class ChatView extends ItemView {
     this.refreshProviderUI();
     this.syncSendButton();
     this.updateUsage(null);
+    // Reflect the newly-active convo's session quota (if any) on the badge.
+    this.lastRateLimit = (c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null;
+    this.updateRateBadge();
     this.renderTabs();
     this.persistTabs();
     this.scrollConvo(c);
@@ -1637,6 +1656,12 @@ export class ChatView extends ItemView {
     this.clickable(this.usageEl, () => this.compactActive());
     this.updateUsage(null);
 
+    // Claude-plan quota badge — a quiet dot+percent that only appears when the
+    // plan is nearing (≥80% / warning) or over its limit. Sits beside the ring.
+    this.rateBadgeEl = tb.createDiv({ cls: "mva-rate-badge" });
+    this.rateBadgeEl.hide();
+    this.updateRateBadge();
+
     // Send button — lives inside the input box, right side.
     this.sendBtn = tb.createEl("button", { cls: "mva-send", attr: { "aria-label": "Send" } });
     setIcon(this.sendBtn, "arrow-up");
@@ -1763,6 +1788,41 @@ export class ChatView extends ItemView {
     // ring's caution state), suggest compacting. Shown at most once per convo.
     if (pct >= 75) this.maybeShowCompactNudge();
     else this.hideCompactNudge();
+  }
+
+  /** Render the Claude-plan quota badge from `lastRateLimit`. Hidden entirely
+   *  when there's no snapshot (API-key sessions, or a plan with headroom) — no
+   *  fake states. Visible as a quiet dot+percent at ≥80%/warning (caution) or a
+   *  danger "limit" when the plan rejects. Pure thresholding lives in
+   *  core/rate-limit.ts. */
+  private updateRateBadge(): void {
+    const el = this.rateBadgeEl;
+    if (!el) return;
+    const info = this.lastRateLimit;
+    el.removeClass("is-caution");
+    el.removeClass("is-danger");
+    if (!info) {
+      el.hide();
+      return;
+    }
+    const state = badgeState(info.status, info.utilization);
+    if (!state.visible) {
+      el.hide();
+      return;
+    }
+    el.empty();
+    el.createSpan({ cls: "mva-rate-dot" });
+    el.createSpan({ cls: "mva-rate-pct", text: state.label });
+    el.addClass(state.level === "danger" ? "is-danger" : "is-caution");
+    // Tooltip: "Plan usage: N% of the {5-hour|weekly} window — resets HH:MM".
+    const win = windowLabel(info.windowType);
+    const resetMs = normalizeResetEpochMs(info.resetsAt);
+    const parts = [`Plan usage: ${state.label === "limit" ? "over" : state.label} of the ${win} window`];
+    if (resetMs) parts.push(`resets ${formatClock(resetMs)}`);
+    const tip = parts.join(" — ");
+    setTooltip(el, tip);
+    el.setAttribute("aria-label", tip);
+    el.show();
   }
 
   /** Show the discreet ≥75% compaction nudge under the composer — one-shot per
@@ -4010,6 +4070,19 @@ export class ChatView extends ItemView {
         }
         case "usage":
           if (c === this.active) this.updateUsage(e.usage);
+          break;
+        case "rate-limit":
+          // The badge is a single view-level control, so only the active convo's
+          // quota drives it. Late reads (tab switch) come from session.rateLimit.
+          if (c === this.active) {
+            this.lastRateLimit = {
+              status: e.status,
+              utilization: e.utilization,
+              resetsAt: e.resetsAt,
+              windowType: e.windowType,
+            };
+            this.updateRateBadge();
+          }
           break;
         case "compact": {
           const div = c.listEl.createDiv({ cls: "mva-compact-divider" });
