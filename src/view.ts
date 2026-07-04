@@ -50,6 +50,7 @@ import {
   normalizeResetEpochMs,
   windowLabel,
 } from "./core/rate-limit";
+import { buildOptionRows, type SelectOption } from "./core/option-filter";
 
 export type { AskQuestion } from "./core/model";
 
@@ -1592,8 +1593,14 @@ export class ChatView extends ItemView {
     this.refreshModelChip = this.buildSelectChip(tb, {
       ariaLabel: "Model",
       getLabel: () => this.modelLabel(),
+      searchable: true,
       getOptions: () =>
-        this.allModelChoices().map((m) => ({ value: m.id, label: m.label, dotColor: ADAPTERS[m.provider].brandColor })),
+        this.allModelChoices().map((m) => ({
+          value: m.id,
+          label: m.label,
+          dotColor: ADAPTERS[m.provider].brandColor,
+          group: m.provider === "claude" ? "Claude" : "Codex",
+        })),
       getCurrent: () => this.model,
       onSelect: (v) => {
         if (this.streaming) {
@@ -1688,10 +1695,13 @@ export class ChatView extends ItemView {
     opts: {
       ariaLabel: string;
       getLabel: () => string;
-      getOptions: () => { value: string; label: string; risk?: RiskLevel; dotColor?: string }[];
+      getOptions: () => { value: string; label: string; risk?: RiskLevel; dotColor?: string; group?: string }[];
       getCurrent: () => string;
       onSelect: (value: string) => void;
       chipRisk?: () => RiskLevel;
+      /** Opt-in (model picker only): a search input + group headers + roving
+       *  keyboard highlight. Pickers that don't pass it render exactly as before. */
+      searchable?: boolean;
     }
   ): () => void {
     const wrap = tb.createDiv({ cls: "mva-sel" });
@@ -1708,21 +1718,117 @@ export class ChatView extends ItemView {
     const buildPop = () => {
       pop.empty();
       const cur = opts.getCurrent();
-      for (const o of opts.getOptions()) {
-        const row = pop.createDiv({ cls: "mva-sel-opt" });
-        if (o.risk) row.addClass(o.risk);
-        if (o.value === cur) row.addClass("is-active");
-        if (o.dotColor) {
-          const dot = row.createSpan({ cls: "mva-sel-opt-dot" });
-          dot.style.background = o.dotColor;
+      const allOpts = opts.getOptions();
+      const searchable = !!opts.searchable;
+
+      // Non-searchable pickers keep the exact original render (flat rows, static
+      // is-active on the current value) — perm/effort/provider are unchanged.
+      if (!searchable) {
+        for (const r of buildOptionRows(allOpts as SelectOption[], "")) {
+          if (r.kind === "header") continue; // no groups without searchable
+          const o = r.option;
+          const row = pop.createDiv({ cls: "mva-sel-opt" });
+          if (o.risk) row.addClass(o.risk as string);
+          if (o.value === cur) row.addClass("is-active");
+          if (o.dotColor) row.createSpan({ cls: "mva-sel-opt-dot" }).style.background = o.dotColor;
+          row.createSpan({ text: o.label });
+          row.onclick = () => {
+            opts.onSelect(o.value);
+            refresh();
+            close();
+          };
         }
-        row.createSpan({ text: o.label });
-        row.onclick = () => {
-          opts.onSelect(o.value);
-          refresh();
-          close();
-        };
+        return;
       }
+
+      // Searchable variant (model picker): search box + group headers + a roving
+      // `is-active` highlight driven by the keyboard, initialized to the current
+      // value. The pure query→rows logic (headers dropped for empty groups) lives
+      // in core/option-filter.ts.
+      let query = "";
+      let optionEls: { el: HTMLElement; value: string }[] = [];
+      let activeIdx = -1;
+
+      const sw = pop.createDiv({ cls: "mva-sel-search-wrap" });
+      setIcon(sw.createSpan({ cls: "mva-sel-search-ico" }), "search");
+      const search = sw.createEl("input", {
+        cls: "mva-sel-search",
+        attr: { type: "text", placeholder: "Search models…", "aria-label": "Search models" },
+      });
+      const rowsWrap = pop.createDiv({ cls: "mva-sel-rows" });
+
+      const setActive = (idx: number) => {
+        if (!optionEls.length) {
+          activeIdx = -1;
+          return;
+        }
+        activeIdx = ((idx % optionEls.length) + optionEls.length) % optionEls.length;
+        optionEls.forEach((o, i) => o.el.toggleClass("is-active", i === activeIdx));
+        optionEls[activeIdx].el.scrollIntoView({ block: "nearest" });
+      };
+
+      const renderRows = () => {
+        rowsWrap.empty();
+        optionEls = [];
+        for (const r of buildOptionRows(allOpts as SelectOption[], query)) {
+          if (r.kind === "header") {
+            rowsWrap.createDiv({ cls: "mva-sel-group", text: r.group });
+            continue;
+          }
+          const o = r.option;
+          const row = rowsWrap.createDiv({ cls: "mva-sel-opt" });
+          if (o.risk) row.addClass(o.risk as string);
+          if (o.dotColor) row.createSpan({ cls: "mva-sel-opt-dot" }).style.background = o.dotColor;
+          row.createSpan({ text: o.label });
+          const idx = optionEls.length;
+          optionEls.push({ el: row, value: o.value });
+          row.addEventListener("mouseenter", () => setActive(idx));
+          row.onclick = () => {
+            opts.onSelect(o.value);
+            refresh();
+            close();
+          };
+        }
+        // Start the cursor on the current value (or the first row).
+        const curIdx = optionEls.findIndex((o) => o.value === cur);
+        setActive(curIdx >= 0 ? curIdx : 0);
+      };
+      renderRows();
+
+      search.addEventListener("input", () => {
+        query = search.value;
+        renderRows();
+      });
+      // Arrows move the roving highlight but keep focus in the input; Enter picks
+      // the highlighted row; Escape clears a non-empty query first, then closes.
+      search.addEventListener("keydown", (ev) => {
+        if (ev.key === "ArrowDown") {
+          ev.preventDefault();
+          setActive(activeIdx + 1);
+        } else if (ev.key === "ArrowUp") {
+          ev.preventDefault();
+          setActive(activeIdx - 1);
+        } else if (ev.key === "Enter") {
+          ev.preventDefault();
+          const o = optionEls[activeIdx];
+          if (o) {
+            opts.onSelect(o.value);
+            refresh();
+            close();
+          }
+        } else if (ev.key === "Escape") {
+          ev.preventDefault();
+          if (query) {
+            query = "";
+            search.value = "";
+            renderRows();
+          } else {
+            close();
+          }
+        }
+      });
+      // Focus on open (deferred until after pop.show() in the click handler).
+      setTimeout(() => search.focus(), 0);
     };
 
     refresh();
