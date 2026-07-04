@@ -55,6 +55,15 @@ describe("buildRecap", () => {
     expect(recap).toContain("[assistant] [1 tool calls]");
   });
 
+  it("summarizes a plan segment by its approval state", () => {
+    const approved = buildRecap([assistant([{ t: "plan", md: "# Plan", approved: true }])]);
+    expect(approved).toContain("[assistant] [plan: approved]");
+    const revised = buildRecap([assistant([{ t: "plan", md: "# Plan", approved: false }])]);
+    expect(revised).toContain("[plan: revised]");
+    const pending = buildRecap([assistant([{ t: "plan", md: "# Plan", approved: null }])]);
+    expect(pending).toContain("[plan: pending]");
+  });
+
   it("caps the body at ~5000 chars, dropping the OLDEST lines first", () => {
     // 8 assistant lines, each a full 600-char text + a tool-call suffix:
     // "[assistant] " (12) + 600 + " [1 tool calls]" (15) = 627 chars/line.

@@ -16,7 +16,8 @@ export type Segment =
   | { t: "text"; md: string }
   | { t: "tool"; name: string; input: unknown; ok: boolean | null; output: string }
   | { t: "ask"; questions: AskQuestion[]; answers: Record<string, string> }
-  | { t: "artifact"; path: string };
+  | { t: "artifact"; path: string }
+  | { t: "plan"; md: string; approved: boolean | null };
 
 /** Per-turn file snapshot for code rewind: path → content before the turn (null = didn't exist). */
 export type Checkpoint = Map<string, string | null>;

@@ -43,6 +43,7 @@ import { TurnWatchdog } from "./core/turn-watchdog";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched } from "./core/touched";
 import { describeCliFailure } from "./core/errors";
+import { planInputParts, planStateText } from "./core/plan";
 import {
   badgeState,
   formatClock,
@@ -1015,6 +1016,9 @@ export class ChatView extends ItemView {
   private togglePlanMode(): void {
     const s = this.plugin.settings;
     const next = s.permissionMode === "plan" ? "default" : "plan";
+    // Remember the mode we're leaving so approving a plan can restore it exactly
+    // (rather than always dropping to "default").
+    if (next === "plan") this.prePlanMode = s.permissionMode;
     s.permissionMode = next;
     void this.plugin.saveSettings();
     this.refreshPermChipFn();
@@ -1286,7 +1290,9 @@ export class ChatView extends ItemView {
                     ? "↳ asked: " + seg.questions.map((q) => q.header).join(", ")
                     : seg.t === "artifact"
                       ? "🖼 " + noteBasename(seg.path)
-                      : `↳ ${toolMeta(seg.name, seg.input).label}`
+                      : seg.t === "plan"
+                        ? "↳ plan"
+                        : `↳ ${toolMeta(seg.name, seg.input).label}`
               )
               .join(" ");
       s += part.replace(/[#*`>_~]/g, "").replace(/\s+/g, " ").trim() + "  ";
@@ -1642,6 +1648,9 @@ export class ChatView extends ItemView {
           s.codexSandbox = v;
           void this.plugin.saveSettings();
         } else {
+          // Entering plan mode via the chip records the mode we came from, so a
+          // later plan approval restores it (mirrors togglePlanMode).
+          if (v === "plan" && s.permissionMode !== "plan") this.prePlanMode = s.permissionMode;
           s.permissionMode = v as typeof s.permissionMode;
           void this.plugin.saveSettings();
           this.active.session?.setPermissionMode?.(s.permissionMode);
@@ -2286,6 +2295,12 @@ export class ChatView extends ItemView {
           } else if (s.t === "ask") {
             const card = body.createDiv({ cls: "mva-ask" });
             this.renderAskSummary(card, s.questions, s.answers);
+          } else if (s.t === "plan") {
+            // Restored plan: settled read-only card (collapsed, expandable). A
+            // still-pending plan (approved null, e.g. an interrupted turn) shows
+            // as "proposed" but treated as not-approved for the state line.
+            const card = body.createDiv({ cls: "mva-plan-card" });
+            this.renderPlanSettled(card, s.md, s.approved === true);
           } else if (s.t === "artifact") {
             this.buildArtifactCard(body, s.path, m.checkpoint);
           } else {
@@ -3390,6 +3405,132 @@ export class ChatView extends ItemView {
     this.scrollConvo(c);
   }
 
+  /* ------------------------------- plan ----------------------------- */
+
+  /** Read a plan file saved by the CLI (absolute path, outside the vault — e.g.
+   *  ~/.claude/plans/…). Node fs, since the vault adapter only sees vault files.
+   *  Returns null on any failure so the card degrades gracefully. */
+  private async readPlanFile(filePath: string): Promise<string | null> {
+    try {
+      const fs = require("fs") as typeof import("fs");
+      return await fs.promises.readFile(filePath, "utf8");
+    } catch {
+      return null;
+    }
+  }
+
+  /** Dedicated plan-approval card for ExitPlanMode (the Trust Pack centerpiece).
+   *  Renders the proposed plan markdown for review with two actions:
+   *  "Approve & build" → allow (and restore the pre-plan permission mode so the
+   *  build runs under normal gating), and "Revise" → deny with feedback (plan
+   *  mode stays active so the agent revises). Collapses to a settled one-liner on
+   *  resolution and records a persisted `plan` segment. */
+  private async renderPlanCard(
+    ctx: AssistantCtx,
+    c: Convo,
+    input: unknown,
+    resolve: (d: { behavior: "allow" } | { behavior: "deny"; message?: string }) => void
+  ): Promise<void> {
+    this.dropThinking(ctx);
+    this.resetTextStream(ctx);
+    const parts = planInputParts(input);
+    let planMd = parts.md;
+    if (!planMd && parts.filePath) planMd = await this.readPlanFile(parts.filePath);
+    planMd = planMd || "_The agent didn't include a plan body._";
+
+    // Persisted segment — approved:null until the user acts.
+    const seg: Segment = { t: "plan", md: planMd, approved: null };
+    ctx.segments.push(seg);
+
+    // Default EXPANDED: this is the thing to review. Reuses the .mva-reason
+    // collapsed-block grammar (head / chevron / body).
+    const card = ctx.bodyEl.createDiv({ cls: "mva-plan-card" });
+    const head = card.createDiv({ cls: "mva-plan-head" });
+    setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
+    setIcon(head.createSpan({ cls: "mva-plan-icon" }), "clipboard-list");
+    head.createSpan({ cls: "mva-plan-title", text: "Plan" });
+    this.clickable(head, () => card.toggleClass("is-collapsed", !card.hasClass("is-collapsed")));
+    const body = card.createDiv({ cls: "mva-plan-body" });
+    void MarkdownRenderer.render(this.app, planMd, body, "", this);
+
+    let done = false;
+    const md = planMd;
+    const finish = (
+      approved: boolean,
+      d: { behavior: "allow" } | { behavior: "deny"; message?: string }
+    ) => {
+      if (done) return;
+      done = true;
+      c.pendingPerm = null;
+      seg.approved = approved;
+      // building=true only on a live approval — the historical/restored card omits it.
+      this.renderPlanSettled(card, md, approved, approved);
+      resolve(d);
+    };
+
+    // Stop cancels the open card (provider side already unblocked via interrupt).
+    c.pendingPerm = () => finish(false, { behavior: "deny", message: "Stopped." });
+
+    const actions = card.createDiv({ cls: "mva-plan-actions" });
+    actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Approve & build" }).onclick = () => {
+      // Restore the pre-plan permission mode so subsequent build actions are
+      // gated normally (setting + live session + perm chip all in sync).
+      const s = this.plugin.settings;
+      if (s.permissionMode === "plan") {
+        const restore = this.prePlanMode ?? "default";
+        s.permissionMode = restore;
+        void this.plugin.saveSettings();
+        c.session?.setPermissionMode?.(restore);
+        this.refreshPermChipFn();
+      }
+      finish(true, { behavior: "allow" });
+    };
+    const reviseBtn = actions.createEl("button", { cls: "mva-btn", text: "Revise" });
+    reviseBtn.onclick = () => {
+      if (card.querySelector(".mva-plan-revise")) return; // already revealed
+      reviseBtn.disabled = true;
+      const revise = card.createDiv({ cls: "mva-plan-revise" });
+      const ta = revise.createEl("textarea", {
+        cls: "mva-plan-revise-input",
+        attr: { placeholder: "What should change about this plan?", rows: "3" },
+      });
+      const sendRow = revise.createDiv({ cls: "mva-plan-revise-actions" });
+      const send = sendRow.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Send" });
+      const submit = () => {
+        const feedback = ta.value.trim();
+        // Deny keeps plan mode active → the agent revises rather than building.
+        finish(false, { behavior: "deny", message: feedback || "Please revise the plan." });
+      };
+      send.onclick = submit;
+      // Cmd/Ctrl+Enter sends (a bare Enter should add a newline in the textarea).
+      ta.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+          ev.preventDefault();
+          submit();
+        }
+      });
+      ta.focus();
+      this.scrollConvo(c);
+    };
+    this.scrollConvo(c);
+  }
+
+  /** Settled read-only plan card: collapsed, expandable, with the approved/
+   *  revised state line. Shared by live resolution and transcript restore so
+   *  they render identically (mirrors renderAskSummary). */
+  private renderPlanSettled(card: HTMLElement, md: string, approved: boolean, building = false): void {
+    card.empty();
+    card.className = "mva-plan-card is-resolved is-collapsed";
+    const head = card.createDiv({ cls: "mva-plan-head" });
+    setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
+    setIcon(head.createSpan({ cls: "mva-plan-icon" }), "clipboard-list");
+    head.createSpan({ cls: "mva-plan-title", text: "Plan" });
+    head.createSpan({ cls: "mva-plan-state", text: planStateText(approved, building) });
+    const body = card.createDiv({ cls: "mva-plan-body" });
+    void MarkdownRenderer.render(this.app, md, body, "", this);
+    this.clickable(head, () => card.toggleClass("is-collapsed", !card.hasClass("is-collapsed")));
+  }
+
   /* -------------------------------- ask ----------------------------- */
 
   /** Bridge invoked by the in-process `ask_user` tool: render an ask card into
@@ -4026,6 +4167,21 @@ export class ChatView extends ItemView {
           // ask_user is a user interaction, not a gated action — never card it.
           if (e.tool === "mcp__obsidian__ask_user") {
             e.resolve({ behavior: "allow" });
+            break;
+          }
+          // ExitPlanMode → the dedicated plan-approval card (the thing to review),
+          // not the generic permission card. Suspend the watchdog like any other
+          // interactive card; resolve resumes it (the suspend already happened
+          // before this event via the SDK's canUseTool round-trip).
+          if (e.tool === "ExitPlanMode") {
+            wd.suspendCard();
+            this.hideWorking(ctx); // the plan card is the feedback while it waits
+            this.notifyOnce(ctx, "waiting", "Exo — plan ready", "The agent proposed a plan for your review.");
+            void this.renderPlanCard(ctx, c, e.input, (d) => {
+              wd.resumeCard();
+              this.ensureWorking(ctx); // the turn continues once resolved
+              e.resolve(d);
+            });
             break;
           }
           const isRead = READ_ONLY_TOOLS.has(e.tool) || OBSIDIAN_READ_TOOLS.has(e.tool);
