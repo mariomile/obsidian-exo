@@ -116,7 +116,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   max-width: 170px;
   height: 28px;
   padding: 4px 10px;
-  border-radius: 10px;
+  border-radius: var(--mva-r2);
   font-size: 12px;
   color: var(--text-muted);
   cursor: pointer;
@@ -132,7 +132,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-tab.is-active {
   background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
   color: var(--text-normal);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--background-modifier-border);
+  box-shadow: var(--shadow-s), 0 0 0 1px var(--background-modifier-border);
 }
 .mva-tab.is-active .mva-tab-title {
   font-weight: 500;
@@ -170,7 +170,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   opacity: 0;
   border-radius: var(--mva-r1);
   flex-shrink: 0;
-  transition: opacity 100ms ease;
+  transition: opacity var(--mva-t);
 }
 .mva-tab:hover .mva-tab-x {
   opacity: 1;
@@ -188,7 +188,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   justify-content: center;
   height: 28px;
   padding: 4px 10px;
-  border-radius: 10px;
+  border-radius: var(--mva-r2);
   color: var(--text-muted);
   background: transparent;
   cursor: pointer;
@@ -227,7 +227,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-muted);
   cursor: pointer;
   z-index: 5;
-  transition: opacity 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: opacity var(--mva-t), border-color var(--mva-t), color var(--mva-t);
 }
 .mva-jump-pill:hover {
   color: var(--interactive-accent);
@@ -239,7 +239,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 @media (prefers-reduced-motion: reduce) {
   .mva-jump-pill {
-    transition: opacity 120ms ease;
+    transition: opacity var(--mva-t);
   }
 }
 .mva-list {
@@ -481,7 +481,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   text-decoration: line-through;
 }
 .mva-todo.is-completed .mva-todo-box {
-  color: var(--color-green, #3ca84b);
+  color: var(--color-green, #19c37d);
 }
 .mva-todo.is-in_progress .mva-todo-box {
   color: var(--mva-brand, var(--interactive-accent));
@@ -573,7 +573,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-l);
   z-index: 30;
   scrollbar-width: thin;
 }
@@ -677,7 +677,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-l);
   scrollbar-width: thin;
 }
 .mva-sel-opt {
@@ -1553,13 +1553,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   overflow-wrap: anywhere;
   padding: 8px 10px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 6px;
+  border-radius: var(--mva-r1);
   background: var(--background-primary);
   color: var(--text-normal);
   font: inherit;
   cursor: pointer;
   box-shadow: none;
-  transition: border-color 120ms ease, background-color 120ms ease;
+  transition: border-color var(--mva-t), background-color var(--mva-t);
 }
 .mva-ask-opt:hover {
   border-color: var(--background-modifier-border-hover);
@@ -1662,7 +1662,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 @media (prefers-reduced-motion: reduce) {
   .mva-ask-opt {
-    transition: border-color 120ms ease;
+    transition: border-color var(--mva-t);
   }
 }
 
@@ -1831,7 +1831,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   margin: 0;
   padding: 0 12px 0 30px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--mva-r2);
   background: var(--background-primary);
   color: var(--text-normal);
   font-size: var(--font-ui-small);
@@ -1972,6 +1972,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-radius: 50%;
   cursor: pointer;
   background: conic-gradient(var(--ring-color) calc(var(--pct) * 1%), var(--background-modifier-border) 0);
+  /* Sole sanctioned motion override: the donut fill uses a bespoke 220ms
+     ease-out so the context ring feels like it settles, not snaps. Everything
+     else routes through var(--mva-t). Do not tokenize this line. */
   transition: background 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .mva-ctx-ring::after {
@@ -2098,12 +2101,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-normal);
 }
 .mva-ie-add {
-  background: color-mix(in srgb, var(--color-green, #3ca84b) 22%, transparent);
+  background: color-mix(in srgb, var(--color-green, #19c37d) 22%, transparent);
   color: var(--text-normal);
   border-radius: 3px;
 }
 .mva-ie-del {
-  background: color-mix(in srgb, var(--color-red, #e0533d) 18%, transparent);
+  background: color-mix(in srgb, var(--color-red, #e05b5b) 18%, transparent);
   color: var(--text-muted);
   text-decoration: line-through;
   border-radius: 3px;
@@ -2131,6 +2134,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 14px;
   height: 14px;
 }
+/* The inline-edit modal spinner lives outside .mva-root, so it needs its own
+   reduced-motion guard rather than inheriting a view-scoped one. */
+@media (prefers-reduced-motion: reduce) {
+  .mva-ie-spin {
+    animation: none;
+  }
+}
 
 /* ----------------------- prompt variables modal ----------------------- */
 .mva-pv-row { margin-bottom: 12px; }
@@ -2143,7 +2153,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 100%;
   padding: 8px 12px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
+  border-radius: var(--mva-r2);
   background: var(--background-primary);
   color: var(--text-normal);
 }
@@ -2181,13 +2191,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: inline-flex;
   background: var(--background-primary);
   border-radius: 50%;
-  padding: 1px;
+  padding: 3px;
   cursor: pointer;
   opacity: 0.85;
 }
 .mva-img-x .svg-icon {
-  width: 11px;
-  height: 11px;
+  width: 12px;
+  height: 12px;
 }
 .mva-img-x:hover {
   opacity: 1;
@@ -2281,7 +2291,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 /* ×N edit-count badge */
 .mva-src-count {
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 600;
   color: var(--interactive-accent);
   opacity: 0.85;
@@ -2311,7 +2321,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   justify-content: center;
   color: var(--text-muted);
   border-radius: 3px;
-  padding: 1px;
+  /* 12px glyph + 2×4px = 20px hit target (was 14px) for comfortable clicking. */
+  padding: 4px;
   cursor: pointer;
   transition: color var(--mva-t), background var(--mva-t);
 }
@@ -2614,8 +2625,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-modifier-hover);
 }
 .mva-gal-del .svg-icon {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 .mva-gal-del.is-armed,
 .mva-card:hover .mva-gal-del.is-armed {
@@ -2845,7 +2856,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   max-height: 80%;
   overflow: hidden;
   pointer-events: auto;
-  transition: opacity 150ms ease-out;
+  transition: opacity var(--mva-t);
 }
 .mva-outline-tick {
   flex-shrink: 0;
@@ -2854,7 +2865,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-radius: 999px;
   background: var(--text-faint);
   cursor: pointer;
-  transition: width 150ms ease-out, background-color 150ms ease-out;
+  transition: width var(--mva-t), background-color var(--mva-t);
 }
 .mva-outline-tick.is-active {
   width: 22px;
@@ -2879,7 +2890,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   visibility: hidden;
   pointer-events: none;
   scrollbar-width: thin;
-  transition: opacity 150ms ease-out, transform 150ms ease-out, visibility 150ms;
+  transition: opacity var(--mva-t), transform var(--mva-t), visibility var(--mva-t);
 }
 .mva-outline.is-expanded .mva-outline-strip {
   opacity: 0;
