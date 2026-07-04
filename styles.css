@@ -111,9 +111,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   scrollbar-width: none;
   flex-shrink: 0;
   background: transparent;
-  /* Above the transcript that slides up behind it (see .mva-main-row). */
-  position: relative;
-  z-index: 6;
 }
 .mva-tabs::-webkit-scrollbar {
   display: none;
@@ -224,10 +221,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* Slide up under the frosted tabs so the transcript scrolls behind them (real
-     backdrop blur, not a flat panel). The list/gallery/recap re-clear the tabs
-     with their own top spacing below. */
-  margin-top: calc(-1 * var(--mva-tabs-h, 36px));
 }
 .mva-root.is-wide .mva-main-row {
   flex-direction: row;
@@ -237,6 +230,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   min-height: 0;
   min-width: 0;
   display: flex;
+  flex-direction: column;
   position: relative;
 }
 /* Scroll host for the transcript (and gallery/capabilities overlays). Fills
@@ -262,7 +256,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   align-self: stretch;
   flex: none;
   width: 272px;
-  margin: calc(var(--mva-tabs-h, 36px) + 12px) 12px 12px 0;
+  margin: 12px 12px 12px 0;
   min-height: 0;
   overflow-y: auto;
   padding: 14px 14px;
@@ -272,41 +266,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   box-shadow: var(--shadow-s);
   background: var(--background-secondary);
   scrollbar-width: thin;
-}
-/* Real backdrop blur on the two surfaces the transcript scrolls BEHIND (composer
-   input + tabs): a bigger radius and a more translucent tint so the content shows
-   through, softly blurred — not a flat milky panel. Only where backdrop-filter is
-   supported; otherwise the solid theme backgrounds above stand. Tint stays ~58-62%
-   so typed text and tab labels keep contrast on any theme. */
-/* Frosted bars via a masked pseudo BEHIND the bar's own content (z-index:-1, above
-   the transcript). Masking the pseudo — not the element — means the blur fades in
-   at the edge that meets the transcript, so there's NO hard blur line, while the
-   input and tab labels stay fully sharp on top. */
-.mva-composer::before,
-.mva-tabs::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-}
-@supports (backdrop-filter: blur(1px)) {
-  .mva-composer::before {
-    background: color-mix(in srgb, var(--background-primary) 60%, transparent);
-    backdrop-filter: blur(14px) saturate(1.05);
-    -webkit-backdrop-filter: blur(14px) saturate(1.05);
-    /* fade the frost in over the top edge (where it meets the transcript) */
-    -webkit-mask-image: linear-gradient(to bottom, transparent, black 48px);
-    mask-image: linear-gradient(to bottom, transparent, black 48px);
-  }
-  .mva-tabs::before {
-    background: color-mix(in srgb, var(--background-primary) 60%, transparent);
-    backdrop-filter: blur(14px) saturate(1.05);
-    -webkit-backdrop-filter: blur(14px) saturate(1.05);
-    /* fade the frost out at the bottom edge (where it meets the transcript) */
-    -webkit-mask-image: linear-gradient(to top, transparent, black 20px);
-    mask-image: linear-gradient(to top, transparent, black 20px);
-  }
 }
 .mva-recap-title {
   font-size: 11px;
@@ -454,9 +413,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  /* Top padding clears the frosted tabs the list now slides under; bottom padding
-     clears the absolute composer (both heights published from JS). */
-  padding: calc(var(--mva-tabs-h, 36px) + 14px) 12px calc(var(--mva-composer-h, 96px) + 8px) 12px;
+  padding: 14px 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -729,21 +686,15 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 
 /* ------------------------------ composer ------------------------------ */
 .mva-composer {
-  /* Pinned to the bottom of listWrap, overlapping the transcript, so it centers
-     on the SAME 760 column as the messages (aligned even with the recap open)
-     and content scrolls up behind it. */
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 5;
+  /* In-flow at the bottom of listWrap (a flex column): it centers on the SAME 760
+     column as the messages — aligned even with the recap open — without overlapping
+     the transcript. Solid, no frost. */
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 10px 12px;
   background: transparent;
-  /* Same reading-column cap as the message list — margin auto centers it within
-     listWrap even as an absolute element (left/right:0 + max-width). */
   max-width: 760px;
   width: 100%;
   margin-left: auto;
@@ -1972,9 +1923,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* Clear the frosted tabs the pane now slides under (gallery/capabilities fill
-     the scroll host, whose top sits behind the tabs). */
-  padding-top: calc(var(--mva-tabs-h, 36px) + 4px);
 }
 .mva-gallery-title {
   padding: 14px 14px 8px;

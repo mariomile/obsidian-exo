@@ -432,14 +432,6 @@ export class ChatView extends ItemView {
     });
     this.registerEvent(this.app.workspace.on("layout-change", () => this.applyWideMode()));
     this.applyWideMode();
-    // Publish the tabs bar height so the transcript can slide up under the frosted
-    // tabs (content scrolls behind them → real blur) while its top padding still
-    // clears them, and the recap panel starts below them.
-    const tabsResize = new ResizeObserver(() =>
-      this.contentEl.style.setProperty("--mva-tabs-h", `${this.tabsEl.offsetHeight}px`)
-    );
-    tabsResize.observe(this.tabsEl);
-    this.register(() => tabsResize.disconnect());
     this.prewarm();
   }
 
