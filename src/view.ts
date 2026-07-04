@@ -4,7 +4,6 @@ import {
   MarkdownRenderer,
   FileSystemAdapter,
   FuzzySuggestModal,
-  Menu,
   TFile,
   TFolder,
   setIcon,
@@ -302,12 +301,8 @@ export class ChatView extends ItemView {
   private recapHost: HTMLElement | null = null;
   private recapPanel: RecapPanel | null = null;
   private recapResizeObserver: ResizeObserver | null = null;
-  /** Whether the Context panel is shown (persisted as settings.contextPanelOpen). */
-  private contextOpen = true;
-  /** Header toggle for the Context panel; reflects contextOpen via is-active. */
-  private contextToggleBtn: HTMLElement | null = null;
-  /** Last computed "recap actually visible" state (wide AND contextOpen). */
-  private wasRecapShown = false;
+  /** Last computed wide state — only rebuild the Context panel on the transition. */
+  private wasWide = false;
   private composerEl!: HTMLElement;
   /** One-shot "context is filling up" row under the composer (null when hidden). */
   private compactNudgeEl: HTMLElement | null = null;
@@ -372,7 +367,6 @@ export class ChatView extends ItemView {
     const root = this.contentEl;
     root.empty();
     root.addClass("mva-root");
-    this.contextOpen = this.plugin.settings.contextPanelOpen;
     this.buildHeader(root);
     this.tabsEl = root.createDiv({ cls: "mva-tabs" });
     // Chat column + Recap Rail as flex-row siblings. In the sidebar (not wide)
@@ -385,11 +379,7 @@ export class ChatView extends ItemView {
     // SAME column as the messages — aligned even with the recap rail open.
     this.listHost = this.listWrap.createDiv({ cls: "mva-list-host" });
     this.recapHost = mainRow.createDiv({ cls: "mva-recap" });
-    this.recapPanel = new RecapPanel(
-      this.app,
-      (p) => this.openNote(p),
-      () => this.setContextOpen(false)
-    );
+    this.recapPanel = new RecapPanel(this.app, (p) => this.openNote(p));
     // Wire up link clicks in rendered markdown (MarkdownRenderer doesn't do this for custom views).
     this.registerDomEvent(this.listWrap, "click", (e) => {
       const a = (e.target as HTMLElement).closest("a") as HTMLAnchorElement | null;
@@ -456,36 +446,22 @@ export class ChatView extends ItemView {
   }
 
   /** Toggle the `is-wide` layout class and (re)build or clear the recap to match.
-   *  The panel shows only when wide AND the user hasn't closed it (contextOpen).
-   *  Only builds on the transition into "shown" — while already shown, content
-   *  changes drive updateRecap() from turn-end/switch/restore, so we don't rebuild
-   *  the panel on every ResizeObserver tick during a drag. */
+   *  The panel shows only when the leaf is a wide full-page main area. Only builds
+   *  on the narrow→wide transition — while already wide, content changes drive
+   *  updateRecap() from turn-end/switch/restore, so we don't rebuild the panel on
+   *  every ResizeObserver tick during a drag. */
   private applyWideMode(): void {
     const wide = this.isWideMain();
     this.contentEl.toggleClass("is-wide", wide);
-    // CSS hides .mva-recap when closed so the chat column reflows to full width.
-    this.contentEl.toggleClass("is-context-closed", !this.contextOpen);
-    const show = wide && this.contextOpen;
-    if (show && !this.wasRecapShown) this.updateRecap();
-    else if (!show) this.recapHost?.empty();
-    this.wasRecapShown = show;
+    if (wide && !this.wasWide) this.updateRecap();
+    else if (!wide) this.recapHost?.empty();
+    this.wasWide = wide;
   }
 
-  /** Show/hide the Context panel; persists the choice so it survives reloads. */
-  private setContextOpen(open: boolean): void {
-    if (this.contextOpen === open) return;
-    this.contextOpen = open;
-    this.plugin.settings.contextPanelOpen = open;
-    void this.plugin.saveSettings();
-    this.contextToggleBtn?.toggleClass("is-active", open);
-    this.applyWideMode();
-  }
-
-  /** Rebuild the recap for the active conversation. No-op unless the panel is
-   *  actually shown (wide AND open), so no work happens in the sidebar or when
-   *  closed. Called at turn end, on switch, and on restore/rewind. */
+  /** Rebuild the recap for the active conversation. No-op unless wide, so no work
+   *  happens in the sidebar. Called at turn end, on switch, and on restore/rewind. */
   private updateRecap(): void {
-    if (!this.recapHost || !this.recapPanel || !this.isWideMain() || !this.contextOpen) return;
+    if (!this.recapHost || !this.recapPanel || !this.isWideMain()) return;
     this.recapPanel.render(this.recapHost, buildConvoRecap(this.active.messages, (p) => this.relPath(p)));
   }
 
@@ -672,13 +648,6 @@ export class ChatView extends ItemView {
     setIcon(histBtn, "history");
     setTooltip(histBtn, "History");
     histBtn.onclick = () => this.toggleGallery();
-
-    const ctx = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "Context" } });
-    setIcon(ctx, "panel-right");
-    setTooltip(ctx, "Context");
-    ctx.toggleClass("is-active", this.contextOpen);
-    ctx.onclick = () => this.setContextOpen(!this.contextOpen);
-    this.contextToggleBtn = ctx;
 
     const newChat = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "New chat" } });
     setIcon(newChat, "plus");
@@ -1691,11 +1660,9 @@ export class ChatView extends ItemView {
     const tb = bar.createDiv({ cls: "mva-toolbar" });
 
     // Attach "+" — the single entry point for adding context (note / file /
-    // folder / image). Leftmost in the toolbar; opens a native themed Menu.
-    const attach = tb.createDiv({ cls: "mva-tb-btn mva-attach", attr: { "aria-label": "Attach" } });
-    setIcon(attach, "plus");
-    setTooltip(attach, "Attach note, file, folder, or image");
-    this.clickable(attach, (e) => this.openAttachMenu(e as MouseEvent));
+    // folder / image). Leftmost in the toolbar; opens a themed popover (matching
+    // the select chips) rather than the OS/Obsidian menu.
+    this.buildAttachButton(tb);
 
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
     // Context usage as a compact circular counter (donut ring). Hover for the
@@ -2242,29 +2209,55 @@ export class ChatView extends ItemView {
     }
   }
 
-  /** The composer "+" attach menu (native, theme-styled): note / file / folder /
-   *  image. Replaces the two ghost add-cards that used to sit in the context row
-   *  (03-07 feedback wanted a single entry point inside the input box). */
-  private openAttachMenu(e: Event): void {
-    const menu = new Menu();
-    menu.addItem((i) => i.setTitle("Add note…").setIcon("plus").onClick(() => this.pickNote()));
-    menu.addItem((i) => i.setTitle("Attach file…").setIcon("file-plus").onClick(() => this.pickExternal(false)));
-    menu.addItem((i) => i.setTitle("Attach folder…").setIcon("folder-plus").onClick(() => this.pickExternal(true)));
-    menu.addItem((i) => i.setTitle("Attach image…").setIcon("image").onClick(() => this.pickImage()));
-    this.showMenuAt(menu, e);
-  }
-
-  /** Show a Menu at the pointer for mouse events, or anchored above the target
-   *  element for keyboard activation (where clientX/Y are 0). */
-  private showMenuAt(menu: Menu, e: Event): void {
-    if (e instanceof MouseEvent && (e.clientX || e.clientY)) {
-      menu.showAtMouseEvent(e);
-      return;
-    }
-    const el = e.currentTarget as HTMLElement | null;
-    const r = el?.getBoundingClientRect();
-    if (r) menu.showAtPosition({ x: r.left, y: r.top });
-    else menu.showAtPosition({ x: 0, y: 0 });
+  /** The composer "+" attach control: a themed popover (matching the select chips,
+   *  not the OS/Obsidian menu) with the single set of attach actions — note / file
+   *  / folder / image. Opens upward, closes on pick / outside-click / Esc. */
+  private buildAttachButton(tb: HTMLElement): void {
+    const wrap = tb.createDiv({ cls: "mva-sel mva-attach" });
+    const btn = wrap.createDiv({ cls: "mva-tb-btn", attr: { "aria-label": "Attach" } });
+    setIcon(btn, "plus");
+    setTooltip(btn, "Attach note, file, folder, or image");
+    const pop = wrap.createDiv({ cls: "mva-sel-pop mva-attach-pop" });
+    pop.hide();
+    const items: [string, string, () => void][] = [
+      ["Add note", "plus", () => this.pickNote()],
+      ["Attach file", "file-plus", () => this.pickExternal(false)],
+      ["Attach folder", "folder-plus", () => this.pickExternal(true)],
+      ["Attach image", "image", () => this.pickImage()],
+    ];
+    let open = false;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrap.contains(e.target as Node)) close();
+    };
+    const close = () => {
+      open = false;
+      pop.hide();
+      btn.removeClass("is-open");
+      document.removeEventListener("click", onDoc, true);
+    };
+    const doOpen = () => {
+      if (open) return close();
+      pop.empty();
+      for (const [label, icon, run] of items) {
+        const row = pop.createDiv({ cls: "mva-sel-opt" });
+        setIcon(row.createSpan({ cls: "mva-attach-ico" }), icon);
+        row.createSpan({ text: label });
+        this.clickable(row, () => {
+          close();
+          run();
+        });
+      }
+      open = true;
+      btn.addClass("is-open");
+      pop.show();
+      document.addEventListener("click", onDoc, true);
+      setTimeout(() => pop.querySelector<HTMLElement>(".mva-sel-opt")?.focus(), 0);
+    };
+    this.clickable(btn, (e) => {
+      e.stopPropagation();
+      doOpen();
+    });
+    this.register(() => close());
   }
 
   /** Electron file picker for images → reuses the paste/drop attachment path. */
