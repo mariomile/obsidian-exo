@@ -99,6 +99,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-modifier-hover);
   color: var(--text-normal);
 }
+/* Active toggle state (e.g. Context panel open) — accent color signals "on". */
+.mva-icon-btn.is-active {
+  color: var(--mva-brand);
+}
 
 /* -------------------------------- list -------------------------------- */
 /* ------------------------------- tab bar ----------------------------- */
@@ -248,14 +252,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: none;
 }
 .mva-root.is-wide .mva-recap {
-  /* A tall side panel: fills the full height of the pane (a place to show what the
-     agent is doing), content flowing top-down and scrolling when it overflows.
+  /* A side panel sized to its CONTENT: a short Context is short; a long one grows
+     and then scrolls once it exceeds the pane (max-height), scrollbar hidden.
      Solid elevated surface — it's a panel, not a glass-over-content bar. */
   display: flex;
   flex-direction: column;
-  align-self: stretch;
+  align-self: flex-start;
   flex: none;
   width: 272px;
+  height: auto;
+  max-height: calc(100% - 24px);
   margin: 12px 12px 12px 0;
   min-height: 0;
   overflow-y: auto;
@@ -267,16 +273,53 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-secondary);
   scrollbar-width: none;
 }
+/* Closed by the header toggle / title × — hidden so the chat column reflows full. */
+.mva-root.is-wide.is-context-closed .mva-recap {
+  display: none;
+}
 .mva-root.is-wide .mva-recap::-webkit-scrollbar {
   display: none;
 }
 .mva-recap-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.mva-recap-title-text {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-weight: 600;
   color: var(--text-muted);
-  margin-bottom: 10px;
+}
+/* Close "×" in the title row — quiet by default, normal on hover. */
+.mva-recap-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  border-radius: var(--mva-r1);
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t);
+}
+.mva-recap-x:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-recap-x .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+/* Sub-label inside Knowledge separating the Web cluster from the Notes cluster. */
+.mva-recap-sublabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  margin: 4px 0 2px;
 }
 .mva-recap-empty {
   font-size: 12px;
@@ -1096,31 +1139,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-doc-x .svg-icon {
   width: 12px;
   height: 12px;
-}
-/* trailing add-note / external affordances — quiet square icon buttons, centered
-   against the taller doc cards (icon-only since 0.18.0; meaning is in the tooltip) */
-.mva-doc-add {
-  width: 26px;
-  height: 26px;
-  flex: 0 0 auto;
-  align-self: center;
-  justify-content: center;
-  padding: 0;
-  color: var(--text-muted);
-  background: transparent;
-  border: 1px solid transparent;
-}
-.mva-doc-add:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-  border-color: transparent;
-}
-.mva-doc-add-ico {
-  display: inline-flex;
-}
-.mva-doc-add-ico .svg-icon {
-  width: 14px;
-  height: 14px;
 }
 .mva-chip {
   display: inline-flex;

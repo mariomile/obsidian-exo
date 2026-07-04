@@ -19,7 +19,8 @@ const SECTION_CAP = 8;
 export class RecapPanel {
   constructor(
     private app: App,
-    private onOpenNote: (path: string) => void
+    private onOpenNote: (path: string) => void,
+    private onClose?: () => void
   ) {}
 
   /** Render the recap into `container`, replacing any previous content. Sections
@@ -28,7 +29,17 @@ export class RecapPanel {
   render(container: HTMLElement, recap: Recap): void {
     container.empty();
     const total = recap.web.length + recap.read.length + recap.written.length + recap.skills.length;
-    container.createDiv({ cls: "mva-recap-title", text: "Recap" });
+    // Title row: label + a close "×" that hides the panel (also toggled from the
+    // header button). The row is always present so the panel is dismissible even
+    // when empty.
+    const titleRow = container.createDiv({ cls: "mva-recap-title" });
+    titleRow.createSpan({ cls: "mva-recap-title-text", text: "Context" });
+    if (this.onClose) {
+      const x = titleRow.createSpan({ cls: "mva-recap-x", attr: { "aria-label": "Close context" } });
+      setIcon(x, "x");
+      setTooltip(x, "Close");
+      clickable(x, () => this.onClose?.());
+    }
     if (total === 0) {
       container.createDiv({
         cls: "mva-recap-empty",
@@ -37,11 +48,19 @@ export class RecapPanel {
       return;
     }
 
-    // Knowledge — what the agent consulted: web sources + vault notes read.
+    // Knowledge — what the agent consulted. Web sources are their own group (with
+    // per-kind icons: WebSearch = query, WebFetch = fetched URL) and come first,
+    // then the vault notes read — a subtle sub-label separates the two when both
+    // are present so web reads as its own cluster, not mixed into notes.
     if (recap.web.length || recap.read.length) {
       const body = this.section(container, "Knowledge", recap.web.length || undefined);
-      if (recap.web.length) this.cappedList(body, recap.web, (parent, w) => this.webRow(parent, w));
+      const bothKinds = recap.web.length > 0 && recap.read.length > 0;
+      if (recap.web.length) {
+        if (bothKinds) body.createDiv({ cls: "mva-recap-sublabel", text: "Web" });
+        this.cappedList(body, recap.web, (parent, w) => this.webRow(parent, w));
+      }
       if (recap.read.length) {
+        if (bothKinds) body.createDiv({ cls: "mva-recap-sublabel", text: "Notes" });
         this.cappedList(body, recap.read, (parent, path) =>
           this.fileRow(parent, "file-text", path)
         );
@@ -86,7 +105,8 @@ export class RecapPanel {
 
   private webRow(parent: HTMLElement, w: RecapWeb): void {
     const row = parent.createDiv({ cls: "mva-recap-row" });
-    setIcon(row.createSpan({ cls: "mva-recap-ico" }), "globe");
+    // WebFetch carries a URL (a fetched page) → globe; WebSearch is a query → search.
+    setIcon(row.createSpan({ cls: "mva-recap-ico" }), w.url ? "globe" : "search");
     row.createSpan({ cls: "mva-recap-label", text: w.label });
     if (w.url) {
       row.addClass("is-clickable");
