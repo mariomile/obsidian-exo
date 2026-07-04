@@ -1586,7 +1586,6 @@ export class ChatView extends ItemView {
     this.refreshModelChip = this.buildSelectChip(tb, {
       ariaLabel: "Model",
       getLabel: () => this.modelLabel(),
-      searchable: true,
       getOptions: () =>
         this.allModelChoices().map((m) => ({
           value: m.id,
@@ -1692,9 +1691,6 @@ export class ChatView extends ItemView {
       getCurrent: () => string;
       onSelect: (value: string) => void;
       chipRisk?: () => RiskLevel;
-      /** Opt-in (model picker only): a search input + group headers + roving
-       *  keyboard highlight. Pickers that don't pass it render exactly as before. */
-      searchable?: boolean;
     }
   ): () => void {
     const wrap = tb.createDiv({ cls: "mva-sel" });
@@ -1712,7 +1708,6 @@ export class ChatView extends ItemView {
       pop.empty();
       const cur = opts.getCurrent();
       const allOpts = opts.getOptions();
-      const searchable = !!opts.searchable;
 
       // Shared roving-highlight keyboard handler for both variants: Arrow keys move
       // the `is-active` cursor, Enter picks the highlighted row, Escape closes
@@ -1748,70 +1743,13 @@ export class ChatView extends ItemView {
           }
         };
 
-      // Non-searchable pickers (perm/effort/provider): flat rows, but now with the
-      // same roving `is-active` highlight + ArrowUp/Down + Enter + Escape as the
-      // searchable branch. The popover takes focus so arrows work immediately.
-      if (!searchable) {
-        const optionEls: { el: HTMLElement; value: string }[] = [];
-        let activeIdx = -1;
-        const setActive = (idx: number) => {
-          if (!optionEls.length) {
-            activeIdx = -1;
-            return;
-          }
-          activeIdx = ((idx % optionEls.length) + optionEls.length) % optionEls.length;
-          optionEls.forEach((o, i) => o.el.toggleClass("is-active", i === activeIdx));
-          optionEls[activeIdx].el.scrollIntoView({ block: "nearest" });
-        };
-        for (const r of buildOptionRows(allOpts as SelectOption[], "")) {
-          if (r.kind === "header") continue; // no groups without searchable
-          const o = r.option;
-          const row = pop.createDiv({ cls: "mva-sel-opt" });
-          if (o.risk) row.addClass(o.risk as string);
-          if (o.dotColor) row.createSpan({ cls: "mva-sel-opt-dot" }).style.background = o.dotColor;
-          row.createSpan({ text: o.label });
-          const idx = optionEls.length;
-          optionEls.push({ el: row, value: o.value });
-          row.addEventListener("mouseenter", () => setActive(idx));
-          row.onclick = () => {
-            opts.onSelect(o.value);
-            refresh();
-            close();
-          };
-        }
-        // Seed the cursor on the current value (or the first row), then focus the
-        // popover so ArrowUp/Down and Enter/Escape work without a click.
-        const curIdx = optionEls.findIndex((o) => o.value === cur);
-        setActive(curIdx >= 0 ? curIdx : 0);
-        pop.tabIndex = -1;
-        pop.addEventListener(
-          "keydown",
-          keyNav(
-            () => optionEls,
-            () => activeIdx,
-            setActive
-          )
-        );
-        setTimeout(() => pop.focus(), 0);
-        return;
-      }
-
-      // Searchable variant (model picker): search box + group headers + a roving
-      // `is-active` highlight driven by the keyboard, initialized to the current
-      // value. The pure query→rows logic (headers dropped for empty groups) lives
-      // in core/option-filter.ts.
-      let query = "";
-      let optionEls: { el: HTMLElement; value: string }[] = [];
+      // One rendering path for every picker: roving `is-active` rows driven by
+      // ArrowUp/Down + Enter + Escape. Grouped pickers (the model list) get quiet
+      // group headers from buildOptionRows; flat pickers (effort/perm) emit none
+      // (their options carry no `group`). The popover container takes focus so the
+      // keyboard works immediately — no search box (with ~8 models it was overhead).
+      const optionEls: { el: HTMLElement; value: string }[] = [];
       let activeIdx = -1;
-
-      const sw = pop.createDiv({ cls: "mva-sel-search-wrap" });
-      setIcon(sw.createSpan({ cls: "mva-sel-search-ico" }), "search");
-      const search = sw.createEl("input", {
-        cls: "mva-sel-search",
-        attr: { type: "text", placeholder: "Search models…", "aria-label": "Search models" },
-      });
-      const rowsWrap = pop.createDiv({ cls: "mva-sel-rows" });
-
       const setActive = (idx: number) => {
         if (!optionEls.length) {
           activeIdx = -1;
@@ -1821,59 +1759,39 @@ export class ChatView extends ItemView {
         optionEls.forEach((o, i) => o.el.toggleClass("is-active", i === activeIdx));
         optionEls[activeIdx].el.scrollIntoView({ block: "nearest" });
       };
-
-      const renderRows = () => {
-        rowsWrap.empty();
-        optionEls = [];
-        for (const r of buildOptionRows(allOpts as SelectOption[], query)) {
-          if (r.kind === "header") {
-            rowsWrap.createDiv({ cls: "mva-sel-group", text: r.group });
-            continue;
-          }
-          const o = r.option;
-          const row = rowsWrap.createDiv({ cls: "mva-sel-opt" });
-          if (o.risk) row.addClass(o.risk as string);
-          if (o.dotColor) row.createSpan({ cls: "mva-sel-opt-dot" }).style.background = o.dotColor;
-          row.createSpan({ text: o.label });
-          const idx = optionEls.length;
-          optionEls.push({ el: row, value: o.value });
-          row.addEventListener("mouseenter", () => setActive(idx));
-          row.onclick = () => {
-            opts.onSelect(o.value);
-            refresh();
-            close();
-          };
+      for (const r of buildOptionRows(allOpts as SelectOption[], "")) {
+        if (r.kind === "header") {
+          pop.createDiv({ cls: "mva-sel-group", text: r.group });
+          continue;
         }
-        // Start the cursor on the current value (or the first row).
-        const curIdx = optionEls.findIndex((o) => o.value === cur);
-        setActive(curIdx >= 0 ? curIdx : 0);
-      };
-      renderRows();
-
-      search.addEventListener("input", () => {
-        query = search.value;
-        renderRows();
-      });
-      // Arrows move the roving highlight but keep focus in the input; Enter picks
-      // the highlighted row; Escape clears a non-empty query first, then closes.
-      // Same key logic as the non-searchable branch, via the shared keyNav helper.
-      search.addEventListener(
+        const o = r.option;
+        const row = pop.createDiv({ cls: "mva-sel-opt" });
+        if (o.risk) row.addClass(o.risk as string);
+        if (o.dotColor) row.createSpan({ cls: "mva-sel-opt-dot" }).style.background = o.dotColor;
+        row.createSpan({ text: o.label });
+        const idx = optionEls.length;
+        optionEls.push({ el: row, value: o.value });
+        row.addEventListener("mouseenter", () => setActive(idx));
+        row.onclick = () => {
+          opts.onSelect(o.value);
+          refresh();
+          close();
+        };
+      }
+      // Seed the cursor on the current value (or the first row), then focus the
+      // popover so ArrowUp/Down and Enter/Escape work without a click.
+      const curIdx = optionEls.findIndex((o) => o.value === cur);
+      setActive(curIdx >= 0 ? curIdx : 0);
+      pop.tabIndex = -1;
+      pop.addEventListener(
         "keydown",
         keyNav(
           () => optionEls,
           () => activeIdx,
-          setActive,
-          () => {
-            if (!query) return false;
-            query = "";
-            search.value = "";
-            renderRows();
-            return true;
-          }
+          setActive
         )
       );
-      // Focus on open (deferred until after pop.show() in the click handler).
-      setTimeout(() => search.focus(), 0);
+      setTimeout(() => pop.focus(), 0);
     };
 
     refresh();
@@ -2079,15 +1997,17 @@ export class ChatView extends ItemView {
       if (p !== active) this.renderContextCard(cards, p, false);
     }
     // Trailing "add note" card.
-    const add = cards.createDiv({ cls: "mva-doc-card mva-doc-add", attr: { "aria-label": "Attach a note" } });
+    // Icon-only square buttons (03-07 feedback: the labelled ghost chips were
+    // too invasive) — the tooltip + aria-label carry the meaning instead.
+    const add = cards.createDiv({ cls: "mva-doc-card mva-doc-add", attr: { "aria-label": "Add note" } });
     setIcon(add.createSpan({ cls: "mva-doc-add-ico" }), "plus");
-    add.createSpan({ text: "Add note" });
+    setTooltip(add, "Add note");
     this.clickable(add, () => this.pickNote());
     // "Attach external" card — files or a whole folder from outside the vault
     // (the CLI reads any absolute path; only the vault is its cwd, not a wall).
     const ext = cards.createDiv({ cls: "mva-doc-card mva-doc-add", attr: { "aria-label": "Attach external file or folder" } });
     setIcon(ext.createSpan({ cls: "mva-doc-add-ico" }), "paperclip");
-    ext.createSpan({ text: "External" });
+    setTooltip(ext, "Attach external file or folder");
     this.clickable(ext, (e) => {
       const menu = new Menu();
       menu.addItem((i) => i.setTitle("Attach file…").setIcon("file-plus").onClick(() => this.pickExternal(false)));
@@ -2425,9 +2345,6 @@ export class ChatView extends ItemView {
   private renderConvoDom(c: Convo): void {
     c.listEl.empty();
     let lastUser = "";
-    // Only the LAST assistant turn keeps its touched-notes footer expanded —
-    // older ones collapse to a one-line toggle (03-07 feedback).
-    const lastAssistant = [...c.messages].reverse().find((m) => m.role === "assistant");
     for (const m of c.messages) {
       if (m.role === "user") {
         lastUser = m.text;
@@ -2468,7 +2385,7 @@ export class ChatView extends ItemView {
           }
         }
         this.groupToolRows(body); // restored transcripts fold long tool runs too
-        this.attachTouched(el, touched, m.checkpoint, m !== lastAssistant);
+        this.attachTouched(el, touched, m.checkpoint);
         if (full.trim()) this.attachActions(el, full, lastUser || undefined, c);
       }
     }
@@ -2960,17 +2877,17 @@ export class ChatView extends ItemView {
     turnEl: HTMLElement,
     touched: TouchedNote[],
     checkpoint?: Checkpoint,
-    collapsed = false
+    collapsed = true
   ): void {
     if (touched.length === 0) return;
     const bar = turnEl.createDiv({ cls: "mva-sources" + (collapsed ? " is-collapsed" : "") });
-    // Collapsed form (every turn but the latest — 03-07 feedback: old turns'
-    // full chip rows pile up and crowd the transcript): one quiet toggle row.
-    // Both forms live in the DOM and CSS swaps them, so collapsing older
-    // footers when a new turn lands is a class flip with no state loss.
+    // Collapsed by default for EVERY turn (03-07 feedback: the chip rows pile up
+    // and crowd the transcript; the agent also duplicates them in prose — see the
+    // house rule in providers/claude.ts). One quiet "N files" toggle row; the
+    // chips live in the DOM and CSS reveals them when the accordion opens.
     const head = bar.createDiv({ cls: "mva-sources-head" });
     setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
-    head.createSpan({ text: `${touched.length} note${touched.length === 1 ? "" : "s"}` });
+    head.createSpan({ text: `${touched.length} file${touched.length === 1 ? "" : "s"}` });
     this.clickable(head, () => bar.removeClass("is-collapsed"));
     // No "EDITED"/"READ" text headers — the accent border + accent icon color on
     // write chips already distinguish them from muted read chips three ways over
@@ -4447,11 +4364,9 @@ export class ChatView extends ItemView {
             : `No response — timed out after ${IDLE_TIMEOUT / 1000}s.`
         );
       }
-      // A new settled turn owns the expanded footer — fold every older one down
-      // to its one-line toggle first (03-07 feedback: old footers pile up).
-      for (const old of Array.from(c.listEl.querySelectorAll(".mva-sources:not(.is-collapsed)"))) {
-        old.classList.add("is-collapsed");
-      }
+      // Touched-notes footer renders collapsed by default (03-07 feedback), so
+      // there's nothing to fold on older turns — every footer is already a quiet
+      // "N files" toggle that opens on click.
       this.attachTouched(ctx.el, ctx.touched, checkpoint);
       // The footer above now carries every note this turn touched — drop the
       // matching live tool-call rows so the same file isn't shown twice (the

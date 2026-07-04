@@ -11,6 +11,14 @@ import type {
 /** Built-in file tools disabled in "native-first" mode (use Obsidian tools). */
 const NATIVE_FIRST_DISALLOW = ["Read", "Grep", "Glob", "LS", "Edit", "MultiEdit", "Write", "NotebookEdit"];
 
+/** Fixed house rule prepended to the system-prompt append: Exo already renders
+ *  every touched file as chips under each turn, so the agent restating them in
+ *  prose duplicates the native UI. Kept to one short paragraph (cache-friendly). */
+const EXO_HOUSE_RULES =
+  'Exo renders every file you read, create, or edit as chips below your message. ' +
+  'Do NOT restate them as a prose list, a "Files touched"/"File toccati" section, ' +
+  'or a details/accordion — it duplicates the native UI.';
+
 /** All standard tools — denied when tools are off (pure chat). */
 const ALL_TOOLS = [
   "Bash", "BashOutput", "KillShell", "Edit", "MultiEdit", "Write", "NotebookEdit",
@@ -102,7 +110,7 @@ class ClaudeSession implements AgentSession {
           // cache-friendly prefix) and APPEND Exo's memory + optional user prompt.
           // Passing a bare string here would REPLACE CC's system prompt, turning the
           // agent into a raw, more verbose Claude that behaves nothing like CC.
-          const append = [opts.systemPrompt, opts.memoryPreamble].filter(Boolean).join("\n\n");
+          const append = [EXO_HOUSE_RULES, opts.systemPrompt, opts.memoryPreamble].filter(Boolean).join("\n\n");
           return {
             systemPrompt: {
               type: "preset" as const,

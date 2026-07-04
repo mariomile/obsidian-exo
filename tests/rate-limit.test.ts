@@ -69,6 +69,17 @@ describe("badgeState", () => {
     expect(badgeState("allowed", 0.79).visible).toBe(false);
     expect(badgeState("allowed", undefined).visible).toBe(false);
   });
+  it("returns a fully clear state (not visible, level ok) when allowed with low util", () => {
+    // Tab-switch case: a newly-active convo whose plan has headroom must clear
+    // the badge, not carry over another convo's caution/danger state.
+    const s = badgeState("allowed", 0.2);
+    expect(s.visible).toBe(false);
+    expect(s.level).toBe("ok");
+    // No status at all (a convo that never received a rate_limit_event) also clears.
+    const none = badgeState(undefined, undefined);
+    expect(none.visible).toBe(false);
+    expect(none.level).toBe("ok");
+  });
   it("shows caution at >=80% or on allowed_warning", () => {
     const a = badgeState("allowed", 0.8);
     expect(a.visible).toBe(true);
