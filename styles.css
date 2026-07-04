@@ -278,22 +278,34 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    through, softly blurred — not a flat milky panel. Only where backdrop-filter is
    supported; otherwise the solid theme backgrounds above stand. Tint stays ~58-62%
    so typed text and tab labels keep contrast on any theme. */
+/* Frosted bars via a masked pseudo BEHIND the bar's own content (z-index:-1, above
+   the transcript). Masking the pseudo — not the element — means the blur fades in
+   at the edge that meets the transcript, so there's NO hard blur line, while the
+   input and tab labels stay fully sharp on top. */
+.mva-composer::before,
+.mva-tabs::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
 @supports (backdrop-filter: blur(1px)) {
-  /* Frost the whole composer BAR and the tabs (not the opaque input, which stays
-     readable on top). The `.mva-root ` prefix raises specificity so this wins over
-     the later `.mva-composer{background:transparent}` and the base `.mva-tabs`
-     background — without it the computed bg stays fully opaque and nothing blurs.
-     Low tint (~48-55%) so the transcript scrolling behind reads as genuinely
-     blurred, not a milky panel. */
-  .mva-root .mva-composer {
-    background: color-mix(in srgb, var(--background-primary) 48%, transparent);
-    backdrop-filter: blur(20px) saturate(1.1);
-    -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  .mva-composer::before {
+    background: color-mix(in srgb, var(--background-primary) 60%, transparent);
+    backdrop-filter: blur(14px) saturate(1.05);
+    -webkit-backdrop-filter: blur(14px) saturate(1.05);
+    /* fade the frost in over the top edge (where it meets the transcript) */
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 48px);
+    mask-image: linear-gradient(to bottom, transparent, black 48px);
   }
-  .mva-root .mva-tabs {
-    background: color-mix(in srgb, var(--background-primary) 55%, transparent);
-    backdrop-filter: blur(20px) saturate(1.1);
-    -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  .mva-tabs::before {
+    background: color-mix(in srgb, var(--background-primary) 60%, transparent);
+    backdrop-filter: blur(14px) saturate(1.05);
+    -webkit-backdrop-filter: blur(14px) saturate(1.05);
+    /* fade the frost out at the bottom edge (where it meets the transcript) */
+    -webkit-mask-image: linear-gradient(to top, transparent, black 20px);
+    mask-image: linear-gradient(to top, transparent, black 20px);
   }
 }
 .mva-recap-title {
