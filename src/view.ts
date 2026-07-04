@@ -33,6 +33,7 @@ import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
+import { clickable } from "./ui/dom";
 import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
@@ -550,19 +551,11 @@ export class ChatView extends ItemView {
 
   /* ----------------------------- header ----------------------------- */
 
-  /** Make a non-button element keyboard- and screen-reader-operable: role=button,
-   *  focusable, and Enter/Space fire the same handler as a click. Use for the div/
-   *  span controls that can't easily become <button> without losing their layout. */
+  /** Make a non-button element keyboard- and screen-reader-operable. Thin wrapper
+   *  over the shared `clickable()` in ./ui/dom so view.ts and capabilities.ts route
+   *  every keyboard-bypassing control through one implementation. */
   private clickable(el: HTMLElement, handler: (e: Event) => void): void {
-    el.setAttribute("role", "button");
-    el.tabIndex = 0;
-    el.addEventListener("click", handler);
-    el.addEventListener("keydown", (e: KeyboardEvent) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        handler(e);
-      }
-    });
+    clickable(el, handler);
   }
 
   private buildHeader(root: HTMLElement): void {
@@ -917,15 +910,15 @@ export class ChatView extends ItemView {
 
       const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
       setIcon(x, "x");
-      x.onclick = (e) => {
+      this.clickable(x, (e) => {
         e.stopPropagation();
         this.closeTab(c);
-      };
+      });
       this.clickable(tab, () => this.switchTo(c));
     }
     const add = this.tabsEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
     setIcon(add, "plus");
-    add.onclick = () => this.newConversation();
+    this.clickable(add, () => this.newConversation());
   }
 
   /** Close a tab (the conversation stays in history; reopen from the gallery). */
@@ -1209,7 +1202,7 @@ export class ChatView extends ItemView {
       }
       document.removeEventListener("click", outside, true);
     };
-    del.onclick = (e) => {
+    this.clickable(del, (e) => {
       e.stopPropagation();
       if (!armed) {
         armed = true;
@@ -1221,7 +1214,7 @@ export class ChatView extends ItemView {
       }
       disarm();
       this.deleteConvo(c, card, grid);
-    };
+    });
   }
 
   /** Permanently drop a conversation (from the gallery). If it's the active tab,
@@ -1445,10 +1438,10 @@ export class ChatView extends ItemView {
       thumb.src = `data:${img.mediaType};base64,${img.dataB64}`;
       const x = chip.createSpan({ cls: "mva-img-x", attr: { "aria-label": "Remove image" } });
       setIcon(x, "x");
-      x.onclick = () => {
+      this.clickable(x, () => {
         this.pendingImages.splice(i, 1);
         this.renderImageStrip();
-      };
+      });
     });
   }
 
@@ -1721,23 +1714,85 @@ export class ChatView extends ItemView {
       const allOpts = opts.getOptions();
       const searchable = !!opts.searchable;
 
-      // Non-searchable pickers keep the exact original render (flat rows, static
-      // is-active on the current value) — perm/effort/provider are unchanged.
+      // Shared roving-highlight keyboard handler for both variants: Arrow keys move
+      // the `is-active` cursor, Enter picks the highlighted row, Escape closes
+      // (the searchable variant passes an onEscape hook to clear a non-empty query
+      // first). Rows never take focus themselves — focus lives on the search input
+      // (searchable) or the popover container (non-searchable), same as before.
+      const keyNav =
+        (
+          getEls: () => { el: HTMLElement; value: string }[],
+          getActive: () => number,
+          setActive: (i: number) => void,
+          onEscape?: () => boolean
+        ) =>
+        (ev: KeyboardEvent) => {
+          if (ev.key === "ArrowDown") {
+            ev.preventDefault();
+            setActive(getActive() + 1);
+          } else if (ev.key === "ArrowUp") {
+            ev.preventDefault();
+            setActive(getActive() - 1);
+          } else if (ev.key === "Enter") {
+            ev.preventDefault();
+            const o = getEls()[getActive()];
+            if (o) {
+              opts.onSelect(o.value);
+              refresh();
+              close();
+            }
+          } else if (ev.key === "Escape") {
+            ev.preventDefault();
+            if (onEscape?.()) return;
+            close();
+          }
+        };
+
+      // Non-searchable pickers (perm/effort/provider): flat rows, but now with the
+      // same roving `is-active` highlight + ArrowUp/Down + Enter + Escape as the
+      // searchable branch. The popover takes focus so arrows work immediately.
       if (!searchable) {
+        const optionEls: { el: HTMLElement; value: string }[] = [];
+        let activeIdx = -1;
+        const setActive = (idx: number) => {
+          if (!optionEls.length) {
+            activeIdx = -1;
+            return;
+          }
+          activeIdx = ((idx % optionEls.length) + optionEls.length) % optionEls.length;
+          optionEls.forEach((o, i) => o.el.toggleClass("is-active", i === activeIdx));
+          optionEls[activeIdx].el.scrollIntoView({ block: "nearest" });
+        };
         for (const r of buildOptionRows(allOpts as SelectOption[], "")) {
           if (r.kind === "header") continue; // no groups without searchable
           const o = r.option;
           const row = pop.createDiv({ cls: "mva-sel-opt" });
           if (o.risk) row.addClass(o.risk as string);
-          if (o.value === cur) row.addClass("is-active");
           if (o.dotColor) row.createSpan({ cls: "mva-sel-opt-dot" }).style.background = o.dotColor;
           row.createSpan({ text: o.label });
+          const idx = optionEls.length;
+          optionEls.push({ el: row, value: o.value });
+          row.addEventListener("mouseenter", () => setActive(idx));
           row.onclick = () => {
             opts.onSelect(o.value);
             refresh();
             close();
           };
         }
+        // Seed the cursor on the current value (or the first row), then focus the
+        // popover so ArrowUp/Down and Enter/Escape work without a click.
+        const curIdx = optionEls.findIndex((o) => o.value === cur);
+        setActive(curIdx >= 0 ? curIdx : 0);
+        pop.tabIndex = -1;
+        pop.addEventListener(
+          "keydown",
+          keyNav(
+            () => optionEls,
+            () => activeIdx,
+            setActive
+          )
+        );
+        setTimeout(() => pop.focus(), 0);
         return;
       }
 
@@ -1801,32 +1856,22 @@ export class ChatView extends ItemView {
       });
       // Arrows move the roving highlight but keep focus in the input; Enter picks
       // the highlighted row; Escape clears a non-empty query first, then closes.
-      search.addEventListener("keydown", (ev) => {
-        if (ev.key === "ArrowDown") {
-          ev.preventDefault();
-          setActive(activeIdx + 1);
-        } else if (ev.key === "ArrowUp") {
-          ev.preventDefault();
-          setActive(activeIdx - 1);
-        } else if (ev.key === "Enter") {
-          ev.preventDefault();
-          const o = optionEls[activeIdx];
-          if (o) {
-            opts.onSelect(o.value);
-            refresh();
-            close();
-          }
-        } else if (ev.key === "Escape") {
-          ev.preventDefault();
-          if (query) {
+      // Same key logic as the non-searchable branch, via the shared keyNav helper.
+      search.addEventListener(
+        "keydown",
+        keyNav(
+          () => optionEls,
+          () => activeIdx,
+          setActive,
+          () => {
+            if (!query) return false;
             query = "";
             search.value = "";
             renderRows();
-          } else {
-            close();
+            return true;
           }
-        }
-      });
+        )
+      );
       // Focus on open (deferred until after pop.show() in the click handler).
       setTimeout(() => search.focus(), 0);
     };
@@ -2111,12 +2156,12 @@ export class ChatView extends ItemView {
     body.createDiv({ cls: "mva-doc-kind", text: isActive ? "Current Document" : external ? "External" : "Document" });
     const x = card.createSpan({ cls: "mva-doc-x", attr: { "aria-label": "Remove from context" } });
     setIcon(x, "x");
-    x.onclick = (e) => {
+    this.clickable(x, (e) => {
       e.stopPropagation();
       if (isActive) this.excludeActiveNote = true;
       else this.manualAttached = this.manualAttached.filter((p) => p !== path);
       this.refreshContext();
-    };
+    });
     this.clickable(card, () => (external ? this.openArtifactExternally(path) : this.openNote(path)));
   }
 
@@ -2942,7 +2987,7 @@ export class ChatView extends ItemView {
         if (kind === "write" && (t.count ?? 0) > 1) {
           chip.createSpan({ cls: "mva-src-count", text: `×${t.count}` });
         }
-        chip.onclick = () => this.openNote(t.path);
+        this.clickable(chip, () => this.openNote(t.path));
         this.addHoverPreview(chip, t.path);
         // Inline diff + revert — only when we hold this turn's pre-write snapshot.
         const rel = this.relPath(t.path);
@@ -2963,10 +3008,10 @@ export class ChatView extends ItemView {
       if (rest.length) {
         const more = g.createSpan({ cls: "mva-src-chip mva-src-more", text: `+${rest.length}` });
         more.setAttribute("aria-label", `Show ${rest.length} more note${rest.length === 1 ? "" : "s"}`);
-        more.onclick = () => {
+        this.clickable(more, () => {
           more.remove();
           for (const t of rest) makeChip(t);
-        };
+        });
       }
     };
     group("write", "file-pen"); // changes first — the actionable output
@@ -2978,16 +3023,16 @@ export class ChatView extends ItemView {
     const acts = chip.createSpan({ cls: "mva-src-acts" });
     const diff = acts.createSpan({ cls: "mva-src-act", attr: { "aria-label": "View diff" } });
     setIcon(diff, "file-diff");
-    diff.onclick = (e) => {
+    this.clickable(diff, (e) => {
       e.stopPropagation();
       void this.showNoteDiff(path, before);
-    };
+    });
 
     const revert = acts.createSpan({ cls: "mva-src-act", attr: { "aria-label": "Revert this note" } });
     setIcon(revert, "undo-2");
     let armed = false;
     let disarm: number | null = null;
-    revert.onclick = (e) => {
+    this.clickable(revert, (e) => {
       e.stopPropagation();
       if (!armed) {
         armed = true;
@@ -3002,7 +3047,7 @@ export class ChatView extends ItemView {
       }
       if (disarm) window.clearTimeout(disarm);
       void this.revertNote(path, before, chip);
-    };
+    });
   }
 
   /** Hover action on a read-note chip: attach it to the composer context. */
@@ -3010,13 +3055,13 @@ export class ChatView extends ItemView {
     const acts = chip.createSpan({ cls: "mva-src-acts" });
     const attach = acts.createSpan({ cls: "mva-src-act", attr: { "aria-label": "Attach to context" } });
     setIcon(attach, "plus");
-    attach.onclick = (e) => {
+    this.clickable(attach, (e) => {
       e.stopPropagation();
       const rel = this.relPath(path);
       if (!this.manualAttached.includes(rel)) this.manualAttached.push(rel);
       this.refreshContext();
       new Notice(`Attached ${noteBasename(path)} to context.`);
-    };
+    });
   }
 
   /** Open a read-only diff of the note (pre-turn snapshot vs current content). */
@@ -4084,10 +4129,10 @@ export class ChatView extends ItemView {
       });
       const x = row.createSpan({ cls: "mva-chip-x", attr: { "aria-label": "Remove" } });
       setIcon(x, "x");
-      x.onclick = () => {
+      this.clickable(x, () => {
         c.queue.splice(i, 1);
         this.renderQueue(c);
-      };
+      });
     });
     this.scrollConvo(c);
   }
