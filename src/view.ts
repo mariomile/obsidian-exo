@@ -1655,6 +1655,13 @@ export class ChatView extends ItemView {
     const tb = bar.createDiv({ cls: "mva-toolbar" });
     const s = this.plugin.settings;
 
+    // Attach "+" — the single entry point for adding context (note / file /
+    // folder / image). Leftmost in the toolbar; opens a native themed Menu.
+    const attach = tb.createDiv({ cls: "mva-tb-btn mva-attach", attr: { "aria-label": "Attach" } });
+    setIcon(attach, "plus");
+    setTooltip(attach, "Attach note, file, folder, or image");
+    this.clickable(attach, (e) => this.openAttachMenu(e as MouseEvent));
+
     // Model — unified picker across BOTH providers (no separate Provider chip).
     // Options are rebuilt on open; each row carries a brand-color dot (same
     // language as tab/gallery provider dots) so Claude vs Codex models stay
@@ -2066,30 +2073,57 @@ export class ChatView extends ItemView {
     this.contextEl.empty();
     // Every context note is a uniform card in a horizontal row (Craft-style):
     // the active note first ("Current Document"), then manual attachments.
+    // The ADD affordances live inside the composer toolbar now (the "+" menu);
+    // this row is purely the list of attached items — so when it's empty it
+    // collapses entirely rather than leaving an empty bar.
     const active = this.excludeActiveNote ? null : this.activeNotePath();
+    const items = active ? 1 : 0;
+    const hasAny = items + this.manualAttached.filter((p) => p !== active).length > 0;
+    this.contextEl.toggleClass("is-empty", !hasAny);
+    if (!hasAny) return;
     const cards = this.contextEl.createDiv({ cls: "mva-doc-cards" });
     if (active) this.renderContextCard(cards, active, true);
     for (const p of this.manualAttached) {
       if (p !== active) this.renderContextCard(cards, p, false);
     }
-    // Trailing "add note" card.
-    // Icon-only square buttons (03-07 feedback: the labelled ghost chips were
-    // too invasive) — the tooltip + aria-label carry the meaning instead.
-    const add = cards.createDiv({ cls: "mva-doc-card mva-doc-add", attr: { "aria-label": "Add note" } });
-    setIcon(add.createSpan({ cls: "mva-doc-add-ico" }), "plus");
-    setTooltip(add, "Add note");
-    this.clickable(add, () => this.pickNote());
-    // "Attach external" card — files or a whole folder from outside the vault
-    // (the CLI reads any absolute path; only the vault is its cwd, not a wall).
-    const ext = cards.createDiv({ cls: "mva-doc-card mva-doc-add", attr: { "aria-label": "Attach external file or folder" } });
-    setIcon(ext.createSpan({ cls: "mva-doc-add-ico" }), "paperclip");
-    setTooltip(ext, "Attach external file or folder");
-    this.clickable(ext, (e) => {
-      const menu = new Menu();
-      menu.addItem((i) => i.setTitle("Attach file…").setIcon("file-plus").onClick(() => this.pickExternal(false)));
-      menu.addItem((i) => i.setTitle("Attach folder…").setIcon("folder-plus").onClick(() => this.pickExternal(true)));
-      menu.showAtMouseEvent(e as MouseEvent);
-    });
+  }
+
+  /** The composer "+" attach menu (native, theme-styled): note / file / folder /
+   *  image. Replaces the two ghost add-cards that used to sit in the context row
+   *  (03-07 feedback wanted a single entry point inside the input box). */
+  private openAttachMenu(e: Event): void {
+    const menu = new Menu();
+    menu.addItem((i) => i.setTitle("Add note…").setIcon("plus").onClick(() => this.pickNote()));
+    menu.addItem((i) => i.setTitle("Attach file…").setIcon("file-plus").onClick(() => this.pickExternal(false)));
+    menu.addItem((i) => i.setTitle("Attach folder…").setIcon("folder-plus").onClick(() => this.pickExternal(true)));
+    menu.addItem((i) => i.setTitle("Attach image…").setIcon("image").onClick(() => this.pickImage()));
+    this.showMenuAt(menu, e);
+  }
+
+  /** Show a Menu at the pointer for mouse events, or anchored above the target
+   *  element for keyboard activation (where clientX/Y are 0). */
+  private showMenuAt(menu: Menu, e: Event): void {
+    if (e instanceof MouseEvent && (e.clientX || e.clientY)) {
+      menu.showAtMouseEvent(e);
+      return;
+    }
+    const el = e.currentTarget as HTMLElement | null;
+    const r = el?.getBoundingClientRect();
+    if (r) menu.showAtPosition({ x: r.left, y: r.top });
+    else menu.showAtPosition({ x: 0, y: 0 });
+  }
+
+  /** Electron file picker for images → reuses the paste/drop attachment path. */
+  private pickImage(): void {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.multiple = true;
+    input.onchange = () => {
+      const files = Array.from(input.files ?? []);
+      if (files.length) void this.attachImages(files);
+    };
+    input.click();
   }
 
   /** Electron file picker for paths OUTSIDE the vault. A hidden <input type=file>
