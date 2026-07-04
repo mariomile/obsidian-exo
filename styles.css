@@ -111,7 +111,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   scrollbar-width: none;
   flex-shrink: 0;
   background: transparent;
-  border-bottom: 1px solid var(--background-modifier-border);
 }
 .mva-tabs::-webkit-scrollbar {
   display: none;
@@ -233,6 +232,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: flex;
   position: relative;
 }
+/* Scroll host for the transcript (and gallery/capabilities overlays). Fills
+   listWrap; the composer is an absolute sibling pinned to listWrap's bottom, so
+   the last message scrolls up behind it (list reserves --mva-composer-h padding). */
+.mva-list-host {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  position: relative;
+}
 /* Recap Rail — hidden entirely unless the leaf is a wide full-page main area. */
 .mva-recap {
   display: none;
@@ -241,10 +250,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: block;
   flex: none;
   width: 264px;
+  margin: 12px;
   min-height: 0;
   overflow-y: auto;
   padding: 14px 12px;
-  border-left: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r2);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: var(--shadow-s);
+  background: var(--background-secondary);
   scrollbar-width: thin;
 }
 .mva-recap-title {
@@ -360,7 +373,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-jump-pill {
   position: absolute;
-  bottom: 12px;
+  bottom: calc(var(--mva-composer-h, 96px) + 12px);
   right: 14px;
   display: flex;
   align-items: center;
@@ -393,7 +406,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  padding: 14px 12px;
+  /* Reserve room at the bottom for the absolute composer (published as
+     --mva-composer-h by buildComposer) so the last message scrolls above it. */
+  padding: 14px 12px calc(var(--mva-composer-h, 96px) + 8px) 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -666,13 +681,21 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 
 /* ------------------------------ composer ------------------------------ */
 .mva-composer {
+  /* Pinned to the bottom of listWrap, overlapping the transcript, so it centers
+     on the SAME 760 column as the messages (aligned even with the recap open)
+     and content scrolls up behind it. */
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 10px 12px;
   background: transparent;
-  flex-shrink: 0;
-  /* Same reading-column cap as the message list — stays centered on wide panes. */
+  /* Same reading-column cap as the message list — margin auto centers it within
+     listWrap even as an absolute element (left/right:0 + max-width). */
   max-width: 760px;
   width: 100%;
   margin-left: auto;

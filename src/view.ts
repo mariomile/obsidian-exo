@@ -291,6 +291,11 @@ export class ChatView extends ItemView {
 
   private tabsEl!: HTMLElement;
   private listWrap!: HTMLElement;
+  /** Inner scroll host inside listWrap. Holds the (swapped-per-conversation)
+   *  `.mva-list` and any full-pane overlay (gallery/capabilities). Split out from
+   *  listWrap so the composer — now a bottom sibling of the list — survives the
+   *  `listHost.empty()` swap on conversation change. */
+  private listHost!: HTMLElement;
   /** Recap Rail — full-page-only right panel; host + panel instance + observer.
    *  Null in the sidebar (where the rail never mounts its content). */
   private recapHost: HTMLElement | null = null;
@@ -365,6 +370,10 @@ export class ChatView extends ItemView {
     // chat behaves exactly as before.
     const mainRow = root.createDiv({ cls: "mva-main-row" });
     this.listWrap = mainRow.createDiv({ cls: "mva-list-wrap" });
+    // Inner host for the scrolling transcript; the composer mounts as a sibling
+    // pinned to the bottom of listWrap (see buildComposer) so it centers on the
+    // SAME column as the messages — aligned even with the recap rail open.
+    this.listHost = this.listWrap.createDiv({ cls: "mva-list-host" });
     this.recapHost = mainRow.createDiv({ cls: "mva-recap" });
     this.recapPanel = new RecapPanel(this.app, (p) => this.openNote(p));
     // Wire up link clicks in rendered markdown (MarkdownRenderer doesn't do this for custom views).
@@ -381,7 +390,7 @@ export class ChatView extends ItemView {
         window.open(external, "_blank");
       }
     });
-    this.buildComposer(root);
+    this.buildComposer(this.listWrap);
     // View-level Esc-to-stop: the composer's own Escape handler only fires while the
     // textarea is focused, but clicking into the transcript blurs it — so "esc to stop"
     // silently stopped working. A capture-phase listener on the whole view catches Esc
@@ -789,8 +798,8 @@ export class ChatView extends ItemView {
     if (this.active.messages.length && this.active.listEl.childElementCount === 0) {
       this.renderConvoDom(this.active);
     }
-    this.listWrap.empty();
-    this.listWrap.appendChild(this.active.listEl);
+    this.listHost.empty();
+    this.listHost.appendChild(this.active.listEl);
     if (this.active.messages.length === 0) this.renderEmptyState();
     this.refreshProviderUI();
     this.renderTabs();
@@ -918,8 +927,8 @@ export class ChatView extends ItemView {
     // Lazily build the transcript DOM on first open (restore() skips convos
     // that weren't in the saved tab set).
     if (c.messages.length && c.listEl.childElementCount === 0) this.renderConvoDom(c);
-    this.listWrap.empty();
-    this.listWrap.appendChild(c.listEl);
+    this.listHost.empty();
+    this.listHost.appendChild(c.listEl);
     if (c.listEl.childElementCount === 0) this.renderEmptyState();
     this.refreshProviderUI();
     this.syncSendButton();
@@ -1149,7 +1158,7 @@ export class ChatView extends ItemView {
   private showCapabilities(): void {
     if (this.galleryEl) this.hideGallery();
     this.listEl.hide();
-    const wrap = this.listWrap.createDiv({ cls: "mva-gallery-wrap" });
+    const wrap = this.listHost.createDiv({ cls: "mva-gallery-wrap" });
     this.capsEl = wrap;
     this.rebuildOutline(); // drop the outline rail while capabilities is up
     void renderCapabilitiesPanel(wrap, this.app, this.plugin.settings, {
@@ -1173,7 +1182,7 @@ export class ChatView extends ItemView {
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.listEl.hide();
     this.composerEl.hide();
-    const wrap = this.listWrap.createDiv({ cls: "mva-gallery-wrap" });
+    const wrap = this.listHost.createDiv({ cls: "mva-gallery-wrap" });
     this.galleryEl = wrap;
     this.rebuildOutline(); // drop the outline rail while the gallery is up
     wrap.createDiv({ cls: "mva-gallery-title", text: "Conversations" });
@@ -1322,7 +1331,7 @@ export class ChatView extends ItemView {
     if (!this.openTabs.includes(next.id)) this.openTabs.push(next.id);
     if (next.messages.length && next.listEl.childElementCount === 0) this.renderConvoDom(next);
     next.listEl.hide(); // gallery is on top; reveal happens on hideGallery/switchTo
-    this.listWrap.appendChild(next.listEl);
+    this.listHost.appendChild(next.listEl);
     if (next.listEl.childElementCount === 0) this.renderEmptyState();
     this.refreshProviderUI();
     this.syncSendButton();
@@ -1382,6 +1391,16 @@ export class ChatView extends ItemView {
   private buildComposer(root: HTMLElement): void {
     const bar = root.createDiv({ cls: "mva-composer" });
     this.composerEl = bar;
+    // The composer is pinned to the bottom of listWrap (CSS), overlapping the
+    // transcript. Publish its live height as --mva-composer-h so the list can
+    // reserve matching bottom padding (last message clears the bar) and the jump
+    // pill / content fade sit just above it. Height changes as the textarea grows,
+    // images/context rows appear, or the bar is hidden (gallery → 0).
+    const syncHeight = () =>
+      this.listWrap.style.setProperty("--mva-composer-h", `${bar.offsetHeight}px`);
+    const composerResize = new ResizeObserver(syncHeight);
+    composerResize.observe(bar);
+    this.register(() => composerResize.disconnect());
     this.contextEl = bar.createDiv({ cls: "mva-context" });
     this.imagesEl = bar.createDiv({ cls: "mva-images is-hidden" });
 
