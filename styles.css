@@ -1382,7 +1382,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    footers pile up and crowd the transcript). Both forms are in the DOM; the
    class flip swaps them without re-rendering. */
 .mva-sources-head {
-  display: none;
+  display: flex;
   align-items: center;
   gap: 6px;
   min-height: 22px;
@@ -1397,8 +1397,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: color-mix(in srgb, var(--background-modifier-hover) 60%, transparent);
   color: var(--text-muted);
 }
-.mva-sources.is-collapsed .mva-sources-head {
-  display: flex;
+/* The "N files" head is always visible; clicking it opens AND closes the group.
+   Chevron points right when collapsed, rotates down when the chips are showing
+   (same grammar as .mva-reason / .mva-tool-group). */
+.mva-sources:not(.is-collapsed) .mva-reason-chevron {
+  transform: rotate(90deg);
 }
 .mva-sources.is-collapsed .mva-src-group {
   display: none;
@@ -3057,4 +3060,41 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 :is([class^="mva-"], [class*=" mva-"]) :is(button, .clickable-icon, [role="button"]):focus-visible {
   outline: none !important;
   box-shadow: none !important;
+}
+
+/* ------------------------- settings: tabbed panes -------------------------
+   The settings modal lives OUTSIDE .mva-root, so these rules stand alone on
+   theme vars (no --mva-* scope). A segmented bar of buttons over one body per
+   tab; the active tab carries an accent tint like the in-chat tabs. */
+.mva-settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.mva-settings-tab {
+  padding: 5px 12px;
+  border-radius: var(--radius-m, 8px);
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+.mva-settings-tab:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.mva-settings-tab.is-active {
+  background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+  border-color: color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+  color: var(--text-normal);
+  font-weight: 500;
+}
+.mva-settings-body.is-hidden {
+  display: none;
 }

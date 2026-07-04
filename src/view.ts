@@ -2979,7 +2979,7 @@ export class ChatView extends ItemView {
     const head = bar.createDiv({ cls: "mva-sources-head" });
     setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
     head.createSpan({ text: `${touched.length} file${touched.length === 1 ? "" : "s"}` });
-    this.clickable(head, () => bar.removeClass("is-collapsed"));
+    this.clickable(head, () => bar.classList.toggle("is-collapsed"));
     // No "EDITED"/"READ" text headers — the accent border + accent icon color on
     // write chips already distinguish them from muted read chips three ways over
     // (icon shape, border, color); a third, textual signal was pure redundancy
@@ -4093,17 +4093,19 @@ export class ChatView extends ItemView {
     this.pinnedToBottom = true;
     this.updateJumpPill();
     if (c.streaming) {
-      // Mid-turn steering (Claude Code parity): inject the message into the live
-      // turn instead of queuing it for after. The provider's steer() owns the
-      // capability contract — Codex has no steer (→ undefined → false), and
-      // Claude's steer returns false when images are attached — so the shared
-      // path stays provider-agnostic. A false return or a throw falls back to
-      // today's queue behavior, unchanged.
+      // Mid-turn behavior. Default (steerMode "queue") always enqueues so the
+      // message starts as the next turn. Opt-in "steer" injects into the live
+      // turn (Claude Code parity). The provider's steer() owns the capability
+      // contract — Codex has no steer (→ undefined → false), and Claude's steer
+      // returns false when images are attached — so the shared path stays
+      // provider-agnostic. A false return or a throw falls back to queue.
       let steered = false;
-      try {
-        steered = c.session?.steer?.(text, images) ?? false;
-      } catch {
-        steered = false;
+      if (this.plugin.settings.steerMode === "steer") {
+        try {
+          steered = c.session?.steer?.(text, images) ?? false;
+        } catch {
+          steered = false;
+        }
       }
       if (steered) {
         // Render the user bubble now and flush it; the working row stays and the
