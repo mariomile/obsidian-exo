@@ -2,6 +2,7 @@
  * Session-recovery pure logic — extracted verbatim from `view.ts`.
  */
 import type { Message } from "./model";
+import { planRecapLabel } from "./plan";
 
 /**
  * True when an error message signals a *recoverable* session death — the kind
@@ -121,12 +122,15 @@ export function buildRecap(messages: Message[]): string {
     } else {
       let toolCount = 0;
       const texts: string[] = [];
+      const planTags: string[] = [];
       for (const seg of m.segments) {
         if (seg.t === "text") texts.push(seg.md);
         else if (seg.t === "tool") toolCount++;
+        else if (seg.t === "plan") planTags.push(planRecapLabel(seg.approved));
       }
       let body = texts.join("").slice(0, 600);
       if (toolCount > 0) body += (body ? " " : "") + `[${toolCount} tool calls]`;
+      if (planTags.length) body += (body ? " " : "") + planTags.join(" ");
       lines.push(`[assistant] ${body}`);
     }
   }
