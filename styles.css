@@ -7,6 +7,7 @@
   --mva-r2: 9px;
   --mva-r3: 13px;
   --mva-t: 0.14s ease;
+  --mva-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --mva-brand: var(--interactive-accent);
   /* Shared card rhythm — one padding/radius/border across every card family
      (tool, permission, ask, capabilities) so they read as one system. */
@@ -1255,6 +1256,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-send:hover {
   opacity: 0.9;
+  transform: scale(1.06);
+}
+/* Satisfying press — quick scale-down for tactile feedback. */
+.mva-send:active {
+  transform: scale(0.9);
 }
 .mva-send .svg-icon {
   width: 16px;
@@ -1268,17 +1274,95 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 /* ----------------------------- empty state ---------------------------- */
 .mva-empty {
   margin-block: auto;
+  margin-inline: auto;
+  width: 100%;
+  max-width: 440px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
   padding: 12px 4px;
+}
+/* Each block eases up in a gentle stagger on first paint — the one signature
+   entrance; everything else in the chat stays still. */
+.mva-empty > * {
+  animation: mva-rise 0.5s var(--mva-ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+/* Hero: the Exo star is the still centre, greeting just below; the prompt
+   clusters settle in around it. */
+.mva-empty-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.mva-empty-star {
+  position: relative;
+  display: inline-flex;
+  color: var(--mva-brand);
+}
+.mva-empty-star .svg-icon {
+  width: 42px;
+  height: 42px;
+}
+/* Soft aura that breathes slowly behind the star — idle, ready. Compositor-only
+   (transform + opacity over a statically-blurred radial). */
+.mva-empty-star::before {
+  content: "";
+  position: absolute;
+  inset: -55%;
+  z-index: -1;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--mva-brand) 24%, transparent), transparent 68%);
+  filter: blur(6px);
+  animation: mva-breathe 4.5s ease-in-out infinite;
 }
 .mva-empty-title {
   font-size: 18px;
   font-weight: 650;
   letter-spacing: -0.015em;
   color: var(--text-normal);
+  text-wrap: balance;
+}
+/* Centre the prompt clusters under the hero. */
+.mva-empty .mva-es-label,
+.mva-empty .mva-surface-label {
+  text-align: center;
+}
+.mva-empty .mva-starters,
+.mva-empty .mva-surface-chips {
+  justify-content: center;
+}
+@keyframes mva-rise {
+  from {
+    opacity: 0;
+    transform: translateY(9px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes mva-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mva-empty-star::before {
+    animation: none;
+    opacity: 0.7;
+    transform: none;
+  }
 }
 .mva-empty-sub {
   font-size: 13px;
@@ -1317,12 +1401,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
   cursor: pointer;
-  transition: background var(--mva-t), border-color var(--mva-t), color var(--mva-t);
+  transition: background var(--mva-t), border-color var(--mva-t), color var(--mva-t),
+    transform var(--mva-t);
 }
 .mva-starter:hover {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
   border-color: var(--background-modifier-border-hover);
+  transform: translateY(-1px);
+}
+.mva-starter:active {
+  transform: translateY(0);
 }
 /* "Show N more" — a quieter chip than a real starter */
 .mva-es-more {
