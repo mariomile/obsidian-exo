@@ -1,8 +1,10 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, DropdownComponent, Notice, PluginSettingTab, Setting } from "obsidian";
 import type ExoPlugin from "./main";
 import type { PermissionMode, ProviderId } from "./providers/types";
 import { cliDiagnostics, updateClaudeCli } from "./cli";
 import { compareSemver } from "./core/semver";
+import { ADAPTERS } from "./providers/registry";
+import { modelOptions } from "./core/model-options";
 
 export interface MVASettings {
   provider: ProviderId;
@@ -17,6 +19,9 @@ export interface MVASettings {
   systemPrompt: string;
   /** User-defined prompt templates surfaced in the "/" menu. */
   customPrompts: { name: string; prompt: string }[];
+  /** What sending a message during a running turn does: "queue" waits and starts
+   *  it as the next turn; "steer" injects it into the live turn (Claude only). */
+  steerMode: "queue" | "steer";
   /** Phase 1 default: false (pure chat). Phase 2 turns this on with gating. */
   toolsEnabled: boolean;
   permissionMode: PermissionMode;
@@ -83,6 +88,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   effort: "default",
   systemPrompt: "",
   customPrompts: [],
+  steerMode: "queue",
   toolsEnabled: false,
   permissionMode: "default",
   autoAllowRead: true,
@@ -121,136 +127,237 @@ export class MVASettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
+  /** Remembered active tab across re-renders (not persisted to disk). */
+  private activeTab = "General";
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl).setName("Provider").setHeading();
+    // Obsidian has no native settings tabs, so build a segmented bar of <button>s
+    // (keyboard-operable for free) over one body container per tab; clicking a tab
+    // shows its body and hides the rest. All settings live under exactly one tab.
+    const tabNames = ["General", "Chat", "Agent & Permissions", "Memory", "Advanced"];
+    const bar = containerEl.createDiv({ cls: "mva-settings-tabs" });
+    const bodies = new Map<string, HTMLElement>();
+    const btns = new Map<string, HTMLElement>();
 
-    new Setting(containerEl)
+    const select = (name: string) => {
+      this.activeTab = name;
+      for (const [n, b] of btns) b.toggleClass("is-active", n === name);
+      for (const [n, el] of bodies) el.toggleClass("is-hidden", n !== name);
+    };
+
+    for (const name of tabNames) {
+      const btn = bar.createEl("button", { cls: "mva-settings-tab", text: name });
+      btn.onclick = () => select(name);
+      btns.set(name, btn);
+      bodies.set(name, containerEl.createDiv({ cls: "mva-settings-body" }));
+    }
+
+    this.renderGeneralTab(bodies.get("General")!);
+    this.renderChatTab(bodies.get("Chat")!);
+    this.renderAgentTab(bodies.get("Agent & Permissions")!);
+    this.renderMemoryTab(bodies.get("Memory")!);
+    this.renderAdvancedTab(bodies.get("Advanced")!);
+
+    if (!bodies.has(this.activeTab)) this.activeTab = "General";
+    select(this.activeTab);
+  }
+
+  /** A boolean toggle row — the repeated shape across the tabs. */
+  private toggleSetting(el: HTMLElement, name: string, desc: string, key: keyof MVASettings): void {
+    new Setting(el)
+      .setName(name)
+      .setDesc(desc)
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings[key] as boolean).onChange(async (v) => {
+          (this.plugin.settings[key] as boolean) = v;
+          await this.plugin.saveSettings();
+        })
+      );
+  }
+
+  /* ------------------------------- General ------------------------------ */
+
+  private renderGeneralTab(el: HTMLElement): void {
+    const s = this.plugin.settings;
+
+    new Setting(el)
       .setName("Default provider")
-      .setDesc("Which CLI backend new conversations start with.")
+      .setDesc("The CLI backend every new conversation starts with.")
       .addDropdown((d) =>
         d
           .addOption("claude", "Claude")
           .addOption("codex", "Codex")
-          .setValue(this.plugin.settings.provider)
+          .setValue(s.provider)
           .onChange(async (v) => {
-            this.plugin.settings.provider = v as ProviderId;
+            s.provider = v as ProviderId;
             await this.plugin.saveSettings();
           })
       );
 
-    new Setting(containerEl)
+    // The model each new chat starts with, per provider. Options = the provider's
+    // built-ins + the custom ids from the textareas below; editing those textareas
+    // repopulates these dropdowns live via fill().
+    let claudeDd: DropdownComponent | undefined;
+    let codexDd: DropdownComponent | undefined;
+    const fill = (d: DropdownComponent, provider: ProviderId) => {
+      d.selectEl.empty();
+      const cur = provider === "claude" ? s.claudeModel : s.codexModel;
+      const opts = modelOptions(
+        ADAPTERS[provider].models(),
+        provider === "claude" ? s.claudeCustomModels : s.codexCustomModels
+      );
+      for (const o of opts) d.addOption(o.id, o.label);
+      // Keep the current selection valid even if it isn't in the option list.
+      if (cur && !opts.some((o) => o.id === cur)) d.addOption(cur, cur);
+      d.setValue(cur);
+    };
+
+    new Setting(el)
+      .setName("Default Claude model")
+      .setDesc("Which Claude model new conversations start with — includes any custom Claude models set below.")
+      .addDropdown((d) => {
+        claudeDd = d;
+        fill(d, "claude");
+        d.onChange(async (v) => {
+          s.claudeModel = v;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(el)
+      .setName("Default Codex model")
+      .setDesc("Which Codex model new conversations start with — includes any custom Codex models set below.")
+      .addDropdown((d) => {
+        codexDd = d;
+        fill(d, "codex");
+        d.onChange(async (v) => {
+          s.codexModel = v;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(el)
       .setName("Claude binary path")
-      .setDesc("Leave empty to auto-detect. Run `which claude` if detection fails.")
+      .setDesc("Path to the `claude` CLI. Leave empty to auto-detect; run `which claude` if detection fails.")
       .addText((t) =>
         t
           .setPlaceholder("auto-detect")
-          .setValue(this.plugin.settings.claudeBin)
+          .setValue(s.claudeBin)
           .onChange(async (v) => {
-            this.plugin.settings.claudeBin = v.trim();
+            s.claudeBin = v.trim();
             await this.plugin.saveSettings();
           })
       );
-    this.renderCliDiagnostics(containerEl, "claude", this.plugin.settings.claudeBin);
+    this.renderCliDiagnostics(el, "claude", s.claudeBin);
 
-    new Setting(containerEl)
+    new Setting(el)
       .setName("Codex binary path")
-      .setDesc("Leave empty to auto-detect. Run `which codex` if detection fails.")
+      .setDesc("Path to the `codex` CLI. Leave empty to auto-detect; run `which codex` if detection fails.")
       .addText((t) =>
         t
           .setPlaceholder("auto-detect")
-          .setValue(this.plugin.settings.codexBin)
+          .setValue(s.codexBin)
           .onChange(async (v) => {
-            this.plugin.settings.codexBin = v.trim();
+            s.codexBin = v.trim();
             await this.plugin.saveSettings();
           })
       );
-    this.renderCliDiagnostics(containerEl, "codex", this.plugin.settings.codexBin);
+    this.renderCliDiagnostics(el, "codex", s.codexBin);
 
-    new Setting(containerEl)
-      .setName("Codex sandbox")
-      .setDesc("Filesystem access for Codex when tools are enabled.")
-      .addDropdown((d) =>
-        d
-          .addOptions({
-            "read-only": "Read-only",
-            "workspace-write": "Workspace write",
-            "danger-full-access": "Full access (danger)",
-          })
-          .setValue(this.plugin.settings.codexSandbox)
-          .onChange(async (v) => {
-            this.plugin.settings.codexSandbox = v;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Codex approval policy")
-      .setDesc("When Codex asks before running commands.")
-      .addDropdown((d) =>
-        d
-          .addOptions({
-            untrusted: "Untrusted (ask often)",
-            "on-request": "On request",
-            "on-failure": "On failure",
-            never: "Never",
-          })
-          .setValue(this.plugin.settings.codexApproval)
-          .onChange(async (v) => {
-            this.plugin.settings.codexApproval = v;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
+    new Setting(el)
       .setName("Custom Claude models")
-      .setDesc("Extra model ids to add to the Claude picker (comma or newline separated).")
+      .setDesc("Extra Claude model ids (comma- or newline-separated) added to the model picker and the default-model dropdown above.")
       .addTextArea((t) =>
         t
           .setPlaceholder("claude-opus-4-6\nclaude-sonnet-4-6")
-          .setValue(this.plugin.settings.claudeCustomModels)
+          .setValue(s.claudeCustomModels)
           .onChange(async (v) => {
-            this.plugin.settings.claudeCustomModels = v;
+            s.claudeCustomModels = v;
             await this.plugin.saveSettings();
+            if (claudeDd) fill(claudeDd, "claude");
           })
       );
 
-    new Setting(containerEl)
+    new Setting(el)
       .setName("Custom Codex models")
-      .setDesc("Extra model ids to add to the Codex picker (comma or newline separated).")
+      .setDesc("Extra Codex model ids (comma- or newline-separated) added to the model picker and the default-model dropdown above.")
       .addTextArea((t) =>
         t
           .setPlaceholder("gpt-5-codex\no3")
-          .setValue(this.plugin.settings.codexCustomModels)
+          .setValue(s.codexCustomModels)
           .onChange(async (v) => {
-            this.plugin.settings.codexCustomModels = v;
+            s.codexCustomModels = v;
+            await this.plugin.saveSettings();
+            if (codexDd) fill(codexDd, "codex");
+          })
+      );
+  }
+
+  /* -------------------------------- Chat -------------------------------- */
+
+  private renderChatTab(el: HTMLElement): void {
+    const s = this.plugin.settings;
+
+    new Setting(el)
+      .setName("Sending during a running turn")
+      .setDesc(
+        "Queue = your message waits and starts as the next turn. Steer = inject it into the running turn so the agent can change course mid-flight (Claude only; Codex always queues)."
+      )
+      .addDropdown((d) =>
+        d
+          .addOption("queue", "Queue (wait for the next turn)")
+          .addOption("steer", "Steer (inject into the running turn)")
+          .setValue(s.steerMode)
+          .onChange(async (v) => {
+            s.steerMode = v as "queue" | "steer";
             await this.plugin.saveSettings();
           })
       );
 
-    new Setting(containerEl)
-      .setName("System prompt")
-      .setDesc("Optional. Prepended persona/instructions for every conversation.")
-      .addTextArea((t) =>
-        t
-          .setPlaceholder("(use the CLI's default)")
-          .setValue(this.plugin.settings.systemPrompt)
-          .onChange(async (v) => {
-            this.plugin.settings.systemPrompt = v;
-            await this.plugin.saveSettings();
-          })
-      );
+    this.toggleSetting(
+      el,
+      "Generate chat titles with AI (Haiku)",
+      "After the first reply, rename the tab to a concise 3-6 word summary using Claude Haiku; off keeps the truncated first message.",
+      "aiTitles"
+    );
+    this.toggleSetting(
+      el,
+      "Surface related notes",
+      "Show notes related to the active note in the empty state, before you send anything.",
+      "featureSurfacing"
+    );
+    this.toggleSetting(
+      el,
+      "Wikilink-ify replies",
+      "Turn mentions of existing note titles in replies into clickable [[wikilinks]].",
+      "featureWikilinkify"
+    );
+    this.toggleSetting(
+      el,
+      "Reveal edited notes",
+      "When the agent edits or creates a note, open it in a tab beside the chat so you watch it change live.",
+      "revealEditedNotes"
+    );
+    this.toggleSetting(
+      el,
+      "System notifications",
+      "Send an OS notification when a turn finishes, a card needs an answer, or an error occurs — only while Obsidian is in the background.",
+      "systemNotifications"
+    );
 
-    new Setting(containerEl)
+    new Setting(el)
       .setName("Custom prompts")
-      .setDesc('One per line as "Name | prompt text". Use {{variables}} for fill-in values, and " >>> " to chain steps into a multi-step workflow. Surfaced in the "/" menu.')
+      .setDesc(
+        'Reusable prompts for the "/" menu, one per line as "Name | prompt text". Use {{variables}} for fill-in values and " >>> " to chain steps into a multi-step workflow.'
+      )
       .addTextArea((t) => {
         t.setPlaceholder("Summarize | Summarize the current note in 5 bullets")
-          .setValue(this.plugin.settings.customPrompts.map((p) => `${p.name} | ${p.prompt}`).join("\n"))
+          .setValue(s.customPrompts.map((p) => `${p.name} | ${p.prompt}`).join("\n"))
           .onChange(async (v) => {
-            this.plugin.settings.customPrompts = v
+            s.customPrompts = v
               .split("\n")
               .map((line) => {
                 const i = line.indexOf("|");
@@ -265,238 +372,227 @@ export class MVASettingTab extends PluginSettingTab {
         t.inputEl.rows = 5;
       });
 
-    new Setting(containerEl)
-      .setName("Fast startup")
-      .setDesc("Skips external MCP servers for snappier responses.")
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.fastStartup).onChange(async (v) => {
-          this.plugin.settings.fastStartup = v;
-          await this.plugin.saveSettings();
-        })
+    new Setting(el)
+      .setName("System prompt")
+      .setDesc("Optional persona/instructions prepended to every conversation. Leave empty to use the CLI's default.")
+      .addTextArea((t) =>
+        t
+          .setPlaceholder("(use the CLI's default)")
+          .setValue(s.systemPrompt)
+          .onChange(async (v) => {
+            s.systemPrompt = v;
+            await this.plugin.saveSettings();
+          })
       );
+  }
 
-    new Setting(containerEl)
-      .setName("Pre-warm the agent session")
-      .setDesc(
-        "Start the CLI session in the background when Exo opens, so the first message skips the cold start. Claude only."
-      )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.prewarmSession).onChange(async (v) => {
-          this.plugin.settings.prewarmSession = v;
-          await this.plugin.saveSettings();
-        })
-      );
+  /* ------------------------- Agent & Permissions ------------------------ */
 
-    new Setting(containerEl)
-      .setName("Run Claude Code hooks")
-      .setDesc(
-        "Execute hooks configured in .claude/settings.json (vault and global) — PreToolUse guards, formatters, notifications. " +
-          "Matches Claude Code behavior. Note: hooks run at session start and on every tool call — heavy or network-bound hooks " +
-          "(check what's in your global settings) slow turns down. Turn off if Exo feels sluggish."
-      )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.runHooks).onChange(async (v) => {
-          this.plugin.settings.runHooks = v;
-          await this.plugin.saveSettings();
-        })
-      );
+  private renderAgentTab(el: HTMLElement): void {
+    const s = this.plugin.settings;
 
-    new Setting(containerEl)
-      .setName("Auto-compact (token saver)")
-      .setDesc(
-        "Automatically summarize and compact the conversation when the context window fills. " +
-          "Strongly recommended to keep long chats from re-billing the whole history each turn. Claude only."
-      )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.autoCompactEnabled).onChange(async (v) => {
-          this.plugin.settings.autoCompactEnabled = v;
-          await this.plugin.saveSettings();
-        })
-      );
+    this.toggleSetting(
+      el,
+      "Enable tools (agentic mode)",
+      "Let the agent read, write, and edit files and run commands in your vault. Every sensitive action is still gated by the permission cards.",
+      "toolsEnabled"
+    );
 
-    new Setting(containerEl)
-      .setName("Context-saving mode")
-      .setDesc(
-        "Load Obsidian-native tool definitions on demand instead of always in context. " +
-          "Saves tokens every turn; the agent may take an extra step to discover a tool. Claude only."
-      )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.contextSavingMode).onChange(async (v) => {
-          this.plugin.settings.contextSavingMode = v;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl).setName("Agentic capabilities").setHeading();
-
-    new Setting(containerEl)
-      .setName("Enable tools (agentic mode)")
-      .setDesc(
-        "Let the agent read/write/edit files and run commands in your vault. " +
-          "Phase 2 feature — permission prompts are wired up before this is safe to use."
-      )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.toolsEnabled).onChange(async (v) => {
-          this.plugin.settings.toolsEnabled = v;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
+    new Setting(el)
       .setName("Permission mode")
-      .setDesc("How tool use is approved. 'default' asks for each sensitive action.")
+      .setDesc(
+        "How tool use is approved. Ask prompts for each sensitive action; Accept edits auto-approves file edits; Plan only forbids changes; Bypass skips every prompt (dangerous)."
+      )
       .addDropdown((d) =>
         d
           .addOption("default", "Ask (default)")
           .addOption("acceptEdits", "Accept edits")
           .addOption("plan", "Plan only")
           .addOption("bypassPermissions", "Bypass (dangerous)")
-          .setValue(this.plugin.settings.permissionMode)
+          .setValue(s.permissionMode)
           .onChange(async (v) => {
-            this.plugin.settings.permissionMode = v as PermissionMode;
+            s.permissionMode = v as PermissionMode;
             await this.plugin.saveSettings();
           })
       );
 
-    new Setting(containerEl)
-      .setName("Auto-allow read-only tools")
-      .setDesc("Don't prompt for Read/Glob/Grep/LS (no side effects).")
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.autoAllowRead).onChange(async (v) => {
-          this.plugin.settings.autoAllowRead = v;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl).setName("Permissions").setHeading();
-
-    new Setting(containerEl)
-      .setName("Remember 'Always allow' across sessions")
-      .setDesc("When you pick 'Always allow' on a permission card, also save it as an allow rule below so it survives a reload.")
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.rememberAlwaysAllow).onChange(async (v) => {
-          this.plugin.settings.rememberAlwaysAllow = v;
-          await this.plugin.saveSettings();
-        })
-      );
+    this.toggleSetting(
+      el,
+      "Auto-allow read-only tools",
+      "Skip the permission prompt for side-effect-free tools (Read, Glob, Grep, LS).",
+      "autoAllowRead"
+    );
+    this.toggleSetting(
+      el,
+      "Remember 'Always allow' across sessions",
+      "When you pick 'Always allow' on a permission card, also save it as an allow rule below so it survives a reload.",
+      "rememberAlwaysAllow"
+    );
 
     const rulesDesc =
-      "One per line: ToolName or ToolName(argument prefix). Deny wins. These apply before the permission card. " +
-      "Bash prefixes match whole commands/arguments — Bash(rm) covers 'rm -rf x' but not 'rmdir'. Other tools match the target path by plain prefix.";
-    new Setting(containerEl)
+      "One per line: ToolName or ToolName(argument prefix). Deny wins, and both apply before the permission card. " +
+      "Bash prefixes match whole commands — Bash(rm) covers 'rm -rf x' but not 'rmdir'; other tools match the target path by plain prefix.";
+    new Setting(el)
       .setName("Always-allow rules")
       .setDesc(rulesDesc)
       .addTextArea((t) => {
         t.setPlaceholder("Bash(git status)\nread_note")
-          .setValue(this.plugin.settings.permAllowRules)
+          .setValue(s.permAllowRules)
           .onChange(async (v) => {
-            this.plugin.settings.permAllowRules = v;
+            s.permAllowRules = v;
             await this.plugin.saveSettings();
           });
         t.inputEl.rows = 4;
         t.inputEl.style.fontFamily = "var(--font-monospace)";
       });
 
-    new Setting(containerEl)
+    new Setting(el)
       .setName("Deny rules")
       .setDesc(rulesDesc)
       .addTextArea((t) => {
         t.setPlaceholder("Bash(rm)\nWrite")
-          .setValue(this.plugin.settings.permDenyRules)
+          .setValue(s.permDenyRules)
           .onChange(async (v) => {
-            this.plugin.settings.permDenyRules = v;
+            s.permDenyRules = v;
             await this.plugin.saveSettings();
           });
         t.inputEl.rows = 4;
         t.inputEl.style.fontFamily = "var(--font-monospace)";
       });
 
-    new Setting(containerEl).setName("Obsidian-native").setHeading();
-    containerEl.createEl("p", {
-      cls: "setting-item-description",
-      text: "Graph- and memory-aware features. Native tools and memory are Claude-only; graph UI works for both providers.",
-    });
-
-    const toggle = (name: string, desc: string, key: keyof typeof this.plugin.settings) =>
-      new Setting(containerEl)
-        .setName(name)
-        .setDesc(desc)
-        .addToggle((t) =>
-          t.setValue(this.plugin.settings[key] as boolean).onChange(async (v) => {
-            (this.plugin.settings[key] as boolean) = v;
-            await this.plugin.saveSettings();
-          })
-        );
-
-    toggle(
-      "Obsidian tools",
-      "Give the agent native tools (search, read, backlinks, neighborhood, create/edit notes, frontmatter) alongside the standard ones.",
-      "obsidianToolsEnabled"
-    );
-    toggle(
-      "Native-first",
-      "Disable the built-in file tools (Read/Grep/Glob/LS/Edit/Write) so the agent uses only the Obsidian-native tools for vault work. Bash stays available (gated).",
-      "nativeFirst"
-    );
-    toggle(
-      "Read vault memory",
-      "Boot each conversation with context from _system/ (vault-context, preferences, rules, recent sessions).",
-      "memoryReadEnabled"
-    );
-    toggle(
-      "Write vault memory",
-      "Let the agent capture decisions, learnings, and session-log entries into _system/ (every write is permission-gated).",
-      "memoryWriteEnabled"
-    );
-    toggle("Surface related notes", "Show notes related to the active note in the empty state.", "featureSurfacing");
-    toggle(
-      "Generate chat titles with AI (Haiku)",
-      "After the first reply, refine the tab title into a concise 3-6 word summary using Claude Haiku. When off, the title stays the truncated first message.",
-      "aiTitles"
-    );
-    toggle("Wikilink-ify replies", "Turn mentions of existing note titles in replies into clickable [[wikilinks]].", "featureWikilinkify");
-    toggle(
-      "Reveal edited notes",
-      "When the agent edits or creates a note, open it in a tab beside the chat so you watch it update live.",
-      "revealEditedNotes"
-    );
-    toggle(
-      "System notifications",
-      "Notify when a turn finishes, a question/permission card is waiting, or an error occurs — only while Obsidian is in the background.",
-      "systemNotifications"
+    this.toggleSetting(
+      el,
+      "Run Claude Code hooks",
+      "Execute hooks in .claude/settings.json (vault + global) — PreToolUse guards, formatters, notifications — matching Claude Code. Hooks run at session start and on every tool call, so heavy or network-bound ones slow turns down; turn off if Exo feels sluggish.",
+      "runHooks"
     );
 
-    new Setting(containerEl)
-      .setName("Memory dream pass")
-      .setDesc(
-        "Deterministically consolidate _system/memory: merge duplicate learnings, promote well-evidenced ones to rules, mark stale rules. Every run is snapshotted and undoable. Run manually anytime from the command palette; set a schedule to automate."
-      )
+    new Setting(el)
+      .setName("Codex sandbox")
+      .setDesc("Filesystem access granted to Codex when tools are enabled.")
       .addDropdown((d) =>
         d
-          .addOptions({ off: "Off", daily: "Daily", weekly: "Weekly" })
-          .setValue(this.plugin.settings.dreamPassSchedule)
+          .addOptions({
+            "read-only": "Read-only",
+            "workspace-write": "Workspace write",
+            "danger-full-access": "Full access (danger)",
+          })
+          .setValue(s.codexSandbox)
           .onChange(async (v) => {
-            this.plugin.settings.dreamPassSchedule = v as "off" | "daily" | "weekly";
+            s.codexSandbox = v;
             await this.plugin.saveSettings();
           })
       );
 
-    new Setting(containerEl)
+    new Setting(el)
+      .setName("Codex approval policy")
+      .setDesc("When Codex pauses to ask before running a command.")
+      .addDropdown((d) =>
+        d
+          .addOptions({
+            untrusted: "Untrusted (ask often)",
+            "on-request": "On request",
+            "on-failure": "On failure",
+            never: "Never",
+          })
+          .setValue(s.codexApproval)
+          .onChange(async (v) => {
+            s.codexApproval = v;
+            await this.plugin.saveSettings();
+          })
+      );
+  }
+
+  /* ------------------------------- Memory ------------------------------- */
+
+  private renderMemoryTab(el: HTMLElement): void {
+    const s = this.plugin.settings;
+
+    this.toggleSetting(
+      el,
+      "Read vault memory",
+      "Boot each conversation with context from _system/ (vault-context, preferences, rules, recent sessions). Claude only.",
+      "memoryReadEnabled"
+    );
+    this.toggleSetting(
+      el,
+      "Write vault memory",
+      "Let the agent capture decisions, learnings, and session-log entries into _system/ — every write is still permission-gated. Claude only.",
+      "memoryWriteEnabled"
+    );
+
+    new Setting(el)
+      .setName("Memory dream pass")
+      .setDesc(
+        "Consolidate _system/memory deterministically: merge duplicate learnings, promote well-evidenced ones to rules, mark stale rules. Every run is snapshotted and undoable; set a schedule to automate it, or run it manually from the command palette."
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ off: "Off", daily: "Daily", weekly: "Weekly" })
+          .setValue(s.dreamPassSchedule)
+          .onChange(async (v) => {
+            s.dreamPassSchedule = v as "off" | "daily" | "weekly";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(el)
       .setName("Scheduled playbook runs")
       .setDesc(
-        'Run a custom prompt unattended on a schedule — read-only: the agent can read the vault but every write is denied; the only output is a report note in _system/reports/. One per line: "Prompt name | daily" or "Prompt name | weekly". Prompts with {{variables}} can\'t be scheduled.'
+        'Run a custom prompt unattended on a schedule, read-only: the agent may read the vault but every write is denied, and the only output is a report note in _system/reports/. One per line: "Prompt name | daily" or "Prompt name | weekly"; prompts with {{variables}} can\'t be scheduled.'
       )
       .addTextArea((t) => {
         t.setPlaceholder("Morning brief | daily")
-          .setValue(this.plugin.settings.scheduledRuns)
+          .setValue(s.scheduledRuns)
           .onChange(async (v) => {
-            this.plugin.settings.scheduledRuns = v;
+            s.scheduledRuns = v;
             await this.plugin.saveSettings();
           });
         t.inputEl.rows = 3;
       });
+  }
 
-    this.renderMcpSection(containerEl);
+  /* ------------------------------ Advanced ------------------------------ */
+
+  private renderAdvancedTab(el: HTMLElement): void {
+    this.toggleSetting(
+      el,
+      "Fast startup",
+      "Skip external MCP servers at session start for snappier first responses. Turn off to load the MCP servers configured below.",
+      "fastStartup"
+    );
+    this.toggleSetting(
+      el,
+      "Pre-warm the agent session",
+      "Start the CLI session in the background the moment Exo opens, so your first message skips the cold start. Claude only.",
+      "prewarmSession"
+    );
+    this.toggleSetting(
+      el,
+      "Auto-compact (token saver)",
+      "Summarize and compact the conversation automatically when the context window fills, so long chats don't re-bill the whole history each turn. Claude only.",
+      "autoCompactEnabled"
+    );
+    this.toggleSetting(
+      el,
+      "Context-saving mode",
+      "Load Obsidian-native tool definitions on demand instead of always in context — saves tokens every turn, at the cost of an occasional extra discovery step. Claude only.",
+      "contextSavingMode"
+    );
+    this.toggleSetting(
+      el,
+      "Obsidian tools",
+      "Give the agent native vault tools (search, read, backlinks, neighborhood, create/edit notes, frontmatter) alongside the standard ones. Claude only.",
+      "obsidianToolsEnabled"
+    );
+    this.toggleSetting(
+      el,
+      "Native-first",
+      "Disable the built-in file tools (Read/Grep/Glob/LS/Edit/Write) so vault work goes only through the Obsidian-native tools. Bash stays available (gated). Claude only.",
+      "nativeFirst"
+    );
+
+    void this.renderMcpSection(el);
   }
 
   /** In-app management of the project's `.mcp.json` (loads when Fast startup is off). */
