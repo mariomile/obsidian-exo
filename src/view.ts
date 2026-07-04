@@ -33,6 +33,8 @@ import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
+import { RecapPanel } from "./ui/recap";
+import { buildRecap as buildConvoRecap } from "./core/recap";
 import { clickable } from "./ui/dom";
 import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
@@ -42,7 +44,7 @@ import { planPersistedConvos } from "./core/persistence";
 import { buildRecap, isRecoverableSessionError, resolveRecovery } from "./core/recovery";
 import { TurnWatchdog } from "./core/turn-watchdog";
 import { advanceBoundary } from "./core/stream-scan";
-import { mergeTouched } from "./core/touched";
+import { mergeTouched, WRITE_TOOLS } from "./core/touched";
 import { describeCliFailure } from "./core/errors";
 import { planInputParts, planStateText } from "./core/plan";
 import {
@@ -282,6 +284,11 @@ export class ChatView extends ItemView {
 
   private tabsEl!: HTMLElement;
   private listWrap!: HTMLElement;
+  /** Recap Rail — full-page-only right panel; host + panel instance + observer.
+   *  Null in the sidebar (where the rail never mounts its content). */
+  private recapHost: HTMLElement | null = null;
+  private recapPanel: RecapPanel | null = null;
+  private recapResizeObserver: ResizeObserver | null = null;
   private composerEl!: HTMLElement;
   /** One-shot "context is filling up" row under the composer (null when hidden). */
   private compactNudgeEl: HTMLElement | null = null;
@@ -345,7 +352,13 @@ export class ChatView extends ItemView {
     root.addClass("mva-root");
     this.buildHeader(root);
     this.tabsEl = root.createDiv({ cls: "mva-tabs" });
-    this.listWrap = root.createDiv({ cls: "mva-list-wrap" });
+    // Chat column + Recap Rail as flex-row siblings. In the sidebar (not wide)
+    // the row is a plain column and the recap host stays display:none (CSS); the
+    // chat behaves exactly as before.
+    const mainRow = root.createDiv({ cls: "mva-main-row" });
+    this.listWrap = mainRow.createDiv({ cls: "mva-list-wrap" });
+    this.recapHost = mainRow.createDiv({ cls: "mva-recap" });
+    this.recapPanel = new RecapPanel(this.app, (p) => this.openNote(p));
     // Wire up link clicks in rendered markdown (MarkdownRenderer doesn't do this for custom views).
     this.registerDomEvent(this.listWrap, "click", (e) => {
       const a = (e.target as HTMLElement).closest("a") as HTMLAnchorElement | null;
@@ -392,7 +405,38 @@ export class ChatView extends ItemView {
     const tailResizeObserver = new ResizeObserver(() => this.renderTailSurfacing(this.active));
     tailResizeObserver.observe(this.listWrap);
     this.register(() => tailResizeObserver.disconnect());
+    // Recap Rail: full-page-only. Re-evaluate `is-wide` on container resize and on
+    // layout-change (dragging the leaf between sidebar and main), then build/clear.
+    this.recapResizeObserver = new ResizeObserver(() => this.applyWideMode());
+    this.recapResizeObserver.observe(root);
+    this.register(() => {
+      this.recapResizeObserver?.disconnect();
+      this.recapResizeObserver = null;
+    });
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.applyWideMode()));
+    this.applyWideMode();
     this.prewarm();
+  }
+
+  /** True when this leaf lives in the main editor area (not a sidebar) and is wide
+   *  enough for the recap rail. Sidebar leaves root to left/rightSplit, not rootSplit. */
+  private isWideMain(): boolean {
+    return this.leaf.getRoot() === this.app.workspace.rootSplit && this.contentEl.clientWidth > 900;
+  }
+
+  /** Toggle the `is-wide` layout class and (re)build or clear the recap to match. */
+  private applyWideMode(): void {
+    const wide = this.isWideMain();
+    this.contentEl.toggleClass("is-wide", wide);
+    if (wide) this.updateRecap();
+    else this.recapHost?.empty();
+  }
+
+  /** Rebuild the recap for the active conversation. No-op unless wide, so no work
+   *  happens in the sidebar. Called at turn end, on switch, and on restore/rewind. */
+  private updateRecap(): void {
+    if (!this.recapHost || !this.recapPanel || !this.isWideMain()) return;
+    this.recapPanel.render(this.recapHost, buildConvoRecap(this.active.messages));
   }
 
   async onClose(): Promise<void> {
@@ -872,6 +916,7 @@ export class ChatView extends ItemView {
     this.scrollConvo(c);
     this.renderTailSurfacing(c);
     this.rebuildOutline();
+    this.updateRecap();
     this.prewarm();
   }
 
@@ -1559,9 +1604,6 @@ export class ChatView extends ItemView {
     return out;
   }
 
-  /** Tool names that mutate a note — used to classify touched notes as read vs write. */
-  private static readonly WRITE_TOOLS = /Write|Edit|MultiEdit|NotebookEdit|append_to_note|update_frontmatter|create_note|add_links|edit_note|insert_at_cursor|rename_note/;
-
   private static readonly EFFORT_OPTS: [string, string][] = [
     ["default", "Default"],
     ["low", "Low"],
@@ -1709,11 +1751,10 @@ export class ChatView extends ItemView {
       const cur = opts.getCurrent();
       const allOpts = opts.getOptions();
 
-      // Shared roving-highlight keyboard handler for both variants: Arrow keys move
-      // the `is-active` cursor, Enter picks the highlighted row, Escape closes
-      // (the searchable variant passes an onEscape hook to clear a non-empty query
-      // first). Rows never take focus themselves — focus lives on the search input
-      // (searchable) or the popover container (non-searchable), same as before.
+      // Roving-highlight keyboard handler: Arrow keys move the `is-active` cursor,
+      // Enter picks the highlighted row, Escape closes (the optional onEscape hook
+      // is unused now but kept for callers that want a pre-close step). Rows never
+      // take focus themselves — focus lives on the popover container.
       const keyNav =
         (
           getEls: () => { el: HTMLElement; value: string }[],
@@ -2377,7 +2418,7 @@ export class ChatView extends ItemView {
               // Note-touching calls dissolve into the touched-notes footer below
               // instead of also rendering their own row — this is a restored (not
               // live) turn, so there's no streaming status to show in the first place.
-              mergeTouched(touched, fp, ChatView.WRITE_TOOLS.test(s.name) ? "write" : "read");
+              mergeTouched(touched, fp, WRITE_TOOLS.test(s.name) ? "write" : "read");
             } else {
               const refs = this.createToolCard(body, s.name, s.input);
               this.finishToolCard(refs, s.ok !== false, s.output);
@@ -2389,6 +2430,8 @@ export class ChatView extends ItemView {
         if (full.trim()) this.attachActions(el, full, lastUser || undefined, c);
       }
     }
+    // Rebuilt DOM (restore / rewind / gallery-open) → refresh the recap too.
+    if (c === this.active) this.updateRecap();
   }
 
   private addUserTurn(c: Convo, text: string, images?: ImageAttachment[]): void {
@@ -2774,7 +2817,10 @@ export class ChatView extends ItemView {
     this.renderQueue(c);
     c.updatedAt = Date.now();
     this.updateUsage(null);
-    if (c === this.active) this.rebuildOutline();
+    if (c === this.active) {
+      this.rebuildOutline();
+      this.updateRecap();
+    }
     this.persist();
     new Notice("Rewound the conversation. Files are unchanged; the session was reset.");
   }
@@ -3379,7 +3425,7 @@ export class ChatView extends ItemView {
       return first ? `Bash:${first}` : "Bash";
     }
     const fp = toolFilePath(tool, input);
-    if (fp && ChatView.WRITE_TOOLS.test(tool)) return `${tool}:${fp}`;
+    if (fp && WRITE_TOOLS.test(tool)) return `${tool}:${fp}`;
     return tool;
   }
 
@@ -3390,7 +3436,7 @@ export class ChatView extends ItemView {
     const i = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
     if (tool === "Bash") return typeof i.command === "string" ? i.command.trim() : "";
     const fp = toolFilePath(tool, input);
-    if (fp && ChatView.WRITE_TOOLS.test(tool)) return fp;
+    if (fp && WRITE_TOOLS.test(tool)) return fp;
     return "";
   }
 
@@ -3403,7 +3449,7 @@ export class ChatView extends ItemView {
       return first ? `Bash(${first})` : "Bash";
     }
     const fp = toolFilePath(tool, input);
-    if (fp && ChatView.WRITE_TOOLS.test(tool)) return `${tool}(${fp})`;
+    if (fp && WRITE_TOOLS.test(tool)) return `${tool}(${fp})`;
     return tool;
   }
 
@@ -3450,7 +3496,7 @@ export class ChatView extends ItemView {
     const scope =
       tool === "Bash"
         ? `all \`${(((input as Record<string, unknown>)?.command as string) || "").trim().split(/\s+/)[0] || "shell"}\` commands`
-        : ChatView.WRITE_TOOLS.test(tool) && toolFilePath(tool, input)
+        : WRITE_TOOLS.test(tool) && toolFilePath(tool, input)
           ? `edits to this file`
           : `this tool`;
     alwaysBtn.setAttr("aria-label", `Always allow ${scope} in this conversation`);
@@ -4160,7 +4206,7 @@ export class ChatView extends ItemView {
           // rewindable (checkpoint) and visible in the touched-notes footer.
           const fp = toolFilePath(e.name, e.input);
           if (fp) {
-            const kind = ChatView.WRITE_TOOLS.test(e.name) ? "write" : "read";
+            const kind = WRITE_TOOLS.test(e.name) ? "write" : "read";
             if (kind === "read") ctx.sources.add(fp);
             else snapshots.push(this.snapshot(checkpoint, fp).catch(() => {})); // checkpoint before the write runs
             if (kind === "write") {
@@ -4256,7 +4302,7 @@ export class ChatView extends ItemView {
           const fp = toolFilePath(e.tool, e.input);
           // Single source of truth for write-tool classification (WRITE_TOOLS) so
           // checkpointing, touched-footer, and rules can never disagree.
-          const isWrite = !!fp && ChatView.WRITE_TOOLS.test(e.tool);
+          const isWrite = !!fp && WRITE_TOOLS.test(e.tool);
           // Snapshot the target file (pre-edit) before letting a write proceed.
           const allow = (d: { behavior: "allow"; remember?: boolean }) => {
             if (isWrite && fp) void this.snapshot(checkpoint, fp).finally(() => e.resolve(d));
@@ -4455,6 +4501,8 @@ export class ChatView extends ItemView {
           ...(checkpoint.size ? { checkpoint } : {}),
         });
       }
+      // Turn finalized — refresh the conversation recap (full-page rail only).
+      if (c === this.active) this.updateRecap();
       // Background shells can outlive the turn (Exo can't poll them) — note them
       // honestly as "started this turn" rather than claiming a live running count.
       if (ctx.bgTasks.size) {
