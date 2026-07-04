@@ -111,6 +111,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   scrollbar-width: none;
   flex-shrink: 0;
   background: transparent;
+  /* Above the transcript that slides up behind it (see .mva-main-row). */
+  position: relative;
+  z-index: 6;
 }
 .mva-tabs::-webkit-scrollbar {
   display: none;
@@ -221,6 +224,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Slide up under the frosted tabs so the transcript scrolls behind them (real
+     backdrop blur, not a flat panel). The list/gallery/recap re-clear the tabs
+     with their own top spacing below. */
+  margin-top: calc(-1 * var(--mva-tabs-h, 36px));
 }
 .mva-root.is-wide .mva-main-row {
   flex-direction: row;
@@ -247,13 +254,18 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: none;
 }
 .mva-root.is-wide .mva-recap {
-  display: block;
+  /* A tall side panel: fills the full height of the pane (a place to show what the
+     agent is doing), content flowing top-down and scrolling when it overflows.
+     Solid elevated surface — it's a panel, not a glass-over-content bar. */
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
   flex: none;
-  width: 264px;
-  margin: 12px;
+  width: 272px;
+  margin: calc(var(--mva-tabs-h, 36px) + 12px) 12px 12px 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 14px 12px;
+  padding: 14px 14px;
   border-radius: var(--mva-r2);
   /* Barely-there edge — depth comes from the shadow, not a hard line. */
   border: 1px solid color-mix(in srgb, var(--background-modifier-border) 40%, transparent);
@@ -261,26 +273,23 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-secondary);
   scrollbar-width: thin;
 }
-/* Light frosted depth on the elevated surfaces — a subtle translucent blur only
-   where backdrop-filter is supported; otherwise the solid theme backgrounds above
-   stand. Kept mostly-opaque (82-86%) so text stays fully readable on any theme. */
+/* Real backdrop blur on the two surfaces the transcript scrolls BEHIND (composer
+   input + tabs): a bigger radius and a more translucent tint so the content shows
+   through, softly blurred — not a flat milky panel. Only where backdrop-filter is
+   supported; otherwise the solid theme backgrounds above stand. Tint stays ~58-62%
+   so typed text and tab labels keep contrast on any theme. */
 @supports (backdrop-filter: blur(1px)) {
   .mva-inputbox,
   .mva-inputbox:hover,
   .mva-inputbox:focus-within {
-    background: color-mix(in srgb, var(--background-primary) 86%, transparent);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    background: color-mix(in srgb, var(--background-primary) 62%, transparent);
+    backdrop-filter: blur(16px) saturate(1.1);
+    -webkit-backdrop-filter: blur(16px) saturate(1.1);
   }
   .mva-tabs {
-    background: color-mix(in srgb, var(--background-primary) 82%, transparent);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-  }
-  .mva-root.is-wide .mva-recap {
-    background: color-mix(in srgb, var(--background-secondary) 85%, transparent);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: color-mix(in srgb, var(--background-primary) 58%, transparent);
+    backdrop-filter: blur(16px) saturate(1.1);
+    -webkit-backdrop-filter: blur(16px) saturate(1.1);
   }
 }
 .mva-recap-title {
@@ -429,9 +438,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  /* Reserve room at the bottom for the absolute composer (published as
-     --mva-composer-h by buildComposer) so the last message scrolls above it. */
-  padding: 14px 12px calc(var(--mva-composer-h, 96px) + 8px) 12px;
+  /* Top padding clears the frosted tabs the list now slides under; bottom padding
+     clears the absolute composer (both heights published from JS). */
+  padding: calc(var(--mva-tabs-h, 36px) + 14px) 12px calc(var(--mva-composer-h, 96px) + 8px) 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1960,6 +1969,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Clear the frosted tabs the pane now slides under (gallery/capabilities fill
+     the scroll host, whose top sits behind the tabs). */
+  padding-top: calc(var(--mva-tabs-h, 36px) + 4px);
 }
 .mva-gallery-title {
   padding: 14px 14px 8px;
