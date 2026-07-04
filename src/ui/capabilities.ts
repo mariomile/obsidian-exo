@@ -2,6 +2,7 @@ import { App } from "obsidian";
 import { readdir, readFile } from "fs/promises";
 import { homedir } from "os";
 import type { MVASettings } from "../settings";
+import { clickable } from "./dom";
 
 interface NamedItem {
   name: string;
@@ -166,6 +167,10 @@ export async function renderCapabilitiesPanel(
   ctx: Ctx
 ): Promise<void> {
   container.empty();
+  // Immediate feedback while the (sometimes async) capability scan runs; removed
+  // once the panel is fully built. On the live-caps path this is synchronous and
+  // never paints.
+  const loading = container.createDiv({ cls: "mva-faint", text: "Loading capabilities…" });
   container.createDiv({ cls: "mva-gallery-title", text: "Capabilities" });
   const grid = container.createDiv({ cls: "mva-caps" });
 
@@ -187,7 +192,7 @@ export async function renderCapabilitiesPanel(
     if (desc) el.setAttr("aria-label", desc), el.setAttr("title", desc);
     if (onClick) {
       el.addClass("is-clickable");
-      el.onclick = onClick;
+      clickable(el, onClick);
     }
     return el;
   };
@@ -372,4 +377,6 @@ export async function renderCapabilitiesPanel(
       if (s.fastStartup && external.length) b.createDiv({ cls: "mva-faint", text: "External MCP is off while Fast startup is on." });
     }
   }
+
+  loading.remove();
 }
