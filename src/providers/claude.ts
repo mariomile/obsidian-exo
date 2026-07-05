@@ -61,6 +61,13 @@ class ClaudeSession implements AgentSession {
   /** Per-turn tail of CLI stderr lines, surfaced when a turn ends in an error whose
    *  `result` is empty (e.g. error_during_execution). Cleared at the start of send(). */
   private stderrTail: string[] = [];
+  /** True once WE interrupted the in-flight turn (Stop button, watchdog, dispose).
+   *  The CLI reports any SDK interrupt as an `error_during_execution` result even
+   *  though the process and session survive (verified on CLI 2.1.195–2.1.201:
+   *  its clean-abort classification only covers aborted_streaming/aborted_tools,
+   *  and an SDK interrupt lands outside both windows). This flag lets route()
+   *  tell a requested abort from a genuine mid-turn failure. Cleared per send(). */
+  private interruptRequested = false;
 
   constructor(opts: SessionOpts) {
     this.sessionId = opts.resumeSessionId;
@@ -303,7 +310,16 @@ class ClaudeSession implements AgentSession {
         }
       }
     } else if (msg.type === "result") {
-      if (msg.subtype && msg.subtype !== "success") {
+      const interrupted = this.interruptRequested;
+      this.interruptRequested = false;
+      // A locally-requested interrupt comes back as error_during_execution (see
+      // interruptRequested): the session is healthy, so skip the fake "CLI
+      // crashed" error and settle the turn quietly like a clean abort.
+      if (
+        msg.subtype &&
+        msg.subtype !== "success" &&
+        !(interrupted && msg.subtype === "error_during_execution")
+      ) {
         let message = msg.result || `Claude ended: ${msg.subtype}`;
         if (this.stderrTail.length) {
           message += "\n\nCLI stderr (tail):\n" + this.stderrTail.slice(-6).join("\n");
@@ -343,6 +359,7 @@ class ClaudeSession implements AgentSession {
     // orphan the first promise (its resolve/reject would be overwritten).
     if (this.resolveTurn) return Promise.reject(new Error("A turn is already in flight."));
     this.stderrTail = []; // per-turn tail — drop any lines from a prior turn
+    this.interruptRequested = false; // an old interrupt must not excuse this turn's errors
     this.onEvent = onEvent;
     const content: UserContent =
       images && images.length
@@ -425,6 +442,7 @@ class ClaudeSession implements AgentSession {
   /** Call q.interrupt() and swallow both sync throws and promise rejections
    *  (it rejects when the query has already ended — harmless). */
   private safeInterrupt(): void {
+    this.interruptRequested = true;
     try {
       const p = this.q.interrupt?.();
       if (p && typeof p.catch === "function") p.catch(() => {});

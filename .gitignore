@@ -4,3 +4,4 @@ main.js.map
 .obsidian-plugin-dir
 .DS_Store
 *.log
+.claude/worktrees/

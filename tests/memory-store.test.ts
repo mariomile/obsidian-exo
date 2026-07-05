@@ -5,6 +5,7 @@ import {
   monthFileName,
   scoreEntries,
   resolveSupersedence,
+  guardSupersede,
   type MemoryEntry,
 } from "../src/core/memory-store";
 
@@ -18,6 +19,7 @@ function entry(over: Partial<MemoryEntry> = {}): MemoryEntry {
     at: T,
     session: "sess-1",
     tags: [],
+    source: "user",
     text: "verbatim text",
     ...over,
   };
@@ -84,6 +86,73 @@ describe("formatEntry / parseStoreFile round-trip", () => {
   it("returns [] for an empty store", () => {
     expect(parseStoreFile("")).toEqual([]);
     expect(parseStoreFile("just prose, no blocks\n")).toEqual([]);
+  });
+});
+
+describe("provenance sentinels (source)", () => {
+  it("round-trips a generated entry and emits the sentinel line", () => {
+    const e = entry({ source: "generated" });
+    const block = formatEntry(e);
+    expect(block).toContain("- source: @generated");
+    expect(parseStoreFile(block)[0]).toEqual(e);
+    expect(parseStoreFile(block)[0].source).toBe("generated");
+  });
+
+  it("omits the source line for user entries (legacy byte-identical format)", () => {
+    const block = formatEntry(entry({ source: "user" }));
+    expect(block).not.toContain("source:");
+  });
+
+  it("parses a legacy sentinel-less block as source 'user'", () => {
+    const legacy = `## mem-1 fact\n- at: 2024-07-03T12:00:00.000Z\n- session: sess-1\n\nhello`;
+    expect(parseStoreFile(legacy)[0].source).toBe("user");
+  });
+
+  it("falls back to 'user' for a malformed/unknown source value", () => {
+    const bad = `## mem-1 fact\n- session: sess-1\n- source: nonsense\n\nhello`;
+    expect(parseStoreFile(bad)[0].source).toBe("user");
+  });
+
+  it("accepts the source value with or without the @ prefix", () => {
+    const noAt = `## mem-1 fact\n- session: sess-1\n- source: generated\n\nhello`;
+    expect(parseStoreFile(noAt)[0].source).toBe("generated");
+  });
+});
+
+describe("guardSupersede (truth firewall)", () => {
+  it("blocks a generated entry from superseding a user entry", () => {
+    const userE = entry({ id: "mem-1", source: "user" });
+    const gen = entry({ id: "mem-2", source: "generated", supersedes: "mem-1" });
+    const res = guardSupersede(gen, [userE]);
+    expect(res.ok).toBe(false);
+  });
+
+  it("allows a user entry to supersede a user entry", () => {
+    const a = entry({ id: "mem-1", source: "user" });
+    const b = entry({ id: "mem-2", source: "user", supersedes: "mem-1" });
+    expect(guardSupersede(b, [a]).ok).toBe(true);
+  });
+
+  it("allows a user entry to supersede a generated entry", () => {
+    const g = entry({ id: "mem-1", source: "generated" });
+    const u = entry({ id: "mem-2", source: "user", supersedes: "mem-1" });
+    expect(guardSupersede(u, [g]).ok).toBe(true);
+  });
+
+  it("allows a generated entry to supersede a generated entry", () => {
+    const g1 = entry({ id: "mem-1", source: "generated" });
+    const g2 = entry({ id: "mem-2", source: "generated", supersedes: "mem-1" });
+    expect(guardSupersede(g2, [g1]).ok).toBe(true);
+  });
+
+  it("allows a generated entry that supersedes nothing", () => {
+    const g = entry({ id: "mem-2", source: "generated" });
+    expect(guardSupersede(g, []).ok).toBe(true);
+  });
+
+  it("allows a generated entry whose supersedes target is unknown", () => {
+    const g = entry({ id: "mem-2", source: "generated", supersedes: "mem-missing" });
+    expect(guardSupersede(g, []).ok).toBe(true);
   });
 });
 

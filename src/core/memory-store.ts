@@ -24,6 +24,15 @@
 
 export type MemoryKind = "preference" | "fact" | "decision" | "lesson";
 
+/**
+ * Provenance of a stored memory:
+ *  - `user`      — Mario's verbatim words / explicit statements (the `remember` tool).
+ *  - `generated` — written autonomously by a background pass (observer / dream).
+ * On disk the sentinel is `@user` / `@generated`; the line is emitted ONLY for
+ * `generated`, so legacy `@user` files round-trip byte-identical (missing → user).
+ */
+export type MemorySource = "user" | "generated";
+
 const KINDS: readonly MemoryKind[] = ["preference", "fact", "decision", "lesson"];
 
 export interface MemoryEntry {
@@ -35,6 +44,8 @@ export interface MemoryEntry {
   /** Originating session id, or "unknown". */
   session: string;
   tags: string[];
+  /** Provenance sentinel. A missing on-disk line parses as `user`. */
+  source: MemorySource;
   /** Id of the entry this one supersedes (omitted when not superseding). */
   supersedes?: string;
   /** The memory itself, stored verbatim. */
@@ -49,7 +60,7 @@ export interface ScoredEntry {
 /** Block header, e.g. `## mem-1720000000000 preference`. No `g` flag: safe for `.test`. */
 const HEADER = /^##\s+(mem-\d+)\s+(preference|fact|decision|lesson)\s*$/;
 /** A metadata line inside a block, e.g. `- at: 2024-07-03T12:00:00.000Z`. */
-const META = /^-\s+(at|session|tags|supersedes):\s*(.*)$/;
+const META = /^-\s+(at|session|tags|source|supersedes):\s*(.*)$/;
 
 /** Render one entry to its canonical on-disk block (no trailing newline). */
 export function formatEntry(e: MemoryEntry): string {
@@ -58,6 +69,8 @@ export function formatEntry(e: MemoryEntry): string {
     `- at: ${new Date(e.at).toISOString()}`,
     `- session: ${e.session}`,
   ];
+  // Emit the sentinel ONLY for generated entries — user files stay byte-identical to the legacy format.
+  if (e.source === "generated") lines.push(`- source: @generated`);
   if (e.tags.length) lines.push(`- tags: ${e.tags.join(", ")}`);
   if (e.supersedes) lines.push(`- supersedes: ${e.supersedes}`);
   lines.push("", e.text);
@@ -82,6 +95,7 @@ export function parseStoreFile(content: string): MemoryEntry[] {
     let at = NaN;
     let session = "unknown";
     let tags: string[] = [];
+    let source: MemorySource = "user";
     let supersedes: string | undefined;
     for (let m: RegExpExecArray | null; i < lines.length && (m = META.exec(lines[i])); i++) {
       const key = m[1];
@@ -89,6 +103,8 @@ export function parseStoreFile(content: string): MemoryEntry[] {
       if (key === "at") at = Date.parse(val);
       else if (key === "session") session = val || "unknown";
       else if (key === "tags") tags = val.split(",").map((t) => t.trim()).filter(Boolean);
+      // Only `@generated`/`generated` is generated; anything else (incl. junk) stays `user`.
+      else if (key === "source") source = val.replace(/^@/, "") === "generated" ? "generated" : "user";
       else if (key === "supersedes" && val) supersedes = val;
     }
 
@@ -105,9 +121,44 @@ export function parseStoreFile(content: string): MemoryEntry[] {
       at = idm ? Number(idm[1]) : 0;
     }
 
-    entries.push({ id, kind, at, session, tags, ...(supersedes ? { supersedes } : {}), text });
+    entries.push({ id, kind, at, session, tags, source, ...(supersedes ? { supersedes } : {}), text });
   }
   return entries;
+}
+
+/**
+ * Remove exactly the blocks whose header id is in `ids`, returning the remaining
+ * file content. This is the observer-undo primitive: it re-reads the CURRENT file
+ * and strips only its own appended entries — so any entry written by another
+ * writer (e.g. a `remember` @user entry) that landed after the observer's append
+ * survives intact. Never a blind before-image restore, never a whole-file delete.
+ *
+ * Junk and non-removed blocks are preserved line-for-line; trailing whitespace is
+ * normalized to a single newline (empty string when nothing remains). Idempotent
+ * for ids not present.
+ */
+export function removeEntriesById(content: string, ids: readonly string[]): string {
+  const remove = new Set(ids);
+  const lines = content.split(/\r?\n/);
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const head = HEADER.exec(lines[i]);
+    if (!head) {
+      out.push(lines[i]);
+      i++;
+      continue;
+    }
+    // A block spans its header up to (but not including) the next header / EOF.
+    const start = i;
+    i++;
+    while (i < lines.length && !HEADER.test(lines[i])) i++;
+    if (!remove.has(head[1])) {
+      for (let j = start; j < i; j++) out.push(lines[j]);
+    }
+  }
+  const text = out.join("\n").replace(/\s+$/, "");
+  return text ? `${text}\n` : "";
 }
 
 /** Monthly file name for a timestamp, e.g. `2024-07.md` (UTC — TZ-independent). */
@@ -172,6 +223,28 @@ export function resolveSupersedence(entries: MemoryEntry[]): MemoryEntry[] {
   const superseded = new Set<string>();
   for (const e of entries) if (e.supersedes) superseded.add(e.supersedes);
   return entries.filter((e) => !superseded.has(e.id));
+}
+
+/**
+ * Truth firewall for supersedence. A `generated` entry may NEVER supersede a
+ * `user` entry — only the user's own words may overwrite the record of what the
+ * user said. Allowed: user→anything, generated→generated, generated→(unknown or
+ * no target). Returns `{ ok: false, reason }` only when a `generated` candidate
+ * names a `supersedes` target that resolves (by id in `existing`) to a `user` entry.
+ */
+export function guardSupersede(
+  candidate: MemoryEntry,
+  existing: readonly MemoryEntry[]
+): { ok: true } | { ok: false; reason: string } {
+  if (candidate.source !== "generated" || !candidate.supersedes) return { ok: true };
+  const target = existing.find((e) => e.id === candidate.supersedes);
+  if (target && target.source === "user") {
+    return {
+      ok: false,
+      reason: `Truth firewall: a @generated entry may not supersede @user entry ${target.id}.`,
+    };
+  }
+  return { ok: true };
 }
 
 /** True for a string that is one of the known memory kinds. */
