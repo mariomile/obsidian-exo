@@ -1000,10 +1000,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 
 /* ---- tune dialog: model + effort + permission in one popover ---- */
 .mva-tune-pop {
-  /* Anchored to the right edge (the tune icon lives on the toolbar's right) so a
-     200px popover opens inward, never off the composer. */
-  left: auto;
-  right: 0;
+  /* The tune icon sits on the LEFT of the composer toolbar (after "+"), so anchor
+     left and open rightward. A right-anchored popover would grow leftward off the
+     pane's edge and get clipped — leaving only the trailing checks visible (the
+     row labels, left-aligned, fall outside the pane). */
+  left: 0;
+  right: auto;
   min-width: 200px;
   max-height: 420px;
 }
