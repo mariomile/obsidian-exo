@@ -43,6 +43,20 @@ describe("formatEntry / parseStoreFile round-trip", () => {
     const block = formatEntry(entry());
     expect(block).not.toContain("tags:");
     expect(block).not.toContain("supersedes:");
+    expect(block).not.toContain("origin:");
+  });
+
+  it("round-trips an import provenance origin line", () => {
+    const e = entry({ source: "generated", origin: "claude-mem:123" });
+    const parsed = parseStoreFile(formatEntry(e));
+    expect(parsed[0]).toEqual(e);
+    expect(formatEntry(e)).toContain("- origin: claude-mem:123");
+  });
+
+  it("round-trips a multi-id (comma-list) supersedes line", () => {
+    const e = entry({ source: "generated", supersedes: "mem-1, mem-2, mem-3" });
+    const parsed = parseStoreFile(formatEntry(e));
+    expect(parsed[0].supersedes).toBe("mem-1, mem-2, mem-3");
   });
 
   it("preserves multi-line verbatim text including internal blank lines", () => {
@@ -154,6 +168,20 @@ describe("guardSupersede (truth firewall)", () => {
     const g = entry({ id: "mem-2", source: "generated", supersedes: "mem-missing" });
     expect(guardSupersede(g, []).ok).toBe(true);
   });
+
+  it("blocks a generated merge whose comma-list touches ANY user entry", () => {
+    const genTarget = entry({ id: "mem-1", source: "generated" });
+    const userTarget = entry({ id: "mem-2", source: "user" });
+    const merged = entry({ id: "mem-9", source: "generated", supersedes: "mem-1, mem-2" });
+    expect(guardSupersede(merged, [genTarget, userTarget]).ok).toBe(false);
+  });
+
+  it("allows a generated merge whose comma-list targets are all generated", () => {
+    const g1 = entry({ id: "mem-1", source: "generated" });
+    const g2 = entry({ id: "mem-2", source: "generated" });
+    const merged = entry({ id: "mem-9", source: "generated", supersedes: "mem-1, mem-2" });
+    expect(guardSupersede(merged, [g1, g2]).ok).toBe(true);
+  });
 });
 
 describe("monthFileName", () => {
@@ -214,6 +242,14 @@ describe("resolveSupersedence", () => {
   it("ignores unknown supersedes ids", () => {
     const only = entry({ id: "mem-1", text: "x", supersedes: "mem-does-not-exist" });
     expect(resolveSupersedence([only]).map((e) => e.id)).toEqual(["mem-1"]);
+  });
+
+  it("excludes every id in a comma-list supersedes (merge consolidation)", () => {
+    const a = entry({ id: "mem-1", text: "a" });
+    const b = entry({ id: "mem-2", text: "b" });
+    const c = entry({ id: "mem-3", text: "c" });
+    const merged = entry({ id: "mem-99", text: "consolidated", source: "generated", supersedes: "mem-1, mem-2, mem-3" });
+    expect(resolveSupersedence([a, b, c, merged]).map((e) => e.id)).toEqual(["mem-99"]);
   });
 
   it("returns all entries when none supersede", () => {

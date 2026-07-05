@@ -108,8 +108,15 @@ export function afterCommitCheck(state: AutoCommitState, now: number): AutoCommi
 /** Commit message: `exo: auto-commit — N file(s)`, singular/plural handled.
  *  An unknown or non-positive count (undefined, 0, negative, NaN) falls back
  *  to a generic message rather than printing something like "0 files" or
- *  "NaN files". */
-export function formatCommitMessage(fileCount?: number | null): string {
+ *  "NaN files".
+ *
+ *  An optional `summary` (e.g. the dream pass's "dream — merged 3, superseded 1,
+ *  imported 12 from claude-mem") overrides the file-count phrasing entirely,
+ *  producing `exo: <summary>`. A blank/whitespace-only summary is ignored and the
+ *  file-count path is used, so callers can pass an empty string unconditionally. */
+export function formatCommitMessage(fileCount?: number | null, summary?: string): string {
+  const trimmed = summary?.trim();
+  if (trimmed) return `exo: ${trimmed}`;
   if (fileCount === undefined || fileCount === null || !Number.isFinite(fileCount) || fileCount <= 0) {
     return "exo: auto-commit — vault changes";
   }
