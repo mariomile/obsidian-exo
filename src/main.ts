@@ -10,6 +10,8 @@ import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport } from "./headless";
 import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle } from "./core/title";
+import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
+import { inlineAiExtension } from "./editor/inline-ai";
 
 export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
@@ -25,6 +27,11 @@ export default class ExoPlugin extends Plugin {
     );
 
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
+
+    // In-note AI: a floating toolbar over the selection (Edit / Continue / Ask
+    // Exo). Registered once; gated live behind the `inlineAi` setting, so
+    // toggling it off makes the extension inert without a reload.
+    this.registerEditorExtension(inlineAiExtension(this));
 
     this.addRibbonIcon(EXO_ICON, "Open Exo", () => this.activateView());
 
@@ -165,8 +172,18 @@ export default class ExoPlugin extends Plugin {
     return a instanceof FileSystemAdapter ? a.getBasePath() : ".";
   }
 
-  /** One-shot text transform: a transient (tool-less) session, returns the text. */
-  private async oneShot(instruction: string, text: string, signal: AbortSignal): Promise<string> {
+  /**
+   * Core of every one-shot text transform: a transient, tool-less session that
+   * streams `text-delta` chunks to `onDelta` and resolves with the full text.
+   * The session is disposed on abort and on completion. Shared by `oneShot`
+   * (modal), `oneShotStream` (inline Edit) and `continueStream` (inline
+   * Continue) so there's one place that owns the CLI session lifecycle.
+   */
+  private async runStream(
+    prompt: string,
+    signal: AbortSignal,
+    onDelta: (text: string) => void
+  ): Promise<string> {
     const provider = this.settings.provider;
     const bin = provider === "claude" ? this.settings.claudeBin : this.settings.codexBin;
     const cli = await resolveCli(provider, bin);
@@ -187,18 +204,54 @@ export default class ExoPlugin extends Plugin {
       }
     });
     let out = "";
-    const prompt =
-      "You are an inline text editor inside Obsidian. Apply the instruction to the TEXT and return ONLY " +
-      "the resulting text — no preamble, no explanation, no code fences, no quotes.\n\n" +
-      `Instruction: ${instruction}\n\nTEXT:\n${text}`;
     try {
       await session.send(prompt, (e: AgentEvent) => {
-        if (e.kind === "text-delta") out += e.text;
+        if (e.kind === "text-delta") {
+          out += e.text;
+          onDelta(e.text);
+        }
       });
     } finally {
       session.dispose();
     }
-    return out.trim();
+    return out;
+  }
+
+  /** One-shot text transform (no streaming): returns the trimmed result. Used by
+   *  the legacy inline-edit modal. */
+  private async oneShot(instruction: string, text: string, signal: AbortSignal): Promise<string> {
+    return (await this.runStream(buildEditPrompt(instruction, text), signal, () => {})).trim();
+  }
+
+  /** Streaming Edit: rewrite `text` per `instruction`, emitting live chunks via
+   *  `onDelta`. Resolves with the full (untrimmed — the diff needs raw text)
+   *  result. Used by the in-note floating toolbar's Edit action. */
+  async oneShotStream(
+    instruction: string,
+    text: string,
+    signal: AbortSignal,
+    onDelta: (text: string) => void
+  ): Promise<string> {
+    return this.runStream(buildEditPrompt(instruction, text), signal, onDelta);
+  }
+
+  /** Streaming Continue: keep writing from `precedingText`, emitting live chunks
+   *  via `onDelta`. Resolves with the continuation only. Used by the in-note
+   *  Continue action. */
+  async continueStream(
+    precedingText: string,
+    signal: AbortSignal,
+    onDelta: (text: string) => void
+  ): Promise<string> {
+    return this.runStream(buildContinuePrompt(precedingText), signal, onDelta);
+  }
+
+  /** Reveal the Exo chat and seed the given selection as a quoted context block
+   *  in the composer, then focus it — the in-note "Ask Exo" action. */
+  async attachSelectionToChat(text: string, sourcePath: string): Promise<void> {
+    await this.activateView();
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (view instanceof ChatView) view.attachSelection(text, sourcePath);
   }
 
   /** Generate a concise 3-6 word chat title with Haiku. ALWAYS runs on the Claude

@@ -60,6 +60,8 @@ export interface MVASettings {
   seededPrompts: boolean;
   /** Refine the first-message tab title with a Haiku-generated 3-6 word title. */
   aiTitles: boolean;
+  /** In-note AI: floating toolbar over a selection (Edit / Continue / Ask Exo). */
+  inlineAi: boolean;
   // Tab bar runtime state (not user-facing settings).
   openTabIds: string[];
   activeTabId: string;
@@ -112,6 +114,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   systemNotifications: true,
   seededPrompts: false,
   aiTitles: true,
+  inlineAi: true,
   openTabIds: [],
   activeTabId: "",
   dreamPassSchedule: "off",
@@ -322,6 +325,12 @@ export class MVASettingTab extends PluginSettingTab {
       "Generate chat titles with AI (Haiku)",
       "After the first reply, rename the tab to a concise 3-6 word summary using Claude Haiku; off keeps the truncated first message.",
       "aiTitles"
+    );
+    this.toggleSetting(
+      el,
+      "In-note AI toolbar",
+      "Select text in a note to get a floating toolbar: rewrite it with a streaming inline diff (Edit), keep writing from it (Continue), or open the chat with it as context (Ask Exo).",
+      "inlineAi"
     );
     this.toggleSetting(
       el,
