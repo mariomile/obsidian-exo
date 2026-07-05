@@ -1228,6 +1228,11 @@ export class ChatView extends ItemView {
         this.hideCapabilities();
         this.openNote(p);
       },
+      runCommand: (id) =>
+        (this.app as unknown as { commands: { executeCommandById(id: string): boolean } }).commands.executeCommandById(id),
+      openSettings: () => this.openSettings(),
+      dreamSnapshotPresent: () => this.plugin.loadDreamSnapshot().then((s) => !!s),
+      lastAutoCommitEpoch: () => this.plugin.lastAutoCommitEpoch(),
     });
   }
 

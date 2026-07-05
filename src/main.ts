@@ -820,6 +820,27 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
+  /** Epoch ms of the most recent `exo: auto-commit` in the vault's git log, or
+   *  null when it can't be determined (not a repo, git missing, no such commit).
+   *  Read-only, never throws — same execFile discipline as the auto-commit path.
+   *  Used by the Actions hub (W2-UX) to show the last auto-commit time; the panel
+   *  calls it once per open and async-fills, so a slow git call never blocks render. */
+  async lastAutoCommitEpoch(): Promise<number | null> {
+    const cwd = this.vaultPath();
+    if (cwd === ".") return null;
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["log", "-1", "--format=%ct", "--grep", "exo: auto-commit"],
+        { cwd }
+      );
+      const secs = parseInt(stdout.trim(), 10);
+      return Number.isFinite(secs) ? secs * 1000 : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async maybeScheduledDreamPass(): Promise<void> {
     const sched = this.settings.dreamPassSchedule;
     if (sched === "off") return;

@@ -3,6 +3,9 @@ import { readdir, readFile } from "fs/promises";
 import { homedir } from "os";
 import type { MVASettings } from "../settings";
 import { clickable } from "./dom";
+import { monthFileName, parseStoreFile, type MemoryEntry } from "../core/memory-store";
+import { parseLoopsFile, type LoopEntry } from "../core/open-loops";
+import { memoryStats, memoryActions, systemStatuses } from "../core/actions-hub";
 
 interface NamedItem {
   name: string;
@@ -158,6 +161,52 @@ interface Ctx {
   } | null;
   /** Insert text into the composer (used by clickable skill/command/agent chips). */
   onInsert?: (text: string) => void;
+  /** Actions hub (W2-UX): run an existing command by id (e.g. dream pass / undo). */
+  runCommand?: (id: string) => void;
+  /** Actions hub: open Exo settings (deep-link target for the System card rows). */
+  openSettings?: () => void;
+  /** Actions hub: whether a dream snapshot exists (gates the Undo action). */
+  dreamSnapshotPresent?: () => Promise<boolean>;
+  /** Actions hub: epoch ms of the last `exo: auto-commit` (async, git-log parse). */
+  lastAutoCommitEpoch?: () => Promise<number | null>;
+}
+
+/* --------------------------- actions hub (W2-UX) --------------------------- */
+
+const STORE_DIR = "_system/memory/store";
+const OPEN_LOOPS_PATH = "_system/memory/open-loops.md";
+const REVIEW_PATH = "_system/review.md";
+
+/** Read + parse every month file in the store dir. Missing dir / unreadable
+ *  files are tolerated (→ fewer entries), never thrown on. */
+async function gatherStoreEntries(app: App): Promise<MemoryEntry[]> {
+  const entries: MemoryEntry[] = [];
+  try {
+    const res = await app.vault.adapter.list(STORE_DIR);
+    for (const f of res.files) {
+      if (!f.endsWith(".md")) continue;
+      try {
+        entries.push(...parseStoreFile(await app.vault.adapter.read(f)));
+      } catch {
+        /* skip unreadable file */
+      }
+    }
+  } catch {
+    /* missing dir */
+  }
+  return entries;
+}
+
+/** Read + parse the open-loops ledger (empty when absent/unreadable). */
+async function gatherLoops(app: App): Promise<LoopEntry[]> {
+  try {
+    if (await app.vault.adapter.exists(OPEN_LOOPS_PATH)) {
+      return parseLoopsFile(await app.vault.adapter.read(OPEN_LOOPS_PATH));
+    }
+  } catch {
+    /* missing/unreadable */
+  }
+  return [];
 }
 
 export async function renderCapabilitiesPanel(
@@ -219,6 +268,71 @@ export async function renderCapabilitiesPanel(
     chip(b, "Agentic tools", agentic);
     chip(b, "Fast startup", s.fastStartup);
     chip(b, "Native-first", s.nativeFirst);
+  }
+
+  // Actions hub (W2-UX): Wave 1-2 machinery — one place to see state + act.
+  tier("Actions");
+  {
+    const now = Date.now();
+    const [storeEntries, loops, reviewExists, snapshotPresent] = await Promise.all([
+      gatherStoreEntries(app),
+      gatherLoops(app),
+      app.vault.adapter.exists(REVIEW_PATH).catch(() => false),
+      ctx.dreamSnapshotPresent?.() ?? Promise.resolve(false),
+    ]);
+
+    // Memory card — live stats + one-click actions.
+    {
+      const b = card("Memory", "dream · loops · store · budget");
+      for (const stat of memoryStats({
+        storeEntries,
+        loops,
+        ledger: s.backgroundBudgetLedger,
+        dailyBudget: s.backgroundDailyTokenBudget,
+        lastDreamPass: s.lastDreamPass,
+        now,
+      })) {
+        chip(b, `${stat.label}: ${stat.value}`, true);
+      }
+      const openMain = (p: string) => () => ctx.onOpenNote(p);
+      const run = (id: string) => () => ctx.runCommand?.(id);
+      const handler: Record<string, () => void> = {
+        "dream-run": run("exo:memory-dream-pass"),
+        "dream-undo": run("exo:memory-dream-undo"),
+        "open-store": openMain(`${STORE_DIR}/${monthFileName(now)}`),
+        "open-loops": openMain(OPEN_LOOPS_PATH),
+        "open-review": openMain(REVIEW_PATH),
+      };
+      for (const a of memoryActions({ snapshotPresent, reviewExists, loops, now })) {
+        const label = a.badge ? `${a.label} · ${a.badge}` : a.label;
+        chip(b, label, a.enabled, a.enabled ? "run" : "unavailable", a.enabled ? handler[a.id] : undefined);
+      }
+    }
+
+    // System card — read-only status + deep-link to settings (no toggles here).
+    {
+      const b = card("System", "auto-commit · observer");
+      const sysInput = {
+        vaultAutoCommit: s.vaultAutoCommit,
+        lastAutoCommitEpoch: null as number | null,
+        selfWritingMemory: s.selfWritingMemory,
+        observerCadence: s.observerCadence,
+        observerStepInterval: s.observerStepInterval,
+        now,
+      };
+      const chips = new Map<string, HTMLElement>();
+      for (const st of systemStatuses(sysInput)) {
+        chips.set(st.id, chip(b, `${st.label}: ${st.value}`, st.enabled, "Open Exo settings", () => ctx.openSettings?.()));
+      }
+      // Async-fill the last auto-commit time (git log) without blocking render.
+      void (ctx.lastAutoCommitEpoch?.() ?? Promise.resolve(null)).then((epoch) => {
+        const el = chips.get("autocommit");
+        if (!el) return;
+        const st = systemStatuses({ ...sysInput, lastAutoCommitEpoch: epoch }).find((x) => x.id === "autocommit");
+        const textSpan = el.querySelector("span:last-child");
+        if (st && textSpan instanceof HTMLElement) textSpan.setText(`${st.label}: ${st.value}`);
+      });
+    }
   }
 
   // Knowledge
