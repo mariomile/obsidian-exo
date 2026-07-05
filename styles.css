@@ -1155,6 +1155,22 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 12px;
   height: 12px;
 }
+
+/* Selection chip: same card grammar as a doc card, a hair distinct because it's
+   transient (a dashed, accent-tinted edge rather than a solid border). Quiet by
+   default; the accent only marks it as "capturable, not yet attached". */
+.mva-sel-card {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 40%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 6%, transparent);
+}
+.mva-sel-card:hover {
+  border-color: var(--mva-brand, var(--interactive-accent));
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 10%, transparent);
+}
+.mva-sel-card .mva-doc-thumb.is-icon .svg-icon {
+  color: var(--mva-brand, var(--interactive-accent));
+}
 .mva-chip {
   display: inline-flex;
   align-items: center;
