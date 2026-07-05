@@ -38,6 +38,8 @@ import { buildRecap as buildConvoRecap } from "./core/recap";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
 import { openablePopover } from "./ui/popover";
+import { renderEmptyState } from "./ui/empty-state";
+import { buildRelatedChips } from "./ui/related";
 import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
@@ -2496,114 +2498,24 @@ export class ChatView extends ItemView {
 
   /* --------------------------- rendering ---------------------------- */
 
-  private static readonly STARTERS: [string, string, string][] = [
-    ["file-text", "Summarize this note", "Summarize the current note in 5 concise bullets."],
-    ["network", "Find related notes", "Find notes in my vault related to the current note and explain how they connect."],
-    ["list-checks", "Extract action items", "Extract every action item and open question from the current note as a checklist."],
-    ["pen-line", "Draft from outline", "Expand the outline in the current note into full prose in my voice."],
-    ["sparkles", "Improve clarity", "Improve the clarity and flow of the current note without changing its meaning."],
-    ["search", "Find gaps", "What's missing, unclear, or unsupported in the current note? List concrete gaps."],
-  ];
-
   private renderEmptyState(): void {
-    const empty = this.listEl.createDiv({ cls: "mva-empty" });
-    // The Exo star is the still centre; the prompt clusters settle in around it.
-    // Each block gets a --i so it eases up in a gentle stagger (reduced-motion off).
-    const staggered: HTMLElement[] = [];
-    const hero = empty.createDiv({ cls: "mva-empty-hero" });
-    setIcon(hero.createDiv({ cls: "mva-empty-star", attr: { "aria-hidden": "true" } }), EXO_ICON);
-    hero.createDiv({ cls: "mva-empty-title", text: "What are we working on?" });
-    staggered.push(hero);
-    const sugg = this.renderPromptList(
-      empty,
-      "Suggestions",
-      ChatView.STARTERS.map(([icon, label, prompt]) => ({ icon, label, prompt }))
-    );
-    if (sugg) staggered.push(sugg);
-    const yours = this.renderPromptList(
-      empty,
-      "Your prompts",
-      this.plugin.settings.customPrompts.map((p) => ({ icon: "message-square", label: p.name, prompt: p.prompt }))
-    );
-    if (yours) staggered.push(yours);
-    const related = this.renderSurfacing(empty);
-    if (related) staggered.push(related);
-    staggered.forEach((el, i) => el.style.setProperty("--i", String(i)));
-  }
-
-  /** A labelled, tappable prompt list (Suggestions / Your prompts) with "Show N
-   *  more". Returns the section element (or null when there's nothing to show) so
-   *  the empty state can stagger its entrance. */
-  private renderPromptList(
-    parent: HTMLElement,
-    label: string,
-    items: { icon: string; label: string; prompt: string }[],
-    limit = 3
-  ): HTMLElement | null {
-    if (!items.length) return null;
-    const sec = parent.createDiv({ cls: "mva-es-section" });
-    sec.createDiv({ cls: "mva-es-label", text: label });
-    const list = sec.createDiv({ cls: "mva-starters" });
-    const render = (n: number) => {
-      list.empty();
-      for (const it of items.slice(0, n)) {
-        const row = list.createDiv({ cls: "mva-starter" });
-        setIcon(row.createSpan({ cls: "mva-starter-icon" }), it.icon);
-        row.createSpan({ text: it.label });
-        this.clickable(row, () => this.usePrompt(it.prompt));
-      }
-      if (n < items.length) {
-        const more = list.createDiv({ cls: "mva-starter mva-es-more" });
-        setIcon(more.createSpan({ cls: "mva-starter-icon" }), "chevron-down");
-        more.createSpan({ text: `Show ${items.length - n} more` });
-        more.onclick = () => render(items.length);
-      }
-    };
-    render(Math.min(limit, items.length));
-    return sec;
-  }
-
-  /** Build a labelled row of "related note" chips inside `container`. Clicking a
-   *  chip attaches the note as context and focuses the composer. Shared by the
-   *  empty-state surfacing and the quieter in-conversation tail variant — only
-   *  the classes (and therefore the look) differ between the two. Returns the
-   *  wrapper element so callers can track/remove it. */
-  private buildRelatedChips(
-    container: HTMLElement,
-    related: string[],
-    opts: { wrapCls: string; labelCls: string; labelText: string; rowCls: string; chipCls: string }
-  ): HTMLElement {
-    const wrap = container.createDiv({ cls: opts.wrapCls });
-    wrap.createDiv({ cls: opts.labelCls, text: opts.labelText });
-    const row = wrap.createDiv({ cls: opts.rowCls });
-    for (const p of related) {
-      const chip = row.createDiv({ cls: `mva-chip ${opts.chipCls}` });
-      setIcon(chip.createSpan({ cls: "mva-chip-icon" }), "file-text");
-      chip.createSpan({ cls: "mva-chip-label", text: noteBasename(p) });
-      this.clickable(chip, () => {
-        if (!this.manualAttached.includes(p)) this.manualAttached.push(p);
-        this.refreshContext();
-        this.inputEl.focus();
-      });
-    }
-    return wrap;
-  }
-
-  /** Surface notes related to the active note (toggleable). Returns the wrapper
-   *  (or null when nothing surfaces) so the empty state can stagger it in. */
-  private renderSurfacing(empty: HTMLElement): HTMLElement | null {
-    if (!this.plugin.settings.featureSurfacing) return null;
-    const file = this.app.workspace.getActiveFile();
-    if (!file) return null;
-    const related = relatedNotes(this.app, file, 5);
-    if (!related.length) return null;
-    return this.buildRelatedChips(empty, related, {
-      wrapCls: "mva-surface",
-      labelCls: "mva-surface-label",
-      labelText: `Related to ${noteBasename(file.path)}`,
-      rowCls: "mva-surface-chips",
-      chipCls: "mva-surface-chip",
+    renderEmptyState({
+      app: this.app,
+      listEl: this.listEl,
+      exoIcon: EXO_ICON,
+      customPrompts: this.plugin.settings.customPrompts,
+      featureSurfacing: this.plugin.settings.featureSurfacing,
+      usePrompt: (t) => this.usePrompt(t),
+      attachRelated: (p) => this.attachRelated(p),
     });
+  }
+
+  /** Attach a surfaced related note as context and focus the composer (shared by
+   *  the empty-state surfacing and the in-conversation tail variant). */
+  private attachRelated(p: string): void {
+    if (!this.manualAttached.includes(p)) this.manualAttached.push(p);
+    this.refreshContext();
+    this.inputEl.focus();
   }
 
   /** Quieter "Related" chips appended below the last turn — only when the
@@ -2625,13 +2537,18 @@ export class ChatView extends ItemView {
     if (!file) return;
     const related = relatedNotes(this.app, file, 5).slice(0, 3);
     if (!related.length) return;
-    const wrap = this.buildRelatedChips(el, related, {
-      wrapCls: "mva-tail-surface",
-      labelCls: "mva-tail-surface-label",
-      labelText: "Related",
-      rowCls: "mva-tail-surface-chips",
-      chipCls: "mva-tail-surface-chip",
-    });
+    const wrap = buildRelatedChips(
+      el,
+      related,
+      {
+        wrapCls: "mva-tail-surface",
+        labelCls: "mva-tail-surface-label",
+        labelText: "Related",
+        rowCls: "mva-tail-surface-chips",
+        chipCls: "mva-tail-surface-chip",
+      },
+      (p) => this.attachRelated(p)
+    );
     c.tailSurfaceEl = wrap;
     // Adding the section itself might tip the list into overflow — undo if so.
     if (el.scrollHeight > el.clientHeight + 1) {
