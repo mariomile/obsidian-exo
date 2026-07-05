@@ -37,6 +37,7 @@ import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
+import { openablePopover } from "./ui/popover";
 import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
@@ -1926,35 +1927,24 @@ export class ChatView extends ItemView {
         onPick: (value) => {
           opts.onSelect(value);
           refresh();
-          close();
+          popover.close();
         },
-        onEscape: () => close(),
+        onEscape: () => popover.close(),
       });
       setTimeout(() => focus(), 0);
     };
 
     refresh();
 
-    let open = false;
-    const onDoc = (e: MouseEvent) => {
-      if (!wrap.contains(e.target as Node)) close();
-    };
-    const close = () => {
-      open = false;
-      pop.hide();
-      chip.removeClass("is-open"); // drop the "popover open" risk-color state
-      document.removeEventListener("click", onDoc, true);
-    };
+    // `is-open` on the chip holds full risk color while the popover is up; the
+    // primitive toggles it. buildPop rebuilds fresh each open — option lists can
+    // change (e.g. model list per provider) — and seeds keyboard focus itself.
+    const popover = openablePopover({ anchor: chip, pop, wrap, onOpen: buildPop });
     this.clickable(chip, (e) => {
       e.stopPropagation();
-      if (open) return close();
-      buildPop(); // rebuild fresh — option lists can change (e.g. model list per provider)
-      open = true;
-      chip.addClass("is-open"); // hold full risk color while the popover is up
-      pop.show();
-      document.addEventListener("click", onDoc, true);
+      popover.toggle();
     });
-    this.register(() => close());
+    this.register(() => popover.close());
     return { refresh, wrap };
   }
 
@@ -2288,39 +2278,29 @@ export class ChatView extends ItemView {
       ["Attach folder", "folder-plus", () => this.pickExternal(true)],
       ["Attach image", "image", () => this.pickImage()],
     ];
-    let open = false;
-    const onDoc = (e: MouseEvent) => {
-      if (!wrap.contains(e.target as Node)) close();
-    };
-    const close = () => {
-      open = false;
-      pop.hide();
-      btn.removeClass("is-open");
-      document.removeEventListener("click", onDoc, true);
-    };
-    const doOpen = () => {
-      if (open) return close();
-      pop.empty();
-      for (const [label, icon, run] of items) {
-        const row = pop.createDiv({ cls: "mva-sel-opt" });
-        setIcon(row.createSpan({ cls: "mva-attach-ico" }), icon);
-        row.createSpan({ text: label });
-        this.clickable(row, () => {
-          close();
-          run();
-        });
-      }
-      open = true;
-      btn.addClass("is-open");
-      pop.show();
-      document.addEventListener("click", onDoc, true);
-      setTimeout(() => pop.querySelector<HTMLElement>(".mva-sel-opt")?.focus(), 0);
-    };
+    const popover = openablePopover({
+      anchor: btn,
+      pop,
+      wrap,
+      onOpen: () => {
+        pop.empty();
+        for (const [label, icon, run] of items) {
+          const row = pop.createDiv({ cls: "mva-sel-opt" });
+          setIcon(row.createSpan({ cls: "mva-attach-ico" }), icon);
+          row.createSpan({ text: label });
+          this.clickable(row, () => {
+            popover.close();
+            run();
+          });
+        }
+      },
+      focus: () => pop.querySelector<HTMLElement>(".mva-sel-opt")?.focus(),
+    });
     this.clickable(btn, (e) => {
       e.stopPropagation();
-      doOpen();
+      popover.toggle();
     });
-    this.register(() => close());
+    this.register(() => popover.close());
   }
 
   /** Electron file picker for images → reuses the paste/drop attachment path. */
