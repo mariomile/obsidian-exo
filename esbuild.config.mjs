@@ -58,7 +58,19 @@ const ctx = await esbuild.context({
   // URL derived from __filename (always present in CJS / Electron).
   define: { "import.meta.url": "__mvaImportMetaUrl" },
   banner: {
-    js: "const __mvaImportMetaUrl = require('url').pathToFileURL(__filename).href;",
+    // Obsidian's plugin loader hands plugins a require() that returns null for
+    // Node builtins while mobile emulation is on (body class `emulate-mobile`,
+    // persisted across restarts via localStorage.EmulateMobile). Without this
+    // guard the banner dies with a cryptic `Cannot read properties of null
+    // (reading 'pathToFileURL')` — fail loudly with the fix instead.
+    js: [
+      "const __mvaNodeUrl = require('url');",
+      "if (__mvaNodeUrl === null) {",
+      "  new (require('obsidian').Notice)('Exo needs desktop Node access, but mobile emulation is on. Turn it off (Obsidian: \"Emulate mobile device\" toggle, or CLI: obsidian dev:mobile off), then re-enable Exo.', 0);",
+      "  throw new Error('[exo] Node builtins unavailable: mobile emulation is enabled (localStorage.EmulateMobile). Disable it, then reload Exo.');",
+      "}",
+      "const __mvaImportMetaUrl = __mvaNodeUrl.pathToFileURL(__filename).href;",
+    ].join('\n'),
   },
   logLevel: "info",
   sourcemap: prod ? false : "inline",
