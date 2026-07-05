@@ -63,18 +63,24 @@ function observerState(view: EditorView): ObserverState {
   return st;
 }
 
-/** Read the view's current selection and, if it changed since last time, report
- *  it to the plugin. Only markdown editors report (the chip is a note concept);
- *  a non-markdown editor still clears a previously-reported selection once. */
+/** Read the active markdown editor's selection and, if it changed, report it to
+ *  the plugin. Only the ACTIVE markdown editor drives the chip. Crucially, when
+ *  this update fires with no active markdown editor — the common case being the
+ *  user clicking into the Exo composer to type an instruction, which blurs the
+ *  editor — we DO NOT report/clear: the selection must persist so it can be acted
+ *  on from the chat. The chip then only changes when the active editor's own
+ *  selection changes (collapsing it clears the chip; selecting elsewhere replaces it). */
 function report(st: ObserverState, plugin: ExoPlugin, view: EditorView): void {
   if (!plugin.settings.showSelectionChip) return;
   const mdView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
-  // Guard on markdown + that this update belongs to the active markdown editor,
-  // not a foreign CM6 instance (e.g. another plugin's editor).
+  // This update belongs to the active markdown editor (not a foreign CM6 instance,
+  // and not a blurred editor while focus sits in the Exo view)?
   const isActiveMd = !!mdView && (mdView.editor as unknown as { cm?: EditorView })?.cm === view;
-  const path = mdView?.file?.path ?? "";
+  if (!isActiveMd) return; // focus left the editor (e.g. into the chat) — keep the chip
+
+  const path = mdView.file?.path ?? "";
   const sel = view.state.selection.main;
-  const text = isActiveMd && !sel.empty ? view.state.doc.sliceString(sel.from, sel.to) : "";
+  const text = sel.empty ? "" : view.state.doc.sliceString(sel.from, sel.to);
 
   if (text === st.lastText && path === st.lastPath) return;
   st.lastText = text;
