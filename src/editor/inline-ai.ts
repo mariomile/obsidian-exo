@@ -3,52 +3,68 @@
  * markdown editor. Selecting text raises a floating toolbar over the selection
  * with three actions:
  *
- *   • Edit     — rewrite the selection with a streaming inline diff you
- *                accept/reject (a single, undoable transaction on accept).
- *   • Continue — keep writing from the end of the selection in the same voice,
- *                previewed and accepted/rejected.
+ *   • Edit     — rewrite the selection, reviewed as an INLINE diff in the
+ *                document (old text dimmed/struck in place, new text green
+ *                inline) with per-hunk ✓/✗ + keyboard; committed as one
+ *                undoable transaction.
+ *   • Continue — keep writing from the end of the selection, rendered as a green
+ *                inline insertion you accept/reject the same way.
  *   • Ask Exo  — reveal the chat and seed the selection as quoted context.
  *
- * Design choices for v1 (see the report / PRODUCT.md):
- *   - The toolbar and panels are plain DOM anchored via `coordsAtPos`, appended
- *     to `document.body` (position:fixed) so they escape editor overflow. The
- *     toolbar hides on scroll and selection-clear; the panel repositions on
- *     scroll so its Accept/Reject stay reachable.
- *   - Nothing is written to the document while streaming. The generated text is
- *     shown in the anchored panel, and committed exactly once — on Accept — via
- *     a single CM transaction (one undo step, trivially abort-safe). If the user
- *     edits the doc while a panel is open, the op aborts (positions are stale).
- *   - Whole-edit accept/reject only; the diff is computed as hunks (see
- *     `core/inline-ai`) so per-hunk accept is a later, additive step.
+ * Design (v2 — see PRODUCT.md / the plan):
+ *   - The rewrite is NON-DESTRUCTIVE: while streaming and while reviewing, the
+ *     document is untouched. The diff is rendered by the CM6 decoration layer in
+ *     `editor/inline-diff.ts` (a `StateField<InlineDiff|null>`), and committed
+ *     exactly once — on Accept — via `commitInlineDiff` (a single undo step).
+ *   - SOFT-LOCK: the target range is soft-locked during streaming and review.
+ *     Editing elsewhere in the note is fine (offsets are mapped through the
+ *     changes); editing the target range aborts the op (during streaming the
+ *     controller aborts; during review the field self-clears and the controller
+ *     tears its chrome down on the next update).
+ *   - Chrome is minimal DOM anchored via `coordsAtPos`, appended to
+ *     `document.body` (position:fixed) so it escapes editor overflow: the
+ *     toolbar, the Edit instruction input, a live "rewriting…" stream chip, and
+ *     a compact review action bar (Accept all / Reject + a keyboard hint). The
+ *     per-hunk ✓/✗ controls live INLINE in the decoration layer.
  *
- * All pure logic (prompts, hunks) lives in `core/inline-ai` and is unit-tested;
- * this file is the DOM/CM6 shell and is intentionally not unit-tested.
+ * All pure logic (prompts, hunks, doc-range mapping, nav) lives in
+ * `core/inline-ai` and is unit-tested; this file is the DOM/CM6 shell and is
+ * intentionally not unit-tested.
  */
 import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import { MarkdownView, setIcon } from "obsidian";
 import type ExoPlugin from "../main";
-import { computeHunks, applyDiff } from "../core/inline-ai";
+import { computeHunks, hunkCount, type DiffPart } from "../core/inline-ai";
+import {
+  activeDiff,
+  clearDiff,
+  commitInlineDiff,
+  inlineDiffExtension,
+  setAllHunks,
+  setDiff,
+} from "./inline-diff";
 
 /** Max chars of preceding context fed to Continue (keeps the call cheap/fast). */
 const CONTINUE_CONTEXT_CHARS = 2000;
 
-type Phase = "idle" | "edit-input" | "streaming" | "diff" | "continue-preview" | "error";
+type Phase = "idle" | "edit-input" | "streaming" | "reviewing" | "error";
 
-/** Per-editor controller: owns the floating toolbar, the action panel, and the
- *  transient streaming session for one CodeMirror view. */
+/** Per-editor controller: owns the floating toolbar, the instruction input, the
+ *  live stream chip, and the review action bar for one CodeMirror view. The
+ *  inline diff itself is owned by the `inlineDiffField` in `inline-diff.ts`. */
 class InlineAiController {
   private bar: HTMLElement | null = null;
   private panel: HTMLElement | null = null;
+  private streamChip: HTMLElement | null = null;
+  private actionBar: HTMLElement | null = null;
   private abort: AbortController | null = null;
   private phase: Phase = "idle";
   /** The selection the toolbar is anchored to (doc offsets); drives repositioning
    *  while the bar is up. Actions read the LIVE selection at click time, not this. */
   private barRange: { from: number; to: number } | null = null;
-  /** The selection range the current panel operates on (doc offsets). */
+  /** The target range the current op operates on (doc offsets). Soft-locked while
+   *  streaming/reviewing; mapped through edits made elsewhere. */
   private range: { from: number; to: number } | null = null;
-  /** Set true only around our own commit dispatch, so `update()` doesn't mistake
-   *  it for an external edit and tear the panel down before we're done. */
-  private committing = false;
   private readonly onScroll = () => this.reposition();
 
   constructor(
@@ -69,17 +85,42 @@ class InlineAiController {
       this.teardownAll();
       return;
     }
-    // An external edit while a panel is open invalidates our stored offsets —
-    // abort the op rather than risk writing at the wrong place.
-    if (u.docChanged && this.panel && !this.committing) {
-      this.cancel();
+    // Review mode: the decoration field owns range-mapping and self-clears when
+    // the target range is edited. We only follow it: reposition the action bar,
+    // or tear our chrome down if the field has cleared (edited/committed/escaped).
+    if (this.phase === "reviewing") {
+      if (!activeDiff(this.view)) this.teardownReview();
+      else this.reposition();
       return;
     }
-    // While a panel is open we own the surface; selection changes don't move the
-    // toolbar. Otherwise, (re)evaluate the toolbar for the current selection.
-    if (!this.panel && (u.selectionSet || u.docChanged || u.focusChanged)) {
+    // Streaming / edit-input / error: soft-lock the target range. Edits elsewhere
+    // are fine (map the range and follow); editing the target range aborts.
+    if (u.docChanged && (this.panel || this.streamChip)) {
+      if (this.mapOrAbort(u)) return;
+      this.reposition();
+      return;
+    }
+    // Otherwise (re)evaluate the toolbar for the current selection.
+    if (!this.panel && !this.streamChip && (u.selectionSet || u.docChanged || u.focusChanged)) {
       this.syncToolbar();
     }
+  }
+
+  /** Map the soft-locked range through this update's changes; abort if the
+   *  target range itself was touched. Returns true if it aborted. */
+  private mapOrAbort(u: ViewUpdate): boolean {
+    if (!this.range) return false;
+    const { from, to } = this.range;
+    let touched = false;
+    u.changes.iterChanges((fromA, toA) => {
+      if (fromA < to && toA > from) touched = true;
+    });
+    if (touched) {
+      this.cancel();
+      return true;
+    }
+    this.range = { from: u.changes.mapPos(from, 1), to: u.changes.mapPos(to, -1) };
+    return false;
   }
 
   /* ------------------------------- toolbar ------------------------------- */
@@ -160,7 +201,7 @@ class InlineAiController {
     const go = () => {
       const instruction = input.value.trim();
       if (!instruction) return;
-      void this.runEdit(from, to, instruction);
+      void this.runEdit(instruction);
     };
     runBtn.onclick = go;
     input.addEventListener("input", () => this.autosize(input));
@@ -176,21 +217,26 @@ class InlineAiController {
     setTimeout(() => input.focus(), 0);
   }
 
-  private async runEdit(from: number, to: number, instruction: string): Promise<void> {
-    if (!this.panel) return;
+  private async runEdit(instruction: string): Promise<void> {
+    if (!this.range) return;
+    const { from, to } = this.range;
     const original = this.view.state.doc.sliceString(from, to);
+    this.removePanel();
     this.phase = "streaming";
-    const stream = this.renderStreaming("Rewriting…");
+    const chip = this.renderStreamChip(to, "Rewriting…");
     this.abort = new AbortController();
     let live = "";
     try {
       const result = await this.plugin.oneShotStream(instruction, original, this.abort.signal, (d) => {
         live += d;
-        stream.setText(live);
+        chip.setText(live);
         this.reposition();
       });
       if (this.abort.signal.aborted) return;
-      this.renderDiff(from, to, original, result.trim() || original);
+      // this.range may have been mapped by edits elsewhere while streaming.
+      const r = this.range;
+      if (!r) return;
+      this.enterReview(r.from, r.to, original, result.trim() || original);
     } catch (err) {
       if (!this.abort?.signal.aborted) this.renderError(err);
     }
@@ -200,26 +246,27 @@ class InlineAiController {
     const sel = this.liveSelection();
     if (!sel) return;
     this.removeBar();
-    this.range = { from: sel.from, to: sel.to };
+    this.range = { from: sel.to, to: sel.to };
     void this.runContinue(sel.to);
   }
 
   private async runContinue(at: number): Promise<void> {
     const doc = this.view.state.doc;
     const preceding = doc.sliceString(Math.max(0, at - CONTINUE_CONTEXT_CHARS), at);
-    this.openPanel(at);
     this.phase = "streaming";
-    const stream = this.renderStreaming("Writing…");
+    const chip = this.renderStreamChip(at, "Writing…");
     this.abort = new AbortController();
     let live = "";
     try {
       const result = await this.plugin.continueStream(preceding, this.abort.signal, (d) => {
         live += d;
-        stream.setText(live);
+        chip.setText(live);
         this.reposition();
       });
       if (this.abort.signal.aborted) return;
-      this.renderContinuePreview(at, result.trimEnd());
+      const r = this.range;
+      if (!r) return;
+      this.enterContinueReview(r.to, result.trimEnd());
     } catch (err) {
       if (!this.abort?.signal.aborted) this.renderError(err);
     }
@@ -234,9 +281,79 @@ class InlineAiController {
     void this.plugin.attachSelectionToChat(text, path);
   }
 
+  /* ------------------------------- review -------------------------------- */
+
+  /** Enter Edit review: compute the hunked diff and hand it to the decoration
+   *  field. A no-op rewrite (no hunks) just tears down. */
+  private enterReview(from: number, to: number, original: string, revised: string): void {
+    const parts = computeHunks(original, revised);
+    this.removeStreamChip();
+    if (hunkCount(parts) === 0) {
+      this.teardownAll();
+      this.view.focus();
+      return;
+    }
+    this.phase = "reviewing";
+    // Collapse the selection so its highlight doesn't cover the inline diff.
+    this.view.dispatch({ effects: setDiff.of({ from, to, parts }), selection: { anchor: from } });
+    this.showActionBar(to);
+    this.view.focus();
+  }
+
+  /** Enter Continue review: a one-hunk pure insertion (`before:""`) at `at`, so
+   *  it renders as a green inline insertion with the same accept/commit path. */
+  private enterContinueReview(at: number, continuation: string): void {
+    this.removeStreamChip();
+    if (!continuation) {
+      this.renderError(new Error("Nothing to continue."));
+      return;
+    }
+    const parts: DiffPart[] = [{ kind: "hunk", index: 0, before: "", after: continuation }];
+    this.phase = "reviewing";
+    this.range = { from: at, to: at };
+    this.view.dispatch({ effects: setDiff.of({ from: at, to: at, parts }), selection: { anchor: at } });
+    this.showActionBar(at);
+    this.view.focus();
+  }
+
+  /** The compact review action bar (Accept all / Reject + keyboard hint). The
+   *  per-hunk ✓/✗ controls live inline in the decoration layer. */
+  private showActionBar(pos: number): void {
+    this.removeActionBar();
+    const bar = document.body.createDiv({ cls: "mva-inai-actionbar" });
+    const accept = bar.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Accept all" });
+    accept.onclick = () => this.acceptAllReview();
+    const reject = bar.createEl("button", { cls: "mva-btn mva-btn-danger", text: "Reject" });
+    reject.onclick = () => this.rejectReview();
+    bar.createSpan({ cls: "mva-inai-hint", text: "Tab · y/n · ⌘⏎" });
+    this.actionBar = bar;
+    this.placeBelow(bar, pos);
+    requestAnimationFrame(() => bar.addClass("is-shown"));
+  }
+
+  private acceptAllReview(): void {
+    this.view.dispatch({ effects: setAllHunks.of(true) });
+    commitInlineDiff(this.view); // single doc-changing transaction → field clears
+    this.teardownReview();
+    this.view.focus();
+  }
+
+  private rejectReview(): void {
+    if (activeDiff(this.view)) this.view.dispatch({ effects: clearDiff.of(null) });
+    this.teardownReview();
+    this.view.focus();
+  }
+
+  private teardownReview(): void {
+    this.removeActionBar();
+    this.phase = "idle";
+    this.range = null;
+  }
+
   /* ------------------------------ rendering ------------------------------ */
 
-  /** Open (or reset) the anchored panel below `pos` and return its body. */
+  /** Open (or reset) the anchored panel below `pos` and return its body. Used by
+   *  the Edit instruction input and the error state. */
   private openPanel(pos: number): HTMLElement {
     this.removePanel();
     const panel = document.body.createDiv({ cls: "mva-inai-panel" });
@@ -252,69 +369,33 @@ class InlineAiController {
     return panel;
   }
 
-  /** Live "writing…" state: a label + a growing text node. Returns the text node
-   *  so the stream callback can update it in place. */
-  private renderStreaming(label: string): HTMLElement {
-    const panel = this.panel!;
-    panel.empty();
-    const head = panel.createDiv({ cls: "mva-inai-head" });
+  /** The live "rewriting…" chip anchored at the selection end: a spinner + label
+   *  and the growing green text. Returns a `setText` to update it in place. */
+  private renderStreamChip(pos: number, label: string): { setText: (t: string) => void } {
+    this.removeStreamChip();
+    const chip = document.body.createDiv({ cls: "mva-inai-streamchip" });
+    const head = chip.createDiv({ cls: "mva-inai-head" });
     setIcon(head.createSpan({ cls: "mva-inai-spin" }), "loader-2");
     head.createSpan({ text: label });
-    const body = panel.createDiv({ cls: "mva-inai-stream" });
-    const actions = panel.createDiv({ cls: "mva-inai-actions" });
+    const body = chip.createDiv({ cls: "mva-inai-streamtext" });
+    const actions = chip.createDiv({ cls: "mva-inai-actions" });
     const stop = actions.createEl("button", { cls: "mva-btn", text: "Stop" });
     stop.onclick = () => this.cancel();
-    return body;
-  }
-
-  private renderDiff(from: number, to: number, original: string, revised: string): void {
-    const panel = this.panel;
-    if (!panel) return;
-    this.phase = "diff";
-    const parts = computeHunks(original, revised);
-    panel.empty();
-    const diff = panel.createDiv({ cls: "mva-inai-diff" });
-    for (const p of parts) {
-      if (p.kind === "context") {
-        diff.createSpan({ cls: "mva-ie-same", text: p.text });
-      } else {
-        if (p.before) diff.createSpan({ cls: "mva-ie-del", text: p.before });
-        if (p.after) diff.createSpan({ cls: "mva-ie-add", text: p.after });
-      }
-    }
-    const actions = panel.createDiv({ cls: "mva-inai-actions" });
-    const accept = actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Accept" });
-    // v1: accept the whole edit. The hunk model + applyDiff already support a
-    // per-hunk predicate — swap `() => true` for a per-hunk toggle set later.
-    accept.onclick = () => this.commitReplace(from, to, applyDiff(parts, () => true));
-    const reject = actions.createEl("button", { cls: "mva-btn mva-btn-danger", text: "Reject" });
-    reject.onclick = () => this.cancel();
-    this.reposition();
-  }
-
-  private renderContinuePreview(at: number, continuation: string): void {
-    const panel = this.panel;
-    if (!panel) return;
-    this.phase = "continue-preview";
-    panel.empty();
-    if (!continuation) {
-      this.renderError(new Error("Nothing to continue."));
-      return;
-    }
-    panel.createDiv({ cls: "mva-inai-cont", text: continuation });
-    const actions = panel.createDiv({ cls: "mva-inai-actions" });
-    const accept = actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Accept" });
-    accept.onclick = () => this.commitInsert(at, continuation);
-    const reject = actions.createEl("button", { cls: "mva-btn mva-btn-danger", text: "Reject" });
-    reject.onclick = () => this.cancel();
-    this.reposition();
+    this.streamChip = chip;
+    this.placeBelow(chip, pos);
+    requestAnimationFrame(() => chip.addClass("is-shown"));
+    return {
+      setText: (t: string) => {
+        body.textContent = t;
+      },
+    };
   }
 
   private renderError(err: unknown): void {
-    const panel = this.panel;
-    if (!panel) return;
+    this.removeStreamChip();
     this.phase = "error";
-    panel.empty();
+    const pos = this.range?.to ?? this.view.state.selection.main.to;
+    const panel = this.openPanel(pos);
     panel.createDiv({
       cls: "mva-inai-error",
       text: `Inline AI failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -325,41 +406,10 @@ class InlineAiController {
     this.reposition();
   }
 
-  /* ------------------------------- commit -------------------------------- */
-
-  /** Replace [from,to) with `text` in a single transaction (Edit accept). */
-  private commitReplace(from: number, to: number, text: string): void {
-    this.committing = true;
-    try {
-      this.view.dispatch({
-        changes: { from, to, insert: text },
-        selection: { anchor: from + text.length },
-      });
-    } finally {
-      this.committing = false;
-    }
-    this.teardownAll();
-    this.view.focus();
-  }
-
-  /** Insert `text` at `at` in a single transaction (Continue accept). */
-  private commitInsert(at: number, text: string): void {
-    this.committing = true;
-    try {
-      this.view.dispatch({
-        changes: { from: at, insert: text },
-        selection: { anchor: at + text.length },
-      });
-    } finally {
-      this.committing = false;
-    }
-    this.teardownAll();
-    this.view.focus();
-  }
-
   /* ------------------------------ lifecycle ------------------------------ */
 
-  /** Abort any stream, drop the panel, restore the original selection. */
+  /** Abort any stream, drop all chrome + any diff, restore the original
+   *  selection. Used by Stop, Cancel, Dismiss, and the streaming soft-lock. */
   private cancel(): void {
     this.abort?.abort();
     this.abort = null;
@@ -378,8 +428,16 @@ class InlineAiController {
   private removePanel(): void {
     this.panel?.remove();
     this.panel = null;
-    this.phase = "idle";
-    this.range = null;
+  }
+
+  private removeStreamChip(): void {
+    this.streamChip?.remove();
+    this.streamChip = null;
+  }
+
+  private removeActionBar(): void {
+    this.actionBar?.remove();
+    this.actionBar = null;
   }
 
   private teardownAll(): void {
@@ -387,6 +445,17 @@ class InlineAiController {
     this.abort = null;
     this.removeBar();
     this.removePanel();
+    this.removeStreamChip();
+    this.removeActionBar();
+    if (activeDiff(this.view)) {
+      try {
+        this.view.dispatch({ effects: clearDiff.of(null) });
+      } catch {
+        /* view torn down — ignore */
+      }
+    }
+    this.phase = "idle";
+    this.range = null;
   }
 
   destroy(): void {
@@ -401,6 +470,11 @@ class InlineAiController {
   private reposition(): void {
     if (this.bar && this.barRange) this.placeAbove(this.bar, this.barRange.from);
     if (this.panel && this.range) this.placeBelow(this.panel, this.range.to);
+    if (this.streamChip && this.range) this.placeBelow(this.streamChip, this.range.to);
+    if (this.actionBar) {
+      const d = activeDiff(this.view);
+      if (d) this.placeBelow(this.actionBar, d.to);
+    }
   }
 
   /** Anchor an element above `pos` (the toolbar). Fixed coords from CM; the
@@ -417,8 +491,8 @@ class InlineAiController {
     el.style.top = `${c.top}px`;
   }
 
-  /** Anchor an element just below `pos` (the panel), so the selection stays
-   *  visible above it. Clamped to the viewport. */
+  /** Anchor an element just below `pos`, so the selection stays visible above it.
+   *  Clamped to the viewport. */
   private placeBelow(el: HTMLElement, pos: number): void {
     const c = this.view.coordsAtPos(pos);
     if (!c) {
@@ -438,21 +512,26 @@ class InlineAiController {
   }
 }
 
-/** The registerable CodeMirror 6 extension. Gated live behind `settings.inlineAi`
- *  (checked inside the controller), so it's inert when the setting is off. */
+/** The registerable CodeMirror 6 extension: the controller's ViewPlugin bundled
+ *  with the inline-diff decoration layer (field + keymap). Gated live behind
+ *  `settings.inlineAi` (checked inside the controller), so it's inert when the
+ *  setting is off. */
 export function inlineAiExtension(plugin: ExoPlugin) {
-  return ViewPlugin.fromClass(
-    class {
-      private ctrl: InlineAiController;
-      constructor(view: EditorView) {
-        this.ctrl = new InlineAiController(view, plugin);
+  return [
+    ViewPlugin.fromClass(
+      class {
+        private ctrl: InlineAiController;
+        constructor(view: EditorView) {
+          this.ctrl = new InlineAiController(view, plugin);
+        }
+        update(u: ViewUpdate): void {
+          this.ctrl.update(u);
+        }
+        destroy(): void {
+          this.ctrl.destroy();
+        }
       }
-      update(u: ViewUpdate): void {
-        this.ctrl.update(u);
-      }
-      destroy(): void {
-        this.ctrl.destroy();
-      }
-    }
-  );
+    ),
+    inlineDiffExtension(),
+  ];
 }
