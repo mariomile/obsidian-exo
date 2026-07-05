@@ -237,7 +237,7 @@ export async function renderCapabilitiesPanel(
   const chip = (parent: HTMLElement, label: string, active: boolean, desc?: string, onClick?: () => void): HTMLElement => {
     const el = parent.createSpan({ cls: `mva-caps-chip ${active ? "is-on" : "is-off"}` });
     el.createSpan({ cls: "mva-caps-dot" });
-    el.createSpan({ text: label });
+    el.createSpan({ cls: "mva-caps-label", text: label });
     if (desc) el.setAttr("aria-label", desc), el.setAttr("title", desc);
     if (onClick) {
       el.addClass("is-clickable");
@@ -246,15 +246,45 @@ export async function renderCapabilitiesPanel(
     return el;
   };
   const empty = (parent: HTMLElement, text: string) => parent.createDiv({ cls: "mva-faint", text });
-  const tier = (label: string) => {
+  const tier = (label: string, caption?: string) => {
     const t = grid.createDiv({ cls: "mva-caps-tier" });
-    t.setText(label);
-    t.style.fontSize = "10.5px";
-    t.style.textTransform = "uppercase";
-    t.style.letterSpacing = "0.06em";
-    t.style.color = "var(--text-muted)";
-    t.style.fontWeight = "600";
+    const l = t.createSpan({ text: label });
+    l.style.fontSize = "10.5px";
+    l.style.textTransform = "uppercase";
+    l.style.letterSpacing = "0.06em";
+    l.style.color = "var(--text-muted)";
+    l.style.fontWeight = "600";
+    if (caption) t.createSpan({ cls: "mva-caps-tier-caption", text: `  ·  ${caption}` });
     t.style.marginTop = "6px";
+  };
+  /** A one-shot action row (Memory card): distinct from a status chip — a
+   *  leading glyph instead of a dot, since it means "click to run/open" rather
+   *  than "this is on/off". Disabled actions (e.g. undo with no snapshot)
+   *  reuse the same muted `is-off` look as status chips, just without a click
+   *  handler wired. */
+  const actionChip = (
+    parent: HTMLElement,
+    a: { label: string; enabled: boolean; badge?: string; hint?: string },
+    onClick?: () => void
+  ): HTMLElement => {
+    const el = parent.createSpan({ cls: `mva-caps-chip is-action ${a.enabled ? "is-on" : "is-off"}` });
+    el.createSpan({ cls: "mva-caps-glyph", text: "▸" });
+    el.createSpan({ text: a.badge ? `${a.label} · ${a.badge}` : a.label });
+    if (a.hint) el.createSpan({ cls: "mva-caps-chip-hint", text: a.hint });
+    el.setAttr("title", a.enabled ? (a.hint ?? "Run") : "Unavailable");
+    if (a.enabled && onClick) {
+      el.addClass("is-clickable");
+      clickable(el, onClick);
+    }
+    return el;
+  };
+  /** A status chip (System card) that deep-links to settings: keeps the dot
+   *  (it reports an on/off state) but adds a trailing gear glyph so it reads
+   *  as "click to configure", distinct from an action's "click to run". */
+  const configChip = (parent: HTMLElement, label: string, active: boolean, onClick: () => void): HTMLElement => {
+    const el = chip(parent, label, active, "Open Exo settings", onClick);
+    el.createSpan({ cls: "mva-caps-glyph is-gear", text: "⚙" });
+    return el;
   };
 
   // Session
@@ -271,7 +301,7 @@ export async function renderCapabilitiesPanel(
   }
 
   // Actions hub (W2-UX): Wave 1-2 machinery — one place to see state + act.
-  tier("Actions");
+  tier("Actions", "▸ run now  ·  ⚙ open settings");
   {
     const now = Date.now();
     const [storeEntries, loops, reviewExists, snapshotPresent] = await Promise.all([
@@ -303,9 +333,8 @@ export async function renderCapabilitiesPanel(
         "open-loops": openMain(OPEN_LOOPS_PATH),
         "open-review": openMain(REVIEW_PATH),
       };
-      for (const a of memoryActions({ snapshotPresent, reviewExists, loops, now })) {
-        const label = a.badge ? `${a.label} · ${a.badge}` : a.label;
-        chip(b, label, a.enabled, a.enabled ? "run" : "unavailable", a.enabled ? handler[a.id] : undefined);
+      for (const a of memoryActions({ snapshotPresent, reviewExists, loops, now, dreamLlmEnabled: s.dreamLlmEnabled })) {
+        actionChip(b, a, a.enabled ? handler[a.id] : undefined);
       }
     }
 
@@ -322,14 +351,14 @@ export async function renderCapabilitiesPanel(
       };
       const chips = new Map<string, HTMLElement>();
       for (const st of systemStatuses(sysInput)) {
-        chips.set(st.id, chip(b, `${st.label}: ${st.value}`, st.enabled, "Open Exo settings", () => ctx.openSettings?.()));
+        chips.set(st.id, configChip(b, `${st.label}: ${st.value}`, st.enabled, () => ctx.openSettings?.()));
       }
       // Async-fill the last auto-commit time (git log) without blocking render.
       void (ctx.lastAutoCommitEpoch?.() ?? Promise.resolve(null)).then((epoch) => {
         const el = chips.get("autocommit");
         if (!el) return;
         const st = systemStatuses({ ...sysInput, lastAutoCommitEpoch: epoch }).find((x) => x.id === "autocommit");
-        const textSpan = el.querySelector("span:last-child");
+        const textSpan = el.querySelector(".mva-caps-label");
         if (st && textSpan instanceof HTMLElement) textSpan.setText(`${st.label}: ${st.value}`);
       });
     }

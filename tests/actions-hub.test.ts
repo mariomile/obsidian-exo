@@ -134,13 +134,13 @@ describe("memoryStats", () => {
 
 describe("memoryActions", () => {
   it("emits the base four rows with dream-undo disabled and no review", () => {
-    const rows = memoryActions({ snapshotPresent: false, reviewExists: false, loops: [], now: NOW });
+    const rows = memoryActions({ snapshotPresent: false, reviewExists: false, loops: [], now: NOW, dreamLlmEnabled: true });
     expect(rows.map((r) => r.id)).toEqual(["dream-run", "dream-undo", "open-store", "open-loops"]);
     expect(rows.find((r) => r.id === "dream-undo")!.enabled).toBe(false);
     expect(rows.find((r) => r.id === "open-loops")!.badge).toBeUndefined();
   });
   it("enables undo with a snapshot and appends the review row when it exists", () => {
-    const rows = memoryActions({ snapshotPresent: true, reviewExists: true, loops: [], now: NOW });
+    const rows = memoryActions({ snapshotPresent: true, reviewExists: true, loops: [], now: NOW, dreamLlmEnabled: true });
     expect(rows.find((r) => r.id === "dream-undo")!.enabled).toBe(true);
     expect(rows.map((r) => r.id)).toContain("open-review");
   });
@@ -150,8 +150,19 @@ describe("memoryActions", () => {
       reviewExists: false,
       loops: [loop({ id: "1" }), loop({ id: "2" })],
       now: NOW,
+      dreamLlmEnabled: true,
     });
     expect(rows.find((r) => r.id === "open-loops")!.badge).toBe("2 due");
+  });
+  it("hints dream-run as LLM-stage-off without disabling it", () => {
+    const rows = memoryActions({ snapshotPresent: false, reviewExists: false, loops: [], now: NOW, dreamLlmEnabled: false });
+    const dreamRun = rows.find((r) => r.id === "dream-run")!;
+    expect(dreamRun.enabled).toBe(true);
+    expect(dreamRun.hint).toBe("LLM stage off");
+  });
+  it("carries no hint on dream-run once the LLM stage is on", () => {
+    const rows = memoryActions({ snapshotPresent: false, reviewExists: false, loops: [], now: NOW, dreamLlmEnabled: true });
+    expect(rows.find((r) => r.id === "dream-run")!.hint).toBeUndefined();
   });
 });
 
