@@ -50,6 +50,10 @@ export interface MVASettings {
   nativeFirst: boolean;
   memoryReadEnabled: boolean;
   memoryWriteEnabled: boolean;
+  /** Self-Writing Memory: after each healthy turn, a cheap background observer
+   *  proposes durable memories and writes them to the store (with veto/undo).
+   *  OFF by default — only runs when this AND memoryWriteEnabled are on. */
+  selfWritingMemory: boolean;
   featureSurfacing: boolean;
   featureWikilinkify: boolean;
   /** Open notes the agent edits in a tab beside the chat, live. */
@@ -117,6 +121,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   nativeFirst: false,
   memoryReadEnabled: true,
   memoryWriteEnabled: true,
+  selfWritingMemory: false,
   featureSurfacing: true,
   featureWikilinkify: true,
   revealEditedNotes: true,
@@ -564,6 +569,12 @@ export class MVASettingTab extends PluginSettingTab {
       "Write vault memory",
       "Let the agent capture decisions, learnings, and session-log entries into _system/ — every write is still permission-gated. Claude only.",
       "memoryWriteEnabled"
+    );
+    this.toggleSetting(
+      el,
+      "Self-writing memory",
+      "After each healthy turn, a cheap background observer proposes durable memories and appends them to the store as @generated entries — you can review or undo each write. Off by default; runs only when Write vault memory is also on. Claude only.",
+      "selfWritingMemory"
     );
 
     new Setting(el)
