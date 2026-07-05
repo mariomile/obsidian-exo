@@ -99,6 +99,19 @@ Before W2-2 ships, write `_system/memory/decisions/2026-07-XX-dream-pass-llm-sta
 
 **Acceptance**: default behavior unchanged; N-step mode fires at the right counts (unit-test the counter/watermark logic); no observer runs when `selfWritingMemory` OFF.
 
+### W2-UX — Actions hub: every agent capability reachable from Exo's panel
+
+**Goal**: the Wave 1-2 machinery (dream, loops, memory store, budget, review) is currently scattered across Command Palette entries, settings toggles, and agent-only MCP tools. Surface it all in ONE place inside Exo's existing capabilities/context panel so Mario can see state and act with one click.
+
+**Design** — extend the existing capabilities panel (Knowledge/Playbooks/Skills taxonomy) with two additions:
+1. **"Memory" card**: live stats line (store entries total + `@generated` count, loops open/due, last dream run from `lastDreamPass`, background budget used today from the W0 ledger e.g. "12k/200k") + action rows: **Run dream pass** (executes the existing command), **Undo last dream** (enabled only when a snapshot exists), **Open memory store** (opens current `_system/memory/store/YYYY-MM.md` in main pane), **Open open-loops** (opens the ledger; row shows due count badge), **Open review.md** (when the file exists).
+2. **"System" card**: auto-commit status row (ON/OFF + last auto-commit time from vault git log — reuse the existing execFile discipline, cached, never blocking render) with click → Exo settings; observer status row (ON/OFF + cadence); each row = read-only status + deep-link, no new toggles (settings stay the one place to change config).
+Pure logic (stats assembly, budget/loop counting, git-log parse) in `src/core/actions-hub.ts` with vitest coverage; panel rendering follows the existing card component patterns exactly (theme-native, quiet rows, no new visual language). All actions reuse existing commands/methods — this brief adds NO new capability, only reachability.
+
+**Files**: `src/core/actions-hub.ts` (new) + tests, capabilities/context panel module (locate on read), `styles.css` if strictly needed.
+
+**Acceptance**: panel shows both cards with live data; every action row works (dream opens modal, undo disabled without snapshot, files open in main pane); stats render without blocking (async fill, graceful "—" placeholders); zero new settings; all suites green; version not bumped.
+
 ---
 
 ## Wave 3 — the agent takes initiative
