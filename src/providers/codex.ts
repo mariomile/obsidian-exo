@@ -8,6 +8,122 @@ import type {
   SessionOpts,
 } from "./types";
 
+export interface CodexParseState {
+  sessionId?: string;
+  streamed: boolean;
+  finalText: string;
+}
+
+/**
+ * Parse one JSONL line from `codex exec --json` and emit AgentEvents.
+ * Handles both the current schema (0.142+: thread.started / item.* / turn.*)
+ * and the legacy one ({msg:{type:...}}) so older CLIs keep working.
+ */
+export function handleCodexLine(
+  line: string,
+  state: CodexParseState,
+  onEvent: (e: AgentEvent) => void,
+): void {
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+
+  const topType = String(obj.type ?? "");
+
+  if (topType === "thread.started" && typeof obj.thread_id === "string") {
+    state.sessionId = obj.thread_id;
+    return;
+  }
+
+  if (topType === "turn.failed") {
+    const err = (obj.error ?? {}) as Record<string, unknown>;
+    if (typeof err.message === "string") onEvent({ kind: "error", message: err.message });
+    return;
+  }
+
+  if (topType === "item.started" || topType === "item.completed") {
+    const item = (obj.item ?? {}) as Record<string, unknown>;
+    const itemType = String(item.type ?? "");
+    const id = String(item.id ?? "cx");
+    const done = topType === "item.completed";
+
+    if (itemType === "agent_message" && done && typeof item.text === "string") {
+      onEvent({ kind: "text-delta", text: state.streamed ? `\n\n${item.text}` : item.text });
+      state.streamed = true;
+    } else if (itemType === "reasoning" && done && typeof item.text === "string") {
+      onEvent({ kind: "thinking-delta", text: item.text });
+    } else if (itemType === "command_execution") {
+      if (done) {
+        onEvent({
+          kind: "tool-call-result",
+          id,
+          ok: Number(item.exit_code ?? 0) === 0,
+          output: String(item.aggregated_output ?? ""),
+        });
+      } else {
+        onEvent({ kind: "tool-call-start", id, name: "Bash", input: { command: String(item.command ?? "") } });
+      }
+    } else if (itemType === "file_change") {
+      const changes = Array.isArray(item.changes) ? (item.changes as Record<string, unknown>[]) : [];
+      const ok = item.status !== "failed";
+      for (const c of changes) {
+        const path = String(c.path ?? "");
+        if (done) onEvent({ kind: "tool-call-result", id: `${id}:${path}`, ok, output: "" });
+        else onEvent({ kind: "tool-call-start", id: `${id}:${path}`, name: "Edit", input: { file_path: path } });
+      }
+    } else if (itemType === "error" && done && typeof item.message === "string") {
+      onEvent({ kind: "error", message: item.message });
+    }
+    return;
+  }
+
+  // Legacy schema: {id, session_id, msg:{type:...}}
+  const msg = (obj.msg ?? obj) as Record<string, unknown>;
+  const type = String(msg.type ?? "");
+  const sid = (obj.session_id ?? msg.session_id) as string | undefined;
+  if (sid) state.sessionId = sid;
+
+  if (type === "agent_message_delta" && typeof msg.delta === "string") {
+    state.streamed = true;
+    onEvent({ kind: "text-delta", text: msg.delta });
+  } else if (type === "agent_reasoning_delta" && typeof msg.delta === "string") {
+    onEvent({ kind: "thinking-delta", text: msg.delta });
+  } else if (type === "agent_message" && typeof msg.message === "string") {
+    state.finalText = msg.message;
+  } else if (type === "exec_command_begin") {
+    const id = String(msg.call_id ?? msg.id ?? "cx");
+    const command = Array.isArray(msg.command)
+      ? (msg.command as unknown[]).join(" ")
+      : String(msg.command ?? "");
+    onEvent({ kind: "tool-call-start", id, name: "Bash", input: { command } });
+  } else if (type === "exec_command_end") {
+    const id = String(msg.call_id ?? msg.id ?? "");
+    const out = String(msg.aggregated_output ?? msg.stdout ?? msg.output ?? "");
+    onEvent({ kind: "tool-call-result", id, ok: Number(msg.exit_code ?? 0) === 0, output: out });
+  } else if (type === "patch_apply_begin") {
+    const changes = (msg.changes ?? {}) as Record<string, unknown>;
+    for (const path of Object.keys(changes)) {
+      onEvent({
+        kind: "tool-call-start",
+        id: `${msg.call_id ?? "patch"}:${path}`,
+        name: "Edit",
+        input: { file_path: path },
+      });
+    }
+  } else if (type === "patch_apply_end") {
+    const changes = (msg.changes ?? {}) as Record<string, unknown>;
+    const ok = msg.success !== false;
+    for (const path of Object.keys(changes)) {
+      onEvent({ kind: "tool-call-result", id: `${msg.call_id ?? "patch"}:${path}`, ok, output: "" });
+    }
+  } else if (type === "error" && typeof msg.message === "string") {
+    onEvent({ kind: "error", message: msg.message });
+  }
+}
+
 /**
  * Codex session. Codex has no persistent streaming-input protocol wired here,
  * so each turn spawns `codex exec --json`, resuming the prior session id for
@@ -28,7 +144,11 @@ class CodexSession implements AgentSession {
     // Sandbox: forced read-only when tools are off; otherwise the chosen mode.
     const sandbox = o.toolsEnabled ? o.sandboxMode || "workspace-write" : "read-only";
     args.push("-s", sandbox);
-    if (o.approvalPolicy) args.push("-a", o.approvalPolicy);
+    // `codex exec` dropped the `-a/--ask-for-approval` flag (removed by 0.142);
+    // the config key is the stable way to set the policy across CLI versions.
+    if (o.approvalPolicy && /^[a-z-]+$/.test(o.approvalPolicy)) {
+      args.push("-c", `approval_policy="${o.approvalPolicy}"`);
+    }
     if (o.model && o.model !== "default" && /^[A-Za-z0-9._-]+$/.test(o.model)) args.push("-m", o.model);
     if (o.effort && o.effort !== "default" && /^[a-z]+$/.test(o.effort)) {
       args.push("-c", `model_reasoning_effort="${o.effort}"`);
@@ -44,8 +164,7 @@ class CodexSession implements AgentSession {
 
       let buf = "";
       let stderr = "";
-      let streamed = false;
-      let finalText = "";
+      const state: CodexParseState = { sessionId: this.sessionId, streamed: false, finalText: "" };
 
       child.on("error", (err) => reject(err));
 
@@ -56,53 +175,8 @@ class CodexSession implements AgentSession {
           const line = buf.slice(0, nl).trim();
           buf = buf.slice(nl + 1);
           if (!line) continue;
-          let obj: Record<string, unknown>;
-          try {
-            obj = JSON.parse(line) as Record<string, unknown>;
-          } catch {
-            continue;
-          }
-          const msg = (obj.msg ?? obj) as Record<string, unknown>;
-          const type = String(msg.type ?? "");
-          const sid = (obj.session_id ?? msg.session_id) as string | undefined;
-          if (sid) this.sessionId = sid;
-
-          if (type === "agent_message_delta" && typeof msg.delta === "string") {
-            streamed = true;
-            onEvent({ kind: "text-delta", text: msg.delta });
-          } else if (type === "agent_reasoning_delta" && typeof msg.delta === "string") {
-            onEvent({ kind: "thinking-delta", text: msg.delta });
-          } else if (type === "agent_message" && typeof msg.message === "string") {
-            finalText = msg.message;
-          } else if (type === "exec_command_begin") {
-            const id = String(msg.call_id ?? msg.id ?? "cx");
-            const command = Array.isArray(msg.command)
-              ? (msg.command as unknown[]).join(" ")
-              : String(msg.command ?? "");
-            onEvent({ kind: "tool-call-start", id, name: "Bash", input: { command } });
-          } else if (type === "exec_command_end") {
-            const id = String(msg.call_id ?? msg.id ?? "");
-            const out = String(msg.aggregated_output ?? msg.stdout ?? msg.output ?? "");
-            onEvent({ kind: "tool-call-result", id, ok: Number(msg.exit_code ?? 0) === 0, output: out });
-          } else if (type === "patch_apply_begin") {
-            const changes = (msg.changes ?? {}) as Record<string, unknown>;
-            for (const path of Object.keys(changes)) {
-              onEvent({
-                kind: "tool-call-start",
-                id: `${msg.call_id ?? "patch"}:${path}`,
-                name: "Edit",
-                input: { file_path: path },
-              });
-            }
-          } else if (type === "patch_apply_end") {
-            const changes = (msg.changes ?? {}) as Record<string, unknown>;
-            const ok = msg.success !== false;
-            for (const path of Object.keys(changes)) {
-              onEvent({ kind: "tool-call-result", id: `${msg.call_id ?? "patch"}:${path}`, ok, output: "" });
-            }
-          } else if (type === "error" && typeof msg.message === "string") {
-            onEvent({ kind: "error", message: msg.message });
-          }
+          handleCodexLine(line, state, onEvent);
+          this.sessionId = state.sessionId;
         }
       });
 
@@ -115,7 +189,7 @@ class CodexSession implements AgentSession {
           onEvent({ kind: "error", message: m });
           // Don't hard-reject on non-zero (e.g. interrupted) — end the turn.
         }
-        if (!streamed && finalText) onEvent({ kind: "text-delta", text: finalText });
+        if (!state.streamed && state.finalText) onEvent({ kind: "text-delta", text: state.finalText });
         onEvent({ kind: "turn-end", sessionId: this.sessionId });
         resolve();
       });
