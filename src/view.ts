@@ -27,7 +27,7 @@ import type {
 } from "./providers/types";
 import { toolMeta, toolFilePath, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
 import { createObsidianToolServer, OBSIDIAN_READ_TOOLS, OBSIDIAN_MEMORY_TOOLS } from "./obsidian/tools";
-import { MemoryObserver, type ObserverSnapshot } from "./obsidian/observer";
+import { MemoryObserver, type ObserverWrite } from "./obsidian/observer";
 import { readBootContext } from "./obsidian/memory";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
@@ -594,7 +594,10 @@ export class ChatView extends ItemView {
             // Per-session server + per-convo closure: ask_user always renders into
             // the conversation that owns this session, never a parallel one.
             this.askBridge(c, qs),
-          s.memoryReadEnabled
+          s.memoryReadEnabled,
+          // Inject the plugin's ONE shared store write-queue so the `remember`
+          // tool serializes against the observer's appends/undo (w1-1 contract).
+          this.plugin.memoryWriteQueue
         )
       : undefined;
 
@@ -2690,8 +2693,12 @@ export class ChatView extends ItemView {
   /** Lazily build the Self-Writing Memory observer for this view. */
   private observer(): MemoryObserver {
     if (!this.memoryObserver) {
-      this.memoryObserver = new MemoryObserver(this.app, (prompt, signal) =>
-        this.plugin.runObserver(prompt, signal)
+      this.memoryObserver = new MemoryObserver(
+        this.app,
+        (prompt, signal) => this.plugin.runObserver(prompt, signal),
+        // Same shared store write-queue the `remember` tool uses — observer
+        // appends and undo serialize against every other store writer (w1-1).
+        this.plugin.memoryWriteQueue
       );
     }
     return this.memoryObserver;
@@ -2710,7 +2717,7 @@ export class ChatView extends ItemView {
       .then((write) => {
         if (!write || write.entries.length === 0) return;
         if (!this.convos.includes(c) || !el.isConnected) return; // turn removed/rebuilt
-        this.renderMemoryVeto(el, write.snapshot, write.entries.length);
+        this.renderMemoryVeto(el, write);
       })
       .catch(() => {
         /* never surface into the turn */
@@ -2718,21 +2725,24 @@ export class ChatView extends ItemView {
   }
 
   /** Discreet, non-blocking "N memories written — review · undo" indicator. */
-  private renderMemoryVeto(el: HTMLElement, snapshot: ObserverSnapshot, n: number): void {
+  private renderMemoryVeto(el: HTMLElement, write: ObserverWrite): void {
+    const n = write.entries.length;
     const row = el.createDiv({ cls: "mva-faint mva-mem-veto" });
     row.createSpan({ text: `${n} ${n === 1 ? "memory" : "memories"} written — ` });
     const review = row.createEl("a", { text: "review", href: "#" });
     this.clickable(review, (e) => {
       e.preventDefault();
       // Reveal the store file the entries were appended to.
-      void this.app.workspace.openLinkText(snapshot.path, "", "tab");
+      void this.app.workspace.openLinkText(write.snapshot.path, "", "tab");
     });
     row.createSpan({ text: " · " });
     const undo = row.createEl("a", { text: "undo", href: "#" });
     this.clickable(undo, (e) => {
       e.preventDefault();
       void this.observer()
-        .undo(snapshot)
+        // Undo strips exactly this pass's entry ids from the CURRENT file —
+        // any @user entry written in between is preserved (never a blind restore).
+        .undo(write)
         .then(() => {
           row.empty();
           row.createSpan({ text: `${n === 1 ? "Memory" : "Memories"} reverted.` });

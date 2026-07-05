@@ -1,9 +1,10 @@
 import { App, TFile } from "obsidian";
-import { WriteQueue } from "../core/write-queue";
+import type { WriteQueue } from "../core/write-queue";
 import {
   formatEntry,
   monthFileName,
   parseStoreFile,
+  removeEntriesById,
   resolveSupersedence,
   type MemoryEntry,
 } from "../core/memory-store";
@@ -46,22 +47,25 @@ export type RunObserverSession = (prompt: string, signal: AbortSignal) => Promis
  * After a HEALTHY chat turn, `observe()` fans a capped digest off the critical
  * path to a cheap background model, parses the candidates, drops near-duplicates
  * of what recall already knows, and appends the survivors to the Union Store as
- * `source='generated'` entries — through the w1-1 {@link WriteQueue}, and NEVER
- * with a `supersedes` field (truth firewall: a generated entry may never
- * supersede a user entry).
+ * `source='generated'` entries — through the SHARED w1-1 {@link WriteQueue}
+ * injected by the plugin (the same instance the `remember` tool uses, so store
+ * writers never interleave a read-modify-write), and NEVER with a `supersedes`
+ * field (truth firewall: a generated entry may never supersede a user entry).
  *
  * Concurrency: at most ONE run in flight. If a new turn ends while a run is
  * still going, it is skipped (not queued). `dispose()` aborts on view unload.
  */
 export class MemoryObserver {
-  /** The w1-1 serialized write path for every store append + undo this observer makes. */
-  private readonly queue = new WriteQueue();
   private running = false;
   private controller: AbortController | null = null;
 
   constructor(
     private readonly app: App,
-    private readonly runSession: RunObserverSession
+    private readonly runSession: RunObserverSession,
+    /** THE shared store write-queue (plugin-scoped). Every append + undo this
+     *  observer makes enqueues here so it serializes against the `remember`
+     *  tool and future dream passes — one FIFO, no cross-writer clobber (w1-1). */
+    private readonly queue: WriteQueue
   ) {}
 
   /**
@@ -112,17 +116,30 @@ export class MemoryObserver {
   }
 
   /**
-   * Undo exactly the entries a prior {@link observe} appended, by restoring the
-   * captured before-image (or deleting the file the append created). Routed
-   * through the same write-queue so it can't interleave with a store append.
+   * Undo EXACTLY the entries a prior {@link observe} appended. Re-reads the
+   * CURRENT file and strips only this pass's own entry ids ({@link removeEntriesById}) —
+   * it never blind-restores a before-image and never deletes a file that still
+   * holds other entries. This is what protects a `remember` @user entry (or any
+   * other writer's entry) that landed between the observer's append and the undo
+   * click: only the observer's own blocks are removed, everything else survives.
+   *
+   * The whole file is deleted only when it was CREATED by this observer pass
+   * (`before === null`) AND nothing else remains after the strip. Routed through
+   * the shared write-queue so it can't interleave with a concurrent append.
    */
-  async undo(snapshot: ObserverSnapshot): Promise<void> {
+  async undo(write: ObserverWrite): Promise<void> {
+    const ids = write.entries.map((e) => e.id);
     await this.queue.enqueue(async () => {
-      const f = this.app.vault.getAbstractFileByPath(snapshot.path);
-      if (snapshot.before === null) {
-        if (f instanceof TFile) await this.app.vault.delete(f);
-      } else if (f instanceof TFile) {
-        await this.app.vault.modify(f, snapshot.before);
+      const f = this.app.vault.getAbstractFileByPath(write.snapshot.path);
+      if (!(f instanceof TFile)) return;
+      const current = await this.app.vault.read(f);
+      const stripped = removeEntriesById(current, ids);
+      if (stripped.trim() === "" && write.snapshot.before === null) {
+        // The observer created this file and no other writer added anything —
+        // safe to remove it entirely (leaving no empty store file behind).
+        await this.app.vault.delete(f);
+      } else {
+        await this.app.vault.modify(f, stripped);
       }
     });
   }

@@ -126,6 +126,41 @@ export function parseStoreFile(content: string): MemoryEntry[] {
   return entries;
 }
 
+/**
+ * Remove exactly the blocks whose header id is in `ids`, returning the remaining
+ * file content. This is the observer-undo primitive: it re-reads the CURRENT file
+ * and strips only its own appended entries — so any entry written by another
+ * writer (e.g. a `remember` @user entry) that landed after the observer's append
+ * survives intact. Never a blind before-image restore, never a whole-file delete.
+ *
+ * Junk and non-removed blocks are preserved line-for-line; trailing whitespace is
+ * normalized to a single newline (empty string when nothing remains). Idempotent
+ * for ids not present.
+ */
+export function removeEntriesById(content: string, ids: readonly string[]): string {
+  const remove = new Set(ids);
+  const lines = content.split(/\r?\n/);
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const head = HEADER.exec(lines[i]);
+    if (!head) {
+      out.push(lines[i]);
+      i++;
+      continue;
+    }
+    // A block spans its header up to (but not including) the next header / EOF.
+    const start = i;
+    i++;
+    while (i < lines.length && !HEADER.test(lines[i])) i++;
+    if (!remove.has(head[1])) {
+      for (let j = start; j < i; j++) out.push(lines[j]);
+    }
+  }
+  const text = out.join("\n").replace(/\s+$/, "");
+  return text ? `${text}\n` : "";
+}
+
 /** Monthly file name for a timestamp, e.g. `2024-07.md` (UTC — TZ-independent). */
 export function monthFileName(at: number): string {
   const d = new Date(at);
