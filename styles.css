@@ -2914,6 +2914,53 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-caps-chip.is-off {
   opacity: 0.55;
 }
+.mva-caps-tier-caption {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+/* Action chips (Memory card): a glyph replaces the dot, since these mean
+   "click to run/open" rather than "this is on/off". Accent-tinted so the
+   truly clickable rows stand out from the plain status chips around them. */
+.mva-caps-chip.is-action {
+  gap: 5px;
+  font-weight: 550;
+}
+.mva-caps-glyph {
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+  color: var(--mva-brand, var(--interactive-accent));
+}
+.mva-caps-chip.is-action.is-clickable {
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 10%, var(--background-modifier-hover));
+  border-color: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 35%, var(--background-modifier-border));
+}
+.mva-caps-chip.is-action.is-clickable:hover {
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 18%, var(--background-modifier-hover));
+  border-color: var(--mva-brand, var(--interactive-accent));
+}
+.mva-caps-chip.is-action.is-off .mva-caps-glyph {
+  color: var(--text-faint);
+}
+.mva-caps-chip-hint {
+  font-size: 10px;
+  font-style: italic;
+  color: var(--text-faint);
+}
+/* Config chips (System card): keep the on/off dot (they report a state) but
+   add a trailing gear so they read as "click to configure", not "click to
+   run" — the same row grammar as an action chip, a different affordance. */
+.mva-caps-glyph.is-gear {
+  font-size: 9.5px;
+  margin-left: 1px;
+  color: var(--text-faint);
+}
+.mva-caps-chip.is-clickable:hover .mva-caps-glyph.is-gear {
+  color: var(--text-muted);
+}
 
 /* ------------------------------ keyframes ----------------------------- */
 @keyframes mva-spin {

@@ -33,6 +33,10 @@ export interface HubAction {
   enabled: boolean;
   /** Optional trailing badge, e.g. a due-loop count. */
   badge?: string;
+  /** Optional caveat shown alongside an *enabled* action (e.g. a reduced pass
+   *  the button still runs, just not the full pipeline) — distinct from
+   *  `badge`, which signals urgency/count rather than a scope caveat. */
+  hint?: string;
 }
 
 /** A read-only status row → deep-links to Exo settings; the dot reflects `enabled`. */
@@ -125,15 +129,25 @@ export interface MemoryActionsInput {
   reviewExists: boolean;
   loops: LoopEntry[];
   now: number;
+  /** `dreamLlmEnabled` setting. When false, the deterministic pass still runs
+   *  but skips the LLM proposal stage — surfaced as a hint, not a disable,
+   *  since the button remains a real action either way. */
+  dreamLlmEnabled: boolean;
 }
 
 /** The Memory card's action rows. `dream-undo` is disabled without a snapshot;
  *  `open-loops` carries a due-count badge; `open-review` is omitted when the
- *  file is absent. */
+ *  file is absent; `dream-run` carries a "LLM stage off" hint when the LLM
+ *  proposal stage (Wave 2, gated separately) hasn't been turned on yet. */
 export function memoryActions(input: MemoryActionsInput): HubAction[] {
   const due = dueLoops(input.loops, input.now).length;
   const actions: HubAction[] = [
-    { id: "dream-run", label: "Run dream pass", enabled: true },
+    {
+      id: "dream-run",
+      label: "Run dream pass",
+      enabled: true,
+      ...(input.dreamLlmEnabled ? {} : { hint: "LLM stage off" }),
+    },
     { id: "dream-undo", label: "Undo last dream", enabled: input.snapshotPresent },
     { id: "open-store", label: "Open memory store", enabled: true },
     { id: "open-loops", label: "Open open-loops", enabled: true, ...(due > 0 ? { badge: `${due} due` } : {}) },
