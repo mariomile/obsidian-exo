@@ -7,7 +7,11 @@ import { ADAPTERS } from "./providers/registry";
 import { resolveCli } from "./cli";
 import { InlineEditModal } from "./ui/inline-edit";
 import type { AgentEvent } from "./providers/types";
-import { computePlan, applyPlan, undoPlan, type DreamSnapshot } from "./obsidian/dream";
+import { computePlan, applyPlan, applyLlmPlan, mergeSnapshots, undoPlan, type DreamSnapshot } from "./obsidian/dream";
+import { runDreamLlm, type DreamLlmResult } from "./obsidian/dream-llm";
+import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidian/claudemem";
+import { formatDreamSummary } from "./core/dream-proposals";
+import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
 import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport } from "./headless";
 import { parseConversationsSource } from "./core/persistence";
@@ -125,16 +129,7 @@ export default class ExoPlugin extends Plugin {
     this.addCommand({
       id: "memory-dream-pass",
       name: "Run memory dream pass (consolidate _system/memory)",
-      callback: () => {
-        const plan = computePlan(this.app);
-        new DreamModal(this.app, plan, async () => {
-          const snap = await applyPlan(this.app, plan, new Date().toISOString());
-          await this.saveDreamSnapshot(snap);
-          new Notice(
-            `Dream pass: ${plan.promote.length} promoted, ${plan.dedup.length} merged, ${plan.stale.length} marked stale. Undo from the command palette.`
-          );
-        }).open();
-      },
+      callback: () => void this.openDreamPass(),
     });
     this.addCommand({
       id: "memory-dream-undo",
@@ -438,26 +433,33 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
-  /** Run the Self-Writing Memory observer prompt on a cheap, transient, tool-less
-   *  Claude CLI session (same lifecycle shape as {@link generateTitle}). Returns the
-   *  raw model text, or "" on any failure — never throws, aborts silently. A hard
-   *  15s timeout plus the caller's `signal` guarantees a hung call can't leak. */
-  async runObserver(prompt: string, signal: AbortSignal): Promise<string> {
+  /**
+   * Run a prompt on a cheap, transient, tool-less Claude CLI session (same
+   * lifecycle shape as {@link generateTitle}). The reusable chassis behind every
+   * background utility pass — the Self-Writing Memory observer and the Dream Pass
+   * v2 LLM stage. Returns the raw model text, or "" on any failure — never throws,
+   * aborts silently. A hard timeout plus the caller's `signal` guarantees a hung
+   * call can't leak.
+   *
+   * @param opts.model    Cheap model id (defaults to Haiku — the observer's model
+   *                      by Mario's directive; the dream stage passes a Sonnet id).
+   * @param opts.timeoutMs Hard ceiling (default 15s).
+   */
+  async runUtilityPass(
+    prompt: string,
+    opts: { signal: AbortSignal; model?: string; timeoutMs?: number }
+  ): Promise<string> {
+    const { signal, model = "claude-haiku-4-5", timeoutMs = 15_000 } = opts;
     const ctrl = new AbortController();
     const onAbort = () => ctrl.abort();
     if (signal.aborted) ctrl.abort();
     else signal.addEventListener("abort", onAbort);
-    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const cli = await resolveCli("claude", this.settings.claudeBin);
       const session = ADAPTERS.claude.createSession({
         cli,
-        // Model choice: the observer is the same class of cheap, transient utility
-        // session as `generateTitle`, which runs on Haiku by Mario's explicit
-        // directive (floor = Sonnet for subagents/workflows, Haiku allowed only
-        // where he directed). Following that precedent here — a per-turn background
-        // observer must be cheap and fast — so it uses the same Haiku model.
-        model: "claude-haiku-4-5",
+        model,
         effort: "default",
         cwd: this.vaultPath(),
         permissionMode: "default",
@@ -486,6 +488,12 @@ export default class ExoPlugin extends Plugin {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
     }
+  }
+
+  /** Back-compat thin wrapper: the observer chassis, on the Haiku default. Kept so
+   *  ChatView keeps calling `runObserver(prompt, signal)` with unchanged behavior. */
+  async runObserver(prompt: string, signal: AbortSignal): Promise<string> {
+    return this.runUtilityPass(prompt, { signal });
   }
 
   private inlineEdit(editor: Editor): void {
@@ -640,6 +648,118 @@ export default class ExoPlugin extends Plugin {
       /* ignore */
     }
   }
+  /**
+   * Manual dream pass: compute the deterministic plan, optionally run the Dream
+   * Pass v2 LLM proposal stage (when `dreamLlmEnabled`), and open the preview
+   * modal. Nothing mutates until the user clicks Apply.
+   */
+  private async openDreamPass(): Promise<void> {
+    const plan = computePlan(this.app);
+    const llm = await this.maybeRunDreamLlm();
+    new DreamModal(this.app, plan, llm, async () => {
+      const ranAt = new Date().toISOString();
+      let snap = await applyPlan(this.app, plan, ranAt);
+
+      if (llm && (llm.writePlan.storeEntries.length || llm.writePlan.ruleDrafts.length)) {
+        const llmSnap = await applyLlmPlan(this.app, llm.writePlan, this.memoryWriteQueue, ranAt);
+        snap = mergeSnapshots(snap, llmSnap);
+        // Watermark advances ONLY on apply (never on propose/preview).
+        if (llm.writePlan.importedIds.length) {
+          await advanceAndPersistWatermark(this.app, this.memoryWriteQueue, llm.writePlan.importedIds, ranAt);
+        }
+        // Persist applied keys so the next run's gate culls duplicates.
+        this.settings.appliedProposalKeys = [...this.settings.appliedProposalKeys, ...llm.writePlan.keys].slice(-500);
+        await this.saveSettings();
+        // Descriptive memory commit (Letta context-repositories).
+        await this.commitDreamApply(formatDreamSummary(llm.writePlan.summary));
+      }
+
+      await this.saveDreamSnapshot(snap);
+      const s = llm?.writePlan.summary;
+      const llmBit = s ? `; LLM: merged ${s.merged}, superseded ${s.superseded}, drafts ${s.ruleDrafts}, imported ${s.imported}` : "";
+      new Notice(
+        `Dream pass: ${plan.promote.length} promoted, ${plan.dedup.length} merged, ${plan.stale.length} marked stale${llmBit}. Undo from the command palette.`
+      );
+    }).open();
+  }
+
+  /**
+   * Run the Dream Pass v2 LLM proposal stage, or null when it should not run
+   * (toggle off, non-Claude provider, or the background budget is exhausted —
+   * checked BEFORE the LLM call). Never throws.
+   */
+  private async maybeRunDreamLlm(): Promise<DreamLlmResult | null> {
+    const s = this.settings;
+    if (!s.dreamLlmEnabled) return null;
+    if (s.provider !== "claude") return null;
+
+    // W0 budget: check BEFORE the LLM call.
+    const estimate = 8000;
+    if (!this.checkBackgroundBudget(estimate)) {
+      console.info("[Exo] dream-llm skipped: background budget exhausted or disabled.");
+      return null;
+    }
+
+    try {
+      const controller = new AbortController();
+      const observations = await readUnimportedObservations(this.app, {
+        projects: s.claudememProjects,
+        limit: 100,
+      });
+      const result = await runDreamLlm({
+        app: this.app,
+        runUtilityPass: (p, o) => this.runUtilityPass(p, o),
+        queue: this.memoryWriteQueue,
+        observations,
+        appliedKeys: new Set(s.appliedProposalKeys),
+        memoryFileBudget: s.memoryFileBudget,
+        signal: controller.signal,
+        now: Date.now(),
+        session: "dream",
+        model: s.backgroundModel,
+      });
+      // Record spend (rough estimate: prompt overhead + output length).
+      this.recordBackgroundSpend(estimate + Math.ceil((result.raw?.length ?? 0) / 4));
+      return result;
+    } catch (err) {
+      console.warn("[Exo] dream-llm stage failed (no-op):", err);
+      return null;
+    }
+  }
+
+  /** Roll the daily ledger and answer whether a background pass may spend `estimate`. */
+  private checkBackgroundBudget(estimate: number): boolean {
+    const s = this.settings;
+    const now = Date.now();
+    s.backgroundBudgetLedger = resetIfNewDay(s.backgroundBudgetLedger, now);
+    return canSpend(s.backgroundBudgetLedger, estimate, {
+      enabled: s.backgroundPassesEnabled,
+      dailyBudget: s.backgroundDailyTokenBudget,
+      now,
+    });
+  }
+
+  /** Add `tokens` to the daily background ledger and persist. */
+  private recordBackgroundSpend(tokens: number): void {
+    const s = this.settings;
+    s.backgroundBudgetLedger = recordSpend(s.backgroundBudgetLedger, tokens, Date.now());
+    void this.saveSettings();
+  }
+
+  /** Fire one descriptive git commit for an applied dream pass. Gated on the same
+   *  opt-in git safety-net setting; a no-op when the vault isn't a git repo. */
+  private async commitDreamApply(summary: string): Promise<void> {
+    if (!this.settings.vaultAutoCommit) return;
+    const cwd = this.vaultPath();
+    if (cwd === ".") return;
+    try {
+      const { isGitRepo, gitAvailable } = await checkGitRepo(cwd);
+      if (isGitRepo && gitAvailable) await runGitCommit(cwd, formatCommitMessage(undefined, summary));
+    } catch (err) {
+      console.error("[Exo] dream commit failed:", err);
+    }
+  }
+
   private async maybeScheduledDreamPass(): Promise<void> {
     const sched = this.settings.dreamPassSchedule;
     if (sched === "off") return;

@@ -46,10 +46,23 @@ export interface MemoryEntry {
   tags: string[];
   /** Provenance sentinel. A missing on-disk line parses as `user`. */
   source: MemorySource;
-  /** Id of the entry this one supersedes (omitted when not superseding). */
+  /**
+   * Id(s) of the entry/entries this one supersedes (omitted when not
+   * superseding). Usually a single `mem-<id>`; a dream-pass merge may set a
+   * comma-separated LIST (`mem-1, mem-2`) so one consolidated entry retires a
+   * whole group at once. Use {@link supersededIds} to enumerate.
+   */
   supersedes?: string;
+  /** External provenance line, e.g. `claude-mem:123` for an imported observation. */
+  origin?: string;
   /** The memory itself, stored verbatim. */
   text: string;
+}
+
+/** Split a `supersedes` value (single id or `mem-1, mem-2` list) into ids. */
+export function supersededIds(supersedes: string | undefined): string[] {
+  if (!supersedes) return [];
+  return supersedes.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
 export interface ScoredEntry {
@@ -60,7 +73,7 @@ export interface ScoredEntry {
 /** Block header, e.g. `## mem-1720000000000 preference`. No `g` flag: safe for `.test`. */
 const HEADER = /^##\s+(mem-\d+)\s+(preference|fact|decision|lesson)\s*$/;
 /** A metadata line inside a block, e.g. `- at: 2024-07-03T12:00:00.000Z`. */
-const META = /^-\s+(at|session|tags|source|supersedes):\s*(.*)$/;
+const META = /^-\s+(at|session|tags|source|supersedes|origin):\s*(.*)$/;
 
 /** Render one entry to its canonical on-disk block (no trailing newline). */
 export function formatEntry(e: MemoryEntry): string {
@@ -71,6 +84,7 @@ export function formatEntry(e: MemoryEntry): string {
   ];
   // Emit the sentinel ONLY for generated entries — user files stay byte-identical to the legacy format.
   if (e.source === "generated") lines.push(`- source: @generated`);
+  if (e.origin) lines.push(`- origin: ${e.origin}`);
   if (e.tags.length) lines.push(`- tags: ${e.tags.join(", ")}`);
   if (e.supersedes) lines.push(`- supersedes: ${e.supersedes}`);
   lines.push("", e.text);
@@ -97,6 +111,7 @@ export function parseStoreFile(content: string): MemoryEntry[] {
     let tags: string[] = [];
     let source: MemorySource = "user";
     let supersedes: string | undefined;
+    let origin: string | undefined;
     for (let m: RegExpExecArray | null; i < lines.length && (m = META.exec(lines[i])); i++) {
       const key = m[1];
       const val = m[2].trim();
@@ -106,6 +121,7 @@ export function parseStoreFile(content: string): MemoryEntry[] {
       // Only `@generated`/`generated` is generated; anything else (incl. junk) stays `user`.
       else if (key === "source") source = val.replace(/^@/, "") === "generated" ? "generated" : "user";
       else if (key === "supersedes" && val) supersedes = val;
+      else if (key === "origin" && val) origin = val;
     }
 
     // Optional single blank line separating metadata from the verbatim text.
@@ -121,7 +137,17 @@ export function parseStoreFile(content: string): MemoryEntry[] {
       at = idm ? Number(idm[1]) : 0;
     }
 
-    entries.push({ id, kind, at, session, tags, source, ...(supersedes ? { supersedes } : {}), text });
+    entries.push({
+      id,
+      kind,
+      at,
+      session,
+      tags,
+      source,
+      ...(supersedes ? { supersedes } : {}),
+      ...(origin ? { origin } : {}),
+      text,
+    });
   }
   return entries;
 }
@@ -221,7 +247,7 @@ export function scoreEntries(query: string, entries: MemoryEntry[]): ScoredEntry
  */
 export function resolveSupersedence(entries: MemoryEntry[]): MemoryEntry[] {
   const superseded = new Set<string>();
-  for (const e of entries) if (e.supersedes) superseded.add(e.supersedes);
+  for (const e of entries) for (const id of supersededIds(e.supersedes)) superseded.add(id);
   return entries.filter((e) => !superseded.has(e.id));
 }
 
@@ -237,12 +263,14 @@ export function guardSupersede(
   existing: readonly MemoryEntry[]
 ): { ok: true } | { ok: false; reason: string } {
   if (candidate.source !== "generated" || !candidate.supersedes) return { ok: true };
-  const target = existing.find((e) => e.id === candidate.supersedes);
-  if (target && target.source === "user") {
-    return {
-      ok: false,
-      reason: `Truth firewall: a @generated entry may not supersede @user entry ${target.id}.`,
-    };
+  for (const id of supersededIds(candidate.supersedes)) {
+    const target = existing.find((e) => e.id === id);
+    if (target && target.source === "user") {
+      return {
+        ok: false,
+        reason: `Truth firewall: a @generated entry may not supersede @user entry ${target.id}.`,
+      };
+    }
   }
   return { ok: true };
 }

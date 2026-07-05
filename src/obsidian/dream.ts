@@ -1,4 +1,6 @@
 import { App, TFile } from "obsidian";
+import type { WriteQueue } from "../core/write-queue";
+import { renderStoreBlock, targetStoreFile, type LlmWritePlan } from "../core/dream-proposals";
 
 /**
  * Deterministic (no-LLM) memory-consolidation engine — "dream" pass.
@@ -35,6 +37,7 @@ export interface DreamSnapshot {
 
 const LEARNINGS_DIR = "_system/memory/learnings";
 const RULES_DIR = "_system/memory/rules";
+const STORE_DIR = "_system/memory/store";
 const PROMOTE_AT = 3; // combined evidence needed to promote learning -> rule
 const STALE_DAYS = 120; // rule not updated in this many days -> mark stale
 
@@ -275,4 +278,109 @@ export async function undoPlan(app: App, snap: DreamSnapshot): Promise<number> {
     }
   }
   return count;
+}
+
+/* ===================== Dream Pass v2 — LLM proposal apply ================= */
+
+/** Create any missing parent folders for a vault path (idempotent, race-safe). */
+async function ensureParent(app: App, path: string): Promise<void> {
+  const slash = path.lastIndexOf("/");
+  if (slash <= 0) return;
+  const dir = path.slice(0, slash);
+  if (app.vault.getAbstractFileByPath(dir)) return;
+  try {
+    await app.vault.createFolder(dir);
+  } catch {
+    /* already exists (race) — fine */
+  }
+}
+
+/** Frontmatter+body for a rule-draft candidate file (NOT a rule — the evidence≥3
+ *  promotion path still owns `rules/`). Marked `@generated`. */
+function ruleDraftContent(text: string, evidenceIds: string[], date: string): string {
+  const lines = [
+    "---",
+    "type: rule-draft",
+    "status: candidate",
+    `evidence: ${evidenceIds.length}`,
+    evidenceIds.length ? `evidence_ids: [${evidenceIds.join(", ")}]` : "evidence_ids: []",
+    'source: "@generated"',
+    "created_by: exo",
+    `created: ${date}`,
+    "---",
+    "",
+    text.trim(),
+    "",
+  ];
+  return lines.join("\n");
+}
+
+/**
+ * Apply a gate-approved {@link LlmWritePlan}: append the consolidated / superseding
+ * / imported entries to the monthly store file, and write each rule-draft candidate
+ * file — ALL through the shared {@link WriteQueue} so they serialize against the
+ * `remember` tool and the observer. Captures a before-image of every touched file
+ * into a {@link DreamSnapshot} so the whole LLM stage is reversible via {@link undoPlan}.
+ *
+ * `import` watermark advancement is the caller's job (only after this resolves).
+ */
+export async function applyLlmPlan(
+  app: App,
+  writePlan: LlmWritePlan,
+  queue: WriteQueue,
+  ranAt: string
+): Promise<DreamSnapshot> {
+  const snapshots = new Map<string, string | null>();
+  const snap = (path: string, before: string | null): void => {
+    if (!snapshots.has(path)) snapshots.set(path, before);
+  };
+  const date = ranAt.slice(0, 10);
+
+  // 1) Store entries (merge / supersede / import) → append to the monthly file.
+  if (writePlan.storeEntries.length) {
+    const path = `${STORE_DIR}/${targetStoreFile(writePlan.storeEntries[0].at)}`;
+    const block = renderStoreBlock(writePlan.storeEntries);
+    await queue.enqueue(async () => {
+      const existing = app.vault.getAbstractFileByPath(path);
+      if (existing instanceof TFile) {
+        const before = await app.vault.read(existing);
+        snap(path, before);
+        await app.vault.modify(existing, `${before.replace(/\s+$/, "")}\n\n${block}\n`);
+      } else {
+        snap(path, null);
+        await ensureParent(app, path);
+        await app.vault.create(path, `${block}\n`);
+      }
+    });
+  }
+
+  // 2) Rule-draft candidates → one file each under learnings/ (never rules/).
+  for (const draft of writePlan.ruleDrafts) {
+    const path = `${LEARNINGS_DIR}/${date}-${draft.slug}.md`;
+    const content = ruleDraftContent(draft.text, draft.evidenceIds, date);
+    await queue.enqueue(async () => {
+      const existing = app.vault.getAbstractFileByPath(path);
+      if (existing instanceof TFile) {
+        snap(path, await app.vault.read(existing));
+        await app.vault.modify(existing, content);
+      } else {
+        snap(path, null);
+        await ensureParent(app, path);
+        await app.vault.create(path, content);
+      }
+    });
+  }
+
+  return { ranAt, files: [...snapshots.entries()].map(([path, before]) => ({ path, before })) };
+}
+
+/**
+ * Merge two snapshots into one undoable unit (deterministic pass + LLM pass). The
+ * FIRST before-image recorded for a path wins, so a file touched by both passes
+ * still restores to its true pre-pass state.
+ */
+export function mergeSnapshots(a: DreamSnapshot, b: DreamSnapshot): DreamSnapshot {
+  const files = new Map<string, string | null>();
+  for (const f of [...a.files, ...b.files]) if (!files.has(f.path)) files.set(f.path, f.before);
+  return { ranAt: a.ranAt, files: [...files.entries()].map(([path, before]) => ({ path, before })) };
 }

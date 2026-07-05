@@ -153,4 +153,21 @@ describe("formatCommitMessage", () => {
     expect(formatCommitMessage(-1)).toBe("exo: auto-commit — vault changes");
     expect(formatCommitMessage(Number.NaN)).toBe("exo: auto-commit — vault changes");
   });
+
+  it("uses the descriptive summary when one is given (overrides the file count)", () => {
+    expect(formatCommitMessage(7, "dream — merged 3, superseded 1, imported 12 from claude-mem")).toBe(
+      "exo: dream — merged 3, superseded 1, imported 12 from claude-mem"
+    );
+  });
+
+  it("uses the summary even when the file count is unknown", () => {
+    expect(formatCommitMessage(undefined, "dream — imported 4 from claude-mem")).toBe(
+      "exo: dream — imported 4 from claude-mem"
+    );
+  });
+
+  it("ignores a blank/whitespace summary and falls back to the file count", () => {
+    expect(formatCommitMessage(2, "   ")).toBe("exo: auto-commit — 2 files");
+    expect(formatCommitMessage(2, "")).toBe("exo: auto-commit — 2 files");
+  });
 });

@@ -75,6 +75,27 @@ export interface MVASettings {
   dreamPassSchedule: "off" | "daily" | "weekly";
   /** Timestamp of the last dream pass (scheduler bookkeeping). */
   lastDreamPass: number;
+  /** Dream Pass v2 — LLM proposal stage. When ON, the dream pass runs an extra,
+   *  transient tool-less LLM stage that PROPOSES typed consolidation changes
+   *  (merge/supersede/rule_draft/import); a deterministic gate culls anything
+   *  touching @user entries or matching known-false patterns before preview.
+   *  OFF by default — zero behavior change when off. Claude only. */
+  dreamLlmEnabled: boolean;
+  /** Defrag threshold: when the store/ or learnings/ dir exceeds this many files,
+   *  the dream LLM prompt asks for consolidation merges. */
+  memoryFileBudget: number;
+  /** claude-mem project filter (path-slug form) for the import stage. */
+  claudememProjects: string[];
+  /** Canonical keys of dream proposals already applied — dedup across runs. */
+  appliedProposalKeys: string[];
+  /** W0 background-AI master toggle: gates every background LLM pass. */
+  backgroundPassesEnabled: boolean;
+  /** W0 shared daily token budget for all background passes (0 = unlimited). */
+  backgroundDailyTokenBudget: number;
+  /** W0 model for background passes (floor Sonnet — never Haiku). */
+  backgroundModel: string;
+  /** W0 persisted daily budget ledger. */
+  backgroundBudgetLedger: { dateUTC: string; tokensUsed: number };
   /** Scheduled playbook runs — one per line: "<Prompt name> | daily" or "<Prompt name> | weekly". */
   scheduledRuns: string;
   /** Per-playbook last-run timestamps (scheduler bookkeeping). */
@@ -136,6 +157,14 @@ export const DEFAULT_SETTINGS: MVASettings = {
   activeTabId: "",
   dreamPassSchedule: "off",
   lastDreamPass: 0,
+  dreamLlmEnabled: false,
+  memoryFileBudget: 25,
+  claudememProjects: ["-Users-mariomiletta-Vaults-marioverse-ai"],
+  appliedProposalKeys: [],
+  backgroundPassesEnabled: true,
+  backgroundDailyTokenBudget: 200000,
+  backgroundModel: "claude-sonnet-4-6",
+  backgroundBudgetLedger: { dateUTC: "", tokensUsed: 0 },
   scheduledRuns: "",
   scheduledLastRun: {},
   cliUpdateCheckAt: 0,
@@ -597,6 +626,54 @@ export class MVASettingTab extends PluginSettingTab {
           .setValue(s.dreamPassSchedule)
           .onChange(async (v) => {
             s.dreamPassSchedule = v as "off" | "daily" | "weekly";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    this.toggleSetting(
+      el,
+      "Dream pass — LLM proposal stage",
+      "When the dream pass runs, add a transient tool-less LLM stage that PROPOSES typed changes (merge duplicates, supersede, draft rule candidates, import durable claude-mem observations). A deterministic gate culls anything that would touch your own @user memories or match a known-false pattern BEFORE the preview; you still review and can undo every applied change. Off by default; respects the background-AI budget. Claude only.",
+      "dreamLlmEnabled"
+    );
+
+    new Setting(el)
+      .setName("Memory file budget (defrag threshold)")
+      .setDesc(
+        "When the memory store/ or learnings/ folder exceeds this many files, the dream LLM stage is asked to propose consolidation merges to reduce sprawl."
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("25")
+          .setValue(String(s.memoryFileBudget))
+          .onChange(async (v) => {
+            const n = Number.parseInt(v, 10);
+            if (Number.isFinite(n) && n > 0) s.memoryFileBudget = n;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(el).setName("Background AI").setHeading();
+
+    this.toggleSetting(
+      el,
+      "Enable background AI passes",
+      "Master switch for every background LLM pass (self-writing observer, dream LLM stage). Turn off to silence all of them at once regardless of their individual toggles.",
+      "backgroundPassesEnabled"
+    );
+
+    new Setting(el)
+      .setName("Background daily token budget")
+      .setDesc(
+        "Shared daily cap (UTC) across all background passes. When exhausted, background passes skip silently until the next day. Set 0 for unlimited."
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("200000")
+          .setValue(String(s.backgroundDailyTokenBudget))
+          .onChange(async (v) => {
+            const n = Number.parseInt(v, 10);
+            if (Number.isFinite(n) && n >= 0) s.backgroundDailyTokenBudget = n;
             await this.plugin.saveSettings();
           })
       );
