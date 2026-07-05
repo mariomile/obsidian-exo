@@ -4793,6 +4793,13 @@ export class ChatView extends ItemView {
       window.clearInterval(workingTimer); // stop the elapsed ticker
       this.removeWorking(ctx); // drop the working row for good
       await Promise.all(snapshots); // finalize the checkpoint even if the turn errored
+      // Git auto-commit safety net: hand off the count of files this turn wrote
+      // (however it ended — success, error, or user-stopped) so the plugin can
+      // schedule a debounced commit. Synchronous and cheap — never awaited, never
+      // on the turn's critical path; the plugin no-ops entirely when the setting
+      // is off.
+      const writeCount = ctx.touched.filter((t) => t.kind === "write").length;
+      if (writeCount > 0) this.plugin.noteVaultWrite(writeCount);
       // If the turn died with an interactive card still open (session crash while a
       // permission/ask was pending), CANCEL it — otherwise the card stays live in
       // the transcript and the in-process ask promise hangs forever. No-op on clean
