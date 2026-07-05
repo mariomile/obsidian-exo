@@ -6,6 +6,23 @@
 
 An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** or the **Codex CLI**. Your vault is the agent's working directory. Custom-rendered, theme-aware chat UI — no terminal.
 
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshot-empty.png" width="380" alt="Exo — new-chat empty state" />
+</p>
+<p align="center"><em>The new-chat empty state — the Exo mark, prompt suggestions, and related notes.</em></p>
+
+<p align="center">
+  <img src="assets/screenshot-chat.png" width="900" alt="Exo — a conversation with tool cards and the Context panel" />
+</p>
+<p align="center"><em>A conversation in a full-page pane: tool cards, the touched-files footer, and the live Context panel on the right.</em></p>
+
+<p align="center">
+  <img src="assets/screenshot-tune.png" width="380" alt="Exo — the tune dialog" />
+</p>
+<p align="center"><em>The tune dialog — model, effort, and permission in one place.</em></p>
+
 ## Features
 
 - **Custom chat UI** — streaming markdown, message bubbles, theme-agnostic (built on Obsidian's native CSS variables; transparent panel that adapts to any theme).
