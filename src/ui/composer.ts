@@ -682,65 +682,6 @@ export class Composer {
   }
 
   /**
-   * Generic toolbar selector — a chip that opens a Permission-style popover list.
-   * Reused by the model / effort / permission cascade. Returns `refresh()` (re-sync
-   * the chip label and risk color after external changes) plus the `wrap` element
-   * so callers can hide the whole control (e.g. effort on a model without it).
-   */
-  private buildSelectChip(
-    tb: HTMLElement,
-    opts: {
-      ariaLabel: string;
-      getLabel: () => string;
-      getOptions: () => { value: string; label: string; risk?: RiskLevel; dotColor?: string; group?: string }[];
-      getCurrent: () => string;
-      onSelect: (value: string) => void;
-      chipRisk?: () => RiskLevel;
-    }
-  ): { refresh: () => void; wrap: HTMLElement } {
-    const wrap = tb.createDiv({ cls: "mva-sel" });
-    const chip = wrap.createDiv({ cls: "mva-sel-chip", attr: { "aria-label": opts.ariaLabel } });
-    const pop = wrap.createDiv({ cls: "mva-sel-pop" });
-    pop.hide();
-
-    const refresh = () => {
-      const risk = opts.chipRisk ? opts.chipRisk() : "";
-      chip.className = `mva-sel-chip${risk ? ` ${risk}` : ""}`;
-      chip.setText(opts.getLabel());
-    };
-
-    const buildPop = () => {
-      // One rendering path for every picker (chips + tune dialog): the shared
-      // renderOptionRows draws grouped/flat rows with roving ArrowUp/Down + Enter +
-      // Escape. Here picking closes the popover and re-syncs the chip label; Escape
-      // closes too. The overflow options can change per open (e.g. model list per
-      // provider), so we rebuild fresh each time.
-      const focus = this.renderOptionRows(pop, opts.getOptions() as SelectOption[], opts.getCurrent(), {
-        onPick: (value) => {
-          opts.onSelect(value);
-          refresh();
-          popover.close();
-        },
-        onEscape: () => popover.close(),
-      });
-      setTimeout(() => focus(), 0);
-    };
-
-    refresh();
-
-    // `is-open` on the chip holds full risk color while the popover is up; the
-    // primitive toggles it. buildPop rebuilds fresh each open — option lists can
-    // change (e.g. model list per provider) — and seeds keyboard focus itself.
-    const popover = openablePopover({ anchor: chip, pop, wrap, onOpen: buildPop });
-    clickable(chip, (e) => {
-      e.stopPropagation();
-      popover.toggle();
-    });
-    this.host.register(() => popover.close());
-    return { refresh, wrap };
-  }
-
-  /**
    * Shared option-row renderer for BOTH the toolbar select chips and the tune
    * dialog — the single source of truth for grouped/flat option rows. Draws quiet
    * group headers (from buildOptionRows), an optional provider brand-dot, risk
