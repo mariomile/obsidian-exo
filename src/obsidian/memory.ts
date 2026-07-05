@@ -1,4 +1,5 @@
 import { App, TFile } from "obsidian";
+import { parseLoopsFile, activeLoops, dueLoops, type LoopEntry } from "../core/open-loops";
 
 const cap = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + "\n…(truncated)" : s);
 
@@ -6,6 +7,12 @@ const cap = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + "\
 const MAX_BOOT = 9000;
 /** Cap the rules list so a vault with dozens of rule files stays bounded. */
 const MAX_RULES = 40;
+/** Cap raw ledger bytes read before parsing (bounded cost even for a huge hand-edited file). */
+const MAX_LOOPS_RAW = 20000;
+/** Cap how many loop lines the boot section lists (bounded count, mirrors MAX_RULES). */
+const MAX_LOOP_ITEMS = 12;
+/** Cap the rendered open-loops section itself (bounded chars, a slice of the overall MAX_BOOT budget). */
+const MAX_LOOP_SECTION = 1500;
 
 /**
  * Compose a concise "memory preamble" from the vault's `_system/` layer so the
@@ -40,6 +47,24 @@ export async function readBootContext(app: App): Promise<string> {
 
   const log = await read("_system/memory/session-log.md", 1200);
   if (log) parts.push(`### Recent sessions\n${log}`);
+
+  const loopsRaw = await read("_system/memory/open-loops.md", MAX_LOOPS_RAW);
+  if (loopsRaw) {
+    const entries: LoopEntry[] = parseLoopsFile(loopsRaw);
+    const due = dueLoops(entries);
+    const dueIds = new Set(due.map((e) => e.id));
+    const others = activeLoops(entries).filter((e) => !dueIds.has(e.id));
+    const combined = [...due, ...others].slice(0, MAX_LOOP_ITEMS);
+    // Emit the section only when there's at least one due/active loop — an all-closed
+    // or empty ledger shouldn't cost boot budget for nothing to show.
+    if (combined.length) {
+      const lines = combined.map((e) => {
+        const label = dueIds.has(e.id) ? "due" : e.resurface ? `resurface ${e.resurface}` : "open";
+        return `- [${label}] ${e.title} (${e.id})`;
+      });
+      parts.push(cap(`### Open loops (due/active)\n${lines.join("\n")}`, MAX_LOOP_SECTION));
+    }
+  }
 
   if (!parts.length) return "";
 
