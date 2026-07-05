@@ -68,6 +68,12 @@ class ClaudeSession implements AgentSession {
    *  and an SDK interrupt lands outside both windows). This flag lets route()
    *  tell a requested abort from a genuine mid-turn failure. Cleared per send(). */
   private interruptRequested = false;
+  /** input_tokens + output_tokens from the most recently completed turn's
+   *  `result` message (W0 cost governance — real per-turn spend, not a strlen
+   *  guess). Synchronous the instant `send()` resolves, unlike `contextUsage()`
+   *  which is an async control round-trip that can race a short-lived
+   *  utility session's `dispose()`. `null` until a `result` with `usage` arrives. */
+  private lastResultUsage: { inputTokens: number; outputTokens: number } | null = null;
 
   constructor(opts: SessionOpts) {
     this.sessionId = opts.resumeSessionId;
@@ -312,6 +318,12 @@ class ClaudeSession implements AgentSession {
     } else if (msg.type === "result") {
       const interrupted = this.interruptRequested;
       this.interruptRequested = false;
+      // W0: capture the real per-turn token count synchronously, BEFORE the
+      // async contextUsage() round-trip below (which a short-lived utility
+      // session may dispose() before it ever resolves).
+      this.lastResultUsage = msg.usage
+        ? { inputTokens: msg.usage.input_tokens ?? 0, outputTokens: msg.usage.output_tokens ?? 0 }
+        : null;
       // A locally-requested interrupt comes back as error_during_execution (see
       // interruptRequested): the session is healthy, so skip the fake "CLI
       // crashed" error and settle the turn quietly like a clean abort.
@@ -476,6 +488,17 @@ class ClaudeSession implements AgentSession {
     this.settleTurn(new Error("Session disposed."));
   }
 
+  /** W0 cost governance: input_tokens + output_tokens from the most recently
+   *  completed turn's `result` message, or `null` before any turn has completed
+   *  or when that turn's `result` carried no `usage`. Prefer this over
+   *  `contextUsage()` for recording a single utility pass's spend — it's
+   *  synchronous (no control round-trip) and reflects exactly this turn, not
+   *  the whole session's running context-window occupancy. */
+  lastTurnTokens(): number | null {
+    if (!this.lastResultUsage) return null;
+    return this.lastResultUsage.inputTokens + this.lastResultUsage.outputTokens;
+  }
+
   async contextUsage(): Promise<ContextUsage | null> {
     try {
       const u = await this.q.getContextUsage?.();
@@ -547,6 +570,9 @@ interface ClaudeMsg {
   parent_tool_use_id?: string | null;
   result?: string;
   compact_summary?: string;
+  // Per-turn token usage on the `result` message (SDKResultMessage.usage in the
+  // Agent SDK's types — verified against node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts).
+  usage?: { input_tokens?: number; output_tokens?: number };
   // rate_limit_event payload (claude.ai subscription sessions only).
   rate_limit_info?: {
     status: import("./types").RateStatus;

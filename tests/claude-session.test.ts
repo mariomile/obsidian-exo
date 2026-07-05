@@ -93,3 +93,65 @@ describe("ClaudeSession interrupt vs error_during_execution", () => {
     session.dispose();
   });
 });
+
+/** W0 cost governance: the observer/utility-pass path needs a real per-turn
+ *  token count (not a strlen guess) to record spend against the shared
+ *  background budget. The Agent SDK's `result` message already carries
+ *  `usage.input_tokens` / `usage.output_tokens` — this reads that synchronously
+ *  at the moment `send()` resolves, unlike the async `contextUsage()` control
+ *  round-trip which can race a short-lived session's `dispose()`. */
+describe("ClaudeSession.lastTurnTokens", () => {
+  beforeEach(() => {
+    fake = makeFakeQuery();
+  });
+
+  test("returns input+output tokens from the most recent result message", async () => {
+    const session = claudeAdapter.createSession(OPTS);
+    const turn = session.send("hi", () => {});
+    fake.push({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "ok",
+      usage: { input_tokens: 120, output_tokens: 340 },
+    });
+    await turn;
+    expect(session.lastTurnTokens?.()).toBe(460);
+    session.dispose();
+  });
+
+  test("returns null when the result message carries no usage", async () => {
+    const session = claudeAdapter.createSession(OPTS);
+    const turn = session.send("hi", () => {});
+    fake.push({ type: "result", subtype: "success", is_error: false, result: "ok" });
+    await turn;
+    expect(session.lastTurnTokens?.()).toBeNull();
+    session.dispose();
+  });
+
+  test("updates across turns — a second turn's usage replaces the first's", async () => {
+    const session = claudeAdapter.createSession(OPTS);
+    const first = session.send("hi", () => {});
+    fake.push({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "ok",
+      usage: { input_tokens: 10, output_tokens: 20 },
+    });
+    await first;
+    expect(session.lastTurnTokens?.()).toBe(30);
+
+    const second = session.send("again", () => {});
+    fake.push({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "ok",
+      usage: { input_tokens: 5, output_tokens: 7 },
+    });
+    await second;
+    expect(session.lastTurnTokens?.()).toBe(12);
+    session.dispose();
+  });
+});

@@ -444,12 +444,17 @@ export default class ExoPlugin extends Plugin {
    * @param opts.model    Cheap model id (defaults to Haiku — the observer's model
    *                      by Mario's directive; the dream stage passes a Sonnet id).
    * @param opts.timeoutMs Hard ceiling (default 15s).
+   * @param opts.onUsage  W0 cost governance: invoked once with the real
+   *                      input+output token count for this call, read from the
+   *                      session synchronously right after `send()` resolves
+   *                      (before dispose) — see `ClaudeSession.lastTurnTokens()`.
+   *                      Never invoked if the provider doesn't expose it.
    */
   async runUtilityPass(
     prompt: string,
-    opts: { signal: AbortSignal; model?: string; timeoutMs?: number }
+    opts: { signal: AbortSignal; model?: string; timeoutMs?: number; onUsage?: (tokens: number) => void }
   ): Promise<string> {
-    const { signal, model = "claude-haiku-4-5", timeoutMs = 15_000 } = opts;
+    const { signal, model = "claude-haiku-4-5", timeoutMs = 15_000, onUsage } = opts;
     const ctrl = new AbortController();
     const onAbort = () => ctrl.abort();
     if (signal.aborted) ctrl.abort();
@@ -478,6 +483,12 @@ export default class ExoPlugin extends Plugin {
         await session.send(prompt, (e: AgentEvent) => {
           if (e.kind === "text-delta") out += e.text;
         });
+        // Read BEFORE dispose — contextUsage() is an async control round-trip
+        // that a disposed session may never resolve; lastTurnTokens() is
+        // populated synchronously by the `result` message that just settled
+        // send() above.
+        const tokens = session.lastTurnTokens?.();
+        if (typeof tokens === "number") onUsage?.(tokens);
       } finally {
         session.dispose();
       }
@@ -490,10 +501,33 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
+  /** Rough fallback estimate (chars/4-equivalent order of magnitude) for the
+   *  observer's budget pre-check and for `recordBackgroundSpend` when the
+   *  provider's real per-turn token count (`lastTurnTokens`) isn't available. */
+  private static readonly OBSERVER_TOKEN_ESTIMATE = 1500;
+
   /** Back-compat thin wrapper: the observer chassis, on the Haiku default. Kept so
-   *  ChatView keeps calling `runObserver(prompt, signal)` with unchanged behavior. */
+   *  ChatView keeps calling `runObserver(prompt, signal)` with unchanged behavior.
+   *
+   *  W0 cost governance: gated through the shared background budget exactly like
+   *  the dream-LLM stage and the every-n-steps step-observer — `canSpend`
+   *  BEFORE running (skip silently, one console line, no Notice, on exhaustion
+   *  or master-toggle-OFF), `recordSpend` AFTER, using the real per-turn token
+   *  count from the SDK's `result` message when the provider exposes it. */
   async runObserver(prompt: string, signal: AbortSignal): Promise<string> {
-    return this.runUtilityPass(prompt, { signal });
+    if (!this.checkBackgroundBudget(ExoPlugin.OBSERVER_TOKEN_ESTIMATE)) {
+      console.info("[Exo] observer skipped: background budget exhausted or disabled.");
+      return "";
+    }
+    let tokens: number | null = null;
+    const out = await this.runUtilityPass(prompt, {
+      signal,
+      onUsage: (t) => {
+        tokens = t;
+      },
+    });
+    this.recordBackgroundSpend(tokens ?? ExoPlugin.OBSERVER_TOKEN_ESTIMATE);
+    return out;
   }
 
   private inlineEdit(editor: Editor): void {

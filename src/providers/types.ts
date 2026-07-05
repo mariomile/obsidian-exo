@@ -148,6 +148,10 @@ export interface AgentSession {
   dispose(): void;
   /** Current context-window usage, if the provider exposes it. */
   contextUsage(): Promise<ContextUsage | null>;
+  /** W0 cost governance: input_tokens + output_tokens from the most recently
+   *  completed turn, if the provider exposes it (Claude only — synchronous,
+   *  no control round-trip, unlike `contextUsage()`). */
+  lastTurnTokens?(): number | null;
 }
 
 export interface ProviderAdapter {

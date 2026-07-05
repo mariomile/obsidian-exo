@@ -173,7 +173,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   appliedProposalKeys: [],
   backgroundPassesEnabled: true,
   backgroundDailyTokenBudget: 200000,
-  backgroundModel: "claude-sonnet-4-6",
+  backgroundModel: "claude-sonnet-5",
   backgroundBudgetLedger: { dateUTC: "", tokensUsed: 0 },
   scheduledRuns: "",
   scheduledLastRun: {},
@@ -182,6 +182,16 @@ export const DEFAULT_SETTINGS: MVASettings = {
   vaultAutoCommit: false,
   vaultAutoCommitIntervalMinutes: 15,
 };
+
+/** Options for the "Background AI model" dropdown — Sonnet-class only.
+ *  HARD CONSTRAINT (Mario's standing directive): the floor for background
+ *  passes is Sonnet — never offer (or default to) a Haiku model here, even
+ *  though Haiku is available as the observer's own hardcoded fast-path model
+ *  elsewhere. Keep in sync with the pinned ids in `providers/claude.ts`. */
+const BACKGROUND_MODEL_OPTIONS: ReadonlyArray<{ id: string; label: string }> = [
+  { id: "claude-sonnet-5", label: "Sonnet 5" },
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+];
 
 export class MVASettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: ExoPlugin) {
@@ -719,6 +729,25 @@ export class MVASettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(el)
+      .setName("Background AI model")
+      .setDesc(
+        "Model used by background LLM passes (self-writing observer's dream stage, and future background passes). Floor is Sonnet — Haiku is never offered here, regardless of the observer's own cheap-model default."
+      )
+      .addDropdown((d) => {
+        for (const o of BACKGROUND_MODEL_OPTIONS) d.addOption(o.id, o.label);
+        // Keep an out-of-list saved value (custom id, or a retired option) selectable
+        // rather than silently snapping to the first option.
+        if (!BACKGROUND_MODEL_OPTIONS.some((o) => o.id === s.backgroundModel)) {
+          d.addOption(s.backgroundModel, s.backgroundModel);
+        }
+        d.setValue(s.backgroundModel);
+        d.onChange(async (v) => {
+          s.backgroundModel = v;
+          await this.plugin.saveSettings();
+        });
+      });
 
     new Setting(el)
       .setName("Scheduled playbook runs")
