@@ -34,6 +34,7 @@ import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
 import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
+import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
 import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
@@ -301,6 +302,10 @@ export class ChatView extends ItemView {
   private recapHost: HTMLElement | null = null;
   private recapPanel: RecapPanel | null = null;
   private recapResizeObserver: ResizeObserver | null = null;
+  /** In-flight tool phrase for the Context panel's live activity row while a turn
+   *  streams (set on tool-call-start, cleared on result/turn-end). Only the idle
+   *  path — `updateRecap()` — ignores it; `updateContextLive()` renders it. */
+  private currentActivity: { phrase: string } | null = null;
   /** Last computed wide state — only rebuild the Context panel on the transition. */
   private wasWide = false;
   private composerEl!: HTMLElement;
@@ -463,6 +468,25 @@ export class ChatView extends ItemView {
   private updateRecap(): void {
     if (!this.recapHost || !this.recapPanel || !this.isWideMain()) return;
     this.recapPanel.render(this.recapHost, buildConvoRecap(this.active.messages, (p) => this.relPath(p)));
+  }
+
+  /** Live Context refresh during a streaming turn. Same panel, but two things
+   *  differ from `updateRecap()`: (1) the in-flight turn's segments aren't in
+   *  `c.messages` until turn end, so we fold this turn's already-resolved tool
+   *  segments into the recap input — completed tools appear incrementally; (2) the
+   *  current-activity phrase renders as a live row above the sections. The running
+   *  tool is filtered out of the accumulated part (ok === null) so it only shows in
+   *  the current row until it resolves and folds down. Guarded by `isWideMain()`
+   *  so zero work happens in the sidebar — same guard the idle path uses. */
+  private updateContextLive(ctx: AssistantCtx): void {
+    if (!this.recapHost || !this.recapPanel || !this.isWideMain()) return;
+    const resolved = ctx.segments.filter((s) => s.t !== "tool" || s.ok !== null);
+    const live: Message[] = [...this.active.messages, { role: "assistant", segments: resolved }];
+    this.recapPanel.render(
+      this.recapHost,
+      buildConvoRecap(live, (p) => this.relPath(p)),
+      this.currentActivity
+    );
   }
 
   async onClose(): Promise<void> {
@@ -4494,6 +4518,12 @@ export class ChatView extends ItemView {
           // stays visible below the tool card during execution.
           this.setWorkingLabel(ctx, toolWorkingLabel(e.name, e.input));
           this.ensureWorking(ctx);
+          // Context panel goes live: show what this tool is doing right now. Guarded
+          // to the active convo + wide main so nothing runs in the sidebar.
+          if (c === this.active && this.isWideMain()) {
+            this.currentActivity = { phrase: describeActivity(e.name, e.input) };
+            this.updateContextLive(ctx);
+          }
           break;
         }
         case "tool-call-result": {
@@ -4536,6 +4566,12 @@ export class ChatView extends ItemView {
           // working row while the agent decides what to do next.
           this.setWorkingLabel(ctx, "Thinking…");
           this.ensureWorking(ctx);
+          // The tool resolved: drop the live current row and fold the now-resolved
+          // segment into the accumulated Context sections.
+          if (c === this.active && this.isWideMain()) {
+            this.currentActivity = null;
+            this.updateContextLive(ctx);
+          }
           break;
         }
         case "permission-request": {
@@ -4762,7 +4798,9 @@ export class ChatView extends ItemView {
           ...(checkpoint.size ? { checkpoint } : {}),
         });
       }
-      // Turn finalized — refresh the conversation recap (full-page rail only).
+      // Turn finalized — the live activity row is gone; refresh the conversation
+      // recap (full-page rail only) as the idle post-hoc summary.
+      this.currentActivity = null;
       if (c === this.active) this.updateRecap();
       // Background shells can outlive the turn (Exo can't poll them) — note them
       // honestly as "started this turn" rather than claiming a live running count.
