@@ -24,17 +24,27 @@ export class RecapPanel {
 
   /** Render the recap into `container`, replacing any previous content. Sections
    *  with no content are omitted entirely; a wholly empty recap shows a quiet
-   *  placeholder so the rail is never a blank void. */
-  render(container: HTMLElement, recap: Recap): void {
+   *  placeholder so the rail is never a blank void.
+   *
+   *  `current` is a view-supplied, in-flight activity descriptor: while a turn is
+   *  streaming, `view.ts` passes the running tool as a human phrase so a live
+   *  "Working…" row sits above the accumulated sections. When it's null/absent the
+   *  panel renders exactly the post-hoc recap (idle state). */
+  render(container: HTMLElement, recap: Recap, current?: { phrase: string } | null): void {
     container.empty();
     const total = recap.web.length + recap.read.length + recap.written.length + recap.skills.length;
     const titleRow = container.createDiv({ cls: "mva-recap-title" });
     titleRow.createSpan({ cls: "mva-recap-title-text", text: "Context" });
+    if (current) this.nowRow(container, current.phrase);
     if (total === 0) {
-      container.createDiv({
-        cls: "mva-recap-empty",
-        text: "Builds as the agent works — web sources, notes read, files created.",
-      });
+      // A live current-activity row is enough on its own — the placeholder only
+      // shows when the panel is truly empty (idle, nothing done yet).
+      if (!current) {
+        container.createDiv({
+          cls: "mva-recap-empty",
+          text: "Builds as the agent works — web sources, notes read, files created.",
+        });
+      }
       return;
     }
 
@@ -69,6 +79,14 @@ export class RecapPanel {
       const chips = body.createDiv({ cls: "mva-recap-chips" });
       for (const s of recap.skills) chips.createSpan({ cls: "mva-recap-chip", text: s });
     }
+  }
+
+  /** Live current-activity row: a subtle pulse dot + the in-flight tool phrase,
+   *  under a quiet "Working…" treatment. Reuses the working-star pulse grammar. */
+  private nowRow(container: HTMLElement, phrase: string): void {
+    const row = container.createDiv({ cls: "mva-recap-now" });
+    row.createSpan({ cls: "mva-recap-now-dot" });
+    row.createSpan({ cls: "mva-recap-now-label", text: phrase });
   }
 
   private section(container: HTMLElement, title: string, badge?: number): HTMLElement {
