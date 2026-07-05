@@ -55,6 +55,7 @@ import {
 } from "./core/rate-limit";
 import { buildOptionRows, type SelectOption } from "./core/option-filter";
 import { permDotRisk } from "./core/perm-dot";
+import { selectionPreview } from "./core/selection-preview";
 
 export type { AskQuestion } from "./core/model";
 
@@ -325,6 +326,10 @@ export class ChatView extends ItemView {
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
   private manualAttached: string[] = [];
+  /** The active editor's current selection, mirrored ambiently into the composer
+   *  as a click-to-attach "Selection" chip (null when there's no selection). Fed
+   *  by the selection observer via `setCurrentSelection`; transient, never persisted. */
+  private currentSelection: { text: string; path: string } | null = null;
   private lastPersistErrorNotice = 0;
   private pendingImages: ImageAttachment[] = [];
   private imagesEl!: HTMLElement;
@@ -521,6 +526,18 @@ export class ChatView extends ItemView {
     this.inputEl.setSelectionRange(caret, caret);
     this.autoGrow();
     window.setTimeout(() => this.inputEl?.focus(), 0);
+  }
+
+  /** Mirror the active editor's current selection into the composer as an ambient
+   *  "Selection" chip (see the selection observer). Empty `text` clears it. No-op
+   *  when the (text, path) pair is unchanged, so the debounced observer can call
+   *  freely without churning the DOM. */
+  setCurrentSelection(text: string, path: string): void {
+    const next = text ? { text, path } : null;
+    const prev = this.currentSelection;
+    if ((prev?.text ?? "") === (next?.text ?? "") && (prev?.path ?? "") === (next?.path ?? "")) return;
+    this.currentSelection = next;
+    this.refreshContext();
   }
 
   /* --------------------------- session mgmt ------------------------- */
@@ -2243,7 +2260,11 @@ export class ChatView extends ItemView {
     // collapses entirely rather than leaving an empty bar.
     const active = this.excludeActiveNote ? null : this.activeNotePath();
     const items = active ? 1 : 0;
-    const hasAny = items + this.manualAttached.filter((p) => p !== active).length > 0;
+    // The selection chip shows only while a live selection exists that isn't
+    // already attached as its own text (once attached it becomes redundant with
+    // the seeded excerpt in the input — see attachSelection).
+    const sel = this.selectionChipModel();
+    const hasAny = items + this.manualAttached.filter((p) => p !== active).length > 0 || !!sel;
     this.contextEl.toggleClass("is-empty", !hasAny);
     if (!hasAny) return;
     const cards = this.contextEl.createDiv({ cls: "mva-doc-cards" });
@@ -2251,6 +2272,51 @@ export class ChatView extends ItemView {
     for (const p of this.manualAttached) {
       if (p !== active) this.renderContextCard(cards, p, false);
     }
+    if (sel) this.renderSelectionCard(cards, sel.text, sel.path, active);
+  }
+
+  /** The selection chip's model, or null when it shouldn't show: gated on the
+   *  setting, a non-empty selection, and not-already-seeded into the composer.
+   *  Kept separate so `refreshContext` stays a straight list build. */
+  private selectionChipModel(): { text: string; path: string } | null {
+    if (!this.plugin.settings.showSelectionChip) return null;
+    const sel = this.currentSelection;
+    if (!sel || !sel.text.trim()) return null;
+    return sel;
+  }
+
+  /** A transient, click-to-attach card for the active editor's selection. Same
+   *  card grammar as the document cards (thumb + body + ×) but visually a hair
+   *  distinct (`.mva-sel-card`): a text-cursor thumb, a "Selection" kind line, a
+   *  one-line preview + count, and a source-note suffix when the selection comes
+   *  from a note other than the active-context doc. Clicking seeds the quoted
+   *  excerpt into the composer via the existing `attachSelection` path; the ×
+   *  dismisses the chip. Keyboard-operable via `clickable()`. */
+  private renderSelectionCard(parent: HTMLElement, text: string, path: string, activePath: string | null): void {
+    const { label, count } = selectionPreview(text);
+    const card = parent.createDiv({ cls: "mva-doc-card mva-sel-card" });
+    const thumb = card.createDiv({ cls: "mva-doc-thumb is-icon" });
+    setIcon(thumb, "text-cursor-input");
+    const body = card.createDiv({ cls: "mva-doc-body" });
+    body.createDiv({ cls: "mva-doc-title", text: label || "Selection", attr: { title: label } });
+    // Show the source note only when it isn't the active-context doc (which the
+    // "Current Document" card already names), so the kind line stays terse.
+    const fromOther = path && path !== activePath ? ` · ${noteBasename(path)}` : "";
+    body.createDiv({ cls: "mva-doc-kind", text: `Selection · ${count}${fromOther}` });
+    const x = card.createSpan({ cls: "mva-doc-x", attr: { "aria-label": "Dismiss selection" } });
+    setIcon(x, "x");
+    this.clickable(x, (e) => {
+      e.stopPropagation();
+      this.currentSelection = null;
+      this.refreshContext();
+    });
+    // Click-to-attach: seed the quoted excerpt into the composer, then clear the
+    // chip (the excerpt now lives in the input, so the chip would be redundant).
+    this.clickable(card, () => {
+      this.attachSelection(text, path);
+      this.currentSelection = null;
+      this.refreshContext();
+    });
   }
 
   /** The composer "+" attach control: a themed popover (matching the select chips,

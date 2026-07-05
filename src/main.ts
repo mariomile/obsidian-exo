@@ -12,6 +12,7 @@ import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle } from "./core/title";
 import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
 import { inlineAiExtension } from "./editor/inline-ai";
+import { selectionObserverExtension } from "./editor/selection-observer";
 
 export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
@@ -32,6 +33,11 @@ export default class ExoPlugin extends Plugin {
     // Exo). Registered once; gated live behind the `inlineAi` setting, so
     // toggling it off makes the extension inert without a reload.
     this.registerEditorExtension(inlineAiExtension(this));
+
+    // Selection observer: reports the active editor's selection to the composer
+    // so it shows an ambient "Selection" chip. Registered once; gated live
+    // behind `showSelectionChip`, so toggling it off makes it inert.
+    this.registerEditorExtension(selectionObserverExtension(this));
 
     this.addRibbonIcon(EXO_ICON, "Open Exo", () => this.activateView());
 
@@ -252,6 +258,15 @@ export default class ExoPlugin extends Plugin {
     await this.activateView();
     const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
     if (view instanceof ChatView) view.attachSelection(text, sourcePath);
+  }
+
+  /** Forward the active editor's current selection to the open chat view so it
+   *  renders an ambient "Selection" chip in the composer (`text=""` clears it).
+   *  Unlike `attachSelectionToChat`, this never reveals/activates the view — it's
+   *  passive ambient state: if no ChatView is open there's simply nothing to show. */
+  reportSelection(text: string, sourcePath: string): void {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (view instanceof ChatView) view.setCurrentSelection(text, sourcePath);
   }
 
   /** Generate a concise 3-6 word chat title with Haiku. ALWAYS runs on the Claude

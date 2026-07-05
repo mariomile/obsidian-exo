@@ -62,6 +62,8 @@ export interface MVASettings {
   aiTitles: boolean;
   /** In-note AI: floating toolbar over a selection (Edit / Continue / Ask Exo). */
   inlineAi: boolean;
+  /** Show the current editor selection as a click-to-attach chip in the composer. */
+  showSelectionChip: boolean;
   // Tab bar runtime state (not user-facing settings).
   openTabIds: string[];
   activeTabId: string;
@@ -115,6 +117,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   seededPrompts: false,
   aiTitles: true,
   inlineAi: true,
+  showSelectionChip: true,
   openTabIds: [],
   activeTabId: "",
   dreamPassSchedule: "off",
@@ -331,6 +334,12 @@ export class MVASettingTab extends PluginSettingTab {
       "In-note AI toolbar",
       "Select text in a note to get a floating toolbar: rewrite it with a streaming inline diff (Edit), keep writing from it (Continue), or open the chat with it as context (Ask Exo).",
       "inlineAi"
+    );
+    this.toggleSetting(
+      el,
+      "Show selection in composer",
+      "When you select text in a note, show it as a chip in the chat composer — click it to add the excerpt as context.",
+      "showSelectionChip"
     );
     this.toggleSetting(
       el,
