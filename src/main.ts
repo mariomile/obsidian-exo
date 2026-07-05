@@ -412,6 +412,56 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
+  /** Run the Self-Writing Memory observer prompt on a cheap, transient, tool-less
+   *  Claude CLI session (same lifecycle shape as {@link generateTitle}). Returns the
+   *  raw model text, or "" on any failure — never throws, aborts silently. A hard
+   *  15s timeout plus the caller's `signal` guarantees a hung call can't leak. */
+  async runObserver(prompt: string, signal: AbortSignal): Promise<string> {
+    const ctrl = new AbortController();
+    const onAbort = () => ctrl.abort();
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener("abort", onAbort);
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    try {
+      const cli = await resolveCli("claude", this.settings.claudeBin);
+      const session = ADAPTERS.claude.createSession({
+        cli,
+        // Model choice: the observer is the same class of cheap, transient utility
+        // session as `generateTitle`, which runs on Haiku by Mario's explicit
+        // directive (floor = Sonnet for subagents/workflows, Haiku allowed only
+        // where he directed). Following that precedent here — a per-turn background
+        // observer must be cheap and fast — so it uses the same Haiku model.
+        model: "claude-haiku-4-5",
+        effort: "default",
+        cwd: this.vaultPath(),
+        permissionMode: "default",
+        toolsEnabled: false, // read-only extraction — no tools
+        fastStartup: true,
+      });
+      ctrl.signal.addEventListener("abort", () => {
+        try {
+          session.dispose();
+        } catch {
+          /* already torn down */
+        }
+      });
+      let out = "";
+      try {
+        await session.send(prompt, (e: AgentEvent) => {
+          if (e.kind === "text-delta") out += e.text;
+        });
+      } finally {
+        session.dispose();
+      }
+      return out;
+    } catch {
+      return ""; // CLI missing / errored / aborted — caller treats as no-op
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
   private inlineEdit(editor: Editor): void {
     const selection = editor.getSelection();
     const text = selection || editor.getLine(editor.getCursor().line);
