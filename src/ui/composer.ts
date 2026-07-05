@@ -63,8 +63,8 @@ function extToMime(ext: string): string {
 }
 
 /**
- * What the composer needs from the view. Kept narrow: the turn engine (send /
- * stop / runTurn / renderQueue), the shared model/provider/permission state, and
+ * What the composer needs from the view. Kept narrow: the send/stop turn
+ * controls, workflow submission, the shared model/provider/permission state, and
  * a handful of view services (open a note, register cleanup). The composer owns
  * everything else (its own DOM, popovers, images, context row, selection chip).
  */
@@ -87,8 +87,7 @@ export interface ComposerHost {
   register(cb: () => void): void;
   send(): void;
   stop(source?: "esc" | "button"): void;
-  runTurn(c: Convo, text: string, images?: ImageAttachment[]): void;
-  renderQueue(c: Convo): void;
+  submitWorkflow(c: Convo, steps: string[]): void;
   compactActive(instructions?: string): void;
   togglePlanMode(): void;
   onProviderChange(next: ProviderId, explicitModel?: string): void;
@@ -1187,7 +1186,8 @@ export class Composer {
     const vars = extractVars(promptText);
     const run = (values: Record<string, string>) => {
       if (steps.length > 1) {
-        this.runWorkflow(this.host.active, steps.map((s) => fillVars(s, values)));
+        // Turn orchestration lives in the view — hand it the resolved steps.
+        this.host.submitWorkflow(this.host.active, steps.map((s) => fillVars(s, values)));
       } else {
         this.insertAtComposer(fillVars(promptText, values));
       }
@@ -1197,22 +1197,6 @@ export class Composer {
       return;
     }
     new PromptVarsModal(this.host.app, vars, run).open();
-  }
-
-  /** Run a multi-step workflow by enqueuing its steps; the turn-drain loop runs
-   *  them in order. Stop (which clears the queue) aborts the remaining steps. */
-  private runWorkflow(c: Convo, steps: string[]): void {
-    if (steps.length === 0) return;
-    const [first, ...rest] = steps;
-    for (const s of rest) c.queue.push({ text: s });
-    if (c.streaming) {
-      // Busy: queue the first step too; it runs when the current turn drains.
-      c.queue.unshift({ text: first });
-      this.host.renderQueue(c);
-    } else {
-      this.host.renderQueue(c);
-      void this.host.runTurn(c, first);
-    }
   }
 
   /** Insert text at the composer's caret (replacing any selection), then focus. */

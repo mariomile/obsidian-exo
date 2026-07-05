@@ -481,10 +481,7 @@ export class ChatView extends ItemView {
       register: (cb) => this.register(cb),
       send: () => this.send(),
       stop: (source) => this.stop(source),
-      runTurn: (c, text, images) => {
-        void this.runTurn(c, text, images);
-      },
-      renderQueue: (c) => this.renderQueue(c),
+      submitWorkflow: (c, steps) => this.submitWorkflow(c, steps),
       compactActive: (instructions) => this.compactActive(instructions),
       togglePlanMode: () => this.togglePlanMode(),
       onProviderChange: (next, explicitModel) => this.onProviderChange(next, explicitModel),
@@ -3291,6 +3288,24 @@ export class ChatView extends ItemView {
       }
     } else {
       void this.runTurn(c, text, images);
+    }
+  }
+
+  /** Run a multi-step workflow by enqueuing its steps; the turn-drain loop runs
+   *  them in order. Stop (which clears the queue) aborts the remaining steps.
+   *  Owns the "run first step, enqueue the rest" turn orchestration on behalf of
+   *  the composer (which just hands over the resolved steps). */
+  submitWorkflow(c: Convo, steps: string[]): void {
+    if (steps.length === 0) return;
+    const [first, ...rest] = steps;
+    for (const s of rest) c.queue.push({ text: s });
+    if (c.streaming) {
+      // Busy: queue the first step too; it runs when the current turn drains.
+      c.queue.unshift({ text: first });
+      this.renderQueue(c);
+    } else {
+      this.renderQueue(c);
+      void this.runTurn(c, first);
     }
   }
 
