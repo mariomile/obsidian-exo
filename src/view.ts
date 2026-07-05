@@ -503,6 +503,26 @@ export class ChatView extends ItemView {
     window.setTimeout(() => this.inputEl?.focus(), 0);
   }
 
+  /** Seed the composer with a selection quoted from a note (the in-note "Ask Exo"
+   *  action) and focus it. The excerpt is rendered as a Markdown blockquote with
+   *  a source line so the agent sees exactly what the user highlighted; the caret
+   *  lands after it, ready for the question. */
+  attachSelection(text: string, sourcePath: string): void {
+    const src = sourcePath ? noteBasename(sourcePath) : "the current note";
+    const quoted = text
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((l) => `> ${l}`)
+      .join("\n");
+    const block = `From "${src}":\n${quoted}\n\n`;
+    // Prepend the excerpt, leave the caret at the very end for the question.
+    this.inputEl.value = block + this.inputEl.value;
+    const caret = this.inputEl.value.length;
+    this.inputEl.setSelectionRange(caret, caret);
+    this.autoGrow();
+    window.setTimeout(() => this.inputEl?.focus(), 0);
+  }
+
   /* --------------------------- session mgmt ------------------------- */
 
   private sessionSigOf(c: Convo): string {

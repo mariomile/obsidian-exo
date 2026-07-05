@@ -3339,3 +3339,147 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-settings-body.is-hidden {
   display: none;
 }
+
+/* ------------------------------ in-note AI ---------------------------- */
+/* Floating toolbar + action panel raised over an editor selection. Both are
+   appended to <body> (position:fixed) so they escape editor overflow; JS sets
+   left/top from CM coords and toggles .is-shown for the entrance. */
+.mva-inai-bar,
+.mva-inai-panel {
+  position: fixed;
+  z-index: var(--layer-popover, 30);
+  opacity: 0;
+  translate: 0 4px;
+  transition: opacity var(--mva-t), translate var(--mva-t);
+}
+.mva-inai-bar.is-shown,
+.mva-inai-panel.is-shown {
+  opacity: 1;
+  translate: 0 0;
+}
+.mva-inai-bar.is-off,
+.mva-inai-panel.is-off {
+  display: none;
+}
+
+/* The toolbar pill sits ABOVE the selection: transform lifts it by its own
+   height; translate handles the entrance slide (independent properties). */
+.mva-inai-bar {
+  transform: translateY(calc(-100% - 6px));
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r2);
+  box-shadow: var(--shadow-s, 0 4px 14px rgba(0, 0, 0, 0.18));
+}
+.mva-inai-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text-normal);
+  background: transparent;
+  border: none;
+  border-radius: var(--mva-r1);
+  cursor: pointer;
+  box-shadow: none;
+  transition: background var(--mva-t), color var(--mva-t);
+}
+.mva-inai-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--mva-brand, var(--interactive-accent));
+}
+.mva-inai-ico {
+  display: inline-flex;
+}
+.mva-inai-ico .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* The action panel sits just BELOW the selection (no lift transform). */
+.mva-inai-panel {
+  width: min(440px, 90vw);
+  padding: 10px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r2);
+  box-shadow: var(--shadow-s, 0 6px 20px rgba(0, 0, 0, 0.2));
+}
+.mva-inai-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.mva-inai-spin {
+  display: inline-flex;
+  color: var(--mva-brand, var(--interactive-accent));
+  animation: mva-spin 0.8s linear infinite;
+}
+.mva-inai-spin .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+.mva-inai-input {
+  width: 100%;
+  min-height: 34px;
+  max-height: 140px;
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r1);
+  resize: none;
+  box-sizing: border-box;
+}
+.mva-inai-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
+}
+.mva-inai-stream,
+.mva-inai-cont,
+.mva-inai-diff {
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-normal);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.mva-inai-cont {
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--color-green, #19c37d) 12%, transparent);
+  border-radius: var(--mva-r1);
+  padding: 6px 8px;
+}
+.mva-inai-error {
+  font-size: 12px;
+  color: var(--text-error);
+}
+.mva-inai-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mva-inai-bar,
+  .mva-inai-panel {
+    transition: none;
+    translate: 0 0;
+  }
+  .mva-inai-spin {
+    animation: none;
+  }
+}
