@@ -10,6 +10,7 @@ import {
   resolveSupersedence,
   type MemoryEntry,
 } from "../core/memory-store";
+import { currentAsOf, isValidAsOfDate } from "../core/memory-asof";
 import {
   formatLoop,
   parseLoopsFile,
@@ -571,10 +572,14 @@ export function createObsidianToolServer(
 
   const recall = tool(
     "recall",
-    "Call this before answering anything that may depend on prior sessions — user preferences, past decisions, project facts. Returns stored memories verbatim.",
-    { query: z.string(), k: z.number().optional() },
+    "Call this before answering anything that may depend on prior sessions — user preferences, past decisions, project facts. Returns stored memories verbatim. Pass `as_of` (YYYY-MM-DD) for a point-in-time query — 'what did I believe on that date?' — resolving the supersedes chain as of that day (entries superseded only afterwards are still shown, flagged with how they later changed).",
+    { query: z.string(), k: z.number().optional(), as_of: z.string().optional().describe("YYYY-MM-DD — resolve beliefs as of this date instead of now.") },
     async (args) => {
       const k = Math.min(Math.max(args.k ?? 5, 1), 12);
+      const asOfDate = args.as_of;
+      if (asOfDate !== undefined && !isValidAsOfDate(asOfDate)) {
+        return err(`Invalid as_of date "${asOfDate}" — expected a real calendar date in YYYY-MM-DD.`);
+      }
       const files = app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${MEMORY_STORE_DIR}/`));
       const all: MemoryEntry[] = [];
       for (const f of files) {
@@ -585,20 +590,33 @@ export function createObsidianToolServer(
         }
       }
       if (all.length === 0) return ok("No memories stored yet.");
-      const scored = scoreEntries(args.query, resolveSupersedence(all))
+
+      // Point-in-time: resolve the belief set current as of `asOfDate`; else the live set.
+      const asOf = asOfDate ? currentAsOf(all, asOfDate) : undefined;
+      const pool = asOf ? asOf.current : resolveSupersedence(all);
+      const scored = scoreEntries(args.query, pool)
         .filter((s) => s.score > 0)
         .slice(0, k);
-      if (scored.length === 0) return ok(`No stored memories match "${args.query}".`);
+      if (scored.length === 0) {
+        return ok(
+          asOfDate
+            ? `No stored memories as of ${asOfDate} match "${args.query}".`
+            : `No stored memories match "${args.query}".`
+        );
+      }
       const body = scored
         .map(({ entry }) => {
           const date = new Date(entry.at).toISOString().slice(0, 10);
           const tags = entry.tags.length ? ` · tags: ${entry.tags.join(", ")}` : "";
           // Mark autonomously-written memories; user memories need no marker.
           const prov = entry.source === "generated" ? " · @generated" : "";
-          return `${entry.id} · ${entry.kind} · ${date}${tags}${prov}\n${entry.text}`;
+          // In an as-of query, flag a belief that was superseded AFTER the queried date.
+          const later = asOf?.supersededAfter.get(entry.id);
+          const evolved = later ? ` · (superseded on ${later.on} by ${later.by})` : "";
+          return `${entry.id} · ${entry.kind} · ${date}${tags}${prov}${evolved}\n${entry.text}`;
         })
         .join("\n\n");
-      return ok(body);
+      return ok(asOfDate ? `As of ${asOfDate}:\n\n${body}` : body);
     }
   );
 
