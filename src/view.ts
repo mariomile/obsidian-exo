@@ -448,7 +448,6 @@ export class ChatView extends ItemView {
   private buildComposer(): void {
     const self = this;
     this.composer = new Composer({
-      app: this.app,
       plugin: this.plugin,
       listWrap: this.listWrap,
       get active() {

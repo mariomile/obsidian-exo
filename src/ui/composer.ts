@@ -69,7 +69,6 @@ function extToMime(ext: string): string {
  * everything else (its own DOM, popovers, images, context row, selection chip).
  */
 export interface ComposerHost {
-  app: App;
   plugin: ExoPlugin;
   /** The scroll host the composer pins itself to the bottom of. */
   listWrap: HTMLElement;
@@ -121,6 +120,12 @@ export class Composer {
   private imagesEl!: HTMLElement;
 
   constructor(private host: ComposerHost) {}
+
+  /** The Obsidian app, reached through the plugin — the composer never holds a
+   *  direct `app` handle, so the host stays a narrow view contract. */
+  private get app(): App {
+    return this.host.plugin.app;
+  }
 
   /* --------------------------- public surface ----------------------- */
 
@@ -304,10 +309,10 @@ export class Composer {
     const re = /!\[\[([^\]]+?\.(?:png|jpe?g|gif|webp))(?:\|[^\]]*)?\]\]/gi;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text))) {
-      const f = this.host.app.metadataCache.getFirstLinkpathDest(m[1], "");
+      const f = this.app.metadataCache.getFirstLinkpathDest(m[1], "");
       if (!f) continue;
       try {
-        const buf = await this.host.app.vault.readBinary(f);
+        const buf = await this.app.vault.readBinary(f);
         out.push({
           mediaType: extToMime(f.extension),
           dataB64: arrayBufferToBase64(buf),
@@ -348,20 +353,20 @@ export class Composer {
     const agents: string[] = [];
     const base = (p: string) => p.split("/").pop()?.replace(/\.md$/, "") ?? p;
     try {
-      const c = await this.host.app.vault.adapter.list(".claude/commands");
+      const c = await this.app.vault.adapter.list(".claude/commands");
       for (const f of c.files) if (f.endsWith(".md")) commands.push(base(f));
     } catch {
       /* no commands dir */
     }
     try {
-      const s = await this.host.app.vault.adapter.list(".claude/skills");
+      const s = await this.app.vault.adapter.list(".claude/skills");
       for (const folder of s.folders) skills.push(folder.split("/").pop() ?? folder);
       for (const f of s.files) if (f.endsWith(".md")) skills.push(base(f));
     } catch {
       /* no skills dir */
     }
     try {
-      const a = await this.host.app.vault.adapter.list(".claude/agents");
+      const a = await this.app.vault.adapter.list(".claude/agents");
       for (const f of a.files) if (f.endsWith(".md")) agents.push(base(f));
     } catch {
       /* no agents dir */
@@ -429,7 +434,7 @@ export class Composer {
       if (q && !a.toLowerCase().includes(q)) continue;
       out.push({ label: a, detail: "subagent", icon: "bot", insert: `@${a} ` });
     }
-    for (const f of this.host.app.vault.getAllLoadedFiles()) {
+    for (const f of this.app.vault.getAllLoadedFiles()) {
       if (!f.path || f.path === "/") continue;
       if (q && !f.path.toLowerCase().includes(q)) continue;
       const isFolder = f instanceof TFolder;
@@ -913,7 +918,7 @@ export class Composer {
   }
 
   private activeNotePath(): string | null {
-    const f = this.host.app.workspace.getActiveFile();
+    const f = this.app.workspace.getActiveFile();
     return f ? f.path : null;
   }
 
@@ -1124,7 +1129,7 @@ export class Composer {
    * tiny text preview ("document" look), everything else gets a file-type icon.
    */
   private async fillThumb(el: HTMLElement, path: string): Promise<void> {
-    const f = this.host.app.vault.getAbstractFileByPath(path);
+    const f = this.app.vault.getAbstractFileByPath(path);
     if (!(f instanceof TFile)) {
       el.addClass("is-icon");
       setIcon(el, "file");
@@ -1133,7 +1138,7 @@ export class Composer {
     if (Composer.IMAGE_EXT.test(f.extension)) {
       el.addClass("is-image");
       const img = el.createEl("img");
-      img.src = this.host.app.vault.getResourcePath(f);
+      img.src = this.app.vault.getResourcePath(f);
       img.onerror = () => {
         el.empty();
         el.removeClass("is-image");
@@ -1148,7 +1153,7 @@ export class Composer {
       return;
     }
     try {
-      const txt = (await this.host.app.vault.cachedRead(f))
+      const txt = (await this.app.vault.cachedRead(f))
         .replace(/^---\n[\s\S]*?\n---\n?/, "") // drop frontmatter
         .replace(/!?\[\[[^\]]*\]\]/g, " ") // drop embeds / wikilinks
         .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // md links → their text
@@ -1166,7 +1171,7 @@ export class Composer {
   }
 
   private pickNote(): void {
-    new NotePicker(this.host.app, (f) => {
+    new NotePicker(this.app, (f) => {
       if (!this.manualAttached.includes(f.path)) this.manualAttached.push(f.path);
       this.refreshContext();
     }).open();
@@ -1196,7 +1201,7 @@ export class Composer {
       run({});
       return;
     }
-    new PromptVarsModal(this.host.app, vars, run).open();
+    new PromptVarsModal(this.app, vars, run).open();
   }
 
   /** Insert text at the composer's caret (replacing any selection), then focus. */
