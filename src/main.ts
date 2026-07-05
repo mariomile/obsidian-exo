@@ -20,6 +20,7 @@ import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
 import { inlineAiExtension } from "./editor/inline-ai";
 import { selectionObserverExtension } from "./editor/selection-observer";
 import { WriteQueue } from "./core/write-queue";
+import { makeTolerantSetMaxListeners, isTolerantShim } from "./core/node-interop";
 import {
   initialAutoCommitState,
   recordVaultWrite,
@@ -60,6 +61,18 @@ export default class ExoPlugin extends Plugin {
   private static readonly AUTO_COMMIT_CHECK_INTERVAL_MS = 20 * 1000;
 
   async onload(): Promise<void> {
+    // Electron-renderer interop, BEFORE anything can spawn a session: the Agent
+    // SDK hands its (DOM-realm) AbortSignals to Node's events.setMaxListeners,
+    // which throws ERR_INVALID_ARG_TYPE in Obsidian's renderer and kills every
+    // Claude session at query() setup (first hit: dream-llm, 2026-07-06 — but it
+    // breaks chat and headless identically). Mutating the module object is what
+    // makes the bundled SDK see the shim (esbuild namespace getters are live).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeEvents = require("node:events") as { setMaxListeners: (n?: number, ...t: unknown[]) => void };
+    if (!isTolerantShim(nodeEvents.setMaxListeners)) {
+      nodeEvents.setMaxListeners = makeTolerantSetMaxListeners(nodeEvents.setMaxListeners.bind(nodeEvents));
+    }
+
     await this.loadSettings();
 
     // Exo brand mark — a concave 4-point star (matches the product logo).
@@ -454,7 +467,10 @@ export default class ExoPlugin extends Plugin {
     prompt: string,
     opts: { signal: AbortSignal; model?: string; timeoutMs?: number; onUsage?: (tokens: number) => void }
   ): Promise<string> {
-    const { signal, model = "claude-haiku-4-5", timeoutMs = 15_000, onUsage } = opts;
+    // Model floor is Sonnet (Mario's directive: never Haiku for background
+    // passes) — default to the W0 backgroundModel setting, not a hardcoded id.
+    const { signal, timeoutMs = 15_000, onUsage } = opts;
+    const model = opts.model || this.settings.backgroundModel || "claude-sonnet-5";
     const ctrl = new AbortController();
     const onAbort = () => ctrl.abort();
     if (signal.aborted) ctrl.abort();
@@ -493,8 +509,12 @@ export default class ExoPlugin extends Plugin {
         session.dispose();
       }
       return out;
-    } catch {
-      return ""; // CLI missing / errored / aborted — caller treats as no-op
+    } catch (err) {
+      // Caller treats "" as no-op, but NEVER swallow the reason silently —
+      // an instantly-empty utility pass is indistinguishable from a healthy
+      // empty answer without this line (bit us on the first dream-llm run).
+      console.warn("[Exo] utility pass failed:", err);
+      return "";
     } finally {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
@@ -522,6 +542,7 @@ export default class ExoPlugin extends Plugin {
     let tokens: number | null = null;
     const out = await this.runUtilityPass(prompt, {
       signal,
+      timeoutMs: 90_000, // long-transcript extraction can exceed the 15s default
       onUsage: (t) => {
         tokens = t;
       },
@@ -742,7 +763,9 @@ export default class ExoPlugin extends Plugin {
       });
       const result = await runDreamLlm({
         app: this.app,
-        runUtilityPass: (p, o) => this.runUtilityPass(p, o),
+        // Generating a full proposal batch over store+learnings+observations
+        // takes far longer than the 15s utility default — give it real room.
+        runUtilityPass: (p, o) => this.runUtilityPass(p, { ...o, timeoutMs: 300_000 }),
         queue: this.memoryWriteQueue,
         observations,
         appliedKeys: new Set(s.appliedProposalKeys),
