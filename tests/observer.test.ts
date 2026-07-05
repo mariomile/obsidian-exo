@@ -11,6 +11,8 @@ import {
   MIN_TURN_CHARS,
   type Candidate,
 } from "../src/core/observer";
+import { formatEntry, parseStoreFile, removeEntriesById, type MemoryEntry } from "../src/core/memory-store";
+import { WriteQueue } from "../src/core/write-queue";
 
 describe("buildObserverPrompt", () => {
   it("includes both the user and assistant text", () => {
@@ -164,5 +166,117 @@ describe("dedupeCandidates", () => {
     const a: Candidate = { kind: "fact", text: "The sky is blue today", tags: [] };
     const b: Candidate = { kind: "fact", text: "The sky is blue today!", tags: [] };
     expect(dedupeCandidates([a, b], [])).toEqual([a]);
+  });
+});
+
+/**
+ * Undo-exactness: the observer's undo must strip EXACTLY the entry ids it wrote,
+ * re-reading the current file — never blind-restore a before-image and never
+ * delete the whole file. This is what protects an interleaved @user entry.
+ */
+describe("removeEntriesById (observer undo primitive)", () => {
+  const entry = (id: string, source: "user" | "generated", text: string): MemoryEntry => ({
+    id,
+    kind: "fact",
+    at: Number(id.replace("mem-", "")),
+    session: "s",
+    tags: [],
+    source,
+    text,
+  });
+
+  it("removes only the named ids, preserving every other block verbatim", () => {
+    const user = entry("mem-1000", "user", "Mario ships on Fridays");
+    const gen1 = entry("mem-2000", "generated", "Observer thought A");
+    const gen2 = entry("mem-2001", "generated", "Observer thought B");
+    const file = [formatEntry(user), formatEntry(gen1), formatEntry(gen2)].join("\n\n") + "\n";
+
+    const out = removeEntriesById(file, ["mem-2000", "mem-2001"]);
+
+    const parsed = parseStoreFile(out);
+    expect(parsed.map((e) => e.id)).toEqual(["mem-1000"]);
+    expect(parsed[0].text).toBe("Mario ships on Fridays");
+    expect(parsed[0].source).toBe("user");
+  });
+
+  it("preserves a @user entry that was appended AFTER the observer's blocks (interleaved write)", () => {
+    // File existed as X (a user entry) → observer appends B → remember appends R (a @user entry).
+    const x = entry("mem-1000", "user", "existing user memory");
+    const observerBlock = entry("mem-2000", "generated", "observer generated memory");
+    const rememberR = entry("mem-3000", "user", "brand-new user memory R");
+    const file =
+      [formatEntry(x), formatEntry(observerBlock), formatEntry(rememberR)].join("\n\n") + "\n";
+
+    // Undo strips ONLY the observer's own id.
+    const out = removeEntriesById(file, ["mem-2000"]);
+
+    const parsed = parseStoreFile(out);
+    expect(parsed.map((e) => e.id)).toEqual(["mem-1000", "mem-3000"]);
+    // The user entry R that landed between the append and the undo MUST survive.
+    expect(parsed.find((e) => e.id === "mem-3000")?.text).toBe("brand-new user memory R");
+    expect(parsed.find((e) => e.id === "mem-2000")).toBeUndefined();
+  });
+
+  it("returns an empty string when the file only ever held the removed blocks (observer-created, nothing else)", () => {
+    const gen1 = entry("mem-2000", "generated", "only observer entry");
+    const file = formatEntry(gen1) + "\n";
+    expect(removeEntriesById(file, ["mem-2000"]).trim()).toBe("");
+  });
+
+  it("is a no-op for ids not present in the file", () => {
+    const user = entry("mem-1000", "user", "keep me");
+    const file = formatEntry(user) + "\n";
+    expect(parseStoreFile(removeEntriesById(file, ["mem-9999"])).map((e) => e.id)).toEqual(["mem-1000"]);
+  });
+});
+
+/**
+ * Shared-queue regression: a `remember`-style append and an observer append that
+ * race on ONE shared WriteQueue must both survive. Two independent queues would
+ * interleave their read-modify-write cycles and clobber one of the entries — the
+ * exact w1-1 corruption this feature must not reintroduce.
+ */
+describe("shared WriteQueue serialization (observer vs remember)", () => {
+  // Minimal in-memory model of the read-modify-write both writers do on the store file.
+  function makeStore() {
+    let content = "";
+    return {
+      // A read-modify-write with an awaited gap between read and write (where a
+      // concurrent writer could interleave if not serialized).
+      appendVia: (queue: WriteQueue, block: string) =>
+        queue.enqueue(async () => {
+          const cur = content; // read
+          await Promise.resolve(); // <-- yield: gives any concurrent writer a chance
+          await Promise.resolve();
+          content = cur ? `${cur}\n\n${block}` : block; // modify + write
+        }),
+      get: () => content,
+    };
+  }
+
+  it("preserves BOTH entries when observer and remember append on the shared queue", async () => {
+    const store = makeStore();
+    const shared = new WriteQueue();
+    await Promise.all([
+      store.appendVia(shared, "REMEMBER @user R"),
+      store.appendVia(shared, "OBSERVER @generated B"),
+    ]);
+    expect(store.get()).toContain("REMEMBER @user R");
+    expect(store.get()).toContain("OBSERVER @generated B");
+  });
+
+  it("demonstrates the clobber when two SEPARATE queues target the same file (guards against regression)", async () => {
+    const store = makeStore();
+    const qA = new WriteQueue();
+    const qB = new WriteQueue();
+    await Promise.all([
+      store.appendVia(qA, "REMEMBER @user R"),
+      store.appendVia(qB, "OBSERVER @generated B"),
+    ]);
+    // Independent queues do NOT serialize: one write clobbers the other (lost update).
+    const survived =
+      Number(store.get().includes("REMEMBER @user R")) +
+      Number(store.get().includes("OBSERVER @generated B"));
+    expect(survived).toBe(1);
   });
 });

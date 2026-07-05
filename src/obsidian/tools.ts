@@ -95,7 +95,8 @@ export function createObsidianToolServer(
   alwaysLoad = true,
   memoryWrite = true,
   askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>,
-  memoryRead = true
+  memoryRead = true,
+  memoryWriteQueue: WriteQueue = new WriteQueue()
 ) {
   const need = (target: string): TFile => {
     const f = resolveLink(app, target);
@@ -105,11 +106,12 @@ export function createObsidianToolServer(
 
   /**
    * One serialized write path for ALL appends to the Memory Union Store. Every
-   * store writer (the `remember` tool today; the future observer / dream passes)
-   * MUST enqueue here so concurrent read-modify-write cycles never interleave or
-   * clobber a monthly store file.
+   * store writer (the `remember` tool, the Self-Writing Memory observer, future
+   * dream passes) MUST enqueue on the SAME instance so concurrent read-modify-write
+   * cycles never interleave or clobber a monthly store file. This is injected by
+   * the plugin (`ExoPlugin.memoryWriteQueue`) and shared with `MemoryObserver`;
+   * the `new WriteQueue()` default only exists for standalone callers (tests).
    */
-  const memoryWriteQueue = new WriteQueue();
 
   /** Serialized write path for the single-file Open-Loops Ledger — a separate
    *  queue from `memoryWriteQueue` since it targets a different file, but the

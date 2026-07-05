@@ -14,6 +14,7 @@ import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle } from "./core/title";
 import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
 import { inlineAiExtension } from "./editor/inline-ai";
+import { WriteQueue } from "./core/write-queue";
 import {
   initialAutoCommitState,
   recordVaultWrite,
@@ -28,6 +29,16 @@ const execFileAsync = promisify(execFile);
 
 export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
+
+  /**
+   * THE ONE shared write path for every append to the Memory Union Store
+   * (`_system/memory/store/`). Plugin-scoped so all store writers — the
+   * `remember` tool, the Self-Writing Memory observer (append + undo), and any
+   * future dream pass — enqueue on the SAME FIFO and never interleave a
+   * read-modify-write cycle (w1-1 contract). Injected into both
+   * `createObsidianToolServer` and `MemoryObserver`.
+   */
+  readonly memoryWriteQueue = new WriteQueue();
 
   /** Git auto-commit safety net — debounce/cadence bookkeeping (in-memory
    *  only; resets on reload, which is fine, it's just scheduling state). */
