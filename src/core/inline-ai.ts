@@ -136,6 +136,56 @@ export function hunkCount(parts: DiffPart[]): number {
 }
 
 /**
+ * Map each hunk onto document offsets, given the doc position `from` where the
+ * diffed region starts (the start of the original selection). Walking the parts
+ * in order: `context` and a hunk's `before` consume ORIGINAL characters (advance
+ * the offset); a hunk's `after` consumes none (it's an inserted widget, not in
+ * the doc yet). For each hunk we emit its `before` doc range and the `at` offset
+ * — the end of that before-range — where the `after` widget is inserted.
+ *
+ * Pure counterpart to the decoration layer: the CM6 field turns these ranges
+ * into a `Decoration.mark` over `before` and `Decoration.widget` at `at`.
+ *
+ *  - pure insertion (`before === ""`): `before.from === before.to === at`.
+ *  - pure deletion (`after === ""`): `at === before.to`, no widget text.
+ *  - replace: `before` spans the removed text, `at` is its end.
+ */
+export function hunkDocRanges(
+  from: number,
+  parts: DiffPart[]
+): { index: number; before: { from: number; to: number }; at: number }[] {
+  const ranges: { index: number; before: { from: number; to: number }; at: number }[] = [];
+  let offset = from;
+  for (const p of parts) {
+    if (p.kind === "context") {
+      offset += p.text.length;
+    } else {
+      const start = offset;
+      const end = offset + p.before.length;
+      ranges.push({ index: p.index, before: { from: start, to: end }, at: end });
+      offset = end; // `before` consumed; `after` (widget) consumes nothing
+    }
+  }
+  return ranges;
+}
+
+/**
+ * Move a hunk cursor over the contiguous hunk-index space `[0, hunkCount-1]`.
+ * Hunks from `computeHunks` are numbered 0..n-1, so navigation is plain integer
+ * stepping. We **clamp** at the ends (no wrap) — landing on the first/last hunk
+ * and pressing again is a no-op, which reads as "you're at the edge" rather than
+ * silently teleporting across the document. Empty parts → 0.
+ */
+export function nextHunk(parts: DiffPart[], current: number, dir: 1 | -1): number {
+  const n = hunkCount(parts);
+  if (n === 0) return 0;
+  const next = current + dir;
+  if (next < 0) return 0;
+  if (next > n - 1) return n - 1;
+  return next;
+}
+
+/**
  * Prompt for the Edit action: apply a free-text INSTRUCTION to a TEXT selection
  * and return only the rewritten text. Shared by `oneShot` (modal) and
  * `oneShotStream` (inline) so the wording has a single source of truth.
