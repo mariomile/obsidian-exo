@@ -10,9 +10,20 @@ import {
   resolveSupersedence,
   type MemoryEntry,
 } from "../core/memory-store";
+import {
+  formatLoop,
+  parseLoopsFile,
+  activeLoops,
+  dueLoops,
+  closeLoop,
+  type LoopEntry,
+} from "../core/open-loops";
+import { WriteQueue } from "../core/write-queue";
 
 /** Folder holding the append-only Memory Union Store (monthly markdown files). */
 const MEMORY_STORE_DIR = "_system/memory/store";
+/** Single-file Open-Loops Ledger (tickler / follow-up tracking). */
+const OPEN_LOOPS_PATH = "_system/memory/open-loops.md";
 
 type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
 const ok = (text: string): Result => ({ content: [{ type: "text", text }] });
@@ -84,13 +95,29 @@ export function createObsidianToolServer(
   alwaysLoad = true,
   memoryWrite = true,
   askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>,
-  memoryRead = true
+  memoryRead = true,
+  memoryWriteQueue: WriteQueue = new WriteQueue()
 ) {
   const need = (target: string): TFile => {
     const f = resolveLink(app, target);
     if (!f) throw new Error(`Note not found: ${target}`);
     return f;
   };
+
+  /**
+   * One serialized write path for ALL appends to the Memory Union Store. Every
+   * store writer (the `remember` tool, the Self-Writing Memory observer, future
+   * dream passes) MUST enqueue on the SAME instance so concurrent read-modify-write
+   * cycles never interleave or clobber a monthly store file. This is injected by
+   * the plugin (`ExoPlugin.memoryWriteQueue`) and shared with `MemoryObserver`;
+   * the `new WriteQueue()` default only exists for standalone callers (tests).
+   */
+
+  /** Serialized write path for the single-file Open-Loops Ledger — a separate
+   *  queue from `memoryWriteQueue` since it targets a different file, but the
+   *  same reasoning applies: `open_loop` and `close_loop` both read-modify-write
+   *  the whole ledger file, so concurrent calls must never interleave. */
+  const loopsWriteQueue = new WriteQueue();
 
   /* ----------------------------- read ----------------------------- */
 
@@ -517,19 +544,25 @@ export function createObsidianToolServer(
         at,
         session: "unknown",
         tags: args.tags ?? [],
+        // `remember` captures the user's own words — always @user provenance.
+        source: "user",
         ...(args.supersedes ? { supersedes: args.supersedes } : {}),
         text: args.text,
       };
       const path = `${MEMORY_STORE_DIR}/${monthFileName(at)}`;
       const block = formatEntry(entry);
-      const existing = app.vault.getAbstractFileByPath(path);
-      if (existing instanceof TFile) {
-        const cur = await app.vault.read(existing);
-        await app.vault.modify(existing, `${cur.replace(/\s+$/, "")}\n\n${block}\n`);
-      } else {
-        await ensureParentFolder(app, path);
-        await app.vault.create(path, `${block}\n`);
-      }
+      // Serialize the read-modify-write through the shared queue so concurrent
+      // store writers never interleave or clobber the monthly file.
+      await memoryWriteQueue.enqueue(async () => {
+        const existing = app.vault.getAbstractFileByPath(path);
+        if (existing instanceof TFile) {
+          const cur = await app.vault.read(existing);
+          await app.vault.modify(existing, `${cur.replace(/\s+$/, "")}\n\n${block}\n`);
+        } else {
+          await ensureParentFolder(app, path);
+          await app.vault.create(path, `${block}\n`);
+        }
+      });
       return ok(
         `Remembered ${entry.id} (${entry.kind})${entry.supersedes ? `, supersedes ${entry.supersedes}` : ""}.`
       );
@@ -560,9 +593,113 @@ export function createObsidianToolServer(
         .map(({ entry }) => {
           const date = new Date(entry.at).toISOString().slice(0, 10);
           const tags = entry.tags.length ? ` · tags: ${entry.tags.join(", ")}` : "";
-          return `${entry.id} · ${entry.kind} · ${date}${tags}\n${entry.text}`;
+          // Mark autonomously-written memories; user memories need no marker.
+          const prov = entry.source === "generated" ? " · @generated" : "";
+          return `${entry.id} · ${entry.kind} · ${date}${tags}${prov}\n${entry.text}`;
         })
         .join("\n\n");
+      return ok(body);
+    }
+  );
+
+  /* --------------------------- open loops -------------------------- */
+
+  /** `YYYY-MM-DD`, matching the ledger's on-disk tickler-date format. */
+  const RESURFACE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  async function readLoops(): Promise<LoopEntry[]> {
+    const f = app.vault.getAbstractFileByPath(OPEN_LOOPS_PATH);
+    if (!(f instanceof TFile)) return [];
+    try {
+      return parseLoopsFile(await app.vault.cachedRead(f));
+    } catch {
+      return [];
+    }
+  }
+
+  const openLoop = tool(
+    "open_loop",
+    "Record an open loop — a follow-up, promise, or thing to circle back on — in the Open-Loops Ledger. Optionally set a `resurface` tickler date (YYYY-MM-DD) for when it should come back up; omit it to make the loop due immediately.",
+    {
+      title: z.string(),
+      context: z.string().describe("The verbatim context — what this loop is about, stored as-is."),
+      resurface: z
+        .string()
+        .regex(RESURFACE_RE, "resurface must be YYYY-MM-DD")
+        .optional(),
+      tags: z.array(z.string()).optional(),
+    },
+    async (args) => {
+      const openedAt = Date.now();
+      const entry: LoopEntry = {
+        id: `loop-${openedAt}`,
+        title: args.title,
+        note: args.context,
+        openedAt,
+        status: "open",
+        ...(args.resurface ? { resurface: args.resurface } : {}),
+        ...(args.tags && args.tags.length ? { tags: args.tags } : {}),
+      };
+      const block = formatLoop(entry);
+      await loopsWriteQueue.enqueue(async () => {
+        const existing = app.vault.getAbstractFileByPath(OPEN_LOOPS_PATH);
+        if (existing instanceof TFile) {
+          const cur = await app.vault.read(existing);
+          await app.vault.modify(existing, `${cur.replace(/\s+$/, "")}\n\n${block}\n`);
+        } else {
+          await ensureParentFolder(app, OPEN_LOOPS_PATH);
+          await app.vault.create(OPEN_LOOPS_PATH, `${block}\n`);
+        }
+      });
+      return ok(`Opened ${entry.id}: ${entry.title}${entry.resurface ? ` (resurfaces ${entry.resurface})` : ""}.`);
+    }
+  );
+
+  const closeLoopTool = tool(
+    "close_loop",
+    "Close an open loop by id (from `open_loop` or `list_loops`). The entry is never deleted — it's kept in the ledger with status=closed and, if given, an appended outcome note.",
+    { id: z.string(), outcome: z.string().optional() },
+    async (args) => {
+      let result: Result | undefined;
+      await loopsWriteQueue.enqueue(async () => {
+        const f = app.vault.getAbstractFileByPath(OPEN_LOOPS_PATH);
+        if (!(f instanceof TFile)) {
+          result = err(`No open-loops ledger yet — nothing to close.`);
+          return;
+        }
+        const cur = await app.vault.read(f);
+        const entries = parseLoopsFile(cur);
+        let closed: LoopEntry[];
+        try {
+          closed = closeLoop(entries, args.id, args.outcome);
+        } catch {
+          result = err(`No loop found with id ${args.id}.`);
+          return;
+        }
+        const body = closed.map(formatLoop).join("\n\n");
+        await app.vault.modify(f, `${body}\n`);
+        result = ok(`Closed ${args.id}.`);
+      });
+      return result ?? err("Failed to close loop.");
+    }
+  );
+
+  const listLoops = tool(
+    "list_loops",
+    "List open loops from the Open-Loops Ledger — due ones first, then other active ones. Read-only.",
+    {},
+    async () => {
+      const entries = await readLoops();
+      const due = dueLoops(entries);
+      const dueIds = new Set(due.map((e) => e.id));
+      const others = activeLoops(entries).filter((e) => !dueIds.has(e.id));
+      if (due.length === 0 && others.length === 0) return ok("No open loops.");
+      const line = (e: LoopEntry, label: string) =>
+        `- [${label}] ${e.id} — ${e.title}${e.resurface ? ` (resurface: ${e.resurface})` : ""}`;
+      const body = [
+        ...due.map((e) => line(e, "due")),
+        ...others.map((e) => line(e, "open")),
+      ].join("\n");
       return ok(body);
     }
   );
@@ -575,11 +712,11 @@ export function createObsidianToolServer(
       "Obsidian-native tools. Prefer these over generic file/Bash tools for vault work — they respect links, tags, and frontmatter.",
     tools: [
       searchVault, readNote, getBacklinks, getNeighborhood, listNotes, listTags, getActiveContext,
-      askUser,
+      askUser, listLoops,
       createNote, appendToNote, updateFrontmatter, addLinks, openNote,
       editNote, insertAtCursor, renameNote,
       ...(memoryRead ? [recall] : []),
-      ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember] : []),
+      ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
     ],
   });
 }
@@ -594,6 +731,7 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__list_tags",
   "mcp__obsidian__get_active_context",
   "mcp__obsidian__recall",
+  "mcp__obsidian__list_loops",
 ]);
 
 /** Memory-write tool names (gated separately by the memoryWrite setting). */
@@ -602,4 +740,6 @@ export const OBSIDIAN_MEMORY_TOOLS = new Set([
   "mcp__obsidian__log_session",
   "mcp__obsidian__capture_learning",
   "mcp__obsidian__remember",
+  "mcp__obsidian__open_loop",
+  "mcp__obsidian__close_loop",
 ]);

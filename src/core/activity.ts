@@ -62,6 +62,16 @@ export function describeActivity(name: string, input: unknown): string {
       const u = asStr(i.url).trim();
       return u ? `Fetching ${host(u)}` : "Fetching a page";
     }
+    case "mcp__obsidian__open_loop": {
+      const t = asStr(i.title).trim();
+      return t ? `Opening a loop — ${t}` : "Opening a loop";
+    }
+    case "mcp__obsidian__close_loop": {
+      const id = asStr(i.id).trim();
+      return id ? `Closing loop ${id}` : "Closing a loop";
+    }
+    case "mcp__obsidian__list_loops":
+      return "Checking open loops";
     case "Bash":
       return "Running a command";
     case "Skill": {

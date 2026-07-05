@@ -1,4 +1,6 @@
 import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Plugin, WorkspaceLeaf, addIcon, requestUrl } from "obsidian";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
@@ -13,9 +15,45 @@ import { sanitizeTitle } from "./core/title";
 import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
 import { inlineAiExtension } from "./editor/inline-ai";
 import { selectionObserverExtension } from "./editor/selection-observer";
+import { WriteQueue } from "./core/write-queue";
+import {
+  initialAutoCommitState,
+  recordVaultWrite,
+  isCommitDue,
+  shouldCommitNow,
+  afterCommitCheck,
+  formatCommitMessage,
+  type AutoCommitState,
+} from "./core/git-autocommit";
+
+const execFileAsync = promisify(execFile);
 
 export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
+
+  /**
+   * THE ONE shared write path for every append to the Memory Union Store
+   * (`_system/memory/store/`). Plugin-scoped so all store writers — the
+   * `remember` tool, the Self-Writing Memory observer (append + undo), and any
+   * future dream pass — enqueue on the SAME FIFO and never interleave a
+   * read-modify-write cycle (w1-1 contract). Injected into both
+   * `createObsidianToolServer` and `MemoryObserver`.
+   */
+  readonly memoryWriteQueue = new WriteQueue();
+
+  /** Git auto-commit safety net — debounce/cadence bookkeeping (in-memory
+   *  only; resets on reload, which is fine, it's just scheduling state). */
+  private gitAutoCommitState: AutoCommitState = initialAutoCommitState();
+  /** Fires at most once per session — repeated failures log to console but
+   *  never spam the user with Notices. */
+  private gitAutoCommitNoticeShown = false;
+  /** Quiet period after a tracked write before a commit check runs (fixed —
+   *  keeping this predictable rather than another setting to tune). */
+  private static readonly AUTO_COMMIT_DEBOUNCE_MS = 2 * 60 * 1000;
+  /** How often the periodic checker ticks. Actual git calls only run when
+   *  `isCommitDue` says a debounce or cadence window has elapsed, so most
+   *  ticks are a free no-op. */
+  private static readonly AUTO_COMMIT_CHECK_INTERVAL_MS = 20 * 1000;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -129,6 +167,14 @@ export default class ExoPlugin extends Plugin {
     });
     this.registerInterval(window.setInterval(() => void this.checkScheduledRuns(), 30 * 60 * 1000));
 
+    // Git auto-commit safety net: ticks frequently, but only ever runs git
+    // commands once the pure debounce/cadence decision says a check is due —
+    // no-op (and silent) whenever the setting is off, the vault isn't a git
+    // repo, or the worktree is clean. See core/git-autocommit.ts.
+    this.registerInterval(
+      window.setInterval(() => void this.maybeAutoCommit(), ExoPlugin.AUTO_COMMIT_CHECK_INTERVAL_MS)
+    );
+
     this.addSettingTab(new MVASettingTab(this.app, this));
 
     // Daily, non-blocking Claude-CLI update check (failures silent).
@@ -176,6 +222,73 @@ export default class ExoPlugin extends Plugin {
   private vaultPath(): string {
     const a = this.app.vault.adapter;
     return a instanceof FileSystemAdapter ? a.getBasePath() : ".";
+  }
+
+  /**
+   * Git auto-commit safety net — record that a turn wrote `fileCount` file(s).
+   * Called from ChatView at turn end (any turn that touched the write-tool
+   * set), regardless of whether the turn succeeded, errored, or was stopped.
+   *
+   * Purely bookkeeping: synchronous, in-memory, no I/O — so this can never
+   * slow down or block a chat turn. The actual `git add`/`git commit` (if
+   * ever due) happens later, off a periodic timer (`maybeAutoCommit`), fully
+   * decoupled from any turn. No-ops entirely when the setting is off.
+   */
+  noteVaultWrite(fileCount: number): void {
+    if (!this.settings.vaultAutoCommit) return;
+    this.gitAutoCommitState = recordVaultWrite(this.gitAutoCommitState, Date.now(), fileCount);
+  }
+
+  /**
+   * Periodic tick for the git auto-commit safety net (see core/git-autocommit
+   * for the pure decision logic). Cheap on every tick that isn't due; only
+   * once the debounce (after a write) or cadence (periodic fallback) window
+   * has elapsed does this actually shell out to `git`. Fully async and
+   * fire-and-forget from the caller — a failure here is caught, logged, and
+   * (at most once per session) surfaced as a single Notice; it never throws
+   * back into a chat turn because nothing calls this from inside one.
+   */
+  private async maybeAutoCommit(): Promise<void> {
+    if (!this.settings.vaultAutoCommit) return;
+    const cwd = this.vaultPath();
+    if (cwd === ".") return; // no real filesystem adapter (e.g. mobile) — silent no-op
+
+    const debounceMs = ExoPlugin.AUTO_COMMIT_DEBOUNCE_MS;
+    const cadenceMs = Math.max(1, this.settings.vaultAutoCommitIntervalMinutes) * 60 * 1000;
+    const now = Date.now();
+    // Cheap pure check first — most ticks bail out here with zero git calls.
+    if (!isCommitDue(this.gitAutoCommitState, now, debounceMs, cadenceMs)) return;
+
+    try {
+      const { isGitRepo, gitAvailable } = await checkGitRepo(cwd);
+      const worktreeDirty = isGitRepo && gitAvailable ? await isWorktreeDirty(cwd) : false;
+      const pendingFileCount = this.gitAutoCommitState.pendingWriteCount;
+      const commit = shouldCommitNow({
+        enabled: this.settings.vaultAutoCommit,
+        isGitRepo,
+        gitAvailable,
+        worktreeDirty,
+        state: this.gitAutoCommitState,
+        now,
+        debounceMs,
+        cadenceMs,
+      });
+      if (commit) await runGitCommit(cwd, formatCommitMessage(pendingFileCount));
+    } catch (err) {
+      // Never let a failed commit break anything — log it and surface at most
+      // one Notice ever (repeated failures would otherwise spam every tick).
+      console.error("[Exo] git auto-commit failed:", err);
+      if (!this.gitAutoCommitNoticeShown) {
+        this.gitAutoCommitNoticeShown = true;
+        new Notice("Exo: git auto-commit failed once — see the developer console for details.");
+      }
+    } finally {
+      // Whether it committed, found the tree clean, or errored — the check
+      // itself happened, so reset the debounce/cadence bookkeeping for the
+      // next cycle. (On error, this also prevents a hard-failing repo from
+      // being hammered every single tick.)
+      this.gitAutoCommitState = afterCommitCheck(this.gitAutoCommitState, now);
+    }
   }
 
   /**
@@ -319,6 +432,56 @@ export default class ExoPlugin extends Plugin {
       return sanitizeTitle(out);
     } catch {
       return ""; // CLI missing / errored / aborted — keep the placeholder
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /** Run the Self-Writing Memory observer prompt on a cheap, transient, tool-less
+   *  Claude CLI session (same lifecycle shape as {@link generateTitle}). Returns the
+   *  raw model text, or "" on any failure — never throws, aborts silently. A hard
+   *  15s timeout plus the caller's `signal` guarantees a hung call can't leak. */
+  async runObserver(prompt: string, signal: AbortSignal): Promise<string> {
+    const ctrl = new AbortController();
+    const onAbort = () => ctrl.abort();
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener("abort", onAbort);
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    try {
+      const cli = await resolveCli("claude", this.settings.claudeBin);
+      const session = ADAPTERS.claude.createSession({
+        cli,
+        // Model choice: the observer is the same class of cheap, transient utility
+        // session as `generateTitle`, which runs on Haiku by Mario's explicit
+        // directive (floor = Sonnet for subagents/workflows, Haiku allowed only
+        // where he directed). Following that precedent here — a per-turn background
+        // observer must be cheap and fast — so it uses the same Haiku model.
+        model: "claude-haiku-4-5",
+        effort: "default",
+        cwd: this.vaultPath(),
+        permissionMode: "default",
+        toolsEnabled: false, // read-only extraction — no tools
+        fastStartup: true,
+      });
+      ctrl.signal.addEventListener("abort", () => {
+        try {
+          session.dispose();
+        } catch {
+          /* already torn down */
+        }
+      });
+      let out = "";
+      try {
+        await session.send(prompt, (e: AgentEvent) => {
+          if (e.kind === "text-delta") out += e.text;
+        });
+      } finally {
+        session.dispose();
+      }
+      return out;
+    } catch {
+      return ""; // CLI missing / errored / aborted — caller treats as no-op
     } finally {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
@@ -549,5 +712,56 @@ class PlaybookPicker extends FuzzySuggestModal<{ name: string; prompt: string }>
   }
   onChooseItem(p: { name: string; prompt: string }): void {
     this.onPick(p);
+  }
+}
+
+/* -------------------- git auto-commit — impure shell -------------------- */
+// Argument arrays only, explicit cwd, never a shell string — no interpolation
+// of any path or message into a command line. See core/git-autocommit.ts for
+// the pure decision logic these merely execute.
+
+/** Best-effort text of a node `child_process` error, for matching known-benign
+ *  git outcomes (e.g. "nothing to commit"). Never throws. */
+function errText(err: unknown): string {
+  if (!err || typeof err !== "object") return String(err);
+  const e = err as { message?: unknown; stdout?: unknown; stderr?: unknown };
+  return [e.message, e.stdout, e.stderr]
+    .filter((x): x is string => typeof x === "string")
+    .join("\n");
+}
+
+/** Is `cwd` inside a git working tree, and is the `git` binary itself
+ *  available? A single `git rev-parse` call answers both: ENOENT means the
+ *  binary is missing; any other failure (exit 128, "not a git repository")
+ *  means git ran fine but this path isn't a repo. Neither case throws — both
+ *  are normal, silent no-op conditions, not failures. */
+async function checkGitRepo(cwd: string): Promise<{ isGitRepo: boolean; gitAvailable: boolean }> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], { cwd });
+    return { isGitRepo: stdout.trim() === "true", gitAvailable: true };
+  } catch (err) {
+    const code = (err as { code?: unknown } | undefined)?.code;
+    if (code === "ENOENT") return { isGitRepo: false, gitAvailable: false }; // git binary not found
+    return { isGitRepo: false, gitAvailable: true }; // git ran, just not (cleanly) a repo here
+  }
+}
+
+/** `git status --porcelain` — non-empty output means the worktree is dirty. */
+async function isWorktreeDirty(cwd: string): Promise<boolean> {
+  const { stdout } = await execFileAsync("git", ["status", "--porcelain"], { cwd });
+  return stdout.trim().length > 0;
+}
+
+/** Stage everything and commit with `message`. A concurrent process (another
+ *  Exo tick, a manual commit) can beat us to it between the dirty-check and
+ *  here — `git commit` then exits non-zero with "nothing to commit", which is
+ *  swallowed as benign; any other failure propagates to the caller. */
+async function runGitCommit(cwd: string, message: string): Promise<void> {
+  await execFileAsync("git", ["add", "-A"], { cwd });
+  try {
+    await execFileAsync("git", ["commit", "-m", message], { cwd });
+  } catch (err) {
+    if (/nothing to commit/i.test(errText(err))) return; // race — benign, silent
+    throw err;
   }
 }

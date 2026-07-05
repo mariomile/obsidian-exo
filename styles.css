@@ -882,6 +882,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-radius: var(--mva-r1);
   cursor: pointer;
   white-space: nowrap;
+  /* Three cascade chips share the row with the ring/badge/send — cap each so a
+     long custom model id degrades to an ellipsis instead of wrapping the bar. */
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: color var(--mva-t), background var(--mva-t);
 }
 .mva-sel-chip:hover {

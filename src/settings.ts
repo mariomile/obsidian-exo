@@ -50,6 +50,10 @@ export interface MVASettings {
   nativeFirst: boolean;
   memoryReadEnabled: boolean;
   memoryWriteEnabled: boolean;
+  /** Self-Writing Memory: after each healthy turn, a cheap background observer
+   *  proposes durable memories and writes them to the store (with veto/undo).
+   *  OFF by default — only runs when this AND memoryWriteEnabled are on. */
+  selfWritingMemory: boolean;
   featureSurfacing: boolean;
   featureWikilinkify: boolean;
   /** Open notes the agent edits in a tab beside the chat, live. */
@@ -79,6 +83,15 @@ export interface MVASettings {
   cliUpdateCheckAt: number;
   /** Latest published Claude CLI version seen by the update check ("" = unknown). */
   cliLatestKnown: string;
+  /** Git auto-commit safety net: silently commit vault writes so every
+   *  agent-driven mutation is recoverable via git. OFF by default — an opt-in
+   *  net, not a surprise. No-op when the vault isn't a git repo. */
+  vaultAutoCommit: boolean;
+  /** Periodic fallback cadence (minutes) — a commit check runs at least this
+   *  often even without a fresh tracked write, catching a dirty tree from
+   *  drift. The debounce quiet period after a write (2 min, fixed) usually
+   *  fires first. */
+  vaultAutoCommitIntervalMinutes: number;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -110,6 +123,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   nativeFirst: false,
   memoryReadEnabled: true,
   memoryWriteEnabled: true,
+  selfWritingMemory: false,
   featureSurfacing: true,
   featureWikilinkify: true,
   revealEditedNotes: true,
@@ -126,6 +140,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   scheduledLastRun: {},
   cliUpdateCheckAt: 0,
   cliLatestKnown: "",
+  vaultAutoCommit: false,
+  vaultAutoCommitIntervalMinutes: 15,
 };
 
 export class MVASettingTab extends PluginSettingTab {
@@ -519,6 +535,31 @@ export class MVASettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(el).setName("Safety net").setHeading();
+
+    this.toggleSetting(
+      el,
+      "Auto-commit vault changes to git",
+      "Silently `git add -A && git commit` the vault after the agent writes files, so every mutation is recoverable. No-op (and silent) when the vault isn't a git repo or the git binary can't be found; never blocks a chat turn.",
+      "vaultAutoCommit"
+    );
+
+    new Setting(el)
+      .setName("Auto-commit fallback interval")
+      .setDesc(
+        "Minutes between periodic safety-net checks, independent of the debounce after a write. Catches a dirty tree even without a tracked agent write."
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("15")
+          .setValue(String(s.vaultAutoCommitIntervalMinutes))
+          .onChange(async (v) => {
+            const n = Number.parseInt(v, 10);
+            if (Number.isFinite(n) && n > 0) s.vaultAutoCommitIntervalMinutes = n;
+            await this.plugin.saveSettings();
+          })
+      );
   }
 
   /* ------------------------------- Memory ------------------------------- */
@@ -537,6 +578,12 @@ export class MVASettingTab extends PluginSettingTab {
       "Write vault memory",
       "Let the agent capture decisions, learnings, and session-log entries into _system/ — every write is still permission-gated. Claude only.",
       "memoryWriteEnabled"
+    );
+    this.toggleSetting(
+      el,
+      "Self-writing memory",
+      "After each healthy turn, a cheap background observer proposes durable memories and appends them to the store as @generated entries — you can review or undo each write. Off by default; runs only when Write vault memory is also on. Claude only.",
+      "selfWritingMemory"
     );
 
     new Setting(el)

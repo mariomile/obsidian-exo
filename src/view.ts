@@ -27,6 +27,7 @@ import type {
 } from "./providers/types";
 import { toolMeta, toolFilePath, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
 import { createObsidianToolServer, OBSIDIAN_READ_TOOLS, OBSIDIAN_MEMORY_TOOLS } from "./obsidian/tools";
+import { MemoryObserver, type ObserverWrite } from "./obsidian/observer";
 import { readBootContext } from "./obsidian/memory";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
@@ -54,8 +55,8 @@ import {
   windowLabel,
 } from "./core/rate-limit";
 import { buildOptionRows, type SelectOption } from "./core/option-filter";
-import { permDotRisk } from "./core/perm-dot";
 import { selectionPreview } from "./core/selection-preview";
+import { clampEffort, effortOptionsFor } from "./core/model-tuning";
 
 export type { AskQuestion } from "./core/model";
 
@@ -303,6 +304,8 @@ export class ChatView extends ItemView {
   private recapHost: HTMLElement | null = null;
   private recapPanel: RecapPanel | null = null;
   private recapResizeObserver: ResizeObserver | null = null;
+  /** Self-Writing Memory observer — lazily created, one per view, disposed on close. */
+  private memoryObserver: MemoryObserver | null = null;
   /** In-flight tool phrase for the Context panel's live activity row while a turn
    *  streams (set on tool-call-start, cleared on result/turn-end). Only the idle
    *  path — `updateRecap()` — ignores it; `updateContextLive()` renders it. */
@@ -319,10 +322,9 @@ export class ChatView extends ItemView {
   private brandDot!: HTMLElement;
   // The tune dialog (model + effort + permission) exposes these refresh fns:
   // refreshModelChip re-renders the open dialog's model group; refreshPermChipFn
-  // re-renders the permission/sandbox group AND the always-visible permission dot.
+  // re-sync the tuning cascade (model/effort/permission chips) on external changes.
   private refreshModelChip: () => void = () => {};
   private refreshPermChipFn: () => void = () => {};
-  private permDotEl: HTMLElement | null = null;
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
   private manualAttached: string[] = [];
@@ -419,7 +421,7 @@ export class ChatView extends ItemView {
         if (ac && ac.offsetParent !== null) return; // overlay open — it wins
         e.preventDefault();
         e.stopPropagation();
-        this.stop();
+        this.stop("esc");
       },
       true
     );
@@ -501,6 +503,8 @@ export class ChatView extends ItemView {
     }
     // this.active is always within this.convos, so the loop covers it.
     for (const c of this.convos) this.dropSession(c);
+    this.memoryObserver?.dispose();
+    this.memoryObserver = null;
   }
 
   /** Focus the composer input — called when the view is opened via ribbon/command. */
@@ -607,7 +611,10 @@ export class ChatView extends ItemView {
             // Per-session server + per-convo closure: ask_user always renders into
             // the conversation that owns this session, never a parallel one.
             this.askBridge(c, qs),
-          s.memoryReadEnabled
+          s.memoryReadEnabled,
+          // Inject the plugin's ONE shared store write-queue so the `remember`
+          // tool serializes against the observer's appends/undo (w1-1 contract).
+          this.plugin.memoryWriteQueue
         )
       : undefined;
 
@@ -1497,7 +1504,7 @@ export class ChatView extends ItemView {
       }
       if (e.key === "Escape" && this.streaming) {
         e.preventDefault();
-        this.stop();
+        this.stop("esc");
         return;
       }
       if (e.key === "Enter" && !e.shiftKey) {
@@ -1725,6 +1732,11 @@ export class ChatView extends ItemView {
     // the select chips) rather than the OS/Obsidian menu.
     this.buildAttachButton(tb);
 
+    // Tuning cascade, left-aligned: Model → Effort → Permission. Model comes
+    // first because the other two derive from it (07-05: replaces the 03-07
+    // tune dialog, which hid the cascade behind one sliders icon).
+    this.buildTuneChips(tb);
+
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
     // Context usage as a compact circular counter (donut ring). Hover for the
     // detailed breakdown, click to compact. See updateUsage for the fill logic.
@@ -1738,12 +1750,6 @@ export class ChatView extends ItemView {
     this.rateBadgeEl.hide();
     this.updateRateBadge();
 
-    // Tune dialog + permission dot — model / effort / permission collapsed into
-    // one icon and a single always-visible risk dot (03-07: the three chips were
-    // too heavy). buildTuneDialog also wires refreshModelChip/refreshPermChipFn to
-    // re-render the open dialog and the dot on external changes.
-    this.buildTuneDialog(tb);
-
     // Send button — lives inside the input box, right side.
     this.sendBtn = tb.createEl("button", { cls: "mva-send", attr: { "aria-label": "Send" } });
     setIcon(this.sendBtn, "arrow-up");
@@ -1752,138 +1758,92 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * The consolidated tune control: one `sliders-horizontal` icon opens a single
-   * popover (same `.mva-sel-pop` look as the chips) with three labeled groups —
-   * Model, Effort, and Permission (Claude) or Sandbox (Codex). Each group renders
-   * via the shared renderOptionRows; picking applies immediately and the popover
-   * stays open (close on outside-click / Escape). A small always-visible permission
-   * dot sits beside the icon (color = active risk) and also opens the dialog.
+   * The tuning cascade: three quiet chips left of the spacer — Model, Effort,
+   * Permission (Claude) / Sandbox (Codex) — each opening its own popover via
+   * the shared buildSelectChip. Model leads because the other two derive from
+   * it: effort tiers are per-model (core/model-tuning.ts — hidden for models
+   * with no effort support, clamped on switch so an invalid tier never reaches
+   * the CLI), and the third chip flips Permission↔Sandbox with the provider.
    */
-  private buildTuneDialog(tb: HTMLElement): void {
+  private buildTuneChips(tb: HTMLElement): void {
     const s = this.plugin.settings;
-    const wrap = tb.createDiv({ cls: "mva-sel mva-tune" });
-    const btn = wrap.createDiv({ cls: "mva-tb-btn", attr: { "aria-label": "Model, effort & permissions" } });
-    setIcon(btn, "sliders-horizontal");
-    setTooltip(btn, "Model, effort & permissions");
-    const pop = wrap.createDiv({ cls: "mva-sel-pop mva-tune-pop" });
-    pop.hide();
+    const effortOpts = () => effortOptionsFor(this.provider, this.model);
+    // A stale stored combo (e.g. effort "max" saved, then a Codex model
+    // restored) must never reach the provider — clamp on build and on every
+    // model/provider change.
+    const clampNow = () => {
+      const next = clampEffort(s.effort || "default", effortOpts());
+      if (next !== (s.effort || "default")) {
+        s.effort = next;
+        void this.plugin.saveSettings();
+      }
+    };
 
-    // Always-visible permission dot — reflects the active permission/sandbox risk.
-    const dot = tb.createDiv({ cls: "mva-perm-dot", attr: { "aria-label": "Permission mode" } });
-    this.permDotEl = dot;
-    this.refreshPermDot();
-
-    // Render (or re-render) the three groups. Kept as a closure so external
-    // changes (provider switch, plan toggle) can refresh the open dialog.
-    const renderGroups = () => {
-      pop.empty();
-      // Model — unified across BOTH providers; each row carries the brand dot, and
-      // picking a model from the other backend switches provider + model together.
-      this.tuneGroup(
-        pop,
-        "Model",
+    // Model — unified across BOTH providers; each row carries the brand dot,
+    // and picking a model from the other backend switches provider + model
+    // together (applyModelChoice → onProviderChange).
+    const model = this.buildSelectChip(tb, {
+      ariaLabel: "Model",
+      getLabel: () => this.modelLabel(),
+      getOptions: () =>
         this.allModelChoices().map((m) => ({
           value: m.id,
           label: m.label,
           dotColor: ADAPTERS[m.provider].brandColor,
           group: m.provider === "claude" ? "Claude" : "Codex",
         })),
-        this.model,
-        (v) => {
-          this.applyModelChoice(v);
-          // Switching provider flips Permission↔Sandbox — rebuild if still open.
-          if (open) renderGroups();
-        },
-        () => close()
-      );
-      // Effort.
-      this.tuneGroup(
-        pop,
-        "Effort",
-        ChatView.EFFORT_OPTS.map(([value, label]) => ({ value, label })),
-        s.effort || "default",
-        (v) => {
-          s.effort = v;
-          void this.plugin.saveSettings();
-        },
-        () => close()
-      );
-      // Permission (Claude) or Sandbox (Codex) — the actual tool gate per provider.
-      if (this.provider === "codex") {
-        this.tuneGroup(
-          pop,
-          "Sandbox",
-          ChatView.CODEX_SANDBOX_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.codexSandboxRisk(v) })),
-          s.codexSandbox,
-          (v) => this.applyPermChoice(v),
-          () => close()
-        );
-      } else {
-        this.tuneGroup(
-          pop,
-          "Permission",
-          ChatView.PERM_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.permRisk(v) })),
-          s.permissionMode,
-          (v) => this.applyPermChoice(v),
-          () => close()
-        );
-      }
-    };
-
-    let open = false;
-    const onDoc = (e: MouseEvent) => {
-      if (!wrap.contains(e.target as Node) && e.target !== dot) close();
-    };
-    const close = () => {
-      open = false;
-      pop.hide();
-      btn.removeClass("is-open");
-      document.removeEventListener("click", onDoc, true);
-    };
-    const doOpen = () => {
-      if (open) return close();
-      renderGroups();
-      open = true;
-      btn.addClass("is-open");
-      pop.show();
-      document.addEventListener("click", onDoc, true);
-      setTimeout(() => pop.querySelector<HTMLElement>(".mva-tune-rows")?.focus(), 0);
-    };
-    this.clickable(btn, (e) => {
-      e.stopPropagation();
-      doOpen();
+      getCurrent: () => this.model,
+      onSelect: (v) => this.applyModelChoice(v),
     });
-    this.clickable(dot, (e) => {
-      e.stopPropagation();
-      doOpen();
+
+    // Effort — options follow the chosen model. Reads "Effort" while on the
+    // CLI default so a bare tier name never floats without context.
+    const effort = this.buildSelectChip(tb, {
+      ariaLabel: "Effort",
+      getLabel: () => {
+        const e = s.effort || "default";
+        return e === "default" ? "Effort" : ChatView.effortLabel(e);
+      },
+      getOptions: () => (effortOpts() ?? []).map(([value, label]) => ({ value, label })),
+      getCurrent: () => s.effort || "default",
+      onSelect: (v) => {
+        s.effort = v;
+        void this.plugin.saveSettings();
+      },
     });
-    this.register(() => close());
 
-    // External-change hooks: model group re-renders on provider change; the perm
-    // hook re-renders the perm/sandbox group and the dot (plan toggle, restore).
-    this.refreshModelChip = () => {
-      if (open) renderGroups();
-    };
-    this.refreshPermChipFn = () => {
-      this.refreshPermDot();
-      if (open) renderGroups();
-    };
-  }
+    // Permission (Claude) or Sandbox (Codex) — the actual tool gate. The chip
+    // carries the risk coloring the old standalone dot had.
+    const perm = this.buildSelectChip(tb, {
+      ariaLabel: "Permission mode",
+      getLabel: () =>
+        this.provider === "codex"
+          ? ChatView.codexSandboxLabel(s.codexSandbox)
+          : ChatView.permLabel(s.permissionMode),
+      getOptions: () =>
+        this.provider === "codex"
+          ? ChatView.CODEX_SANDBOX_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.codexSandboxRisk(v) }))
+          : ChatView.PERM_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.permRisk(v) })),
+      getCurrent: () => (this.provider === "codex" ? s.codexSandbox : s.permissionMode),
+      onSelect: (v) => this.applyPermChoice(v),
+      chipRisk: () =>
+        this.provider === "codex"
+          ? ChatView.codexSandboxRisk(s.codexSandbox)
+          : ChatView.permRisk(s.permissionMode),
+    });
 
-  /** One labeled group inside the tune dialog: a quiet label + a rows container
-   *  rendered by the shared renderOptionRows (immediate-apply, stays open). */
-  private tuneGroup(
-    pop: HTMLElement,
-    label: string,
-    options: SelectOption[],
-    current: string,
-    onPick: (value: string) => void,
-    onEscape: () => void
-  ): void {
-    const group = pop.createDiv({ cls: "mva-tune-group" });
-    group.createDiv({ cls: "mva-tune-label", text: label });
-    const rows = group.createDiv({ cls: "mva-tune-rows" });
-    this.renderOptionRows(rows, options, current, { onPick, onEscape });
+    // External-change hook shared by every path that shifts the cascade's
+    // inputs: model pick, provider switch, plan toggle, restore, tab switch.
+    const refreshAll = () => {
+      clampNow();
+      model.refresh();
+      effort.refresh();
+      effort.wrap.toggle(effortOpts() !== null);
+      perm.refresh();
+    };
+    refreshAll();
+    this.refreshModelChip = refreshAll;
+    this.refreshPermChipFn = refreshAll;
   }
 
   /** Apply a model pick from the tune dialog (mirrors the old model chip's
@@ -1905,10 +1865,13 @@ export class ChatView extends ItemView {
     // Re-render the statusline's model label immediately — no new usage event
     // fires just from a model switch, so refresh with cached data.
     this.updateUsage(this.lastUsage);
+    // Effort options (and the current tier's validity) follow the model —
+    // re-sync the whole cascade.
+    this.refreshModelChip();
   }
 
   /** Apply a permission (Claude) or sandbox (Codex) pick; keeps setting, live
-   *  session, and the permission dot in sync (mirrors the old perm chip). */
+   *  session, and the permission chip in sync. */
   private applyPermChoice(v: string): void {
     const s = this.plugin.settings;
     if (this.provider === "codex") {
@@ -1922,24 +1885,14 @@ export class ChatView extends ItemView {
       void this.plugin.saveSettings();
       this.active.session?.setPermissionMode?.(s.permissionMode);
     }
-    this.refreshPermDot();
-  }
-
-  /** Repaint the always-visible permission dot: risk class drives the color, the
-   *  tooltip names the current mode. Provider-aware (permission vs sandbox). */
-  private refreshPermDot(): void {
-    if (!this.permDotEl) return;
-    const s = this.plugin.settings;
-    const mode = this.provider === "codex" ? s.codexSandbox : s.permissionMode;
-    const label = this.provider === "codex" ? ChatView.codexSandboxLabel(s.codexSandbox) : ChatView.permLabel(s.permissionMode);
-    this.permDotEl.className = `mva-perm-dot ${permDotRisk(this.provider, mode)}`;
-    setTooltip(this.permDotEl, this.provider === "codex" ? `Sandbox: ${label}` : `Permission: ${label}`);
+    this.refreshPermChipFn();
   }
 
   /**
    * Generic toolbar selector — a chip that opens a Permission-style popover list.
-   * Reused by provider / model / effort / permission. Returns a `refresh()` that
-   * re-syncs the chip label (and risk color) after external changes.
+   * Reused by the model / effort / permission cascade. Returns `refresh()` (re-sync
+   * the chip label and risk color after external changes) plus the `wrap` element
+   * so callers can hide the whole control (e.g. effort on a model without it).
    */
   private buildSelectChip(
     tb: HTMLElement,
@@ -1951,7 +1904,7 @@ export class ChatView extends ItemView {
       onSelect: (value: string) => void;
       chipRisk?: () => RiskLevel;
     }
-  ): () => void {
+  ): { refresh: () => void; wrap: HTMLElement } {
     const wrap = tb.createDiv({ cls: "mva-sel" });
     const chip = wrap.createDiv({ cls: "mva-sel-chip", attr: { "aria-label": opts.ariaLabel } });
     const pop = wrap.createDiv({ cls: "mva-sel-pop" });
@@ -2002,7 +1955,7 @@ export class ChatView extends ItemView {
       document.addEventListener("click", onDoc, true);
     });
     this.register(() => close());
-    return refresh;
+    return { refresh, wrap };
   }
 
   /**
@@ -2801,6 +2754,70 @@ export class ChatView extends ItemView {
       .finally(() => {
         if (c.titleAbort === ctrl) c.titleAbort = null;
       });
+  }
+
+  /** Lazily build the Self-Writing Memory observer for this view. */
+  private observer(): MemoryObserver {
+    if (!this.memoryObserver) {
+      this.memoryObserver = new MemoryObserver(
+        this.app,
+        (prompt, signal) => this.plugin.runObserver(prompt, signal),
+        // Same shared store write-queue the `remember` tool uses — observer
+        // appends and undo serialize against every other store writer (w1-1).
+        this.plugin.memoryWriteQueue
+      );
+    }
+    return this.memoryObserver;
+  }
+
+  /** Self-Writing Memory: after a HEALTHY turn, fire the observer off the critical
+   *  path. Gated to Claude + both toggles; never blocks the turn or the next one.
+   *  On a successful write, render a discreet veto row (review · undo) into the turn. */
+  private observeTurn(c: Convo, el: HTMLElement, userText: string, assistantText: string): void {
+    const s = this.plugin.settings;
+    if (!s.selfWritingMemory || !s.memoryWriteEnabled) return;
+    if (c.provider !== "claude") return;
+    if (!userText.trim() || !assistantText.trim()) return;
+    void this.observer()
+      .observe({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown")
+      .then((write) => {
+        if (!write || write.entries.length === 0) return;
+        if (!this.convos.includes(c) || !el.isConnected) return; // turn removed/rebuilt
+        this.renderMemoryVeto(el, write);
+      })
+      .catch(() => {
+        /* never surface into the turn */
+      });
+  }
+
+  /** Discreet, non-blocking "N memories written — review · undo" indicator. */
+  private renderMemoryVeto(el: HTMLElement, write: ObserverWrite): void {
+    const n = write.entries.length;
+    const row = el.createDiv({ cls: "mva-faint mva-mem-veto" });
+    row.createSpan({ text: `${n} ${n === 1 ? "memory" : "memories"} written — ` });
+    const review = row.createEl("a", { text: "review", href: "#" });
+    this.clickable(review, (e) => {
+      e.preventDefault();
+      // Reveal the store file the entries were appended to.
+      void this.app.workspace.openLinkText(write.snapshot.path, "", "tab");
+    });
+    row.createSpan({ text: " · " });
+    const undo = row.createEl("a", { text: "undo", href: "#" });
+    this.clickable(undo, (e) => {
+      e.preventDefault();
+      void this.observer()
+        // Undo strips exactly this pass's entry ids from the CURRENT file —
+        // any @user entry written in between is preserved (never a blind restore).
+        .undo(write)
+        .then(() => {
+          row.empty();
+          row.createSpan({ text: `${n === 1 ? "Memory" : "Memories"} reverted.` });
+        })
+        .catch(() => {
+          row.empty();
+          row.createSpan({ text: "Couldn't undo — the store file may have changed." });
+        });
+    });
   }
 
   private addUserTurn(c: Convo, text: string, images?: ImageAttachment[]): void {
@@ -4382,7 +4399,7 @@ export class ChatView extends ItemView {
     }
   }
 
-  private stop(): void {
+  private stop(source: "esc" | "button" = "button"): void {
     const c = this.active;
     c.stopped = true;
     c.queue = [];
@@ -4390,6 +4407,11 @@ export class ChatView extends ItemView {
     c.pendingPerm?.(); // cancel any open permission card
     c.pendingAsk?.(); // cancel any open ask card
     c.session?.interrupt();
+    // Esc is heavily overloaded in Obsidian and the view-level handler catches it
+    // wherever focus sits inside the view — an accidental press silently killed
+    // turns with zero attribution (2026-07-05: two "Exo si è bloccato" reports
+    // that were really unnoticed Esc stops). The button gives its own feedback.
+    if (source === "esc") new Notice("Exo — stopped (Esc)");
   }
 
   private send(): void {
@@ -4859,6 +4881,13 @@ export class ChatView extends ItemView {
       window.clearInterval(workingTimer); // stop the elapsed ticker
       this.removeWorking(ctx); // drop the working row for good
       await Promise.all(snapshots); // finalize the checkpoint even if the turn errored
+      // Git auto-commit safety net: hand off the count of files this turn wrote
+      // (however it ended — success, error, or user-stopped) so the plugin can
+      // schedule a debounced commit. Synchronous and cheap — never awaited, never
+      // on the turn's critical path; the plugin no-ops entirely when the setting
+      // is off.
+      const writeCount = ctx.touched.filter((t) => t.kind === "write").length;
+      if (writeCount > 0) this.plugin.noteVaultWrite(writeCount);
       // If the turn died with an interactive card still open (session crash while a
       // permission/ask was pending), CANCEL it — otherwise the card stays live in
       // the transcript and the in-process ask promise hangs forever. No-op on clean
@@ -4868,12 +4897,11 @@ export class ChatView extends ItemView {
       c.pendingAsk?.();
       c.pendingAsk = null;
       c.currentCtx = null; // this turn is over — late ask_user calls reject cleanly
-      // Confirm a user-initiated stop when nothing substantive was rendered.
-      if (
-        c.stopped &&
-        !ctx.fullText.trim() &&
-        !ctx.el.querySelector(".mva-faint, .mva-inline-error, .mva-onboard")
-      ) {
+      // Confirm a user-initiated stop — ALWAYS, even mid-work. A turn that had
+      // already streamed text/tool cards used to end with zero feedback when
+      // stopped (guarded on "nothing rendered"), which read as "Exo è bloccato":
+      // the user couldn't tell an aborted turn from one still thinking.
+      if (c.stopped && !ctx.el.querySelector(".mva-faint, .mva-inline-error, .mva-onboard")) {
         ctx.el.addClass("mva-aborted");
         ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
       }
@@ -4928,6 +4956,11 @@ export class ChatView extends ItemView {
       ) {
         c.titledByAi = true; // fire once, even if the call later fails
         this.aiTitle(c, ctx.userText, ctx.fullText);
+      }
+      // Self-Writing Memory: observe HEALTHY turns only (not poisoned/errored, not
+      // stopped). Fires off the critical path — never delays the next user turn.
+      if (!poisoned && !c.stopped && ctx.fullText.trim()) {
+        this.observeTurn(c, ctx.el, ctx.userText, ctx.fullText);
       }
       if (plan.enqueueRecapRetry) {
         // Stage 2: auto-retry the SAME user message once with a private recap
