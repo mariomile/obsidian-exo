@@ -20,6 +20,11 @@ const SYNC_STATE_PATH = "_system/memory/claudemem-sync-state.json";
 /** Verified location of the claude-mem SQLite DB (inspected 2026-07-05). */
 const DB_PATH = path.join(os.homedir(), ".claude-mem", "claude-mem.db");
 
+/** Log the first read failure per plugin session only — the dream pass may call
+ *  this repeatedly (every run), and a persistently-missing db/binary must not
+ *  spam the console on every attempt. */
+let hasWarnedOnce = false;
+
 /** Read + parse the import watermark (zero watermark on missing/garbage). */
 export async function readSyncState(app: App): Promise<SyncState> {
   try {
@@ -59,7 +64,8 @@ function sqlQuote(s: string): string {
 }
 
 export interface ReadObservationsOpts {
-  /** Project filter (path-slug form). */
+  /** Project filter — claude-mem's `project` column value(s), e.g. "marioverse.ai"
+   *  (verified 2026-07-05: it's the vault/repo directory basename, not a path-slug). */
   projects: string[];
   /** Max rows to read (N=100 for the dream stage). */
   limit: number;
@@ -96,7 +102,10 @@ export async function readUnimportedObservations(
     });
     return parseObservations(stdout);
   } catch (err) {
-    console.warn("[Exo] claude-mem read skipped (db/sqlite3 unavailable or query error):", err);
+    if (!hasWarnedOnce) {
+      hasWarnedOnce = true;
+      console.warn("[Exo] claude-mem read skipped (db/sqlite3 unavailable or query error):", err);
+    }
     return [];
   }
 }

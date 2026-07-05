@@ -92,7 +92,10 @@ export interface MVASettings {
   /** Defrag threshold: when the store/ or learnings/ dir exceeds this many files,
    *  the dream LLM prompt asks for consolidation merges. */
   memoryFileBudget: number;
-  /** claude-mem project filter (path-slug form) for the import stage. */
+  /** claude-mem project filter for the import stage. NOT a path-slug — verified
+   *  2026-07-05 against the real DB: claude-mem's `project` column stores the
+   *  vault/repo's directory basename (e.g. "marioverse.ai"), not the CWD-derived
+   *  slug used elsewhere. */
   claudememProjects: string[];
   /** Canonical keys of dream proposals already applied — dedup across runs. */
   appliedProposalKeys: string[];
@@ -169,7 +172,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   lastDreamPass: 0,
   dreamLlmEnabled: false,
   memoryFileBudget: 25,
-  claudememProjects: ["-Users-mariomiletta-Vaults-marioverse-ai"],
+  claudememProjects: ["marioverse.ai"],
   appliedProposalKeys: [],
   backgroundPassesEnabled: true,
   backgroundDailyTokenBudget: 200000,
