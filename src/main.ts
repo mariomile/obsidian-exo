@@ -727,8 +727,10 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
-  /** Roll the daily ledger and answer whether a background pass may spend `estimate`. */
-  private checkBackgroundBudget(estimate: number): boolean {
+  /** Roll the daily ledger and answer whether a background pass may spend `estimate`.
+   *  Not `private`: the observer-cadence step passes (view.ts, W2-3) gate through
+   *  this same W0 ledger as the dream-LLM stage does. */
+  checkBackgroundBudget(estimate: number): boolean {
     const s = this.settings;
     const now = Date.now();
     s.backgroundBudgetLedger = resetIfNewDay(s.backgroundBudgetLedger, now);
@@ -739,8 +741,9 @@ export default class ExoPlugin extends Plugin {
     });
   }
 
-  /** Add `tokens` to the daily background ledger and persist. */
-  private recordBackgroundSpend(tokens: number): void {
+  /** Add `tokens` to the daily background ledger and persist. Not `private` —
+   *  see {@link checkBackgroundBudget}. */
+  recordBackgroundSpend(tokens: number): void {
     const s = this.settings;
     s.backgroundBudgetLedger = recordSpend(s.backgroundBudgetLedger, tokens, Date.now());
     void this.saveSettings();
