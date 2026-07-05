@@ -1,60 +1,9 @@
 import { App, Modal, Notice, setIcon } from "obsidian";
+import { wordDiff } from "../core/inline-ai";
+
+export { wordDiff };
 
 export type InlineEditRunner = (instruction: string, text: string, signal: AbortSignal) => Promise<string>;
-
-interface DiffSeg {
-  type: "same" | "add" | "del";
-  text: string;
-}
-
-/** Word-level diff via LCS. Returns ordered segments for rendering. */
-export function wordDiff(a: string, b: string): DiffSeg[] {
-  const split = (s: string) => s.split(/(\s+)/).filter((t) => t.length > 0);
-  const aw = split(a);
-  const bw = split(b);
-  const n = aw.length;
-  const m = bw.length;
-  // Guard: the LCS matrix is O(n*m). For very large inputs (e.g. diffing a whole
-  // big note) skip it and show a coarse whole-block replacement instead of
-  // freezing the UI allocating tens of millions of cells.
-  const MAX_DIFF_CELLS = 2_000_000;
-  if (n * m > MAX_DIFF_CELLS) {
-    if (a === b) return [{ type: "same", text: a }];
-    const out: DiffSeg[] = [];
-    if (a) out.push({ type: "del", text: a });
-    if (b) out.push({ type: "add", text: b });
-    return out;
-  }
-  // LCS table
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] = aw[i] === bw[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
-  }
-  const out: DiffSeg[] = [];
-  const push = (type: DiffSeg["type"], text: string) => {
-    const last = out[out.length - 1];
-    if (last && last.type === type) last.text += text;
-    else out.push({ type, text });
-  };
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (aw[i] === bw[j]) {
-      push("same", aw[i]);
-      i++;
-      j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      push("del", aw[i++]);
-    } else {
-      push("add", bw[j++]);
-    }
-  }
-  while (i < n) push("del", aw[i++]);
-  while (j < m) push("add", bw[j++]);
-  return out;
-}
 
 /**
  * Inline-edit modal: takes a selection, asks for an instruction, runs the agent
