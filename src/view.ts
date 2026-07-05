@@ -24,6 +24,13 @@ import type {
 import { toolMeta, toolFilePath, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
 import { createObsidianToolServer, OBSIDIAN_READ_TOOLS, OBSIDIAN_MEMORY_TOOLS } from "./obsidian/tools";
 import { MemoryObserver, type ObserverWrite } from "./obsidian/observer";
+import {
+  initialCadenceState,
+  recordStep,
+  pendingDelta,
+  advanceWatermark,
+  type CadenceState,
+} from "./core/observer-cadence";
 import { readBootContext } from "./obsidian/memory";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
@@ -123,6 +130,14 @@ export interface Convo {
    *  with this true also poisons, recovery escalates to a fresh session + recap
    *  (see runTurn's two-stage recovery). Cleared on any healthy turn. */
   resumeRisky?: boolean;
+  /** Observer cadence (W2-3) — runtime-only, never persisted. `cadence` is the
+   *  pure per-conversation step-counter/watermark state (used only in
+   *  `observerCadence: "every-n-steps"`; harmless dead weight otherwise).
+   *  `cadenceTurnFlushLen` is how many chars of THIS turn's accumulated
+   *  assistant text a step pass already sent — reset at the top of each new
+   *  turn — so the end-of-turn pass only sends the unsent tail. */
+  cadence?: CadenceState;
+  cadenceTurnFlushLen?: number;
 }
 
 interface AssistantCtx {
@@ -803,6 +818,8 @@ export class ChatView extends ItemView {
         currentCtx: null,
         tailSurfaceEl: null,
         compactNudged: false,
+        cadence: initialCadenceState(),
+        cadenceTurnFlushLen: 0,
       };
       if (wantDom.has(c.id)) this.renderConvoDom(c);
       this.wireScroll(c);
@@ -921,6 +938,8 @@ export class ChatView extends ItemView {
       currentCtx: null,
       tailSurfaceEl: null,
       compactNudged: false,
+      cadence: initialCadenceState(),
+      cadenceTurnFlushLen: 0,
     };
     this.wireScroll(c);
     return c;
@@ -1609,6 +1628,94 @@ export class ChatView extends ItemView {
       })
       .catch(() => {
         /* never surface into the turn */
+      });
+  }
+
+  /** Rough token estimate for a step-pass call — the digest is capped small
+   *  (current turn's user text + accumulated assistant text so far), so this
+   *  sits well under the dream-LLM stage's estimate. Mirrors the "estimate
+   *  before, record actual after" W0 pattern used by `maybeRunDreamLlm`. */
+  private static readonly STEP_OBSERVE_TOKEN_ESTIMATE = 1500;
+
+  /** Observer cadence dispatch (W2-3), called once per completed turn — the
+   *  exact spot the always-on end-of-turn observer used to fire from.
+   *
+   *  `observerCadence: "session-end"` (default): byte-for-byte the original
+   *  behavior — `observeTurn` on the full turn, cadence state untouched.
+   *
+   *  `observerCadence: "every-n-steps"`: a step pass may already have flushed
+   *  part of this turn's assistant text (tracked in `cadenceTurnFlushLen`,
+   *  reset below for the next turn) — only the unsent tail is handed to the
+   *  observer, and the conversation's watermark is advanced to cover the
+   *  whole turn, so nothing in it is ever sent twice. */
+  private observeTurnEnd(c: Convo, ctx: AssistantCtx): void {
+    const s = this.plugin.settings;
+    if (s.observerCadence !== "every-n-steps") {
+      this.observeTurn(c, ctx.el, ctx.userText, ctx.fullText);
+      return;
+    }
+    const flushed = c.cadenceTurnFlushLen ?? 0;
+    const assistantTail = ctx.fullText.slice(flushed);
+    c.cadenceTurnFlushLen = 0; // next turn starts with a clean slate
+    const cadence = c.cadence ?? initialCadenceState();
+    c.cadence = advanceWatermark(cadence, cadence.stepCount); // this turn is now fully covered
+    if (!assistantTail.trim()) return; // a step pass already captured everything this turn
+    this.observeTurn(c, ctx.el, ctx.userText, assistantTail);
+  }
+
+  /** Observer cadence (W2-3): count one real tool-call step for `c` and, when
+   *  `observerCadence: "every-n-steps"` crosses an interval boundary, flush a
+   *  delta capture over whatever this turn has produced so far — WITHOUT
+   *  waiting for the turn to end. No-op (state untouched) unless self-writing
+   *  memory is fully on and the setting is every-n-steps. */
+  private maybeStepObserve(c: Convo, ctx: AssistantCtx): void {
+    const s = this.plugin.settings;
+    if (s.observerCadence !== "every-n-steps") return;
+    if (!s.selfWritingMemory || !s.memoryWriteEnabled) return;
+    if (c.provider !== "claude") return;
+    const cadence = c.cadence ?? initialCadenceState();
+    const stepped = recordStep(cadence, s.observerStepInterval);
+    c.cadence = stepped.state;
+    if (!stepped.fired) return;
+    const delta = pendingDelta(stepped.state, stepped.state.stepCount);
+    if (!delta) return; // defensive — a fresh fire always has something pending
+    this.runStepObserve(c, ctx, stepped.state.stepCount);
+  }
+
+  /** Actually run one every-n-steps delta pass: budget-checked through the W0
+   *  ledger (skip silently, no retry queue, when it denies), same observer
+   *  pipeline as the end-of-turn pass. Only the assistant text produced SINCE
+   *  the last flush (step pass or turn start) is sent — so back-to-back step
+   *  passes within one marathon turn never re-send the same content. Advances
+   *  the watermark and the turn's flush marker once the pass is attempted. */
+  private runStepObserve(c: Convo, ctx: AssistantCtx, toStepCount: number): void {
+    if (!this.plugin.checkBackgroundBudget(ChatView.STEP_OBSERVE_TOKEN_ESTIMATE)) {
+      console.info("[Exo] observer step-pass skipped: background budget exhausted or disabled.");
+      return; // no unbounded retry — the next boundary (step or end-of-turn) gets another try
+    }
+    const userText = ctx.userText;
+    const flushedSoFar = c.cadenceTurnFlushLen ?? 0;
+    const assistantDelta = ctx.fullText.slice(flushedSoFar);
+    // Snapshot NOW (before the async call) how much of this turn's assistant
+    // text this pass covers — text that streams in WHILE the call is in
+    // flight must stay unflushed for the next boundary, not silently skipped.
+    const coveredLen = ctx.fullText.length;
+    if (!userText.trim() || !assistantDelta.trim()) return; // nothing new yet this turn
+    const el = ctx.el;
+    void this.observer()
+      .observe({ user: userText, assistant: assistantDelta }, c.sessionId ?? "unknown")
+      .then((write) => {
+        this.plugin.recordBackgroundSpend(ChatView.STEP_OBSERVE_TOKEN_ESTIMATE);
+        // Regardless of whether a memory was actually written, the delta WAS
+        // shown to the model — mark it flushed so it's never re-sent.
+        c.cadenceTurnFlushLen = Math.max(c.cadenceTurnFlushLen ?? 0, coveredLen);
+        c.cadence = advanceWatermark(c.cadence ?? initialCadenceState(), toStepCount);
+        if (!write || write.entries.length === 0) return;
+        if (!this.convos.includes(c) || !el.isConnected) return; // turn removed/rebuilt
+        this.renderMemoryVeto(el, write);
+      })
+      .catch(() => {
+        /* never surface into the turn — a later boundary gets another chance */
       });
   }
 
@@ -3436,6 +3543,10 @@ export class ChatView extends ItemView {
           // watchdog on the longer tool window — a legit multi-minute tool emits no
           // events until its result, and must not be mistaken for a dead session.
           wd.toolStart(e.id);
+          // Observer cadence (W2-3): count this real tool-call as one step. Only
+          // meaningful in "every-n-steps" mode; a no-op (state kept, never fires)
+          // otherwise since the setting gate below short-circuits first.
+          this.maybeStepObserve(c, ctx);
           // File tracking runs before the nesting branch: subagent writes must stay
           // rewindable (checkpoint) and visible in the touched-notes footer.
           const fp = toolFilePath(e.name, e.input);
@@ -3801,7 +3912,7 @@ export class ChatView extends ItemView {
       // Self-Writing Memory: observe HEALTHY turns only (not poisoned/errored, not
       // stopped). Fires off the critical path — never delays the next user turn.
       if (!poisoned && !c.stopped && ctx.fullText.trim()) {
-        this.observeTurn(c, ctx.el, ctx.userText, ctx.fullText);
+        this.observeTurnEnd(c, ctx);
       }
       if (plan.enqueueRecapRetry) {
         // Stage 2: auto-retry the SAME user message once with a private recap

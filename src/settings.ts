@@ -54,6 +54,14 @@ export interface MVASettings {
    *  proposes durable memories and writes them to the store (with veto/undo).
    *  OFF by default — only runs when this AND memoryWriteEnabled are on. */
   selfWritingMemory: boolean;
+  /** Observer cadence (W2-3): "session-end" is the original always-on
+   *  end-of-turn capture (default, behavior-neutral). "every-n-steps" ALSO
+   *  flushes a delta capture every `observerStepInterval` tool-call steps
+   *  within a long turn — Letta-style sleep-time cadence, so context isn't
+   *  lost waiting for a marathon agentic turn to finish. */
+  observerCadence: "session-end" | "every-n-steps";
+  /** Tool-call step interval for `observerCadence: "every-n-steps"`. */
+  observerStepInterval: number;
   featureSurfacing: boolean;
   featureWikilinkify: boolean;
   /** Open notes the agent edits in a tab beside the chat, live. */
@@ -145,6 +153,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   memoryReadEnabled: true,
   memoryWriteEnabled: true,
   selfWritingMemory: false,
+  observerCadence: "session-end",
+  observerStepInterval: 25,
   featureSurfacing: true,
   featureWikilinkify: true,
   revealEditedNotes: true,
@@ -614,6 +624,38 @@ export class MVASettingTab extends PluginSettingTab {
       "After each healthy turn, a cheap background observer proposes durable memories and appends them to the store as @generated entries — you can review or undo each write. Off by default; runs only when Write vault memory is also on. Claude only.",
       "selfWritingMemory"
     );
+
+    new Setting(el)
+      .setName("Observer cadence")
+      .setDesc(
+        "When self-writing memory captures. \"End of turn\" (default) is the behavior above, unchanged. \"Every N tool-call steps\" ALSO flushes a delta capture partway through a long, tool-call-heavy turn — so context isn't lost waiting for it to finish — then the end-of-turn pass only covers whatever's left. Step passes respect the background-AI budget below."
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ "session-end": "End of turn", "every-n-steps": "Every N tool-call steps" })
+          .setValue(s.observerCadence)
+          .onChange(async (v) => {
+            s.observerCadence = v as "session-end" | "every-n-steps";
+            await this.plugin.saveSettings();
+            this.display();
+          })
+      );
+
+    if (s.observerCadence === "every-n-steps") {
+      new Setting(el)
+        .setName("Observer step interval")
+        .setDesc("Flush a delta capture every this many tool-call steps within a conversation.")
+        .addText((t) =>
+          t
+            .setPlaceholder("25")
+            .setValue(String(s.observerStepInterval))
+            .onChange(async (v) => {
+              const n = Number.parseInt(v, 10);
+              if (Number.isFinite(n) && n > 0) s.observerStepInterval = n;
+              await this.plugin.saveSettings();
+            })
+        );
+    }
 
     new Setting(el)
       .setName("Memory dream pass")
