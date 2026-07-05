@@ -10,6 +10,7 @@ import {
   resolveSupersedence,
   type MemoryEntry,
 } from "../core/memory-store";
+import { WriteQueue } from "../core/write-queue";
 
 /** Folder holding the append-only Memory Union Store (monthly markdown files). */
 const MEMORY_STORE_DIR = "_system/memory/store";
@@ -91,6 +92,14 @@ export function createObsidianToolServer(
     if (!f) throw new Error(`Note not found: ${target}`);
     return f;
   };
+
+  /**
+   * One serialized write path for ALL appends to the Memory Union Store. Every
+   * store writer (the `remember` tool today; the future observer / dream passes)
+   * MUST enqueue here so concurrent read-modify-write cycles never interleave or
+   * clobber a monthly store file.
+   */
+  const memoryWriteQueue = new WriteQueue();
 
   /* ----------------------------- read ----------------------------- */
 
@@ -517,19 +526,25 @@ export function createObsidianToolServer(
         at,
         session: "unknown",
         tags: args.tags ?? [],
+        // `remember` captures the user's own words — always @user provenance.
+        source: "user",
         ...(args.supersedes ? { supersedes: args.supersedes } : {}),
         text: args.text,
       };
       const path = `${MEMORY_STORE_DIR}/${monthFileName(at)}`;
       const block = formatEntry(entry);
-      const existing = app.vault.getAbstractFileByPath(path);
-      if (existing instanceof TFile) {
-        const cur = await app.vault.read(existing);
-        await app.vault.modify(existing, `${cur.replace(/\s+$/, "")}\n\n${block}\n`);
-      } else {
-        await ensureParentFolder(app, path);
-        await app.vault.create(path, `${block}\n`);
-      }
+      // Serialize the read-modify-write through the shared queue so concurrent
+      // store writers never interleave or clobber the monthly file.
+      await memoryWriteQueue.enqueue(async () => {
+        const existing = app.vault.getAbstractFileByPath(path);
+        if (existing instanceof TFile) {
+          const cur = await app.vault.read(existing);
+          await app.vault.modify(existing, `${cur.replace(/\s+$/, "")}\n\n${block}\n`);
+        } else {
+          await ensureParentFolder(app, path);
+          await app.vault.create(path, `${block}\n`);
+        }
+      });
       return ok(
         `Remembered ${entry.id} (${entry.kind})${entry.supersedes ? `, supersedes ${entry.supersedes}` : ""}.`
       );
@@ -560,7 +575,9 @@ export function createObsidianToolServer(
         .map(({ entry }) => {
           const date = new Date(entry.at).toISOString().slice(0, 10);
           const tags = entry.tags.length ? ` · tags: ${entry.tags.join(", ")}` : "";
-          return `${entry.id} · ${entry.kind} · ${date}${tags}\n${entry.text}`;
+          // Mark autonomously-written memories; user memories need no marker.
+          const prov = entry.source === "generated" ? " · @generated" : "";
+          return `${entry.id} · ${entry.kind} · ${date}${tags}${prov}\n${entry.text}`;
         })
         .join("\n\n");
       return ok(body);
