@@ -3,22 +3,18 @@ import {
   WorkspaceLeaf,
   MarkdownRenderer,
   FileSystemAdapter,
-  FuzzySuggestModal,
   TFile,
-  TFolder,
   setIcon,
   setTooltip,
   Notice,
   Keymap,
 } from "obsidian";
-import { Autocomplete, type AcItem } from "./ui/autocomplete";
 import type ExoPlugin from "./main";
 import { resolveCli, describeError, isAbort } from "./cli";
 import { ADAPTERS } from "./providers/registry";
 import type {
   AgentEvent,
   AgentSession,
-  ContextUsage,
   ImageAttachment,
   PermissionMode,
   ProviderId,
@@ -37,10 +33,9 @@ import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
-import { openablePopover } from "./ui/popover";
+import { Composer } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { buildRelatedChips } from "./ui/related";
-import { PromptVarsModal, extractVars, fillVars } from "./ui/prompt-vars";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { groupRuns } from "./core/group-runs";
@@ -51,15 +46,6 @@ import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
 import { describeCliFailure } from "./core/errors";
 import { planInputParts, planStateText } from "./core/plan";
-import {
-  badgeState,
-  formatClock,
-  normalizeResetEpochMs,
-  windowLabel,
-} from "./core/rate-limit";
-import { buildOptionRows, type SelectOption } from "./core/option-filter";
-import { selectionPreview } from "./core/selection-preview";
-import { clampEffort, effortOptionsFor } from "./core/model-tuning";
 
 export type { AskQuestion } from "./core/model";
 
@@ -79,34 +65,6 @@ const MAX_CONVOS = 30;
 const MAX_PERSIST_OUTPUT = 2000;
 const MAX_CHECKPOINT_FILE = 64_000; // don't persist a rewind snapshot larger than this (bloat guard)
 
-/** Semantic risk modifier class for a toolbar selector option/chip ("" = neutral). */
-type RiskLevel = "" | "is-caution" | "is-danger";
-
-function arrayBufferToBase64(buf: ArrayBuffer): string {
-  let binary = "";
-  const bytes = new Uint8Array(buf);
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-/** Abbreviate a token count with k/M suffixes: 68000 → "68k", 1_500_000 → "1.5M". */
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
-  if (n >= 1000) return `${Math.round(n / 1000)}k`;
-  return String(n);
-}
-
-function extToMime(ext: string): string {
-  const e = ext.toLowerCase();
-  if (e === "jpg" || e === "jpeg") return "image/jpeg";
-  if (e === "gif") return "image/gif";
-  if (e === "webp") return "image/webp";
-  return "image/png";
-}
-
 interface ToolCard {
   card: HTMLElement;
   statusEl: HTMLElement;
@@ -124,7 +82,7 @@ interface ConvoData {
   messages: PersistedMessage[];
 }
 
-interface Convo {
+export interface Convo {
   id: string;
   listEl: HTMLElement;
   title: string;
@@ -264,15 +222,9 @@ let convoSeed = 0;
 export class ChatView extends ItemView {
   private provider: ProviderId;
   private model: string;
-  /** Circular context counter (donut ring) in the composer footer. */
-  private usageEl: HTMLElement | null = null;
-  /** Last usage payload received (or null) — cached so a model/provider change
-   *  alone (no new 'usage' event) can still re-render the counter. */
-  private lastUsage: ContextUsage | null = null;
-  /** Claude-plan quota badge next to the context ring (null until built). */
-  private rateBadgeEl: HTMLElement | null = null;
-  /** Last rate-limit snapshot for the active convo (null when none / API-key). */
-  private lastRateLimit: RateLimitInfo | null = null;
+  /** The composer subsystem (input box + toolbar + popovers + context row).
+   *  Owns its own DOM, images, selection chip, usage ring, and rate badge. */
+  private composer!: Composer;
   /** Also record the view-level prePlanMode so a plan-mode entry (Shift+Tab or
    *  the perm chip) can be restored to the exact prior mode once a plan is
    *  approved. Defaults to "default" — the safe post-approval build mode. */
@@ -315,29 +267,10 @@ export class ChatView extends ItemView {
   private currentActivity: { phrase: string } | null = null;
   /** Last computed wide state — only rebuild the Context panel on the transition. */
   private wasWide = false;
-  private composerEl!: HTMLElement;
-  /** One-shot "context is filling up" row under the composer (null when hidden). */
-  private compactNudgeEl: HTMLElement | null = null;
   private galleryEl: HTMLElement | null = null;
   private capsEl: HTMLElement | null = null;
-  private inputEl!: HTMLTextAreaElement;
-  private sendBtn!: HTMLButtonElement;
   private brandDot!: HTMLElement;
-  // The tune dialog (model + effort + permission) exposes these refresh fns:
-  // refreshModelChip re-renders the open dialog's model group; refreshPermChipFn
-  // re-sync the tuning cascade (model/effort/permission chips) on external changes.
-  private refreshModelChip: () => void = () => {};
-  private refreshPermChipFn: () => void = () => {};
-  private contextEl!: HTMLElement;
-  private excludeActiveNote = false;
-  private manualAttached: string[] = [];
-  /** The active editor's current selection, mirrored ambiently into the composer
-   *  as a click-to-attach "Selection" chip (null when there's no selection). Fed
-   *  by the selection observer via `setCurrentSelection`; transient, never persisted. */
-  private currentSelection: { text: string; path: string } | null = null;
   private lastPersistErrorNotice = 0;
-  private pendingImages: ImageAttachment[] = [];
-  private imagesEl!: HTMLElement;
   /** Whether the view auto-follows new content to the bottom. False once the
    *  user scrolls up, so streaming no longer yanks them back down. */
   private pinnedToBottom = true;
@@ -409,7 +342,7 @@ export class ChatView extends ItemView {
         window.open(external, "_blank");
       }
     });
-    this.buildComposer(this.listWrap);
+    this.buildComposer();
     // View-level Esc-to-stop: the composer's own Escape handler only fires while the
     // textarea is focused, but clicking into the transcript blurs it — so "esc to stop"
     // silently stopped working. A capture-phase listener on the whole view catches Esc
@@ -429,10 +362,10 @@ export class ChatView extends ItemView {
       true
     );
     await this.restore();
-    this.refreshContext();
+    this.composer.refreshContext();
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
-        this.refreshContext();
+        this.composer.refreshContext();
         this.refreshSurfacing();
       })
     );
@@ -510,41 +443,74 @@ export class ChatView extends ItemView {
     this.memoryObserver = null;
   }
 
+  /** Build the composer subsystem, wiring the narrow host adapter (turn engine,
+   *  shared model/provider/permission state, view services) it calls back into. */
+  private buildComposer(): void {
+    const self = this;
+    this.composer = new Composer({
+      app: this.app,
+      plugin: this.plugin,
+      listWrap: this.listWrap,
+      get active() {
+        return self.active;
+      },
+      get streaming() {
+        return self.streaming;
+      },
+      get provider() {
+        return self.provider;
+      },
+      set provider(v: ProviderId) {
+        self.provider = v;
+      },
+      get model() {
+        return self.model;
+      },
+      set model(v: string) {
+        self.model = v;
+      },
+      get prePlanMode() {
+        return self.prePlanMode;
+      },
+      set prePlanMode(v: PermissionMode) {
+        self.prePlanMode = v;
+      },
+      get sessionCaps() {
+        return self.sessionCaps;
+      },
+      register: (cb) => this.register(cb),
+      send: () => this.send(),
+      stop: (source) => this.stop(source),
+      runTurn: (c, text, images) => {
+        void this.runTurn(c, text, images);
+      },
+      renderQueue: (c) => this.renderQueue(c),
+      compactActive: (instructions) => this.compactActive(instructions),
+      togglePlanMode: () => this.togglePlanMode(),
+      onProviderChange: (next, explicitModel) => this.onProviderChange(next, explicitModel),
+      allModelChoices: () => this.allModelChoices(),
+      persistModel: () => this.persistModel(),
+      openNote: (p) => this.openNote(p),
+      openArtifactExternally: (p) => this.openArtifactExternally(p),
+    });
+    this.composer.mount(this.listWrap);
+  }
+
   /** Focus the composer input — called when the view is opened via ribbon/command. */
   focusComposer(): void {
-    window.setTimeout(() => this.inputEl?.focus(), 0);
+    this.composer.focusInput();
   }
 
   /** Seed the composer with a selection quoted from a note (the in-note "Ask Exo"
-   *  action) and focus it. The excerpt is rendered as a Markdown blockquote with
-   *  a source line so the agent sees exactly what the user highlighted; the caret
-   *  lands after it, ready for the question. */
+   *  action) and focus it. */
   attachSelection(text: string, sourcePath: string): void {
-    const src = sourcePath ? noteBasename(sourcePath) : "the current note";
-    const quoted = text
-      .replace(/\r\n?/g, "\n")
-      .split("\n")
-      .map((l) => `> ${l}`)
-      .join("\n");
-    const block = `From "${src}":\n${quoted}\n\n`;
-    // Prepend the excerpt, leave the caret at the very end for the question.
-    this.inputEl.value = block + this.inputEl.value;
-    const caret = this.inputEl.value.length;
-    this.inputEl.setSelectionRange(caret, caret);
-    this.autoGrow();
-    window.setTimeout(() => this.inputEl?.focus(), 0);
+    this.composer.attachSelection(text, sourcePath);
   }
 
   /** Mirror the active editor's current selection into the composer as an ambient
-   *  "Selection" chip (see the selection observer). Empty `text` clears it. No-op
-   *  when the (text, path) pair is unchanged, so the debounced observer can call
-   *  freely without churning the DOM. */
+   *  "Selection" chip (see the selection observer). Empty `text` clears it. */
   setCurrentSelection(text: string, path: string): void {
-    const next = text ? { text, path } : null;
-    const prev = this.currentSelection;
-    if ((prev?.text ?? "") === (next?.text ?? "") && (prev?.path ?? "") === (next?.path ?? "")) return;
-    this.currentSelection = next;
-    this.refreshContext();
+    this.composer.setCurrentSelection(text, path);
   }
 
   /* --------------------------- session mgmt ------------------------- */
@@ -653,7 +619,7 @@ export class ChatView extends ItemView {
     // and the Capabilities panel; older CLIs simply never fire this (no gate).
     session.onCaps = (caps) => {
       this.sessionCaps = caps;
-      this.slashCache = null; // menus rebuild with the enriched lists
+      this.composer.resetSlashCache(); // menus rebuild with the enriched lists
       if (this.capsEl) {
         this.hideCapabilities();
         this.showCapabilities(); // live panel refresh if it's open
@@ -744,9 +710,9 @@ export class ChatView extends ItemView {
     this.active.sessionId = undefined;
     this.active.allow.clear();
     this.dropSession(this.active);
-    this.updateUsage(null);
+    this.composer.updateUsage(null);
     this.refreshProviderUI();
-    this.refreshPermChipFn();
+    this.composer.refreshPerm();
     // Provider changed (e.g. back to Claude) — warm the new session.
     this.prewarm();
   }
@@ -777,17 +743,12 @@ export class ChatView extends ItemView {
     return out;
   }
 
-  private modelLabel(): string {
-    const found = this.allModelChoices().find((m) => m.id === this.model);
-    return found?.label || this.model || "Model";
-  }
-
   private refreshProviderUI(): void {
     const a = ADAPTERS[this.provider];
     // Provider identity tints the brand star. All interactive accents follow
     // the theme (--mva-brand defaults to --interactive-accent in CSS).
     this.brandDot.style.color = a.brandColor;
-    this.refreshModelChip();
+    this.composer.refreshModel();
   }
 
   private persistModel(): void {
@@ -1008,10 +969,10 @@ export class ChatView extends ItemView {
     if (c.listEl.childElementCount === 0) this.renderEmptyState();
     this.refreshProviderUI();
     this.syncSendButton();
-    this.updateUsage(null);
+    this.composer.updateUsage(null);
     // Reflect the newly-active convo's session quota (if any) on the badge.
-    this.lastRateLimit = (c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null;
-    this.updateRateBadge();
+    this.composer.setLastRateLimit((c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null);
+    this.composer.updateRateBadge();
     this.renderTabs();
     this.persistTabs();
     this.scrollConvo(c);
@@ -1124,7 +1085,7 @@ export class ChatView extends ItemView {
     c.listEl.empty();
     c.pendingEl = null;
     this.renderEmptyState();
-    this.updateUsage(null);
+    this.composer.updateUsage(null);
     this.renderTabs();
     this.persist();
   }
@@ -1161,7 +1122,7 @@ export class ChatView extends ItemView {
     if (next === "plan") this.prePlanMode = s.permissionMode;
     s.permissionMode = next;
     void this.plugin.saveSettings();
-    this.refreshPermChipFn();
+    this.composer.refreshPerm();
     this.active.session?.setPermissionMode?.(next);
     new Notice(next === "plan" ? "Plan mode on — the agent will propose before acting." : "Plan mode off.");
   }
@@ -1188,17 +1149,18 @@ export class ChatView extends ItemView {
     c.session.compact(instructions);
     // Any compaction retires the proactive nudge for good.
     c.compactNudged = true;
-    this.hideCompactNudge();
+    this.composer.hideCompactNudge();
     new Notice(instructions ? "Compacting with your instructions…" : "Compacting the conversation…");
   }
 
   /** Reflect the active conversation's streaming state on the send button. */
   private syncSendButton(): void {
     const on = this.streaming;
-    this.sendBtn.empty();
-    setIcon(this.sendBtn, on ? "square" : "arrow-up");
-    setTooltip(this.sendBtn, on ? "Stop" : "Send");
-    this.sendBtn.toggleClass("is-streaming", on);
+    const sendBtn = this.composer.getSendBtn();
+    sendBtn.empty();
+    setIcon(sendBtn, on ? "square" : "arrow-up");
+    setTooltip(sendBtn, on ? "Stop" : "Send");
+    sendBtn.toggleClass("is-streaming", on);
   }
 
   private toggleGallery(): void {
@@ -1213,7 +1175,7 @@ export class ChatView extends ItemView {
     this.galleryEl?.remove();
     this.galleryEl = null;
     this.listEl.show();
-    this.composerEl.show();
+    this.composer.getComposerEl().show();
     this.rebuildOutline();
   }
 
@@ -1243,8 +1205,9 @@ export class ChatView extends ItemView {
       caps: this.sessionCaps,
       onInsert: (text) => {
         this.hideCapabilities();
-        this.inputEl.value += (this.inputEl.value && !this.inputEl.value.endsWith(" ") ? " " : "") + text;
-        this.inputEl.focus();
+        const el = this.composer.getInputEl();
+        el.value += (el.value && !el.value.endsWith(" ") ? " " : "") + text;
+        el.focus();
       },
       onOpenNote: (p) => {
         this.hideCapabilities();
@@ -1257,7 +1220,7 @@ export class ChatView extends ItemView {
     this.saveActive();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.listEl.hide();
-    this.composerEl.hide();
+    this.composer.getComposerEl().hide();
     const wrap = this.listHost.createDiv({ cls: "mva-gallery-wrap" });
     this.galleryEl = wrap;
     this.rebuildOutline(); // drop the outline rail while the gallery is up
@@ -1411,7 +1374,7 @@ export class ChatView extends ItemView {
     if (next.listEl.childElementCount === 0) this.renderEmptyState();
     this.refreshProviderUI();
     this.syncSendButton();
-    this.updateUsage(null);
+    this.composer.updateUsage(null);
     this.renderTabs();
     this.persistTabs();
   }
@@ -1462,1040 +1425,6 @@ export class ChatView extends ItemView {
     return d.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
   }
 
-  /* ---------------------------- context ----------------------------- */
-
-  private buildComposer(root: HTMLElement): void {
-    const bar = root.createDiv({ cls: "mva-composer" });
-    this.composerEl = bar;
-    // The composer is pinned to the bottom of listWrap (CSS), overlapping the
-    // transcript. Publish its live height as --mva-composer-h so the list can
-    // reserve matching bottom padding (last message clears the bar) and the jump
-    // pill / content fade sit just above it. Height changes as the textarea grows,
-    // images/context rows appear, or the bar is hidden (gallery → 0).
-    const syncHeight = () =>
-      this.listWrap.style.setProperty("--mva-composer-h", `${bar.offsetHeight}px`);
-    const composerResize = new ResizeObserver(syncHeight);
-    composerResize.observe(bar);
-    this.register(() => composerResize.disconnect());
-    this.contextEl = bar.createDiv({ cls: "mva-context" });
-    this.imagesEl = bar.createDiv({ cls: "mva-images is-hidden" });
-
-    // One unified input box (the only surface): textarea on top, controls at the bottom.
-    const box = bar.createDiv({ cls: "mva-inputbox" });
-    this.inputEl = box.createEl("textarea", {
-      cls: "mva-input",
-      attr: { rows: "3", placeholder: "Message the agent…" },
-    });
-    this.inputEl.addEventListener("input", () => this.autoGrow());
-    this.inputEl.addEventListener("paste", (e) => this.onPaste(e));
-    bar.addEventListener("dragover", (e) => {
-      if (e.dataTransfer?.types.includes("Files")) {
-        e.preventDefault();
-        bar.addClass("is-drop");
-      }
-    });
-    bar.addEventListener("dragleave", () => bar.removeClass("is-drop"));
-    bar.addEventListener("drop", (e) => {
-      bar.removeClass("is-drop");
-      this.onDrop(e);
-    });
-    this.inputEl.addEventListener("keydown", (e) => {
-      if (e.key === "Tab" && e.shiftKey) {
-        e.preventDefault();
-        this.togglePlanMode();
-        return;
-      }
-      if (e.key === "Escape" && this.streaming) {
-        e.preventDefault();
-        this.stop("esc");
-        return;
-      }
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        void this.send(); // send() queues if the active conversation is streaming
-      }
-    });
-
-    new Autocomplete(this.inputEl, box, [
-      { trigger: "/", getItems: (q) => this.slashItems(q) },
-      { trigger: "$", getItems: (q) => this.skillItems(q) },
-      { trigger: "@", getItems: (q) => this.atItems(q) },
-    ]);
-
-    this.buildToolbar(box);
-  }
-
-  /* ----------------------------- images ----------------------------- */
-
-  private onPaste(e: ClipboardEvent): void {
-    const files = Array.from(e.clipboardData?.items ?? [])
-      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
-      .map((it) => it.getAsFile())
-      .filter((f): f is File => !!f);
-    if (files.length) {
-      e.preventDefault();
-      void this.attachImages(files);
-    }
-  }
-
-  private onDrop(e: DragEvent): void {
-    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.type.startsWith("image/"));
-    if (files.length) {
-      e.preventDefault();
-      void this.attachImages(files);
-    }
-  }
-
-  private async attachImages(files: Blob[]): Promise<void> {
-    for (const f of files) {
-      try {
-        const buf = await f.arrayBuffer();
-        const dataB64 = arrayBufferToBase64(buf);
-        this.pendingImages.push({
-          mediaType: (f as File).type || "image/png",
-          dataB64,
-          name: (f as File).name || "pasted image",
-        });
-      } catch {
-        new Notice("Couldn't read an image.");
-      }
-    }
-    this.renderImageStrip();
-  }
-
-  /** Resolve `![[image]]` embeds in the text to base64 attachments (Obsidian-native). */
-  private async embeddedImages(text: string): Promise<ImageAttachment[]> {
-    const out: ImageAttachment[] = [];
-    const re = /!\[\[([^\]]+?\.(?:png|jpe?g|gif|webp))(?:\|[^\]]*)?\]\]/gi;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text))) {
-      const f = this.app.metadataCache.getFirstLinkpathDest(m[1], "");
-      if (!f) continue;
-      try {
-        const buf = await this.app.vault.readBinary(f);
-        out.push({
-          mediaType: extToMime(f.extension),
-          dataB64: arrayBufferToBase64(buf),
-          name: f.name,
-        });
-      } catch {
-        /* skip unreadable */
-      }
-    }
-    return out;
-  }
-
-  private renderImageStrip(): void {
-    this.imagesEl.empty();
-    this.imagesEl.toggleClass("is-hidden", this.pendingImages.length === 0);
-    this.pendingImages.forEach((img, i) => {
-      const chip = this.imagesEl.createDiv({ cls: "mva-img-chip" });
-      const thumb = chip.createEl("img", { cls: "mva-img-thumb" });
-      thumb.src = `data:${img.mediaType};base64,${img.dataB64}`;
-      const x = chip.createSpan({ cls: "mva-img-x", attr: { "aria-label": "Remove image" } });
-      setIcon(x, "x");
-      this.clickable(x, () => {
-        this.pendingImages.splice(i, 1);
-        this.renderImageStrip();
-      });
-    });
-  }
-
-  /* --------------------------- autocomplete ------------------------- */
-
-  private slashCache: { commands: string[]; skills: string[]; agents: string[]; ts: number } | null = null;
-  private static readonly SLASH_TTL = 30_000;
-
-  private async loadSlash(): Promise<{ commands: string[]; skills: string[]; agents: string[] }> {
-    if (this.slashCache && Date.now() - this.slashCache.ts < ChatView.SLASH_TTL) return this.slashCache;
-    const commands: string[] = [];
-    const skills: string[] = [];
-    const agents: string[] = [];
-    const base = (p: string) => p.split("/").pop()?.replace(/\.md$/, "") ?? p;
-    try {
-      const c = await this.app.vault.adapter.list(".claude/commands");
-      for (const f of c.files) if (f.endsWith(".md")) commands.push(base(f));
-    } catch {
-      /* no commands dir */
-    }
-    try {
-      const s = await this.app.vault.adapter.list(".claude/skills");
-      for (const folder of s.folders) skills.push(folder.split("/").pop() ?? folder);
-      for (const f of s.files) if (f.endsWith(".md")) skills.push(base(f));
-    } catch {
-      /* no skills dir */
-    }
-    try {
-      const a = await this.app.vault.adapter.list(".claude/agents");
-      for (const f of a.files) if (f.endsWith(".md")) agents.push(base(f));
-    } catch {
-      /* no agents dir */
-    }
-    // Union with the session's live init snapshot (global + plugin + vault —
-    // the vault scan above only ever saw the vault's own .claude/). Dedup keeps
-    // the menus stable when both sources know the same name.
-    if (this.sessionCaps) {
-      const add = (into: string[], names: string[]) => {
-        const seen = new Set(into);
-        for (const n of names) if (!seen.has(n)) (seen.add(n), into.push(n));
-      };
-      add(commands, this.sessionCaps.commands);
-      add(skills, this.sessionCaps.skills);
-      add(agents, this.sessionCaps.agents);
-    }
-    this.slashCache = { commands, skills, agents, ts: Date.now() };
-    return this.slashCache;
-  }
-
-  /** `$` trigger — skills. */
-  private async skillItems(query: string): Promise<AcItem[]> {
-    const q = query.toLowerCase();
-    const { skills } = await this.loadSlash();
-    return skills
-      .filter((sk) => sk.toLowerCase().includes(q))
-      .map((sk) => ({ label: sk, detail: "skill", icon: "sparkles", insert: `$${sk} ` }));
-  }
-
-  private async slashItems(query: string): Promise<AcItem[]> {
-    const q = query.toLowerCase();
-    const out: AcItem[] = [];
-    // Built-in: /compact [instructions] — compaction, handled locally in send().
-    if ("compact".includes(q)) {
-      out.push({ label: "compact", detail: "compact context", icon: "scissors", insert: "/compact " });
-    }
-    for (const p of this.plugin.settings.customPrompts) {
-      if (p.name.toLowerCase().includes(q)) {
-        const isWorkflow = p.prompt.includes(" >>> ");
-        out.push({
-          label: p.name,
-          detail: isWorkflow ? "workflow" : "prompt",
-          icon: isWorkflow ? "list-ordered" : "message-square",
-          insert: "",
-          onSelect: () => this.usePrompt(p.prompt),
-        });
-      }
-    }
-    const { commands, skills } = await this.loadSlash();
-    for (const c of commands) {
-      if (c.toLowerCase().includes(q)) out.push({ label: c, detail: "command", icon: "terminal", insert: `/${c} ` });
-    }
-    for (const sk of skills) {
-      if (sk.toLowerCase().includes(q)) out.push({ label: sk, detail: "skill", icon: "sparkles", insert: `/${sk} ` });
-    }
-    return out;
-  }
-
-  private async atItems(query: string): Promise<AcItem[]> {
-    const q = query.toLowerCase();
-    const out: AcItem[] = [];
-    // Subagents first — reference a vault agent by @mention.
-    const { agents } = await this.loadSlash();
-    for (const a of agents) {
-      if (q && !a.toLowerCase().includes(q)) continue;
-      out.push({ label: a, detail: "subagent", icon: "bot", insert: `@${a} ` });
-    }
-    for (const f of this.app.vault.getAllLoadedFiles()) {
-      if (!f.path || f.path === "/") continue;
-      if (q && !f.path.toLowerCase().includes(q)) continue;
-      const isFolder = f instanceof TFolder;
-      if (!isFolder && !(f instanceof TFile)) continue;
-      const parent = f.parent && f.parent.path !== "/" ? f.parent.path : "";
-      out.push({
-        label: isFolder ? `${f.name}/` : f.name,
-        detail: parent,
-        icon: isFolder ? "folder" : "file-text",
-        insert: `@${f.path}${isFolder ? "/" : ""} `,
-        onSelect: () => {
-          if (!this.manualAttached.includes(f.path)) this.manualAttached.push(f.path);
-          this.refreshContext();
-        },
-      });
-      if (out.length >= 40) break;
-    }
-    return out;
-  }
-
-  private static readonly EFFORT_OPTS: [string, string][] = [
-    ["default", "Default"],
-    ["low", "Low"],
-    ["medium", "Medium"],
-    ["high", "High"],
-    ["xhigh", "Extra high"],
-    ["max", "Max"],
-  ];
-  private static effortLabel(e: string): string {
-    return ChatView.EFFORT_OPTS.find(([v]) => v === e)?.[1] ?? e;
-  }
-
-  private buildToolbar(bar: HTMLElement): void {
-    const tb = bar.createDiv({ cls: "mva-toolbar" });
-
-    // Attach "+" — the single entry point for adding context (note / file /
-    // folder / image). Leftmost in the toolbar; opens a themed popover (matching
-    // the select chips) rather than the OS/Obsidian menu.
-    this.buildAttachButton(tb);
-
-    // Tuning cascade, left-aligned: Model → Effort → Permission. Model comes
-    // first because the other two derive from it (07-05: replaces the 03-07
-    // tune dialog, which hid the cascade behind one sliders icon).
-    this.buildTuneChips(tb);
-
-    tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
-    // Context usage as a compact circular counter (donut ring). Hover for the
-    // detailed breakdown, click to compact. See updateUsage for the fill logic.
-    this.usageEl = tb.createDiv({ cls: "mva-ctx-ring" });
-    this.clickable(this.usageEl, () => this.compactActive());
-    this.updateUsage(null);
-
-    // Claude-plan quota badge — a quiet dot+percent that only appears when the
-    // plan is nearing (≥80% / warning) or over its limit. Sits beside the ring.
-    this.rateBadgeEl = tb.createDiv({ cls: "mva-rate-badge" });
-    this.rateBadgeEl.hide();
-    this.updateRateBadge();
-
-    // Send button — lives inside the input box, right side.
-    this.sendBtn = tb.createEl("button", { cls: "mva-send", attr: { "aria-label": "Send" } });
-    setIcon(this.sendBtn, "arrow-up");
-    setTooltip(this.sendBtn, "Send");
-    this.sendBtn.onclick = () => (this.streaming ? this.stop() : void this.send());
-  }
-
-  /**
-   * The tuning cascade: three quiet chips left of the spacer — Model, Effort,
-   * Permission (Claude) / Sandbox (Codex) — each opening its own popover via
-   * the shared buildSelectChip. Model leads because the other two derive from
-   * it: effort tiers are per-model (core/model-tuning.ts — hidden for models
-   * with no effort support, clamped on switch so an invalid tier never reaches
-   * the CLI), and the third chip flips Permission↔Sandbox with the provider.
-   */
-  private buildTuneChips(tb: HTMLElement): void {
-    const s = this.plugin.settings;
-    const effortOpts = () => effortOptionsFor(this.provider, this.model);
-    // A stale stored combo (e.g. effort "max" saved, then a Codex model
-    // restored) must never reach the provider — clamp on build and on every
-    // model/provider change.
-    const clampNow = () => {
-      const next = clampEffort(s.effort || "default", effortOpts());
-      if (next !== (s.effort || "default")) {
-        s.effort = next;
-        void this.plugin.saveSettings();
-      }
-    };
-
-    // Model — unified across BOTH providers; each row carries the brand dot,
-    // and picking a model from the other backend switches provider + model
-    // together (applyModelChoice → onProviderChange).
-    const model = this.buildSelectChip(tb, {
-      ariaLabel: "Model",
-      getLabel: () => this.modelLabel(),
-      getOptions: () =>
-        this.allModelChoices().map((m) => ({
-          value: m.id,
-          label: m.label,
-          dotColor: ADAPTERS[m.provider].brandColor,
-          group: m.provider === "claude" ? "Claude" : "Codex",
-        })),
-      getCurrent: () => this.model,
-      onSelect: (v) => this.applyModelChoice(v),
-    });
-
-    // Effort — options follow the chosen model. Reads "Effort" while on the
-    // CLI default so a bare tier name never floats without context.
-    const effort = this.buildSelectChip(tb, {
-      ariaLabel: "Effort",
-      getLabel: () => {
-        const e = s.effort || "default";
-        return e === "default" ? "Effort" : ChatView.effortLabel(e);
-      },
-      getOptions: () => (effortOpts() ?? []).map(([value, label]) => ({ value, label })),
-      getCurrent: () => s.effort || "default",
-      onSelect: (v) => {
-        s.effort = v;
-        void this.plugin.saveSettings();
-      },
-    });
-
-    // Permission (Claude) or Sandbox (Codex) — the actual tool gate. The chip
-    // carries the risk coloring the old standalone dot had.
-    const perm = this.buildSelectChip(tb, {
-      ariaLabel: "Permission mode",
-      getLabel: () =>
-        this.provider === "codex"
-          ? ChatView.codexSandboxLabel(s.codexSandbox)
-          : ChatView.permLabel(s.permissionMode),
-      getOptions: () =>
-        this.provider === "codex"
-          ? ChatView.CODEX_SANDBOX_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.codexSandboxRisk(v) }))
-          : ChatView.PERM_OPTS.map(([v, l]) => ({ value: v, label: l, risk: ChatView.permRisk(v) })),
-      getCurrent: () => (this.provider === "codex" ? s.codexSandbox : s.permissionMode),
-      onSelect: (v) => this.applyPermChoice(v),
-      chipRisk: () =>
-        this.provider === "codex"
-          ? ChatView.codexSandboxRisk(s.codexSandbox)
-          : ChatView.permRisk(s.permissionMode),
-    });
-
-    // External-change hook shared by every path that shifts the cascade's
-    // inputs: model pick, provider switch, plan toggle, restore, tab switch.
-    const refreshAll = () => {
-      clampNow();
-      model.refresh();
-      effort.refresh();
-      effort.wrap.toggle(effortOpts() !== null);
-      perm.refresh();
-    };
-    refreshAll();
-    this.refreshModelChip = refreshAll;
-    this.refreshPermChipFn = refreshAll;
-  }
-
-  /** Apply a model pick from the tune dialog (mirrors the old model chip's
-   *  onSelect): guard while streaming, switch provider+model together when the
-   *  chosen model belongs to the other backend. */
-  private applyModelChoice(v: string): void {
-    if (this.streaming) {
-      new Notice("Can't switch model while a reply is streaming.");
-      return;
-    }
-    const found = this.allModelChoices().find((m) => m.id === v);
-    if (!found) return;
-    if (found.provider !== this.provider) {
-      this.onProviderChange(found.provider, v);
-      return;
-    }
-    this.model = v;
-    this.persistModel();
-    // Re-render the statusline's model label immediately — no new usage event
-    // fires just from a model switch, so refresh with cached data.
-    this.updateUsage(this.lastUsage);
-    // Effort options (and the current tier's validity) follow the model —
-    // re-sync the whole cascade.
-    this.refreshModelChip();
-  }
-
-  /** Apply a permission (Claude) or sandbox (Codex) pick; keeps setting, live
-   *  session, and the permission chip in sync. */
-  private applyPermChoice(v: string): void {
-    const s = this.plugin.settings;
-    if (this.provider === "codex") {
-      s.codexSandbox = v;
-      void this.plugin.saveSettings();
-    } else {
-      // Entering plan mode records the mode we came from, so a later plan approval
-      // restores it (mirrors togglePlanMode).
-      if (v === "plan" && s.permissionMode !== "plan") this.prePlanMode = s.permissionMode;
-      s.permissionMode = v as typeof s.permissionMode;
-      void this.plugin.saveSettings();
-      this.active.session?.setPermissionMode?.(s.permissionMode);
-    }
-    this.refreshPermChipFn();
-  }
-
-  /**
-   * Generic toolbar selector — a chip that opens a Permission-style popover list.
-   * Reused by the model / effort / permission cascade. Returns `refresh()` (re-sync
-   * the chip label and risk color after external changes) plus the `wrap` element
-   * so callers can hide the whole control (e.g. effort on a model without it).
-   */
-  private buildSelectChip(
-    tb: HTMLElement,
-    opts: {
-      ariaLabel: string;
-      getLabel: () => string;
-      getOptions: () => { value: string; label: string; risk?: RiskLevel; dotColor?: string; group?: string }[];
-      getCurrent: () => string;
-      onSelect: (value: string) => void;
-      chipRisk?: () => RiskLevel;
-    }
-  ): { refresh: () => void; wrap: HTMLElement } {
-    const wrap = tb.createDiv({ cls: "mva-sel" });
-    const chip = wrap.createDiv({ cls: "mva-sel-chip", attr: { "aria-label": opts.ariaLabel } });
-    const pop = wrap.createDiv({ cls: "mva-sel-pop" });
-    pop.hide();
-
-    const refresh = () => {
-      const risk = opts.chipRisk ? opts.chipRisk() : "";
-      chip.className = `mva-sel-chip${risk ? ` ${risk}` : ""}`;
-      chip.setText(opts.getLabel());
-    };
-
-    const buildPop = () => {
-      // One rendering path for every picker (chips + tune dialog): the shared
-      // renderOptionRows draws grouped/flat rows with roving ArrowUp/Down + Enter +
-      // Escape. Here picking closes the popover and re-syncs the chip label; Escape
-      // closes too. The overflow options can change per open (e.g. model list per
-      // provider), so we rebuild fresh each time.
-      const focus = this.renderOptionRows(pop, opts.getOptions() as SelectOption[], opts.getCurrent(), {
-        onPick: (value) => {
-          opts.onSelect(value);
-          refresh();
-          popover.close();
-        },
-        onEscape: () => popover.close(),
-      });
-      setTimeout(() => focus(), 0);
-    };
-
-    refresh();
-
-    // `is-open` on the chip holds full risk color while the popover is up; the
-    // primitive toggles it. buildPop rebuilds fresh each open — option lists can
-    // change (e.g. model list per provider) — and seeds keyboard focus itself.
-    const popover = openablePopover({ anchor: chip, pop, wrap, onOpen: buildPop });
-    this.clickable(chip, (e) => {
-      e.stopPropagation();
-      popover.toggle();
-    });
-    this.register(() => popover.close());
-    return { refresh, wrap };
-  }
-
-  /**
-   * Shared option-row renderer for BOTH the toolbar select chips and the tune
-   * dialog — the single source of truth for grouped/flat option rows. Draws quiet
-   * group headers (from buildOptionRows), an optional provider brand-dot, risk
-   * coloring, and a check on the current value; wires roving ArrowUp/Down + Enter +
-   * Escape keyboard nav onto `container` (focus lives on the container, never the
-   * rows). Picking a row fires `onPick` and moves the check to it — chips close
-   * afterwards; the dialog stays open, so the moved check reflects the new value.
-   * Returns a `focus()` that seeds the keyboard cursor on the current row.
-   */
-  private renderOptionRows(
-    container: HTMLElement,
-    options: SelectOption[],
-    current: string,
-    cb: { onPick: (value: string) => void; onEscape?: () => void }
-  ): () => void {
-    container.empty();
-    const optionEls: { el: HTMLElement; value: string; check: HTMLElement }[] = [];
-    let activeIdx = -1;
-    const setActive = (idx: number) => {
-      if (!optionEls.length) {
-        activeIdx = -1;
-        return;
-      }
-      activeIdx = ((idx % optionEls.length) + optionEls.length) % optionEls.length;
-      optionEls.forEach((o, i) => o.el.toggleClass("is-active", i === activeIdx));
-      optionEls[activeIdx].el.scrollIntoView({ block: "nearest" });
-    };
-    const markSelected = (value: string) => {
-      for (const o of optionEls) {
-        const sel = o.value === value;
-        o.el.toggleClass("is-selected", sel);
-        o.check.style.visibility = sel ? "visible" : "hidden";
-      }
-    };
-    const pick = (value: string) => {
-      cb.onPick(value);
-      markSelected(value);
-    };
-    for (const r of buildOptionRows(options, "")) {
-      if (r.kind === "header") {
-        container.createDiv({ cls: "mva-sel-group", text: r.group });
-        continue;
-      }
-      const o = r.option;
-      const row = container.createDiv({ cls: "mva-sel-opt" });
-      if (o.risk) row.addClass(o.risk);
-      if (o.dotColor) row.createSpan({ cls: "mva-sel-opt-dot" }).style.background = o.dotColor;
-      row.createSpan({ cls: "mva-sel-opt-label", text: o.label });
-      const check = row.createSpan({ cls: "mva-sel-opt-check" });
-      setIcon(check, "check");
-      const idx = optionEls.length;
-      optionEls.push({ el: row, value: o.value, check });
-      row.addEventListener("mouseenter", () => setActive(idx));
-      row.onclick = () => pick(o.value);
-    }
-    markSelected(current);
-    const curIdx = optionEls.findIndex((o) => o.value === current);
-    setActive(curIdx >= 0 ? curIdx : 0);
-    container.tabIndex = 0;
-    container.addEventListener("keydown", (ev: KeyboardEvent) => {
-      if (ev.key === "ArrowDown") {
-        ev.preventDefault();
-        setActive(activeIdx + 1);
-      } else if (ev.key === "ArrowUp") {
-        ev.preventDefault();
-        setActive(activeIdx - 1);
-      } else if (ev.key === "Enter") {
-        ev.preventDefault();
-        const o = optionEls[activeIdx];
-        if (o) pick(o.value);
-      } else if (ev.key === "Escape") {
-        ev.preventDefault();
-        cb.onEscape?.();
-      }
-    });
-    return () => container.focus();
-  }
-
-  /**
-   * Single entry point for the composer footer's circular context counter
-   * (donut ring). Sets --pct (0-100) and --ring-color on the ring element and
-   * a hover/aria tooltip with the used/total breakdown. Called after every
-   * 'usage' event and whenever model/provider changes so it stays in sync even
-   * without a fresh event. NOTE: the >=75% compact nudge hooks in here — this
-   * stays the one place usage state is rendered, so that trigger keeps firing.
-   */
-  private updateUsage(u: ContextUsage | null): void {
-    const ring = this.usageEl;
-    if (!ring) return;
-    this.lastUsage = u;
-
-    ring.removeClass("is-caution");
-    ring.removeClass("is-danger");
-
-    // Fresh session / provider that doesn't report usage (Codex): empty ring.
-    if (!u || !u.total) {
-      ring.addClass("is-empty");
-      ring.style.setProperty("--pct", "0");
-      ring.style.setProperty("--ring-color", "var(--interactive-accent)");
-      const tip = "Context usage appears after the first reply";
-      setTooltip(ring, tip);
-      ring.setAttribute("aria-label", tip);
-      this.hideCompactNudge();
-      return;
-    }
-
-    ring.removeClass("is-empty");
-    const pct = Math.min(100, Math.round((u.used / u.total) * 100));
-    const risk: RiskLevel = pct >= 90 ? "is-danger" : pct >= 75 ? "is-caution" : "";
-    const color = pct >= 90 ? "var(--color-red)" : pct >= 75 ? "var(--color-orange)" : "var(--interactive-accent)";
-    ring.style.setProperty("--pct", String(pct));
-    ring.style.setProperty("--ring-color", color);
-    if (risk) ring.addClass(risk);
-
-    // Cost lives in the tooltip only (Codex omits it; Claude omits it when the
-    // experimental SDK cost API is unavailable) — never a broken/empty footer.
-    const costPart = typeof u.costUsd === "number" ? ` · $${u.costUsd.toFixed(2)}` : "";
-    const tip = `Context: ${pct}% — ~${fmtTokens(u.used)} / ${fmtTokens(u.total)} tokens${costPart} · click to compact`;
-    setTooltip(ring, tip);
-    ring.setAttribute("aria-label", tip);
-
-    // Proactive one-shot nudge: once context crosses 75% (same threshold as the
-    // ring's caution state), suggest compacting. Shown at most once per convo.
-    if (pct >= 75) this.maybeShowCompactNudge();
-    else this.hideCompactNudge();
-  }
-
-  /** Render the Claude-plan quota badge from `lastRateLimit`. Hidden entirely
-   *  when there's no snapshot (API-key sessions, or a plan with headroom) — no
-   *  fake states. Visible as a quiet dot+percent at ≥80%/warning (caution) or a
-   *  danger "limit" when the plan rejects. Pure thresholding lives in
-   *  core/rate-limit.ts. */
-  private updateRateBadge(): void {
-    const el = this.rateBadgeEl;
-    if (!el) return;
-    const info = this.lastRateLimit;
-    el.removeClass("is-caution");
-    el.removeClass("is-danger");
-    if (!info) {
-      el.hide();
-      return;
-    }
-    const state = badgeState(info.status, info.utilization);
-    if (!state.visible) {
-      el.hide();
-      return;
-    }
-    el.empty();
-    el.createSpan({ cls: "mva-rate-dot" });
-    el.createSpan({ cls: "mva-rate-pct", text: state.label });
-    el.addClass(state.level === "danger" ? "is-danger" : "is-caution");
-    // Tooltip: "Plan usage: N% of the {5-hour|weekly} window — resets HH:MM".
-    const win = windowLabel(info.windowType);
-    const resetMs = normalizeResetEpochMs(info.resetsAt);
-    const parts = [`Plan usage: ${state.label === "limit" ? "over" : state.label} of the ${win} window`];
-    if (resetMs) parts.push(`resets ${formatClock(resetMs)}`);
-    const tip = parts.join(" — ");
-    setTooltip(el, tip);
-    el.setAttribute("aria-label", tip);
-    el.show();
-  }
-
-  /** Show the discreet ≥75% compaction nudge under the composer — one-shot per
-   *  conversation, Claude-only (compaction is a Claude capability). Marks the
-   *  convo as nudged before rendering so it never re-appears. */
-  private maybeShowCompactNudge(): void {
-    const c = this.active;
-    if (c.provider !== "claude") return; // compaction is Claude-only
-    if (c.compactNudged) return; // one-shot per conversation
-    if (!c.session?.compact) return; // nothing to compact yet
-    if (this.compactNudgeEl) return; // already visible
-    c.compactNudged = true;
-
-    const row = this.composerEl.createDiv({ cls: "mva-compact-nudge" });
-    setIcon(row.createSpan({ cls: "mva-compact-nudge-icon" }), "scissors");
-    row.createSpan({
-      cls: "mva-compact-nudge-text",
-      text: "Context is filling up — compacting keeps the conversation sharp.",
-    });
-    const act = row.createEl("button", { cls: "mva-compact-nudge-act", text: "Compact now" });
-    act.onclick = () => {
-      this.hideCompactNudge();
-      this.compactActive(); // no instructions — quick one-click compaction
-    };
-    const x = row.createSpan({ cls: "mva-compact-nudge-x", attr: { "aria-label": "Dismiss" } });
-    setIcon(x, "x");
-    x.onclick = () => this.hideCompactNudge();
-    this.compactNudgeEl = row;
-  }
-
-  /** Remove the nudge row (visual only — the per-convo `compactNudged` flag
-   *  persists, so the one-shot is never re-triggered). */
-  private hideCompactNudge(): void {
-    this.compactNudgeEl?.remove();
-    this.compactNudgeEl = null;
-  }
-
-
-  /* ---- Permission chip helpers ---- */
-  private static readonly PERM_OPTS: [string, string][] = [
-    ["default", "Ask"],
-    ["acceptEdits", "Accept edits"],
-    ["plan", "Plan"],
-    ["auto", "Auto"],
-    ["bypassPermissions", "Bypass"],
-  ];
-  private static permLabel(mode: string): string {
-    return ChatView.PERM_OPTS.find(([v]) => v === mode)?.[1] ?? mode;
-  }
-  /** Returns a CSS modifier class for risk coloring; empty string = safe mode. */
-  private static permRisk(mode: string): RiskLevel {
-    if (mode === "bypassPermissions") return "is-danger";
-    if (mode === "acceptEdits" || mode === "auto") return "is-caution";
-    return "";
-  }
-
-  /** Codex sandbox options (Codex has no canUseTool — its sandbox is the gate). */
-  private static readonly CODEX_SANDBOX_OPTS: [string, string][] = [
-    ["read-only", "Read-only"],
-    ["workspace-write", "Workspace write"],
-    ["danger-full-access", "Full access"],
-  ];
-  private static codexSandboxLabel(mode: string): string {
-    return ChatView.CODEX_SANDBOX_OPTS.find(([v]) => v === mode)?.[1] ?? mode;
-  }
-  private static codexSandboxRisk(mode: string): RiskLevel {
-    if (mode === "danger-full-access") return "is-danger";
-    if (mode === "workspace-write") return "is-caution";
-    return "";
-  }
-
-  private activeNotePath(): string | null {
-    const f = this.app.workspace.getActiveFile();
-    return f ? f.path : null;
-  }
-
-  private contextPaths(): string[] {
-    const out: string[] = [];
-    const active = this.excludeActiveNote ? null : this.activeNotePath();
-    if (active) out.push(active);
-    for (const p of this.manualAttached) if (!out.includes(p)) out.push(p);
-    return out;
-  }
-
-  private refreshContext(): void {
-    if (!this.contextEl) return;
-    this.contextEl.empty();
-    // Every context note is a uniform card in a horizontal row (Craft-style):
-    // the active note first ("Current Document"), then manual attachments.
-    // The ADD affordances live inside the composer toolbar now (the "+" menu);
-    // this row is purely the list of attached items — so when it's empty it
-    // collapses entirely rather than leaving an empty bar.
-    const active = this.excludeActiveNote ? null : this.activeNotePath();
-    const items = active ? 1 : 0;
-    // The selection chip shows only while a live selection exists that isn't
-    // already attached as its own text (once attached it becomes redundant with
-    // the seeded excerpt in the input — see attachSelection).
-    const sel = this.selectionChipModel();
-    const hasAny = items + this.manualAttached.filter((p) => p !== active).length > 0 || !!sel;
-    this.contextEl.toggleClass("is-empty", !hasAny);
-    if (!hasAny) return;
-    const cards = this.contextEl.createDiv({ cls: "mva-doc-cards" });
-    if (active) this.renderContextCard(cards, active, true);
-    for (const p of this.manualAttached) {
-      if (p !== active) this.renderContextCard(cards, p, false);
-    }
-    if (sel) this.renderSelectionCard(cards, sel.text, sel.path, active);
-  }
-
-  /** The selection chip's model, or null when it shouldn't show: gated on the
-   *  setting, a non-empty selection, and not-already-seeded into the composer.
-   *  Kept separate so `refreshContext` stays a straight list build. */
-  private selectionChipModel(): { text: string; path: string } | null {
-    if (!this.plugin.settings.showSelectionChip) return null;
-    const sel = this.currentSelection;
-    if (!sel || !sel.text.trim()) return null;
-    return sel;
-  }
-
-  /** A transient, click-to-attach card for the active editor's selection. Same
-   *  card grammar as the document cards (thumb + body + ×) but visually a hair
-   *  distinct (`.mva-sel-card`): a text-cursor thumb, a "Selection" kind line, a
-   *  one-line preview + count, and a source-note suffix when the selection comes
-   *  from a note other than the active-context doc. Clicking seeds the quoted
-   *  excerpt into the composer via the existing `attachSelection` path; the ×
-   *  dismisses the chip. Keyboard-operable via `clickable()`. */
-  private renderSelectionCard(parent: HTMLElement, text: string, path: string, activePath: string | null): void {
-    const { label, count } = selectionPreview(text);
-    const card = parent.createDiv({ cls: "mva-doc-card mva-sel-card" });
-    const thumb = card.createDiv({ cls: "mva-doc-thumb is-icon" });
-    setIcon(thumb, "text-cursor-input");
-    const body = card.createDiv({ cls: "mva-doc-body" });
-    body.createDiv({ cls: "mva-doc-title", text: label || "Selection", attr: { title: label } });
-    // Show the source note only when it isn't the active-context doc (which the
-    // "Current Document" card already names), so the kind line stays terse.
-    const fromOther = path && path !== activePath ? ` · ${noteBasename(path)}` : "";
-    body.createDiv({ cls: "mva-doc-kind", text: `Selection · ${count}${fromOther}` });
-    const x = card.createSpan({ cls: "mva-doc-x", attr: { "aria-label": "Dismiss selection" } });
-    setIcon(x, "x");
-    this.clickable(x, (e) => {
-      e.stopPropagation();
-      this.currentSelection = null;
-      this.refreshContext();
-    });
-    // Click-to-attach: seed the quoted excerpt into the composer, then clear the
-    // chip (the excerpt now lives in the input, so the chip would be redundant).
-    this.clickable(card, () => {
-      this.attachSelection(text, path);
-      this.currentSelection = null;
-      this.refreshContext();
-    });
-  }
-
-  /** The composer "+" attach control: a themed popover (matching the select chips,
-   *  not the OS/Obsidian menu) with the single set of attach actions — note / file
-   *  / folder / image. Opens upward, closes on pick / outside-click / Esc. */
-  private buildAttachButton(tb: HTMLElement): void {
-    const wrap = tb.createDiv({ cls: "mva-sel mva-attach" });
-    const btn = wrap.createDiv({ cls: "mva-tb-btn", attr: { "aria-label": "Attach" } });
-    setIcon(btn, "plus");
-    setTooltip(btn, "Attach note, file, folder, or image");
-    const pop = wrap.createDiv({ cls: "mva-sel-pop mva-attach-pop" });
-    pop.hide();
-    const items: [string, string, () => void][] = [
-      ["Add note", "plus", () => this.pickNote()],
-      ["Attach file", "file-plus", () => this.pickExternal(false)],
-      ["Attach folder", "folder-plus", () => this.pickExternal(true)],
-      ["Attach image", "image", () => this.pickImage()],
-    ];
-    const popover = openablePopover({
-      anchor: btn,
-      pop,
-      wrap,
-      onOpen: () => {
-        pop.empty();
-        for (const [label, icon, run] of items) {
-          const row = pop.createDiv({ cls: "mva-sel-opt" });
-          setIcon(row.createSpan({ cls: "mva-attach-ico" }), icon);
-          row.createSpan({ text: label });
-          this.clickable(row, () => {
-            popover.close();
-            run();
-          });
-        }
-      },
-      focus: () => pop.querySelector<HTMLElement>(".mva-sel-opt")?.focus(),
-    });
-    this.clickable(btn, (e) => {
-      e.stopPropagation();
-      popover.toggle();
-    });
-    this.register(() => popover.close());
-  }
-
-  /** Electron file picker for images → reuses the paste/drop attachment path. */
-  private pickImage(): void {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.multiple = true;
-    input.onchange = () => {
-      const files = Array.from(input.files ?? []);
-      if (files.length) void this.attachImages(files);
-    };
-    input.click();
-  }
-
-  /** Electron file picker for paths OUTSIDE the vault. A hidden <input type=file>
-   *  is enough — in Electron, picked File objects expose an absolute `.path`
-   *  (no @electron/remote needed). Folder mode uses webkitdirectory and derives
-   *  the folder root from the first entry's path minus its relative suffix. */
-  private pickExternal(directory: boolean): void {
-    const input = document.createElement("input");
-    input.type = "file";
-    if (directory) input.webkitdirectory = true;
-    else input.multiple = true;
-    input.onchange = () => {
-      const files = Array.from(input.files ?? []) as Array<File & { path?: string; webkitRelativePath?: string }>;
-      if (!files.length) return;
-      if (directory) {
-        const first = files[0];
-        const abs = first.path ?? "";
-        const rel = first.webkitRelativePath ?? "";
-        if (!abs || !rel) return;
-        // abs = /Users/x/proj/sub/file.ts, rel = proj/sub/file.ts → root = /Users/x/proj
-        const root = abs.slice(0, abs.length - rel.length) + rel.split("/")[0];
-        this.addExternalPath(root);
-      } else {
-        for (const f of files) if (f.path) this.addExternalPath(f.path);
-      }
-    };
-    input.click();
-  }
-
-  private addExternalPath(p: string): void {
-    if (!this.manualAttached.includes(p)) this.manualAttached.push(p);
-    this.refreshContext();
-  }
-
-  /** Absolute (out-of-vault) context path? Vault attachments are vault-relative. */
-  private static isExternalPath(p: string): boolean {
-    return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p);
-  }
-
-  /** A uniform context card: text thumbnail + title + kind ("Current Document" /
-   *  "Document" / "External"). External (absolute) paths open via the OS. */
-  private renderContextCard(parent: HTMLElement, path: string, isActive: boolean): void {
-    const external = ChatView.isExternalPath(path);
-    const card = parent.createDiv({ cls: "mva-doc-card" });
-    const thumb = card.createDiv({ cls: "mva-doc-thumb" });
-    if (external) {
-      thumb.addClass("is-icon");
-      let isDir = false;
-      try {
-        isDir = (require("fs") as typeof import("fs")).statSync(path).isDirectory();
-      } catch {
-        /* unreadable — treat as file */
-      }
-      setIcon(thumb, isDir ? "folder" : "file");
-    } else {
-      void this.fillThumb(thumb, path);
-    }
-    const body = card.createDiv({ cls: "mva-doc-body" });
-    body.createDiv({ cls: "mva-doc-title", text: noteBasename(path), attr: { title: path } });
-    body.createDiv({ cls: "mva-doc-kind", text: isActive ? "Current Document" : external ? "External" : "Document" });
-    const x = card.createSpan({ cls: "mva-doc-x", attr: { "aria-label": "Remove from context" } });
-    setIcon(x, "x");
-    this.clickable(x, (e) => {
-      e.stopPropagation();
-      if (isActive) this.excludeActiveNote = true;
-      else this.manualAttached = this.manualAttached.filter((p) => p !== path);
-      this.refreshContext();
-    });
-    this.clickable(card, () => (external ? this.openArtifactExternally(path) : this.openNote(path)));
-  }
-
-  private static readonly IMAGE_EXT = /^(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
-
-  /**
-   * Fill a card thumbnail: image files get a real image preview, markdown gets a
-   * tiny text preview ("document" look), everything else gets a file-type icon.
-   */
-  private async fillThumb(el: HTMLElement, path: string): Promise<void> {
-    const f = this.app.vault.getAbstractFileByPath(path);
-    if (!(f instanceof TFile)) {
-      el.addClass("is-icon");
-      setIcon(el, "file");
-      return;
-    }
-    if (ChatView.IMAGE_EXT.test(f.extension)) {
-      el.addClass("is-image");
-      const img = el.createEl("img");
-      img.src = this.app.vault.getResourcePath(f);
-      img.onerror = () => {
-        el.empty();
-        el.removeClass("is-image");
-        el.addClass("is-icon");
-        setIcon(el, "image");
-      };
-      return;
-    }
-    if (f.extension !== "md") {
-      el.addClass("is-icon");
-      setIcon(el, "file");
-      return;
-    }
-    try {
-      const txt = (await this.app.vault.cachedRead(f))
-        .replace(/^---\n[\s\S]*?\n---\n?/, "") // drop frontmatter
-        .replace(/!?\[\[[^\]]*\]\]/g, " ") // drop embeds / wikilinks
-        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // md links → their text
-        .replace(/[#>*_`~]/g, "")
-        .trim();
-      if (txt) el.setText(txt.slice(0, 260));
-      else {
-        el.addClass("is-icon");
-        setIcon(el, "file-text");
-      }
-    } catch {
-      el.addClass("is-icon");
-      setIcon(el, "file-text");
-    }
-  }
-
-  private pickNote(): void {
-    new NotePicker(this.app, (f) => {
-      if (!this.manualAttached.includes(f.path)) this.manualAttached.push(f.path);
-      this.refreshContext();
-    }).open();
-  }
-
-  private autoGrow(): void {
-    const el = this.inputEl;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
-  }
-
-  /** Use a custom prompt. A single prompt is inserted into the composer; a
-   *  workflow (steps separated by " >>> ") is queued and run in sequence.
-   *  {{variables}} across all steps are collected once, then applied to each. */
-  private usePrompt(promptText: string): void {
-    const steps = promptText.split(/\s+>>>\s+/).map((s) => s.trim()).filter(Boolean);
-    const vars = extractVars(promptText);
-    const run = (values: Record<string, string>) => {
-      if (steps.length > 1) {
-        this.runWorkflow(this.active, steps.map((s) => fillVars(s, values)));
-      } else {
-        this.insertAtComposer(fillVars(promptText, values));
-      }
-    };
-    if (vars.length === 0) {
-      run({});
-      return;
-    }
-    new PromptVarsModal(this.app, vars, run).open();
-  }
-
-  /** Run a multi-step workflow by enqueuing its steps; the turn-drain loop runs
-   *  them in order. Stop (which clears the queue) aborts the remaining steps. */
-  private runWorkflow(c: Convo, steps: string[]): void {
-    if (steps.length === 0) return;
-    const [first, ...rest] = steps;
-    for (const s of rest) c.queue.push({ text: s });
-    if (c.streaming) {
-      // Busy: queue the first step too; it runs when the current turn drains.
-      c.queue.unshift({ text: first });
-      this.renderQueue(c);
-    } else {
-      this.renderQueue(c);
-      void this.runTurn(c, first);
-    }
-  }
-
-  /** Insert text at the composer's caret (replacing any selection), then focus. */
-  private insertAtComposer(text: string): void {
-    const el = this.inputEl;
-    const start = el.selectionStart ?? el.value.length;
-    const end = el.selectionEnd ?? start;
-    el.value = el.value.slice(0, start) + text + el.value.slice(end);
-    const caret = start + text.length;
-    el.setSelectionRange(caret, caret);
-    el.focus();
-    this.autoGrow();
-  }
-
   /* --------------------------- rendering ---------------------------- */
 
   private renderEmptyState(): void {
@@ -2505,7 +1434,7 @@ export class ChatView extends ItemView {
       exoIcon: EXO_ICON,
       customPrompts: this.plugin.settings.customPrompts,
       featureSurfacing: this.plugin.settings.featureSurfacing,
-      usePrompt: (t) => this.usePrompt(t),
+      usePrompt: (t) => this.composer.usePrompt(t),
       attachRelated: (p) => this.attachRelated(p),
     });
   }
@@ -2513,9 +1442,9 @@ export class ChatView extends ItemView {
   /** Attach a surfaced related note as context and focus the composer (shared by
    *  the empty-state surfacing and the in-conversation tail variant). */
   private attachRelated(p: string): void {
-    if (!this.manualAttached.includes(p)) this.manualAttached.push(p);
-    this.refreshContext();
-    this.inputEl.focus();
+    this.composer.addManualAttached(p);
+    this.composer.refreshContext();
+    this.composer.getInputEl().focus();
   }
 
   /** Quieter "Related" chips appended below the last turn — only when the
@@ -3099,7 +2028,7 @@ export class ChatView extends ItemView {
     c.queue = [];
     this.renderQueue(c);
     c.updatedAt = Date.now();
-    this.updateUsage(null);
+    this.composer.updateUsage(null);
     if (c === this.active) {
       this.rebuildOutline();
       this.updateRecap();
@@ -3190,7 +2119,7 @@ export class ChatView extends ItemView {
     c.queue = [];
     this.renderQueue(c);
     c.updatedAt = Date.now();
-    this.updateUsage(null);
+    this.composer.updateUsage(null);
     if (c === this.active) this.rebuildOutline();
     this.persist();
     const note = `Rewound. Restored ${changed} file${changed === 1 ? "" : "s"}; session reset.`;
@@ -3304,8 +2233,8 @@ export class ChatView extends ItemView {
     this.clickable(attach, (e) => {
       e.stopPropagation();
       const rel = this.relPath(path);
-      if (!this.manualAttached.includes(rel)) this.manualAttached.push(rel);
-      this.refreshContext();
+      this.composer.addManualAttached(rel);
+      this.composer.refreshContext();
       new Notice(`Attached ${noteBasename(path)} to context.`);
     });
   }
@@ -3878,7 +2807,7 @@ export class ChatView extends ItemView {
         s.permissionMode = restore;
         void this.plugin.saveSettings();
         c.session?.setPermissionMode?.(restore);
-        this.refreshPermChipFn();
+        this.composer.refreshPerm();
       }
       finish(true, { behavior: "allow" });
     };
@@ -4312,25 +3241,26 @@ export class ChatView extends ItemView {
   }
 
   private send(): void {
-    const text = this.inputEl.value.trim();
-    if (!text && this.pendingImages.length === 0) return;
+    const text = this.composer.getInputValue().trim();
+    const pendingImages = this.composer.getPendingImages();
+    if (!text && pendingImages.length === 0) return;
     // `/compact [instructions]` is a local slash command, not a chat turn: route
     // it to compaction (mirrors the CLI, which intercepts /compact client-side)
     // instead of sending it to the model. Matches exactly "/compact" or
     // "/compact <instructions>" — never "/compactfoo".
     if (text === "/compact" || text.startsWith("/compact ")) {
       const instructions = text.slice("/compact".length).trim();
-      this.inputEl.value = "";
-      this.autoGrow();
+      this.composer.setInputValue("");
+      this.composer.autoGrow();
       // compactActive() Notices on the no-session / streaming / non-Claude cases.
       this.compactActive(instructions || undefined);
       return;
     }
-    this.inputEl.value = "";
-    this.autoGrow();
-    const images = this.pendingImages.length ? this.pendingImages : undefined;
-    this.pendingImages = [];
-    this.renderImageStrip();
+    this.composer.setInputValue("");
+    this.composer.autoGrow();
+    const images = pendingImages.length ? pendingImages : undefined;
+    this.composer.clearPendingImages();
+    this.composer.renderImageStrip();
     const c = this.active;
     // You always want to watch your own message land.
     this.pinnedToBottom = true;
@@ -4396,7 +3326,7 @@ export class ChatView extends ItemView {
     images?: ImageAttachment[],
     opts?: { sendPrefix?: string; isRecoveryRetry?: boolean }
   ): Promise<void> {
-    const paths = c === this.active ? this.contextPaths() : [];
+    const paths = c === this.active ? this.composer.contextPaths() : [];
     const message = paths.length
       ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${text}`
       : text;
@@ -4409,7 +3339,7 @@ export class ChatView extends ItemView {
     }
     // Add any `![[image]]` embeds referenced in the text (Claude only).
     if (c.provider === "claude") {
-      const embedded = await this.embeddedImages(text);
+      const embedded = await this.composer.embeddedImages(text);
       if (embedded.length) imgs = [...(imgs ?? []), ...embedded];
     }
 
@@ -4641,19 +3571,19 @@ export class ChatView extends ItemView {
           break;
         }
         case "usage":
-          if (c === this.active) this.updateUsage(e.usage);
+          if (c === this.active) this.composer.updateUsage(e.usage);
           break;
         case "rate-limit":
           // The badge is a single view-level control, so only the active convo's
           // quota drives it. Late reads (tab switch) come from session.rateLimit.
           if (c === this.active) {
-            this.lastRateLimit = {
+            this.composer.setLastRateLimit({
               status: e.status,
               utilization: e.utilization,
               resetsAt: e.resetsAt,
               windowType: e.windowType,
-            };
-            this.updateRateBadge();
+            });
+            this.composer.updateRateBadge();
           }
           break;
         case "compact": {
@@ -4943,22 +3873,5 @@ export class ChatView extends ItemView {
     const adapter = this.app.vault.adapter;
     if (adapter instanceof FileSystemAdapter) return adapter.getBasePath();
     return "";
-  }
-}
-
-/* ---------------------- note picker (multi-attach) ---------------------- */
-class NotePicker extends FuzzySuggestModal<TFile> {
-  constructor(app: import("obsidian").App, private onPick: (f: TFile) => void) {
-    super(app);
-    this.setPlaceholder("Attach a note to the conversation…");
-  }
-  getItems(): TFile[] {
-    return this.app.vault.getMarkdownFiles();
-  }
-  getItemText(f: TFile): string {
-    return f.path;
-  }
-  onChooseItem(f: TFile): void {
-    this.onPick(f);
   }
 }
