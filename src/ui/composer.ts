@@ -32,7 +32,6 @@ import {
 import { buildOptionRows, type SelectOption } from "../core/option-filter";
 import { selectionPreview } from "../core/selection-preview";
 import { clampEffort, effortOptionsFor } from "../core/model-tuning";
-import { permDotRisk } from "../core/perm-dot";
 
 /** Semantic risk modifier class for a toolbar selector option/chip ("" = neutral). */
 type RiskLevel = "" | "is-caution" | "is-danger";
@@ -105,11 +104,14 @@ export class Composer {
   private compactNudgeEl: HTMLElement | null = null;
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
-  // The tuning cascade (model + effort + permission) exposes these refresh fns:
-  // refreshModelChip re-syncs the whole cascade after a model/provider change;
-  // refreshPermChipFn re-syncs the cascade (model/effort/permission chips) on
-  // external changes.
+  // Three independent toolbar chips — Model, Effort, Permission — each expose a
+  // refresh fn so external changes (provider switch, plan-mode toggle, model
+  // pick) can re-sync their label without opening the chip's popover.
+  // refreshModelChip also cascades into refreshEffortChip, since valid effort
+  // tiers (and the label) depend on the chosen model; Permission only depends
+  // on provider, and onProviderChange calls refreshPermChipFn directly.
   private refreshModelChip: () => void = () => {};
+  private refreshEffortChip: () => void = () => {};
   private refreshPermChipFn: () => void = () => {};
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
@@ -475,10 +477,16 @@ export class Composer {
     // the select chips) rather than the OS/Obsidian menu.
     this.buildAttachButton(tb);
 
-    // Tuning cascade, left-aligned: Model → Effort → Permission. Model comes
-    // first because the other two derive from it (07-05: replaces the 03-07
-    // tune dialog, which hid the cascade behind one sliders icon).
-    this.buildTuneDialog(tb);
+    // Tuning cascade, left-aligned, each its own visible chip: Model → Effort →
+    // Permission. Model comes first because the other two derive from it (the
+    // chosen model gates which effort tiers are valid and which provider owns
+    // the permission/sandbox setting). Three chips instead of one dial (07-06:
+    // reverts the 07-05 consolidation) — a hidden "sliders" icon meant the
+    // active model/effort/permission weren't visible without a click; each
+    // chip now shows its own current value at rest.
+    this.buildModelSelect(tb);
+    this.buildEffortSelect(tb);
+    this.buildPermissionSelect(tb);
 
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
     // Context usage as a compact circular counter (donut ring). Hover for the
@@ -500,147 +508,168 @@ export class Composer {
     this.sendBtn.onclick = () => (this.host.streaming ? this.host.stop() : void this.host.send());
   }
 
-  /**
-   * The consolidated tune control: one `sliders-horizontal` icon opens a single
-   * popover (same `.mva-sel-pop` look as the chips) with labeled groups — Model,
-   * Effort, and Permission (Claude) / Sandbox (Codex). Picking applies immediately
-   * and the popover stays open (close on outside-click / Escape). A small always-
-   * visible permission dot sits beside the icon (color = active risk) and also
-   * opens the dialog. Effort tiers are per-model (core/model-tuning.ts): the group
-   * is omitted for models with no effort support and clamped on switch so an
-   * invalid tier never reaches the CLI.
-   */
-  private buildTuneDialog(tb: HTMLElement): void {
-    const s = this.host.plugin.settings;
-    const effortOpts = () => effortOptionsFor(this.host.provider, this.host.model);
-    // A stale stored combo (e.g. effort "max" saved, then a Codex model restored)
-    // must never reach the provider — clamp on open and on every model change.
-    const clampNow = () => {
-      const next = clampEffort(s.effort || "default", effortOpts());
-      if (next !== (s.effort || "default")) {
-        s.effort = next;
-        void this.host.plugin.saveSettings();
-      }
-    };
-
-    const wrap = tb.createDiv({ cls: "mva-sel mva-tune" });
-    const btn = wrap.createDiv({ cls: "mva-tb-btn", attr: { "aria-label": "Model, effort & permissions" } });
-    setIcon(btn, "sliders-horizontal");
-    setTooltip(btn, "Model, effort & permissions");
-    const pop = wrap.createDiv({ cls: "mva-sel-pop mva-tune-pop" });
+  /** Model selector — unified picker across BOTH providers (no separate
+   *  Provider chip), first in the cascade since Effort/Permission derive from
+   *  it. The chip shows the chosen model's label at rest; its popover groups
+   *  Claude/Codex options under quiet headers with a brand-color dot per row.
+   *  Picking a model from the other backend switches provider+model together
+   *  (that also flips Permission↔Sandbox — see onProviderChange). */
+  private buildModelSelect(tb: HTMLElement): void {
+    const wrap = tb.createDiv({ cls: "mva-sel" });
+    const chip = wrap.createDiv({ cls: "mva-sel-chip", attr: { "aria-label": "Model" } });
+    const pop = wrap.createDiv({ cls: "mva-sel-pop" });
     pop.hide();
 
-    // Always-visible permission dot beside the icon — active risk color + tooltip.
-    const dot = tb.createDiv({ cls: "mva-perm-dot", attr: { "aria-label": "Permission mode" } });
-    const refreshPermDot = () => {
-      const mode = this.host.provider === "codex" ? s.codexSandbox : s.permissionMode;
-      const label =
-        this.host.provider === "codex" ? Composer.codexSandboxLabel(s.codexSandbox) : Composer.permLabel(s.permissionMode);
-      dot.className = `mva-perm-dot ${permDotRisk(this.host.provider, mode)}`;
-      setTooltip(dot, this.host.provider === "codex" ? `Sandbox: ${label}` : `Permission: ${label}`);
-    };
-
-    // (Re)render the groups; a closure so external changes can refresh an open dialog.
-    const renderGroups = () => {
-      clampNow();
-      pop.empty();
-      this.tuneGroup(
-        pop,
-        "Model",
-        this.host.allModelChoices().map((m) => ({
-          value: m.id,
-          label: m.label,
-          dotColor: ADAPTERS[m.provider].brandColor,
-          group: m.provider === "claude" ? "Claude" : "Codex",
-        })),
-        this.host.model,
-        (v) => {
-          this.applyModelChoice(v); // switching provider flips Permission↔Sandbox
-          if (popover.isOpen()) renderGroups();
-        },
-        () => popover.close()
-      );
-      // Effort — only when the chosen model supports it.
-      const eo = effortOpts();
-      if (eo) {
-        this.tuneGroup(
-          pop,
-          "Effort",
-          eo.map(([value, label]) => ({ value, label })),
-          s.effort || "default",
-          (v) => {
-            s.effort = v;
-            void this.host.plugin.saveSettings();
-          },
-          () => popover.close()
-        );
-      }
-      // Permission (Claude) or Sandbox (Codex) — the actual tool gate.
-      if (this.host.provider === "codex") {
-        this.tuneGroup(
-          pop,
-          "Sandbox",
-          Composer.CODEX_SANDBOX_OPTS.map(([v, l]) => ({ value: v, label: l, risk: Composer.codexSandboxRisk(v) })),
-          s.codexSandbox,
-          (v) => this.applyPermChoice(v),
-          () => popover.close()
-        );
-      } else {
-        this.tuneGroup(
-          pop,
-          "Permission",
-          Composer.PERM_OPTS.map(([v, l]) => ({ value: v, label: l, risk: Composer.permRisk(v) })),
-          s.permissionMode,
-          (v) => this.applyPermChoice(v),
-          () => popover.close()
-        );
-      }
-    };
+    const refreshLabel = () => chip.setText(this.modelLabel());
 
     const popover = openablePopover({
-      anchor: btn,
-      extraAnchors: [dot],
+      anchor: chip,
       pop,
       wrap,
-      onOpen: renderGroups,
-      focus: () => pop.querySelector<HTMLElement>(".mva-tune-rows")?.focus(),
+      onOpen: () =>
+        this.renderOptionRows(
+          pop,
+          this.host.allModelChoices().map((m) => ({
+            value: m.id,
+            label: m.label,
+            dotColor: ADAPTERS[m.provider].brandColor,
+            group: m.provider === "claude" ? "Claude" : "Codex",
+          })),
+          this.host.model,
+          {
+            onPick: (v) => {
+              this.applyModelChoice(v);
+              popover.close();
+            },
+            onEscape: () => popover.close(),
+          }
+        ),
+      focus: () => pop.querySelector<HTMLElement>(".mva-sel-opt")?.focus(),
     });
-    clickable(btn, (e) => {
-      e.stopPropagation();
-      popover.toggle();
-    });
-    clickable(dot, (e) => {
+    clickable(chip, (e) => {
       e.stopPropagation();
       popover.toggle();
     });
     this.host.register(() => popover.close());
 
-    refreshPermDot();
-    // External-change hooks: model group re-renders on provider change; the perm
-    // hook re-renders the perm/sandbox group AND the dot (plan toggle, restore).
+    refreshLabel();
+    // External-change hook (provider switch, model pick): re-label this chip,
+    // then cascade into Effort — its valid tiers (and displayed label) depend
+    // on the model. Permission doesn't depend on the model, only the
+    // provider, and onProviderChange already calls refreshPerm() directly.
     this.refreshModelChip = () => {
-      if (popover.isOpen()) renderGroups();
-    };
-    this.refreshPermChipFn = () => {
-      refreshPermDot();
-      if (popover.isOpen()) renderGroups();
+      refreshLabel();
+      this.refreshEffortChip();
     };
   }
 
-  /** One labeled group inside the tune dialog: a quiet label + a rows container
-   *  rendered by the shared renderOptionRows (immediate-apply, stays open). */
-  private tuneGroup(
-    pop: HTMLElement,
-    label: string,
-    options: SelectOption[],
-    current: string,
-    onPick: (value: string) => void,
-    onEscape: () => void
-  ): void {
-    const group = pop.createDiv({ cls: "mva-tune-group" });
-    group.createDiv({ cls: "mva-tune-label", text: label });
-    const rows = group.createDiv({ cls: "mva-tune-rows" });
-    this.renderOptionRows(rows, options, current, { onPick, onEscape });
+  /** Effort selector — tiers are per-model (core/model-tuning.ts); a stale
+   *  stored tier (e.g. "max" saved, then a Codex model restored) is clamped
+   *  to the nearest valid one on every label refresh, so an invalid tier
+   *  never reaches the CLI and the chip never shows a value the model
+   *  doesn't support. Hidden entirely for models with no effort support. */
+  private buildEffortSelect(tb: HTMLElement): void {
+    const s = this.host.plugin.settings;
+    const effortOpts = () => effortOptionsFor(this.host.provider, this.host.model);
+
+    const wrap = tb.createDiv({ cls: "mva-sel" });
+    const chip = wrap.createDiv({ cls: "mva-sel-chip", attr: { "aria-label": "Effort" } });
+    const pop = wrap.createDiv({ cls: "mva-sel-pop" });
+    pop.hide();
+
+    const refreshLabel = () => {
+      const eo = effortOpts();
+      if (!eo) {
+        wrap.hide();
+        return;
+      }
+      wrap.show();
+      const next = clampEffort(s.effort || "default", eo);
+      if (next !== (s.effort || "default")) {
+        s.effort = next;
+        void this.host.plugin.saveSettings();
+      }
+      chip.setText(Composer.effortLabel(s.effort || "default"));
+    };
+
+    const popover = openablePopover({
+      anchor: chip,
+      pop,
+      wrap,
+      onOpen: () => {
+        const eo = effortOpts();
+        if (!eo) return;
+        this.renderOptionRows(pop, eo.map(([value, label]) => ({ value, label })), s.effort || "default", {
+          onPick: (v) => {
+            s.effort = v;
+            void this.host.plugin.saveSettings();
+            refreshLabel();
+            popover.close();
+          },
+          onEscape: () => popover.close(),
+        });
+      },
+      focus: () => pop.querySelector<HTMLElement>(".mva-sel-opt")?.focus(),
+    });
+    clickable(chip, (e) => {
+      e.stopPropagation();
+      popover.toggle();
+    });
+    this.host.register(() => popover.close());
+
+    refreshLabel();
+    this.refreshEffortChip = refreshLabel;
+  }
+
+  /** Permission (Claude) / Sandbox (Codex) selector — the actual tool gate,
+   *  last in the cascade. Provider-aware: Claude's `permissionMode` gates
+   *  tool calls via `canUseTool`; Codex has no such hook, so its sandbox
+   *  setting is what the chip shows and controls instead. Risk (caution/
+   *  danger) colors the chip itself — no separate always-visible dot. */
+  private buildPermissionSelect(tb: HTMLElement): void {
+    const s = this.host.plugin.settings;
+
+    const wrap = tb.createDiv({ cls: "mva-sel" });
+    const chip = wrap.createDiv({ cls: "mva-sel-chip", attr: { "aria-label": "Permission mode" } });
+    const pop = wrap.createDiv({ cls: "mva-sel-pop" });
+    pop.hide();
+
+    const refreshLabel = () => {
+      const risk = this.host.provider === "codex" ? Composer.codexSandboxRisk(s.codexSandbox) : Composer.permRisk(s.permissionMode);
+      chip.className = `mva-sel-chip${risk ? ` ${risk}` : ""}`;
+      chip.setText(
+        this.host.provider === "codex" ? Composer.codexSandboxLabel(s.codexSandbox) : Composer.permLabel(s.permissionMode)
+      );
+    };
+
+    const popover = openablePopover({
+      anchor: chip,
+      pop,
+      wrap,
+      onOpen: () => {
+        const options =
+          this.host.provider === "codex"
+            ? Composer.CODEX_SANDBOX_OPTS.map(([v, l]) => ({ value: v, label: l, risk: Composer.codexSandboxRisk(v) }))
+            : Composer.PERM_OPTS.map(([v, l]) => ({ value: v, label: l, risk: Composer.permRisk(v) }));
+        const current = this.host.provider === "codex" ? s.codexSandbox : s.permissionMode;
+        this.renderOptionRows(pop, options, current, {
+          onPick: (v) => {
+            this.applyPermChoice(v);
+            popover.close();
+          },
+          onEscape: () => popover.close(),
+        });
+      },
+      focus: () => pop.querySelector<HTMLElement>(".mva-sel-opt")?.focus(),
+    });
+    clickable(chip, (e) => {
+      e.stopPropagation();
+      popover.toggle();
+    });
+    this.host.register(() => popover.close());
+
+    refreshLabel();
+    this.refreshPermChipFn = refreshLabel;
   }
 
   /** Apply a model pick from the tune dialog (mirrors the old model chip's
