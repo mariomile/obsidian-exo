@@ -12,7 +12,7 @@ import { renderStoreBlock, targetStoreFile, type LlmWritePlan } from "../core/dr
  *   2. **Promote** — turn a learning with enough combined evidence into a rule.
  *   3. **Stale** — flag rules that haven't been updated in a long time.
  *
- * Because this mutates Mario's real memory, every mutating pass records a
+ * Because this mutates the user's real memory, every mutating pass records a
  * before-image of each touched file into a {@link DreamSnapshot}, so the entire
  * pass is reversible via {@link undoPlan}. `computePlan` is strictly read-only.
  */
@@ -34,6 +34,17 @@ export interface DreamSnapshot {
   /** Before-image per touched file. `before === null` => the pass CREATED it (delete on undo). */
   files: { path: string; before: string | null }[];
 }
+
+/** Raised when the before-image cannot be durably stored. Callers must abort
+ *  the pass rather than perform a mutation that cannot be undone. */
+export class DreamSnapshotPersistenceError extends Error {
+  constructor() {
+    super("Exo couldn't save the dream-pass undo snapshot; no further changes were applied.");
+    this.name = "DreamSnapshotPersistenceError";
+  }
+}
+
+export type DreamSnapshotCheckpoint = (snapshot: DreamSnapshot) => Promise<void>;
 
 const LEARNINGS_DIR = "_system/memory/learnings";
 const RULES_DIR = "_system/memory/rules";
@@ -151,7 +162,12 @@ export function computePlan(app: App): DreamPlan {
  * Each item is wrapped in try/catch: one failure records what it can and does
  * not abort the rest of the pass.
  */
-export async function applyPlan(app: App, plan: DreamPlan, ranAt: string): Promise<DreamSnapshot> {
+export async function applyPlan(
+  app: App,
+  plan: DreamPlan,
+  ranAt: string,
+  onCheckpoint?: DreamSnapshotCheckpoint
+): Promise<DreamSnapshot> {
   const snapshots = new Map<string, string | null>();
   const snap = (path: string, before: string | null): void => {
     if (!snapshots.has(path)) snapshots.set(path, before);
@@ -160,6 +176,14 @@ export async function applyPlan(app: App, plan: DreamPlan, ranAt: string): Promi
     const f = app.vault.getAbstractFileByPath(path);
     return f instanceof TFile ? f : null;
   };
+  const checkpoint = async (): Promise<void> => {
+    if (onCheckpoint) {
+      await onCheckpoint({
+        ranAt,
+        files: [...snapshots.entries()].map(([path, before]) => ({ path, before })),
+      });
+    }
+  };
 
   // 1) Dedup first: bump the survivor's evidence, delete the duplicates.
   for (const entry of plan.dedup) {
@@ -167,6 +191,7 @@ export async function applyPlan(app: App, plan: DreamPlan, ranAt: string): Promi
       const keepFile = asFile(entry.keep);
       if (keepFile) {
         snap(entry.keep, await app.vault.read(keepFile));
+        await checkpoint();
         await app.fileManager.processFrontMatter(keepFile, (f) => {
           f.evidence = entry.evidence;
           f.last_confirmed = today();
@@ -177,12 +202,15 @@ export async function applyPlan(app: App, plan: DreamPlan, ranAt: string): Promi
           const dropFile = asFile(dropPath);
           if (!dropFile) continue;
           snap(dropPath, await app.vault.read(dropFile));
+          await checkpoint();
           await app.vault.delete(dropFile);
-        } catch {
+        } catch (err) {
+          if (err instanceof DreamSnapshotPersistenceError) throw err;
           /* skip this drop, keep going */
         }
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DreamSnapshotPersistenceError) throw err;
       /* skip this dedup entry */
     }
   }
@@ -195,6 +223,7 @@ export async function applyPlan(app: App, plan: DreamPlan, ranAt: string): Promi
       const sourceBasename = fromFile.basename;
       snap(entry.from, await app.vault.read(fromFile));
       snap(entry.to, null); // target is created by the rename
+      await checkpoint();
       await app.fileManager.renameFile(fromFile, entry.to);
       const movedFile = asFile(entry.to);
       if (movedFile) {
@@ -207,7 +236,8 @@ export async function applyPlan(app: App, plan: DreamPlan, ranAt: string): Promi
           delete f.last_confirmed;
         });
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DreamSnapshotPersistenceError) throw err;
       /* skip this promote entry */
     }
   }
@@ -218,10 +248,12 @@ export async function applyPlan(app: App, plan: DreamPlan, ranAt: string): Promi
       const file = asFile(entry.path);
       if (!file) continue;
       snap(entry.path, await app.vault.read(file));
+      await checkpoint();
       await app.fileManager.processFrontMatter(file, (f) => {
         f.status = "stale";
       });
-    } catch {
+    } catch (err) {
+      if (err instanceof DreamSnapshotPersistenceError) throw err;
       /* skip this stale entry */
     }
   }
@@ -328,13 +360,22 @@ export async function applyLlmPlan(
   app: App,
   writePlan: LlmWritePlan,
   queue: WriteQueue,
-  ranAt: string
+  ranAt: string,
+  onCheckpoint?: DreamSnapshotCheckpoint
 ): Promise<DreamSnapshot> {
   const snapshots = new Map<string, string | null>();
   const snap = (path: string, before: string | null): void => {
     if (!snapshots.has(path)) snapshots.set(path, before);
   };
   const date = ranAt.slice(0, 10);
+  const checkpoint = async (): Promise<void> => {
+    if (onCheckpoint) {
+      await onCheckpoint({
+        ranAt,
+        files: [...snapshots.entries()].map(([path, before]) => ({ path, before })),
+      });
+    }
+  };
 
   // 1) Store entries (merge / supersede / import) → append to the monthly file.
   if (writePlan.storeEntries.length) {
@@ -345,9 +386,11 @@ export async function applyLlmPlan(
       if (existing instanceof TFile) {
         const before = await app.vault.read(existing);
         snap(path, before);
+        await checkpoint();
         await app.vault.modify(existing, `${before.replace(/\s+$/, "")}\n\n${block}\n`);
       } else {
         snap(path, null);
+        await checkpoint();
         await ensureParent(app, path);
         await app.vault.create(path, `${block}\n`);
       }
@@ -362,9 +405,11 @@ export async function applyLlmPlan(
       const existing = app.vault.getAbstractFileByPath(path);
       if (existing instanceof TFile) {
         snap(path, await app.vault.read(existing));
+        await checkpoint();
         await app.vault.modify(existing, content);
       } else {
         snap(path, null);
+        await checkpoint();
         await ensureParent(app, path);
         await app.vault.create(path, content);
       }

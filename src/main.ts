@@ -7,7 +7,15 @@ import { ADAPTERS } from "./providers/registry";
 import { resolveCli } from "./cli";
 import { InlineEditModal } from "./ui/inline-edit";
 import type { AgentEvent } from "./providers/types";
-import { computePlan, applyPlan, applyLlmPlan, mergeSnapshots, undoPlan, type DreamSnapshot } from "./obsidian/dream";
+import {
+  computePlan,
+  applyPlan,
+  applyLlmPlan,
+  mergeSnapshots,
+  undoPlan,
+  DreamSnapshotPersistenceError,
+  type DreamSnapshot,
+} from "./obsidian/dream";
 import { runDreamLlm, type DreamLlmResult } from "./obsidian/dream-llm";
 import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidian/claudemem";
 import { formatDreamSummary } from "./core/dream-proposals";
@@ -45,6 +53,11 @@ export default class ExoPlugin extends Plugin {
    * `createObsidianToolServer` and `MemoryObserver`.
    */
   readonly memoryWriteQueue = new WriteQueue();
+  /** Serialize temp/backup rotation for conversation history. Multiple views and
+   *  rapid UI updates may call saveConversations concurrently; sharing the same
+   *  .tmp path without a queue can regress or temporarily remove the main file. */
+  private readonly conversationWriteQueue = new WriteQueue();
+  private readonly dreamSnapshotWriteQueue = new WriteQueue();
 
   /** Git auto-commit safety net — debounce/cadence bookkeeping (in-memory
    *  only; resets on reload, which is fine, it's just scheduling state). */
@@ -227,6 +240,19 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
+  /**
+   * Public cross-plugin entry point: reveal Exo and start a new default-model
+   * chat seeded with `query` (sent immediately unless `autoSend` is false).
+   * Consumed by sibling plugins — e.g. Sonar's "Search with Exo" row — so they
+   * don't have to reach into ChatView internals. Safe to call before the view
+   * exists; it's created on demand.
+   */
+  async askExo(query: string, autoSend = true): Promise<void> {
+    await this.activateView();
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (view instanceof ChatView) view.askInNewConversation(query, autoSend);
+  }
+
   private vaultPath(): string {
     const a = this.app.vault.adapter;
     return a instanceof FileSystemAdapter ? a.getBasePath() : ".";
@@ -407,7 +433,7 @@ export default class ExoPlugin extends Plugin {
       const cli = await resolveCli("claude", this.settings.claudeBin);
       const session = ADAPTERS.claude.createSession({
         cli,
-        model: "claude-haiku-4-5", // explicit Mario directive — cheap/fast one-liner
+        model: "claude-haiku-4-5", // product default — cheap/fast one-liner
         effort: "default",
         cwd: this.vaultPath(),
         permissionMode: "default",
@@ -455,7 +481,7 @@ export default class ExoPlugin extends Plugin {
    * call can't leak.
    *
    * @param opts.model    Cheap model id (defaults to Haiku — the observer's model
-   *                      by Mario's directive; the dream stage passes a Sonnet id).
+   *                      by product policy; the dream stage passes a Sonnet id).
    * @param opts.timeoutMs Hard ceiling (default 15s).
    * @param opts.onUsage  W0 cost governance: invoked once with the real
    *                      input+output token count for this call, read from the
@@ -467,7 +493,7 @@ export default class ExoPlugin extends Plugin {
     prompt: string,
     opts: { signal: AbortSignal; model?: string; timeoutMs?: number; onUsage?: (tokens: number) => void }
   ): Promise<string> {
-    // Model floor is Sonnet (Mario's directive: never Haiku for background
+    // Model floor is Sonnet (product policy: never Haiku for background
     // passes) — default to the W0 backgroundModel setting, not a hardcoded id.
     const { signal, timeoutMs = 15_000, onUsage } = opts;
     const model = opts.model || this.settings.backgroundModel || "claude-sonnet-5";
@@ -526,19 +552,13 @@ export default class ExoPlugin extends Plugin {
    *  provider's real per-turn token count (`lastTurnTokens`) isn't available. */
   private static readonly OBSERVER_TOKEN_ESTIMATE = 1500;
 
-  /** Back-compat thin wrapper: the observer chassis, on the Haiku default. Kept so
+  /** Back-compat thin wrapper around the observer chassis. Kept so
    *  ChatView keeps calling `runObserver(prompt, signal)` with unchanged behavior.
    *
-   *  W0 cost governance: gated through the shared background budget exactly like
-   *  the dream-LLM stage and the every-n-steps step-observer — `canSpend`
-   *  BEFORE running (skip silently, one console line, no Notice, on exhaustion
-   *  or master-toggle-OFF), `recordSpend` AFTER, using the real per-turn token
-   *  count from the SDK's `result` message when the provider exposes it. */
+   *  Callers gate with `canRunObserver()` before dispatch. This method records the
+   *  real per-turn token count from the SDK result (or a bounded fallback) exactly
+   *  once after the call. */
   async runObserver(prompt: string, signal: AbortSignal): Promise<string> {
-    if (!this.checkBackgroundBudget(ExoPlugin.OBSERVER_TOKEN_ESTIMATE)) {
-      console.info("[Exo] observer skipped: background budget exhausted or disabled.");
-      return "";
-    }
     let tokens: number | null = null;
     const out = await this.runUtilityPass(prompt, {
       signal,
@@ -549,6 +569,10 @@ export default class ExoPlugin extends Plugin {
     });
     this.recordBackgroundSpend(tokens ?? ExoPlugin.OBSERVER_TOKEN_ESTIMATE);
     return out;
+  }
+
+  canRunObserver(): boolean {
+    return this.checkBackgroundBudget(ExoPlugin.OBSERVER_TOKEN_ESTIMATE);
   }
 
   private inlineEdit(editor: Editor): void {
@@ -647,44 +671,56 @@ export default class ExoPlugin extends Plugin {
    *   3. rename `.tmp` over the main path
    */
   async saveConversations(data: unknown[]): Promise<boolean> {
-    const adapter = this.app.vault.adapter;
-    const p = this.convoFile();
-    const tmp = `${p}.tmp`;
-    const bak = `${p}.bak`;
-    try {
-      const json = JSON.stringify(data);
-      // 1. Stage the new content. A crash here leaves main (and bak) untouched.
-      await adapter.write(tmp, json);
-      // 2. Rotate the live main file to .bak before replacing it. Rename can't
-      //    overwrite an existing target on every platform, so clear the old bak
-      //    first. Main is still present throughout this step.
-      if (await adapter.exists(p)) {
-        if (await adapter.exists(bak)) await adapter.remove(bak);
-        await adapter.rename(p, bak);
-      }
-      // 3. Move the staged file over the (now absent) main path.
-      await adapter.rename(tmp, p);
-      return true;
-    } catch {
-      // Drop a stray tmp so a half-written file can't be mistaken for real data.
+    // Snapshot the payload at call time; the caller's arrays keep mutating while
+    // this request waits behind earlier saves.
+    const json = JSON.stringify(data);
+    return this.conversationWriteQueue.enqueue(async () => {
+      const adapter = this.app.vault.adapter;
+      const p = this.convoFile();
+      const tmp = `${p}.tmp`;
+      const bak = `${p}.bak`;
       try {
-        if (await adapter.exists(tmp)) await adapter.remove(tmp);
+        // 1. Stage the new content. A crash here leaves main (and bak) untouched.
+        await adapter.write(tmp, json);
+        // 2. Rotate the live main file to .bak before replacing it. Rename can't
+        //    overwrite an existing target on every platform, so clear the old bak
+        //    first. Main is still present throughout this step.
+        if (await adapter.exists(p)) {
+          if (await adapter.exists(bak)) await adapter.remove(bak);
+          await adapter.rename(p, bak);
+        }
+        // 3. Move the staged file over the (now absent) main path.
+        await adapter.rename(tmp, p);
+        return true;
       } catch {
-        /* ignore */
+        // Drop a stray tmp so a half-written file can't be mistaken for real data.
+        try {
+          if (await adapter.exists(tmp)) await adapter.remove(tmp);
+        } catch {
+          /* ignore */
+        }
+        return false;
       }
-      return false;
-    }
+    });
   }
 
   private dreamFile(): string {
     return `${this.manifest.dir}/dream-snapshot.json`;
   }
-  async saveDreamSnapshot(s: DreamSnapshot): Promise<void> {
-    try {
-      await this.app.vault.adapter.write(this.dreamFile(), JSON.stringify(s));
-    } catch {
-      /* non-fatal */
-    }
+  async saveDreamSnapshot(s: DreamSnapshot): Promise<boolean> {
+    const json = JSON.stringify(s);
+    return this.dreamSnapshotWriteQueue.enqueue(async () => {
+      try {
+        await this.app.vault.adapter.write(this.dreamFile(), json);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  private async requireDreamSnapshot(s: DreamSnapshot): Promise<void> {
+    if (!(await this.saveDreamSnapshot(s))) throw new DreamSnapshotPersistenceError();
   }
   async loadDreamSnapshot(): Promise<DreamSnapshot | null> {
     try {
@@ -713,10 +749,16 @@ export default class ExoPlugin extends Plugin {
     const llm = await this.maybeRunDreamLlm();
     new DreamModal(this.app, plan, llm, async () => {
       const ranAt = new Date().toISOString();
-      let snap = await applyPlan(this.app, plan, ranAt);
+      let snap = await applyPlan(this.app, plan, ranAt, (partial) => this.requireDreamSnapshot(partial));
 
       if (llm && (llm.writePlan.storeEntries.length || llm.writePlan.ruleDrafts.length)) {
-        const llmSnap = await applyLlmPlan(this.app, llm.writePlan, this.memoryWriteQueue, ranAt);
+        const llmSnap = await applyLlmPlan(
+          this.app,
+          llm.writePlan,
+          this.memoryWriteQueue,
+          ranAt,
+          (partial) => this.requireDreamSnapshot(mergeSnapshots(snap, partial))
+        );
         snap = mergeSnapshots(snap, llmSnap);
         // Watermark advances ONLY on apply (never on propose/preview).
         if (llm.writePlan.importedIds.length) {
@@ -729,7 +771,7 @@ export default class ExoPlugin extends Plugin {
         await this.commitDreamApply(formatDreamSummary(llm.writePlan.summary));
       }
 
-      await this.saveDreamSnapshot(snap);
+      await this.requireDreamSnapshot(snap);
       const s = llm?.writePlan.summary;
       const llmBit = s ? `; LLM: merged ${s.merged}, superseded ${s.superseded}, drafts ${s.ruleDrafts}, imported ${s.imported}` : "";
       new Notice(
@@ -848,11 +890,22 @@ export default class ExoPlugin extends Plugin {
     const period = sched === "daily" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
     if (this.settings.lastDreamPass && now - this.settings.lastDreamPass < period) return;
     const plan = computePlan(this.app);
+    if (plan.promote.length + plan.dedup.length + plan.stale.length === 0) {
+      this.settings.lastDreamPass = now;
+      await this.saveSettings();
+      return;
+    }
+    try {
+      const ranAt = new Date().toISOString();
+      const snap = await applyPlan(this.app, plan, ranAt, (partial) => this.requireDreamSnapshot(partial));
+      await this.requireDreamSnapshot(snap);
+    } catch (err) {
+      console.error("[Exo] scheduled dream pass failed:", err);
+      new Notice(err instanceof Error ? err.message : "Scheduled dream pass failed; see the developer console.");
+      return;
+    }
     this.settings.lastDreamPass = now;
     await this.saveSettings();
-    if (plan.promote.length + plan.dedup.length + plan.stale.length === 0) return;
-    const snap = await applyPlan(this.app, plan, new Date().toISOString());
-    await this.saveDreamSnapshot(snap);
     new Notice(
       `Scheduled dream pass: ${plan.promote.length} promoted, ${plan.dedup.length} merged, ${plan.stale.length} stale. Undo from the command palette.`
     );

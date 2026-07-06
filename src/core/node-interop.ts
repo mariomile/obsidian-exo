@@ -27,7 +27,9 @@ export function makeTolerantSetMaxListeners(orig: SetMaxListeners): SetMaxListen
     for (const target of eventTargets) {
       try {
         orig(n, target);
-      } catch {
+      } catch (err) {
+        const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
+        if (!(err instanceof TypeError && code === "ERR_INVALID_ARG_TYPE")) throw err;
         // DOM EventTarget handed to a Node API — skip it. Only the
         // leak-warning threshold is lost for this target.
       }

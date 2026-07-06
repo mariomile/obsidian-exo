@@ -85,9 +85,9 @@ describe("parseProposals", () => {
 
 describe("parseKnownFalse", () => {
   it("parses one tolerant regex per non-blank, non-comment line", () => {
-    const md = `# Truth firewall patterns\n\nfounded Coverzen\ntwo exits?\n\n# comment ignored`;
+    const md = `# Truth firewall patterns\n\nfounded ExampleCo\ntwo exits?\n\n# comment ignored`;
     const pats = parseKnownFalse(md);
-    expect(pats.some((r) => r.test("Mario founded Coverzen in 2020"))).toBe(true);
+    expect(pats.some((r) => r.test("The user founded ExampleCo in 2020"))).toBe(true);
     expect(pats.some((r) => r.test("he had two exit events"))).toBe(true);
   });
 
@@ -104,8 +104,8 @@ describe("parseKnownFalse", () => {
   });
 
   it("is case-insensitive", () => {
-    const pats = parseKnownFalse("cofounded isendu");
-    expect(pats[0].test("Mario COFOUNDED ISENDU")).toBe(true);
+    const pats = parseKnownFalse("cofounded sampleco");
+    expect(pats[0].test("The user COFOUNDED SAMPLECO")).toBe(true);
   });
 });
 
@@ -146,8 +146,8 @@ describe("runGate — negative selection", () => {
   });
 
   it("(b) culls a proposal whose text matches a known-false pattern", () => {
-    const bad: Proposal = { kind: "import", claudememId: 9, text: "Mario founded Coverzen", reason: "x" };
-    const res = runGate([bad, imp], ctx({ knownFalse: parseKnownFalse("founded Coverzen") }));
+    const bad: Proposal = { kind: "import", claudememId: 9, text: "The user founded ExampleCo", reason: "x" };
+    const res = runGate([bad, imp], ctx({ knownFalse: parseKnownFalse("founded ExampleCo") }));
     expect(res.kept).toEqual([imp]);
     expect(res.culled).toHaveLength(1);
     expect(res.culled[0].reason).toMatch(/known-false/i);
@@ -166,10 +166,10 @@ describe("runGate — negative selection", () => {
   });
 
   it("culls each bad proposal for its own reason in one pass", () => {
-    const bad: Proposal = { kind: "import", claudememId: 9, text: "founded Coverzen", reason: "x" };
+    const bad: Proposal = { kind: "import", claudememId: 9, text: "founded ExampleCo", reason: "x" };
     const res = runGate([merge, supersede, bad, imp], ctx({
       userEntryIds: new Set(["mem-2"]),
-      knownFalse: parseKnownFalse("founded Coverzen"),
+      knownFalse: parseKnownFalse("founded ExampleCo"),
       appliedKeys: new Set([proposalKey(supersede)]),
     }));
     expect(res.kept).toEqual([imp]);

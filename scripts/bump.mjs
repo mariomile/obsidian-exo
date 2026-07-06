@@ -2,7 +2,7 @@
 /**
  * Version bump — single source of truth for a release's version number.
  *
- * Usage:  node scripts/bump.mjs <X.Y.Z>   (or: npm run bump -- <X.Y.Z>)
+ * Usage:  node scripts/bump.mjs <X.Y.Z>   (or: pnpm bump -- <X.Y.Z>)
  *
  * Updates, in lockstep, every file that carries the plugin version:
  *   - manifest.json           .version
@@ -14,7 +14,7 @@
  *
  * All four files are tab-indented; this script preserves that. It does NOT touch
  * dependency versions in the lockfile — only the two top-level project fields.
- * After running, rebuild (`npm run build`) to refresh main.js.
+ * After running, rebuild (`pnpm build`) to refresh main.js.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -71,4 +71,4 @@ console.log(`  manifest.json      version = ${version}`);
 console.log(`  package.json       version = ${version}`);
 console.log(`  package-lock.json  version = ${version} (project fields only)`);
 console.log(`  versions.json      "${version}": "${prevMinApp}"`);
-console.log(`\nNext: npm run build`);
+console.log(`\nNext: pnpm build`);

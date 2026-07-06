@@ -12,7 +12,7 @@ import {
 const REAL_JSON = JSON.stringify([
   {
     id: 101,
-    project: "-Users-mariomiletta-Vaults-marioverse-ai",
+    project: "-Users-example-Vaults-example-vault",
     type: "discovery",
     title: "WriteQueue serializes store writes",
     subtitle: "one FIFO for remember + observer",
@@ -22,7 +22,7 @@ const REAL_JSON = JSON.stringify([
   },
   {
     id: 102,
-    project: "-Users-mariomiletta-Vaults-marioverse-ai",
+    project: "-Users-example-Vaults-example-vault",
     type: "bugfix",
     title: "Fixed the boot preamble cap",
     subtitle: "",
@@ -38,7 +38,7 @@ describe("parseObservations", () => {
     expect(obs).toHaveLength(2);
     expect(obs[0]).toMatchObject<Partial<ClaudeMemObservation>>({
       id: 101,
-      project: "-Users-mariomiletta-Vaults-marioverse-ai",
+      project: "-Users-example-Vaults-example-vault",
       type: "discovery",
       title: "WriteQueue serializes store writes",
       subtitle: "one FIFO for remember + observer",

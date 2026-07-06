@@ -26,7 +26,7 @@ export type MemoryKind = "preference" | "fact" | "decision" | "lesson";
 
 /**
  * Provenance of a stored memory:
- *  - `user`      — Mario's verbatim words / explicit statements (the `remember` tool).
+ *  - `user`      — the user's verbatim words / explicit statements (the `remember` tool).
  *  - `generated` — written autonomously by a background pass (observer / dream).
  * On disk the sentinel is `@user` / `@generated`; the line is emitted ONLY for
  * `generated`, so legacy `@user` files round-trip byte-identical (missing → user).

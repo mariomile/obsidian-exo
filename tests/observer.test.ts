@@ -150,9 +150,9 @@ describe("dedupeCandidates", () => {
   const novel: Candidate = { kind: "decision", text: "The project ships in Q3", tags: [] };
 
   it("drops a candidate that near-duplicates an existing entry", () => {
-    const existing = ["Mario prefers dark mode in the editor"];
+    const existing = ["The user prefers dark mode in the editor"];
     const cands: Candidate[] = [
-      { kind: "preference", text: "Mario prefers dark mode in the editor.", tags: [] },
+      { kind: "preference", text: "The user prefers dark mode in the editor.", tags: [] },
       novel,
     ];
     expect(dedupeCandidates(cands, existing)).toEqual([novel]);
@@ -186,7 +186,7 @@ describe("removeEntriesById (observer undo primitive)", () => {
   });
 
   it("removes only the named ids, preserving every other block verbatim", () => {
-    const user = entry("mem-1000", "user", "Mario ships on Fridays");
+    const user = entry("mem-1000", "user", "The user ships on Fridays");
     const gen1 = entry("mem-2000", "generated", "Observer thought A");
     const gen2 = entry("mem-2001", "generated", "Observer thought B");
     const file = [formatEntry(user), formatEntry(gen1), formatEntry(gen2)].join("\n\n") + "\n";
@@ -195,7 +195,7 @@ describe("removeEntriesById (observer undo primitive)", () => {
 
     const parsed = parseStoreFile(out);
     expect(parsed.map((e) => e.id)).toEqual(["mem-1000"]);
-    expect(parsed[0].text).toBe("Mario ships on Fridays");
+    expect(parsed[0].text).toBe("The user ships on Fridays");
     expect(parsed[0].source).toBe("user");
   });
 

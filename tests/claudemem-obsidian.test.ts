@@ -67,7 +67,7 @@ describe("readUnimportedObservations — failure modes (all silent no-ops)", () 
     mockExecFileOnce(() => new Error("Error: unable to open database file"));
     const { app } = fakeApp();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const obs = await readUnimportedObservations(app, { projects: ["marioverse.ai"], limit: 100 });
+    const obs = await readUnimportedObservations(app, { projects: ["example-vault"], limit: 100 });
     expect(obs).toEqual([]);
     expect(warn).toHaveBeenCalledTimes(1);
   });
@@ -80,7 +80,7 @@ describe("readUnimportedObservations — failure modes (all silent no-ops)", () 
     });
     const { app } = fakeApp();
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const obs = await readUnimportedObservations(app, { projects: ["marioverse.ai"], limit: 100 });
+    const obs = await readUnimportedObservations(app, { projects: ["example-vault"], limit: 100 });
     expect(obs).toEqual([]);
   });
 
@@ -88,14 +88,14 @@ describe("readUnimportedObservations — failure modes (all silent no-ops)", () 
     mockExecFileOnce(() => new Error("Parse error: no such table: observations"));
     const { app } = fakeApp();
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const obs = await readUnimportedObservations(app, { projects: ["marioverse.ai"], limit: 100 });
+    const obs = await readUnimportedObservations(app, { projects: ["example-vault"], limit: 100 });
     expect(obs).toEqual([]);
   });
 
   it("returns [] on malformed JSON stdout rather than throwing", async () => {
     mockExecFileOnce(() => ({ stdout: "not json {[" }));
     const { app } = fakeApp();
-    const obs = await readUnimportedObservations(app, { projects: ["marioverse.ai"], limit: 100 });
+    const obs = await readUnimportedObservations(app, { projects: ["example-vault"], limit: 100 });
     expect(obs).toEqual([]);
   });
 
@@ -111,8 +111,8 @@ describe("readUnimportedObservations — failure modes (all silent no-ops)", () 
     mockExecFileOnce(() => new Error("boom 2"));
     const { app } = fakeApp();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await readUnimportedObservations(app, { projects: ["marioverse.ai"], limit: 100 });
-    await readUnimportedObservations(app, { projects: ["marioverse.ai"], limit: 100 });
+    await readUnimportedObservations(app, { projects: ["example-vault"], limit: 100 });
+    await readUnimportedObservations(app, { projects: ["example-vault"], limit: 100 });
     expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
   });
 });
@@ -123,7 +123,7 @@ describe("readUnimportedObservations — happy path & read-only argv discipline"
       stdout: JSON.stringify([
         {
           id: 7,
-          project: "marioverse.ai",
+          project: "example-vault",
           type: "discovery",
           title: "t",
           subtitle: "s",
@@ -134,15 +134,15 @@ describe("readUnimportedObservations — happy path & read-only argv discipline"
       ]),
     }));
     const { app } = fakeApp();
-    const obs = await readUnimportedObservations(app, { projects: ["marioverse.ai"], limit: 100 });
+    const obs = await readUnimportedObservations(app, { projects: ["example-vault"], limit: 100 });
     expect(obs).toHaveLength(1);
-    expect(obs[0]).toMatchObject({ id: 7, project: "marioverse.ai", title: "t" });
+    expect(obs[0]).toMatchObject({ id: 7, project: "example-vault", title: "t" });
   });
 
   it("invokes sqlite3 as explicit argv with -readonly (never a shell string)", async () => {
     mockExecFileOnce(() => ({ stdout: "[]" }));
     const { app } = fakeApp();
-    await readUnimportedObservations(app, { projects: ["marioverse.ai"], limit: 100 });
+    await readUnimportedObservations(app, { projects: ["example-vault"], limit: 100 });
     expect(execFileMock).toHaveBeenCalledTimes(1);
     const [cmd, args] = execFileMock.mock.calls[0] as [string, string[]];
     expect(cmd).toBe("sqlite3");
@@ -159,10 +159,10 @@ describe("readUnimportedObservations — happy path & read-only argv discipline"
   it("filters by the configured project(s) using the real DB naming (not a path-slug)", async () => {
     mockExecFileOnce(() => ({ stdout: "[]" }));
     const { app } = fakeApp();
-    await readUnimportedObservations(app, { projects: ["marioverse.ai"], limit: 100 });
+    await readUnimportedObservations(app, { projects: ["example-vault"], limit: 100 });
     const args = execFileMock.mock.calls[0][1] as string[];
     const sql = args[args.length - 1];
-    expect(sql).toContain("'marioverse.ai'");
+    expect(sql).toContain("'example-vault'");
   });
 });
 

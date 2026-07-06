@@ -12,7 +12,11 @@ function strictOrig(): { fn: (n?: number, ...t: unknown[]) => void; calls: unkno
     calls.push([n, ...targets]);
     for (const t of targets) {
       if (!(t instanceof FakeNodeTarget)) {
-        throw new TypeError('The "eventTargets" argument must be an instance of EventTarget.');
+        const err = new TypeError('The "eventTargets" argument must be an instance of EventTarget.') as TypeError & {
+          code: string;
+        };
+        err.code = "ERR_INVALID_ARG_TYPE";
+        throw err;
       }
     }
   };
@@ -41,6 +45,14 @@ describe("makeTolerantSetMaxListeners", () => {
     const { fn } = strictOrig();
     const shim = makeTolerantSetMaxListeners(fn);
     expect(() => shim(50, new FakeDomSignal())).not.toThrow();
+  });
+
+  it("rethrows unrelated failures instead of hiding global Node API errors", () => {
+    const err = new RangeError("n must be non-negative");
+    const shim = makeTolerantSetMaxListeners(() => {
+      throw err;
+    });
+    expect(() => shim(-1, new FakeNodeTarget())).toThrow(err);
   });
 
   it("isTolerantShim identifies the shim and only the shim (idempotency guard)", () => {

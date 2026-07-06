@@ -5,4 +5,8 @@
  * instead of crashing. Deliberately intentionally sparse — add exports only if
  * a test genuinely needs one.
  */
-export {};
+export class TFile {
+  path = "";
+  basename = "";
+  stat = { mtime: 0 };
+}

@@ -102,7 +102,7 @@ export function buildDreamPrompt(input: {
   const lines: string[] = [];
   lines.push(
     "You are Exo's memory dream stage. Reason over the memory below and propose ONLY consolidation changes.",
-    "You PROPOSE; a deterministic kernel disposes. Never invent facts. Prefer Mario's own words.",
+    "You PROPOSE; a deterministic kernel disposes. Never invent facts. Prefer the user's own words.",
     "",
     "Return ONLY a JSON object of this exact shape (no prose, no code fences):",
     '{ "proposals": [',

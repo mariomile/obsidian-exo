@@ -51,6 +51,7 @@ import { buildRecap, isRecoverableSessionError, resolveRecovery } from "./core/r
 import { TurnWatchdog } from "./core/turn-watchdog";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
+import { matchPermRule } from "./core/permissions";
 import { describeCliFailure } from "./core/errors";
 import { planInputParts, planStateText } from "./core/plan";
 
@@ -209,28 +210,6 @@ const IDLE_TIMEOUT = 120_000;
  *  waits this much longer before reaping. Not a full suspension: a silently-dead
  *  session must still be caught. Claude Code just waits on such tools. */
 const TOOL_TIMEOUT = 600_000;
-
-/** One rule per line: `Tool` or `Tool(argPrefix)`. `#` comments allowed. A bare
- *  `Tool` matches any invocation. For `Bash` the prefix matches on a TOKEN
- *  boundary — `Bash(rm)` matches `rm -rf x` but NOT `rmdir` (a plain prefix
- *  would silently widen shell rules to unrelated commands). For every other
- *  tool the argument is a path/target, where prefix-of-path is the intent. */
-function matchPermRule(rules: string, tool: string, argText: string): boolean {
-  for (const raw of rules.split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const m = line.match(/^([\w-]+(?:__[\w-]+)*)(?:\((.*?)\))?$/);
-    if (!m || m[1] !== tool) continue;
-    const prefix = (m[2] ?? "").replace(/\*+$/, "");
-    if (!prefix) return true;
-    if (tool === "Bash") {
-      if (argText === prefix || argText.startsWith(prefix + " ")) return true;
-    } else if (argText.startsWith(prefix)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 let convoSeed = 0;
 
@@ -951,13 +930,17 @@ export class ChatView extends ItemView {
     this.active.model = this.model;
   }
 
-  private newConversation(): void {
+  private newConversation(target?: { provider: ProviderId; model: string }): void {
     if (this.galleryEl) this.hideGallery();
     if (this.capsEl) this.hideCapabilities();
     // Keep other conversations (and their live sessions) alive — parallel.
     this.saveActive();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     const c = this.makeConvo();
+    if (target) {
+      c.provider = target.provider;
+      c.model = target.model;
+    }
     this.convos.push(c);
     this.openTabs.push(c.id);
     this.switchTo(c);
@@ -1126,6 +1109,23 @@ export class ChatView extends ItemView {
   }
   cmdCompact(): void {
     this.compactActive();
+  }
+
+  /** Open a fresh conversation (new tab, current default provider/model) seeded
+   *  with `text`. When `autoSend` is true the query is dispatched immediately;
+   *  otherwise it's left in the composer, focused, for the user to edit/send.
+   *  Public so sibling plugins (e.g. Sonar's "Search with Exo" row) can launch
+   *  a default chat from an external query. */
+  askInNewConversation(text: string, autoSend = true): void {
+    const q = text.trim();
+    if (!q) return;
+    const provider = this.plugin.settings.provider;
+    const model = provider === "claude" ? this.plugin.settings.claudeModel : this.plugin.settings.codexModel;
+    this.newConversation({ provider, model });
+    this.composer.setInputValue(q);
+    this.composer.autoGrow();
+    if (autoSend) this.send();
+    else this.composer.focusInput();
   }
 
   /** Toggle plan mode (Shift+Tab) — explore & propose before editing. */
@@ -1624,8 +1624,21 @@ export class ChatView extends ItemView {
     if (!s.selfWritingMemory || !s.memoryWriteEnabled) return;
     if (c.provider !== "claude") return;
     if (!userText.trim() || !assistantText.trim()) return;
-    void this.observer()
-      .observe({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown")
+    if (!this.plugin.canRunObserver()) {
+      console.info("[Exo] observer skipped: background budget exhausted or disabled.");
+      return;
+    }
+    const observer = this.observer();
+    const run = async (): Promise<ObserverWrite | null> => {
+      let result = await observer.observeDetailed({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown");
+      if (result.busy) {
+        await observer.whenIdle();
+        if (!this.plugin.canRunObserver()) return null;
+        result = await observer.observeDetailed({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown");
+      }
+      return result.write;
+    };
+    void run()
       .then((write) => {
         if (!write || write.entries.length === 0) return;
         if (!this.convos.includes(c) || !el.isConnected) return; // turn removed/rebuilt
@@ -1708,13 +1721,14 @@ export class ChatView extends ItemView {
     if (!userText.trim() || !assistantDelta.trim()) return; // nothing new yet this turn
     const el = ctx.el;
     void this.observer()
-      .observe({ user: userText, assistant: assistantDelta }, c.sessionId ?? "unknown")
-      .then((write) => {
-        this.plugin.recordBackgroundSpend(ChatView.STEP_OBSERVE_TOKEN_ESTIMATE);
+      .observeDetailed({ user: userText, assistant: assistantDelta }, c.sessionId ?? "unknown")
+      .then((result) => {
+        if (!result.attempted) return;
         // Regardless of whether a memory was actually written, the delta WAS
         // shown to the model — mark it flushed so it's never re-sent.
         c.cadenceTurnFlushLen = Math.max(c.cadenceTurnFlushLen ?? 0, coveredLen);
         c.cadence = advanceWatermark(c.cadence ?? initialCadenceState(), toStepCount);
+        const write = result.write;
         if (!write || write.entries.length === 0) return;
         if (!this.convos.includes(c) || !el.isConnected) return; // turn removed/rebuilt
         this.renderMemoryVeto(el, write);
@@ -2159,13 +2173,11 @@ export class ChatView extends ItemView {
     if (cp.has(path)) return;
     const f = this.app.vault.getAbstractFileByPath(path);
     if (f instanceof TFile) {
-      try {
-        cp.set(path, await this.app.vault.read(f));
-      } catch {
-        cp.set(path, null);
-      }
-    } else {
+      cp.set(path, await this.app.vault.read(f));
+    } else if (!f) {
       cp.set(path, null);
+    } else {
+      throw new Error(`Cannot snapshot non-file path: ${path}`);
     }
   }
 
@@ -3214,7 +3226,7 @@ export class ChatView extends ItemView {
   }
 
   /** Rebuild the Notion-style outline from the ACTIVE conversation's DOM.
-   *  Ported from Mario's `notion-outline` plugin: a full-height tick STRIP at the
+   *  Ported from the sibling `notion-outline` plugin: a full-height tick STRIP at the
    *  right edge that expands, on hover, into a floating PANEL of labelled rows —
    *  a JS `is-expanded` toggle with an anti-flicker collapse delay, not a bare
    *  CSS `:hover` (which snapped shut the moment the cursor left the thin strip).
@@ -3667,7 +3679,12 @@ export class ChatView extends ItemView {
           const isWrite = !!fp && WRITE_TOOLS.test(e.tool);
           // Snapshot the target file (pre-edit) before letting a write proceed.
           const allow = (d: { behavior: "allow"; remember?: boolean }) => {
-            if (isWrite && fp) void this.snapshot(checkpoint, fp).finally(() => e.resolve(d));
+            if (isWrite && fp) {
+              void this.snapshot(checkpoint, fp).then(
+                () => e.resolve(d),
+                () => e.resolve({ behavior: "deny", message: "Exo couldn't snapshot the target file; write denied." })
+              );
+            }
             else e.resolve(d);
           };
           const argText = this.permArgText(e.tool, e.input);
