@@ -82,9 +82,21 @@ export class DreamModal extends Modal {
     const acts = contentEl.createDiv({ cls: "mva-ie-actions" });
     acts.createEl("button", { cls: "mva-btn", text: "Cancel" }).onclick = () => this.close();
     if (applicable > 0) {
-      acts.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Apply" }).onclick = () => {
-        void this.onApply();
-        this.close();
+      const apply = acts.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Apply" });
+      apply.onclick = async () => {
+        apply.disabled = true;
+        try {
+          await this.onApply();
+          this.close();
+        } catch (err) {
+          apply.disabled = false;
+          contentEl.querySelector(".mva-dream-error")?.remove();
+          contentEl.createEl("p", {
+            cls: "mva-dream-error",
+            text: err instanceof Error ? err.message : "Dream pass failed; see the developer console.",
+          });
+          console.error("[Exo] dream pass apply failed:", err);
+        }
       };
     } else {
       acts.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Close" }).onclick = () => this.close();

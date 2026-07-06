@@ -38,6 +38,14 @@ export interface ObserverWrite {
   snapshot: ObserverSnapshot;
 }
 
+export interface ObserverAttempt {
+  /** True only when this call reached the observer runner. */
+  attempted: boolean;
+  /** Another observer pass was already active; callers may retry after whenIdle(). */
+  busy: boolean;
+  write: ObserverWrite | null;
+}
+
 /** Runs a transient, tool-less CLI prompt and resolves the raw text (never throws). */
 export type RunObserverSession = (prompt: string, signal: AbortSignal) => Promise<string>;
 
@@ -52,12 +60,13 @@ export type RunObserverSession = (prompt: string, signal: AbortSignal) => Promis
  * writers never interleave a read-modify-write), and NEVER with a `supersedes`
  * field (truth firewall: a generated entry may never supersede a user entry).
  *
- * Concurrency: at most ONE run in flight. If a new turn ends while a run is
- * still going, it is skipped (not queued). `dispose()` aborts on view unload.
+ * Concurrency: at most ONE run in flight. Detailed callers can distinguish a
+ * busy skip and retry after `whenIdle()`. `dispose()` aborts on view unload.
  */
 export class MemoryObserver {
   private running = false;
   private controller: AbortController | null = null;
+  private idleWaiters: Array<() => void> = [];
 
   constructor(
     private readonly app: App,
@@ -75,22 +84,28 @@ export class MemoryObserver {
    * Failures are silent-safe — never throws.
    */
   async observe(digest: TurnDigest, sessionId: string): Promise<ObserverWrite | null> {
-    if (shouldSkipTurn(digest)) return null;
-    if (this.running) return null; // at most one run in flight — skip, don't queue
+    return (await this.observeDetailed(digest, sessionId)).write;
+  }
+
+  /** Detailed variant used by cadence wiring so a busy skip is never mistaken
+   *  for content that was actually shown to the observer model. */
+  async observeDetailed(digest: TurnDigest, sessionId: string): Promise<ObserverAttempt> {
+    if (shouldSkipTurn(digest)) return { attempted: false, busy: false, write: null };
+    if (this.running) return { attempted: false, busy: true, write: null };
 
     this.running = true;
     const ctrl = new AbortController();
     this.controller = ctrl;
     try {
       const raw = await this.runSession(buildObserverPrompt(digest), ctrl.signal);
-      if (ctrl.signal.aborted || !raw) return null;
+      if (ctrl.signal.aborted || !raw) return { attempted: true, busy: false, write: null };
 
       const candidates = parseObserverOutput(raw);
-      if (candidates.length === 0) return null;
+      if (candidates.length === 0) return { attempted: true, busy: false, write: null };
 
       const existing = await this.readActiveEntryTexts();
       const novel = dedupeCandidates(candidates, existing);
-      if (novel.length === 0) return null;
+      if (novel.length === 0) return { attempted: true, busy: false, write: null };
 
       const at0 = Date.now();
       const session = sessionId || "unknown";
@@ -106,13 +121,20 @@ export class MemoryObserver {
       }));
 
       const snapshot = await this.append(entries, at0);
-      return { entries, snapshot };
+      return { attempted: true, busy: false, write: { entries, snapshot } };
     } catch {
-      return null; // CLI missing / parse / write error — no user-facing surface
+      return { attempted: true, busy: false, write: null }; // CLI missing / parse / write error
     } finally {
       this.running = false;
       this.controller = null;
+      for (const resolve of this.idleWaiters.splice(0)) resolve();
     }
+  }
+
+  /** Resolve when the currently-running observer pass settles. */
+  whenIdle(): Promise<void> {
+    if (!this.running) return Promise.resolve();
+    return new Promise((resolve) => this.idleWaiters.push(resolve));
   }
 
   /**

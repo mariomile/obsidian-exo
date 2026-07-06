@@ -80,9 +80,9 @@ In short: Exo is a thin, local UI over CLIs you already trust and are already si
 ## Develop
 
 ```bash
-npm install
-npm run dev      # watch + auto-deploy (see .obsidian-plugin-dir)
-npm run build    # typecheck + production bundle
+pnpm install
+pnpm dev      # watch + auto-deploy (see .obsidian-plugin-dir)
+pnpm build    # typecheck + production bundle
 ```
 
 Create a `.obsidian-plugin-dir` file containing the absolute path to your vault's

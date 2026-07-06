@@ -94,7 +94,7 @@ export interface MVASettings {
   memoryFileBudget: number;
   /** claude-mem project filter for the import stage. NOT a path-slug — verified
    *  2026-07-05 against the real DB: claude-mem's `project` column stores the
-   *  vault/repo's directory basename (e.g. "marioverse.ai"), not the CWD-derived
+   *  vault/repo's directory basename (e.g. "my-vault"), not the CWD-derived
    *  slug used elsewhere. */
   claudememProjects: string[];
   /** Canonical keys of dream proposals already applied — dedup across runs. */
@@ -172,7 +172,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   lastDreamPass: 0,
   dreamLlmEnabled: false,
   memoryFileBudget: 25,
-  claudememProjects: ["marioverse.ai"],
+  claudememProjects: [],
   appliedProposalKeys: [],
   backgroundPassesEnabled: true,
   backgroundDailyTokenBudget: 200000,
@@ -187,7 +187,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
 };
 
 /** Options for the "Background AI model" dropdown — Sonnet-class only.
- *  HARD CONSTRAINT (Mario's standing directive): the floor for background
+ *  Product constraint: the floor for background
  *  passes is Sonnet — never offer (or default to) a Haiku model here, even
  *  though Haiku is available as the observer's own hardcoded fast-path model
  *  elsewhere. Keep in sync with the pinned ids in `providers/claude.ts`. */
@@ -516,8 +516,8 @@ export class MVASettingTab extends PluginSettingTab {
     );
 
     const rulesDesc =
-      "One per line: ToolName or ToolName(argument prefix). Deny wins, and both apply before the permission card. " +
-      "Bash prefixes match whole commands — Bash(rm) covers 'rm -rf x' but not 'rmdir'; other tools match the target path by plain prefix.";
+      "One per line: ToolName or ToolName(argument). Deny wins, and both apply before the permission card. " +
+      "Bash arguments match command-token boundaries; file paths match exactly unless they end in * (explicit prefix match).";
     new Setting(el)
       .setName("Always-allow rules")
       .setDesc(rulesDesc)

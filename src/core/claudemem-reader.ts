@@ -1,7 +1,7 @@
 /**
  * claude-mem reader — pure parsing + watermark logic (no Obsidian imports).
  *
- * W2-1: read Mario's claude-mem observations so the dream LLM stage can propose
+ * Read the user's claude-mem observations so the dream LLM stage can propose
  * importing durable ones into the Union Store. The impure shell (see
  * `src/obsidian/claudemem.ts`) shells out to the system `sqlite3` binary with
  * `-json` output, READ-ONLY; this module only parses that JSON and maintains the

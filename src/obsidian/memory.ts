@@ -16,7 +16,7 @@ const MAX_LOOP_SECTION = 1500;
 
 /**
  * Compose a concise "memory preamble" from the vault's `_system/` layer so the
- * agent boots with Mario's context, preferences, and active rules. The agent can
+ * agent boots with the user's context, preferences, and active rules. The agent can
  * read deeper on demand via the read_note tool.
  */
 export async function readBootContext(app: App): Promise<string> {

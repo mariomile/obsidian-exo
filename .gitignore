@@ -5,3 +5,10 @@ main.js.map
 .DS_Store
 *.log
 .claude/worktrees/
+
+# Internal product briefs and execution plans are not part of the OSS surface.
+PRODUCT.md
+docs/plans/
+docs/specs/
+docs/superpowers/
+docs/marketplace-submission.md

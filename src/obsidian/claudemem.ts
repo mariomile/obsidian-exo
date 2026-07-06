@@ -64,7 +64,7 @@ function sqlQuote(s: string): string {
 }
 
 export interface ReadObservationsOpts {
-  /** Project filter — claude-mem's `project` column value(s), e.g. "marioverse.ai"
+  /** Project filter — claude-mem's `project` column value(s), e.g. "my-vault"
    *  (verified 2026-07-05: it's the vault/repo directory basename, not a path-slug). */
   projects: string[];
   /** Max rows to read (N=100 for the dream stage). */
@@ -79,7 +79,7 @@ export interface ReadObservationsOpts {
  * binary missing, query error) return `[]` and log once — a graceful no-op.
  *
  * The watermark and project list are sanitized into the query (id → integer,
- * projects → escaped literals); the values are Mario's own, not model/external
+ * projects → escaped literals); the values are user-configured, not model/external
  * input, and the query only ever reads.
  */
 export async function readUnimportedObservations(

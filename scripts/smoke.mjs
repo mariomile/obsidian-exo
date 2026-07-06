@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Smoke contract test — a RELEASE GATE, not CI. It runs a real (billable) Claude
- * session, so run it by hand before tagging: `npm test && npm run smoke`.
+ * session, so run it by hand before tagging: `pnpm test && pnpm smoke`.
  *
  * It deliberately does NOT import plugin source: `src/*` pulls in `obsidian`,
  * which won't load under plain node. Instead it drives

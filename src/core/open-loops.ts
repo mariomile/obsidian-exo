@@ -1,7 +1,7 @@
 /**
  * Open-Loops Ledger — pure logic (no Obsidian imports).
  *
- * A "loop" is a durable open thread Mario asked to be reminded about later —
+ * A "loop" is a durable open thread the user asked to be reminded about later —
  * a follow-up, a promise, a thing to circle back on. Unlike the Memory Union
  * Store (verbatim facts/preferences/decisions), a loop has a lifecycle: it
  * opens, optionally carries a tickler ("resurface") date, and closes with an
