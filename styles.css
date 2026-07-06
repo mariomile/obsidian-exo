@@ -889,7 +889,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   text-overflow: ellipsis;
   transition: color var(--mva-t), background var(--mva-t);
 }
-.mva-sel-chip:hover {
+.mva-sel-chip:hover,
+.mva-sel-chip.is-open {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
 }
