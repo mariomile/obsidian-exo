@@ -3907,49 +3907,124 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   }
 }
 
-/* Quick-add form (Backlog column only). */
-.mva-board-quickadd {
+/* "+ New task" button (Backlog column header) — creation goes through the
+   TaskModal since 2026-07-08 (replaced the inline quick-add form). */
+.mva-board-col-add {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: var(--mva-r1);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.mva-board-col-add:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-board-col-add .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Task modal (create/edit). */
+.mva-task-modal .mva-task-modal-field {
+  position: relative; /* anchors the autocomplete popup */
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  margin: 0 8px 4px;
-  border-radius: var(--mva-r2);
-  border: 1px dashed var(--background-modifier-border);
-  background: var(--background-primary);
+  gap: 4px;
+  margin-bottom: 12px;
 }
-.mva-board-quickadd-title,
-.mva-board-quickadd-prompt {
+.mva-task-modal .mva-task-modal-field > label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.mva-task-modal input[type="text"],
+.mva-task-modal textarea,
+.mva-task-modal select {
   width: 100%;
-  font-size: 12px;
-  padding: 5px 7px;
+  font-size: 13px;
+  padding: 6px 8px;
   border-radius: var(--mva-r1);
   border: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
   color: var(--text-normal);
+}
+.mva-task-modal textarea {
   resize: vertical;
+  min-height: 40px;
+  overflow-y: auto;
 }
-.mva-board-quickadd-controls {
-  display: flex;
-  gap: 6px;
+.mva-task-modal .mva-task-modal-ctx-input {
+  min-height: 30px;
+  resize: none;
+}
+.mva-task-modal .mva-task-modal-row {
+  flex-direction: row;
   align-items: center;
+  gap: 8px;
 }
-.mva-board-quickadd-model {
+.mva-task-modal .mva-task-modal-row > label {
+  flex-shrink: 0;
+}
+.mva-task-modal .mva-task-modal-row > select {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 11px;
   font-family: var(--font-monospace);
-  padding: 3px 5px;
-  border-radius: var(--mva-r1);
+  font-size: 12px;
+}
+.mva-task-modal .mva-task-modal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mva-task-modal .mva-task-modal-chips.is-empty {
+  display: none;
+}
+.mva-task-modal .mva-task-modal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
   border: 1px solid var(--background-modifier-border);
-  background: var(--background-secondary);
+  background: var(--background-primary);
   color: var(--text-normal);
 }
-.mva-board-quickadd-btn {
-  flex-shrink: 0;
+.mva-task-modal .mva-task-modal-chip-x {
+  display: inline-flex;
+  cursor: pointer;
+  color: var(--text-faint);
+}
+.mva-task-modal .mva-task-modal-chip-x:hover {
+  color: var(--text-normal);
+}
+.mva-task-modal .mva-task-modal-chip-x .svg-icon {
+  width: 11px;
+  height: 11px;
+}
+.mva-task-modal .mva-task-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 4px;
+}
+.mva-task-modal .mva-task-modal-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
-  padding: 4px 12px;
-  border-radius: var(--mva-r1);
+  color: var(--text-muted);
   cursor: pointer;
 }
 

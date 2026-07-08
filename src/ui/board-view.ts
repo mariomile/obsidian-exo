@@ -21,6 +21,7 @@ import type { TaskEntry, TaskStatus } from "../core/tasks";
 import type { InputReason } from "../core/orchestrator";
 import { OrchestratorDriver, type DriverDeps } from "../obsidian/orchestrator-driver";
 import { clickable } from "./dom";
+import { TaskModal } from "./task-modal";
 
 /** The board view type — registered in main.ts, opens in the main pane. */
 export const BOARD_VIEW_TYPE = "exo-board";
@@ -196,8 +197,16 @@ export class BoardView extends ItemView {
     head.createSpan({ cls: "mva-board-col-title", text: label });
     head.createSpan({ cls: "mva-board-col-count", text: String(tasks.length) });
 
-    // Quick-add form lives at the top of the Backlog column only.
-    if (status === "backlog") this.renderQuickAdd(colEl);
+    // Task creation goes through the full TaskModal (replaced the old inline
+    // quick-add form) — a "+" button in the Backlog column header opens it.
+    if (status === "backlog") {
+      const addBtn = head.createEl("button", {
+        cls: "mva-board-col-add",
+        attr: { "aria-label": "New task" },
+      });
+      setIcon(addBtn, "plus");
+      addBtn.addEventListener("click", () => this.openTaskModal());
+    }
 
     const list = colEl.createDiv({ cls: "mva-board-col-list" });
 
@@ -271,43 +280,21 @@ export class BoardView extends ItemView {
     });
   }
 
-  private renderQuickAdd(colEl: HTMLElement): void {
-    const form = colEl.createDiv({ cls: "mva-board-quickadd" });
-    const titleInput = form.createEl("input", {
-      cls: "mva-board-quickadd-title",
-      attr: { type: "text", placeholder: "New task title…" },
-    }) as HTMLInputElement;
-    const promptInput = form.createEl("textarea", {
-      cls: "mva-board-quickadd-prompt",
-      attr: { placeholder: "Prompt (optional)…", rows: "2" },
-    }) as HTMLTextAreaElement;
-
-    const controls = form.createDiv({ cls: "mva-board-quickadd-controls" });
-    const modelSelect = controls.createEl("select", { cls: "mva-board-quickadd-model" }) as HTMLSelectElement;
-    for (const o of this.modelChoices()) modelSelect.createEl("option", { value: o.id, text: o.label });
-    modelSelect.value = this.defaultModel();
-
-    const addBtn = controls.createEl("button", { cls: "mva-board-quickadd-btn", text: "Add" });
-    const submit = async () => {
-      const title = titleInput.value.trim();
-      if (!title) {
-        titleInput.focus();
-        return;
-      }
-      const prompt = promptInput.value.trim() || title;
-      const model = modelSelect.value;
-      const pinned = model !== this.defaultModel() ? { model } : {};
-      await this.plugin.taskStore.create({ title, prompt, ...pinned });
-      titleInput.value = "";
-      promptInput.value = "";
-      // Reload the driver's task list so the new backlog card appears.
-      await this.reloadTasks();
-      titleInput.focus();
-    };
-    addBtn.addEventListener("click", () => void submit());
-    titleInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit();
-    });
+  /** Open the TaskModal to create a new task; optionally enqueue it right away
+   *  ("Run immediately"). The run must happen AFTER `reloadTasks()` so the
+   *  rebuilt driver's in-memory list contains the new entry. */
+  private openTaskModal(): void {
+    new TaskModal(this.app, {
+      mode: "create",
+      modelChoices: this.modelChoices(),
+      defaultModel: this.defaultModel(),
+      onSubmit: async (r) => {
+        const pinned = r.model ? { model: r.model } : {};
+        const entry = await this.plugin.taskStore.create({ title: r.title, prompt: r.prompt, ...pinned });
+        await this.reloadTasks();
+        if (r.runImmediately) await this.driver?.run(entry.id);
+      },
+    }).open();
   }
 
   // --- Interactions -------------------------------------------------------
@@ -337,9 +324,9 @@ export class BoardView extends ItemView {
     );
     menu.addItem((i) =>
       i
-        .setTitle("Edit prompt")
+        .setTitle("Edit task…")
         .setIcon("pencil")
-        .onClick(() => void this.editPrompt(task))
+        .onClick(() => this.editTask(task))
     );
     if (task.status === "review") {
       menu.addItem((i) =>
@@ -359,13 +346,20 @@ export class BoardView extends ItemView {
     menu.showAtMouseEvent(e);
   }
 
-  /** Minimal inline prompt edit via a prompt() replacement — reuse a small
-   *  modal-free flow: edit the title/prompt through the store, then reload. */
-  private async editPrompt(task: TaskEntry): Promise<void> {
-    const next = window.prompt("Edit task prompt:", task.prompt);
-    if (next === null || next === task.prompt) return;
-    await this.plugin.taskStore.update(task.id, { prompt: next });
-    await this.reloadTasks();
+  /** Edit an existing task through the same TaskModal, prefilled. Selecting the
+   *  default model clears a previous pin (`model: undefined` drops the line
+   *  from the ledger block via `applyTaskPatch`'s spread). */
+  private editTask(task: TaskEntry): void {
+    new TaskModal(this.app, {
+      mode: "edit",
+      initial: { title: task.title, prompt: task.prompt, model: task.model },
+      modelChoices: this.modelChoices(),
+      defaultModel: this.defaultModel(),
+      onSubmit: async (r) => {
+        await this.plugin.taskStore.update(task.id, { title: r.title, prompt: r.prompt, model: r.model });
+        await this.reloadTasks();
+      },
+    }).open();
   }
 
   // --- Drag & drop --------------------------------------------------------

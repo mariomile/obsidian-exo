@@ -445,14 +445,29 @@ export default class ExoPlugin extends Plugin {
   }
 
   /**
+   * Make sure a ChatView leaf EXISTS without revealing or focusing anything —
+   * the background counterpart to `activateView`. Spawning is a system action
+   * (the orchestrator consuming its queue), so it must never move the UI; only
+   * an explicit user action (`revealConversation`) may reveal. The leaf is
+   * created inactive in the right sidebar; the sidebar stays collapsed.
+   */
+  private async ensureChatView(): Promise<void> {
+    const { workspace } = this.app;
+    if (workspace.getLeavesOfType(VIEW_TYPE).length > 0) return;
+    const leaf = workspace.getRightLeaf(false);
+    await leaf?.setViewState({ type: VIEW_TYPE, active: false });
+  }
+
+  /**
    * Plugin-level wrapper around `ChatView.startTaskConversation` for callers that
-   * don't hold the view (e.g. the Orchestration Board driver). Reveals Exo,
-   * spawns a fresh conversation seeded with `prompt`, and returns its convo id.
-   * The view is created on demand; if it still can't be resolved (shouldn't
-   * happen once activated) it returns "".
+   * don't hold the view (e.g. the Orchestration Board driver). Spawns a fresh
+   * conversation seeded with `prompt` WITHOUT revealing Exo or stealing focus
+   * (2026-07-08: was `activateView`, which yanked the sidebar open on every
+   * queued-task start). The view is created hidden on demand; if it still can't
+   * be resolved it returns "".
    */
   async startTaskConversation(prompt: string, opts?: { model?: string }): Promise<string> {
-    await this.activateView();
+    await this.ensureChatView();
     const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
     return view instanceof ChatView ? view.startTaskConversation(prompt, opts) : "";
   }
