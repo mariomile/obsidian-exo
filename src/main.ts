@@ -2,6 +2,7 @@ import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Plu
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
+import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
 import { resolveCli } from "./cli";
@@ -99,6 +100,14 @@ export default class ExoPlugin extends Plugin {
    */
   readonly convoState = new ConvoStateChannel(() => this.settings.orchestrationEnabled);
 
+  /** Ribbon-icon handle for the Orchestration Board — created only while
+   *  `orchestrationEnabled` is on, removed when it's toggled off, so the entry
+   *  point disappears entirely (not just disabled) on hot-disable. */
+  private boardRibbonEl: HTMLElement | null = null;
+  /** Last-applied orchestration flag, so `saveSettings` can detect a toggle and
+   *  re-sync entry points + tear down the board on disable. */
+  private orchestrationApplied = false;
+
   /** Git auto-commit safety net — debounce/cadence bookkeeping (in-memory
    *  only; resets on reload, which is fine, it's just scheduling state). */
   private gitAutoCommitState: AutoCommitState = initialAutoCommitState();
@@ -141,6 +150,11 @@ export default class ExoPlugin extends Plugin {
     );
 
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
+    // The board view is always REGISTERED (so a leaf restored from the saved
+    // workspace layout can render) but only ENTERED via a gated ribbon/command.
+    // If it opens while orchestration is off it renders a "disabled" placeholder
+    // and never starts the driver (see BoardView.onOpen).
+    this.registerView(BOARD_VIEW_TYPE, (leaf) => new BoardView(leaf, this));
 
     // In-note AI: a floating toolbar over the selection (Edit / Continue / Ask
     // Exo). Registered once; gated live behind the `inlineAi` setting, so
@@ -200,6 +214,23 @@ export default class ExoPlugin extends Plugin {
         return true;
       },
     });
+
+    // Orchestration Board open command — invisible in the palette when the flag
+    // is off (checkCallback returns false), mirroring "Promote to task".
+    this.addCommand({
+      id: "open-orchestration-board",
+      name: "Open orchestration board",
+      checkCallback: (checking) => {
+        if (!this.settings.orchestrationEnabled) return false;
+        if (!checking) void this.activateBoard();
+        return true;
+      },
+    });
+
+    // Ribbon icon (added/removed on flag toggle). Establishes the baseline for
+    // the current flag state so a later toggle in settings re-syncs correctly.
+    this.orchestrationApplied = this.settings.orchestrationEnabled;
+    this.syncBoardRibbon();
 
     this.addCommand({
       id: "inline-edit",
@@ -299,6 +330,58 @@ export default class ExoPlugin extends Plugin {
   }
 
   /**
+   * Open the Orchestration Board in the MAIN workspace pane (a new tab, not the
+   * sidebar). Reuses an already-open board leaf if present. Only ever invoked
+   * from the gated ribbon/command, so the flag is on by the time we get here.
+   */
+  async activateBoard(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(BOARD_VIEW_TYPE)[0] ?? null;
+    if (!leaf) {
+      // Main-area tab (not the sidebar) — the board is a full-width surface.
+      leaf = workspace.getLeaf(true);
+      await leaf.setViewState({ type: BOARD_VIEW_TYPE, active: true });
+    }
+    workspace.revealLeaf(leaf);
+  }
+
+  /** Add or remove the board ribbon icon so it matches the flag exactly. */
+  private syncBoardRibbon(): void {
+    if (this.settings.orchestrationEnabled) {
+      if (!this.boardRibbonEl) {
+        this.boardRibbonEl = this.addRibbonIcon(BOARD_ICON, "Open orchestration board", () =>
+          void this.activateBoard()
+        );
+      }
+    } else if (this.boardRibbonEl) {
+      this.boardRibbonEl.remove();
+      this.boardRibbonEl = null;
+    }
+  }
+
+  /**
+   * React to an `orchestrationEnabled` toggle (called from `saveSettings`).
+   * Hot-disable must be SAFE: it stops the driver (by detaching every open board
+   * leaf — `BoardView.onClose` calls `driver.stop()`, dropping runtime state and
+   * leaving running conversations alive as normal chats), hides entry points
+   * (ribbon + palette command — the latter via its own checkCallback), and
+   * touches NO markdown. Hot-enable just re-shows the ribbon.
+   */
+  private applyOrchestrationToggle(): void {
+    const now = this.settings.orchestrationEnabled;
+    if (now === this.orchestrationApplied) return;
+    this.orchestrationApplied = now;
+    this.syncBoardRibbon();
+    if (!now) {
+      // Detach any open board leaves — their onClose stops the driver and drops
+      // in-memory orchestration state. No file writes, no chat impact.
+      for (const leaf of this.app.workspace.getLeavesOfType(BOARD_VIEW_TYPE)) {
+        leaf.detach();
+      }
+    }
+  }
+
+  /**
    * Public cross-plugin entry point: reveal Exo and start a new default-model
    * chat seeded with `query` (sent immediately unless `autoSend` is false).
    * Consumed by sibling plugins — e.g. Sonar's "Search with Exo" row — so they
@@ -372,6 +455,19 @@ export default class ExoPlugin extends Plugin {
     await this.activateView();
     const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
     return view instanceof ChatView ? view.startTaskConversation(prompt, opts) : "";
+  }
+
+  /**
+   * Plugin-level wrapper around `ChatView.revealConversation` for the
+   * Orchestration Board: reveal Exo (in the sidebar) and focus the tab holding
+   * `convoId`, so clicking a board card jumps to that task's chat. Creates the
+   * view on demand. Returns false if the convo can't be found. Pure reveal —
+   * never spawns a conversation.
+   */
+  async revealConversation(convoId: string): Promise<boolean> {
+    await this.activateView();
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    return view instanceof ChatView ? view.revealConversation(convoId) : false;
   }
 
   /**
@@ -718,6 +814,9 @@ export default class ExoPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+    // React to an orchestration-flag toggle: add/remove the ribbon and tear the
+    // board down on hot-disable (safe — no markdown touched, chats survive).
+    this.applyOrchestrationToggle();
   }
 
   private convoFile(): string {
