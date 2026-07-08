@@ -3932,59 +3932,74 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 14px;
 }
 
-/* Task modal (create/edit). */
+/* Task modal (create/edit) — follows the plugin's own form language: quiet
+   sentence-case labels (prompt-vars modal), .mva-pv-input-style fields with an
+   accent border on focus, the composer's .mva-sel chip+popover for the model
+   picker, and .mva-btn buttons. Lives OUTSIDE .mva-root (Obsidian modal), so
+   focus resets are declared here. */
+.mva-task-modal-window {
+  width: min(560px, 92vw);
+}
 .mva-task-modal .mva-task-modal-field {
   position: relative; /* anchors the autocomplete popup */
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   margin-bottom: 12px;
 }
-.mva-task-modal .mva-task-modal-field > label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.mva-task-modal .mva-task-modal-label {
+  font-size: var(--font-ui-smaller);
   color: var(--text-muted);
+  margin-bottom: 4px;
 }
 .mva-task-modal input[type="text"],
-.mva-task-modal textarea,
-.mva-task-modal select {
+.mva-task-modal textarea {
   width: 100%;
   font-size: 13px;
-  padding: 6px 8px;
-  border-radius: var(--mva-r1);
+  padding: 8px 12px;
   border: 1px solid var(--background-modifier-border);
-  background: var(--background-secondary);
+  border-radius: var(--mva-r2);
+  background: var(--background-primary);
   color: var(--text-normal);
+  box-shadow: none;
+}
+.mva-task-modal input[type="text"]:focus,
+.mva-task-modal textarea:focus {
+  outline: none;
+  box-shadow: none;
+  border-color: var(--interactive-accent);
 }
 .mva-task-modal textarea {
-  resize: vertical;
-  min-height: 40px;
+  resize: none;
+  min-height: 96px;
   overflow-y: auto;
+  font-family: inherit;
+  line-height: 1.45;
 }
 .mva-task-modal .mva-task-modal-ctx-input {
-  min-height: 30px;
-  resize: none;
+  min-height: 34px;
+  height: 34px;
 }
 .mva-task-modal .mva-task-modal-row {
-  flex-direction: row;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
-.mva-task-modal .mva-task-modal-row > label {
-  flex-shrink: 0;
+.mva-task-modal .mva-task-modal-row > .mva-task-modal-label {
+  margin-bottom: 0;
 }
-.mva-task-modal .mva-task-modal-row > select {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-family: var(--font-monospace);
-  font-size: 12px;
+/* Model chip — toolbar .mva-sel-chip language, sized up a touch for the modal
+   and uncapped (the 120px toolbar cap would ellipsize model names for no reason
+   here). Quiet at rest, hover/is-open backgrounds only — no decorative surface. */
+.mva-task-modal .mva-sel-chip.mva-task-modal-model {
+  font-size: 12.5px;
+  padding: 4px 9px;
+  max-width: none;
 }
+/* The popover opens upward from the chip (same rule as the composer toolbar);
+   the model row sits low in the modal, so upward is the roomy direction. */
 .mva-task-modal .mva-task-modal-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+  margin-bottom: 4px;
 }
 .mva-task-modal .mva-task-modal-chips.is-empty {
   display: none;
@@ -3994,7 +4009,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  padding: 2px 6px;
+  padding: 2px 7px;
   border-radius: 999px;
   border: 1px solid var(--background-modifier-border);
   background: var(--background-primary);
@@ -4017,15 +4032,20 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 4px;
+  margin-top: 14px;
 }
 .mva-task-modal .mva-task-modal-run {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text-muted);
   cursor: pointer;
+  user-select: none;
+}
+.mva-task-modal .mva-task-modal-run input[type="checkbox"] {
+  accent-color: var(--interactive-accent);
+  margin: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
