@@ -3680,3 +3680,284 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
     animation: none;
   }
 }
+
+/* ============================ Orchestration Board ============================
+   Full-pane board surface (BoardView, src/ui/board-view.ts). Built on the same
+   mva- design tokens as the chat cards: --mva-r1/r2/r3 radii, --mva-t transition,
+   --mva-card-* rhythm, and Obsidian's native theme variables. Six columns of
+   draggable task cards; the Running card shows a pulsing status dot. */
+
+.mva-board-root {
+  overflow: hidden;
+}
+.mva-board {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 12px;
+  gap: 10px;
+}
+
+/* Malformed-ledger banner — board-only; chat never shows this. */
+.mva-board-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--mva-r2);
+  border: 1px solid var(--background-modifier-error-border, var(--text-error));
+  background: var(--background-modifier-error, rgba(255, 0, 0, 0.08));
+  color: var(--text-error);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.mva-board-error-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.mva-board-error-icon .svg-icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Flag-off placeholder. */
+.mva-board-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  text-align: center;
+  color: var(--text-muted);
+  padding: 24px;
+}
+.mva-board-placeholder-icon .svg-icon {
+  width: 40px;
+  height: 40px;
+  color: var(--text-faint);
+}
+.mva-board-placeholder h3 {
+  margin: 0;
+}
+.mva-board-placeholder p {
+  margin: 0;
+  max-width: 42ch;
+  font-size: 13px;
+}
+
+/* Columns — horizontal scroll if they overflow; never scroll the page body. */
+.mva-board-cols {
+  display: flex;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+}
+.mva-board-col {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 260px;
+  min-width: 260px;
+  min-height: 0;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r3);
+  overflow: hidden;
+}
+.mva-board-col-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 6px;
+  flex-shrink: 0;
+}
+.mva-board-col-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.mva-board-col-count {
+  font-size: 11px;
+  color: var(--text-faint);
+  background: var(--background-modifier-hover);
+  border-radius: 999px;
+  padding: 0 6px;
+  min-width: 18px;
+  text-align: center;
+}
+.mva-board-col-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 8px 10px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 40px;
+}
+.mva-board-col-list.is-drop-target {
+  background: var(--background-modifier-hover);
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+  border-radius: var(--mva-r2);
+}
+
+/* Cards. */
+.mva-board-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--mva-card-pad);
+  border-radius: var(--mva-card-radius);
+  border: var(--mva-card-border);
+  background: var(--background-primary);
+  cursor: grab;
+  transition: border-color var(--mva-t), box-shadow var(--mva-t), transform var(--mva-t);
+}
+.mva-board-card:hover {
+  border-color: var(--background-modifier-border-hover, var(--interactive-accent));
+}
+.mva-board-card.is-dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+.mva-board-card.is-drop-before {
+  box-shadow: inset 0 2px 0 0 var(--interactive-accent);
+}
+.mva-board-card.is-running {
+  border-color: var(--interactive-accent);
+}
+.mva-board-card.is-chat-missing {
+  border-color: var(--text-warning, var(--text-error));
+}
+.mva-board-card-head {
+  display: flex;
+  align-items: flex-start;
+}
+.mva-board-card-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text-normal);
+}
+.mva-board-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.mva-board-chip {
+  font-size: 10px;
+  line-height: 1.6;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.mva-board-chip-model {
+  font-family: var(--font-monospace);
+  font-size: 9.5px;
+}
+.mva-board-chip-reason {
+  background: var(--background-modifier-error, rgba(255, 0, 0, 0.1));
+  color: var(--text-error);
+}
+.mva-board-chip-missing {
+  background: var(--background-modifier-error, rgba(255, 0, 0, 0.1));
+  color: var(--text-error);
+}
+.mva-board-card-time {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-left: auto;
+}
+.mva-board-card-preview {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Pulsing live status dot — the streaming heartbeat on a Running card. */
+.mva-board-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  flex-shrink: 0;
+  animation: mva-board-pulse 1.4s ease-in-out infinite;
+}
+@keyframes mva-board-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 var(--interactive-accent);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+/* Quick-add form (Backlog column only). */
+.mva-board-quickadd {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin: 0 8px 4px;
+  border-radius: var(--mva-r2);
+  border: 1px dashed var(--background-modifier-border);
+  background: var(--background-primary);
+}
+.mva-board-quickadd-title,
+.mva-board-quickadd-prompt {
+  width: 100%;
+  font-size: 12px;
+  padding: 5px 7px;
+  border-radius: var(--mva-r1);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  resize: vertical;
+}
+.mva-board-quickadd-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.mva-board-quickadd-model {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  font-family: var(--font-monospace);
+  padding: 3px 5px;
+  border-radius: var(--mva-r1);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+}
+.mva-board-quickadd-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: var(--mva-r1);
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mva-board-dot {
+    animation: none;
+  }
+  .mva-board-card {
+    transition: none;
+  }
+}

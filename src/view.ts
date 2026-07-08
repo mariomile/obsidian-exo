@@ -1198,6 +1198,28 @@ export class ChatView extends ItemView {
     return { exists: true, streaming: c.streaming, hasPending: !!(c.pendingPerm || c.pendingAsk) };
   }
 
+  /**
+   * Additive public selector for the Orchestration Board (workstream B5): make
+   * the conversation with `convoId` the active tab, so clicking a board card
+   * focuses that task's chat. Returns true if the convo was found and revealed,
+   * false otherwise (e.g. the recorded convo no longer exists). Pure reveal —
+   * never spawns or mutates a conversation; it reuses the existing `switchTo`
+   * path (which lazily builds the transcript DOM and opens the tab). Kept
+   * additive: no existing caller relies on it, so ChatView's structure is
+   * untouched.
+   */
+  revealConversation(convoId: string): boolean {
+    if (this.active?.id === convoId) {
+      this.focusComposer();
+      return true;
+    }
+    const c = this.convos.find((x) => x.id === convoId);
+    if (!c) return false;
+    this.switchTo(c);
+    this.focusComposer();
+    return true;
+  }
+
   /** Toggle plan mode (Shift+Tab) — explore & propose before editing. */
   private togglePlanMode(): void {
     const s = this.plugin.settings;
