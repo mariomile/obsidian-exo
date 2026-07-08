@@ -20,6 +20,7 @@ import {
   type LoopEntry,
 } from "../core/open-loops";
 import { WriteQueue } from "../core/write-queue";
+import { createBacklogTask, adaptAppToTaskVault } from "./task-store";
 
 /** Folder holding the append-only Memory Union Store (monthly markdown files). */
 const MEMORY_STORE_DIR = "_system/memory/store";
@@ -97,7 +98,15 @@ export function createObsidianToolServer(
   memoryWrite = true,
   askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>,
   memoryRead = true,
-  memoryWriteQueue: WriteQueue = new WriteQueue()
+  memoryWriteQueue: WriteQueue = new WriteQueue(),
+  /** Orchestration Board master flag (default OFF). Gates `add_task` only —
+   *  every other tool above is unaffected, and the tool list sent to sessions
+   *  must be byte-identical to before this parameter existed when this is false. */
+  orchestrationEnabled = false,
+  /** Shared write-queue for the tasks ledger (`_system/orchestration/tasks.md`),
+   *  injected by the plugin the same way `memoryWriteQueue` is — so `add_task`
+   *  and any future board-side writer serialize on the SAME queue. */
+  tasksWriteQueue: WriteQueue = new WriteQueue()
 ) {
   const need = (target: string): TFile => {
     const f = resolveLink(app, target);
@@ -722,6 +731,27 @@ export function createObsidianToolServer(
     }
   );
 
+  /* --------------------------- orchestration ------------------------ */
+
+  const addTask = tool(
+    "add_task",
+    "Put something on the Orchestration Board as a backlog task — use this when the user asks to put this on the board, turn this into a task, or queue this up for later instead of doing it in this conversation right now. Creates a `backlog` entry; it does not run anything.",
+    {
+      title: z.string().describe("Short task title shown on the board card."),
+      prompt: z.string().describe("The task prompt — what the spawned conversation should do, verbatim."),
+      model: z.string().optional().describe("Provider model id to run the task with; omit to use the default from settings."),
+    },
+    async (args) => {
+      const vault = adaptAppToTaskVault(app);
+      const entry = await createBacklogTask(vault, tasksWriteQueue, {
+        title: args.title,
+        prompt: args.prompt,
+        ...(args.model ? { model: args.model } : {}),
+      });
+      return ok(`Added ${entry.id} to the Backlog: ${entry.title}`);
+    }
+  );
+
   return createSdkMcpServer({
     name: "obsidian",
     version: "1.0.0",
@@ -735,6 +765,7 @@ export function createObsidianToolServer(
       editNote, insertAtCursor, renameNote,
       ...(memoryRead ? [recall] : []),
       ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
+      ...(orchestrationEnabled ? [addTask] : []),
     ],
   });
 }
@@ -761,3 +792,6 @@ export const OBSIDIAN_MEMORY_TOOLS = new Set([
   "mcp__obsidian__open_loop",
   "mcp__obsidian__close_loop",
 ]);
+
+/** Orchestration tool names — gated separately by the `orchestrationEnabled` setting. */
+export const OBSIDIAN_ORCHESTRATION_TOOLS = new Set(["mcp__obsidian__add_task"]);

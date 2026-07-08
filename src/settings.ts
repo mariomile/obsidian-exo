@@ -124,6 +124,10 @@ export interface MVASettings {
    *  drift. The debounce quiet period after a write (2 min, fixed) usually
    *  fires first. */
   vaultAutoCommitIntervalMinutes: number;
+  /** Orchestration Board master flag, default OFF. Gates the `add_task` tool,
+   *  the "Promote to task" command, and (future) the board view/ribbon icon —
+   *  chat is unaffected either way. See docs/superpowers/specs/2026-07-08-orchestration-board-design.md. */
+  orchestrationEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -184,6 +188,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   cliLatestKnown: "",
   vaultAutoCommit: false,
   vaultAutoCommitIntervalMinutes: 15,
+  orchestrationEnabled: false,
 };
 
 /** Options for the "Background AI model" dropdown — Sonnet-class only.
@@ -806,6 +811,14 @@ export class MVASettingTab extends PluginSettingTab {
       "Native-first",
       "Disable the built-in file tools (Read/Grep/Glob/LS/Edit/Write) so vault work goes only through the Obsidian-native tools. Bash stays available (gated). Claude only.",
       "nativeFirst"
+    );
+
+    new Setting(el).setName("Orchestration Board").setHeading();
+    this.toggleSetting(
+      el,
+      "Enable orchestration",
+      "Turn on the `add_task` chat tool and the \"Promote to task\" command, so a conversation can put work onto the Backlog. Off by default — chat behaves identically either way. Claude only.",
+      "orchestrationEnabled"
     );
 
     void this.renderMcpSection(el);
