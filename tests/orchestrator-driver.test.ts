@@ -284,6 +284,105 @@ describe("OrchestratorDriver — spawn failure", () => {
     expect(t.status).toBe("needs-input");
     expect(deps.notify).toHaveBeenCalled();
   });
+
+  it("spawn resolving to an empty convo id is a failure: parks in needs-input(error) + notifies", async () => {
+    const { deps } = makeDeps([task({ id: "task-1", order: 0 })]);
+    // The real startTaskConversation / askInNewConversation returns "" (does NOT
+    // reject) when the view can't be resolved or the prompt is empty. That empty
+    // id must be treated as a spawn failure, not a success.
+    deps.spawn = vi.fn(async () => "");
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await driver.enqueue("task-1");
+    await flush();
+    const t = driver.snapshot().find((x) => x.id === "task-1")!;
+    expect(t.status).toBe("needs-input");
+    expect(t.inputReason).toBe("error");
+    expect(t.convo ?? "").toBe(""); // never record the empty id as a live convo
+    expect(deps.notify).toHaveBeenCalled();
+  });
+
+  it("a spawn failure in a batch promote refills the freed slot (no slot leak)", async () => {
+    // cap 2; A, B, C all queued at boot; start()'s fillSlots pass promotes A+B
+    // together in ONE fillSlots. A's spawn fails. The freed slot must be
+    // refilled by C, so under cap 2 exactly two tasks run (B and C).
+    const { deps } = makeDeps([
+      task({ id: "A", status: "queued", order: 0 }),
+      task({ id: "B", status: "queued", order: 1 }),
+      task({ id: "C", status: "queued", order: 2 }),
+    ]);
+    let calls = 0;
+    deps.spawn = vi.fn(async () => {
+      calls++;
+      if (calls === 1) throw new Error("CLI down"); // first promoted task (A) fails
+      return `convo-${calls}`;
+    });
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flush();
+
+    const snap = driver.snapshot();
+    const running = snap.filter((t) => t.status === "running").map((t) => t.id).sort();
+    const needsInput = snap.filter((t) => t.status === "needs-input").map((t) => t.id);
+    expect(needsInput).toContain("A");
+    expect(running).toHaveLength(2);
+    expect(snap.filter((t) => t.status === "queued")).toHaveLength(0);
+  });
+
+  it("two consecutive spawn failures in one batch each free only their own slot", async () => {
+    // cap 2; A, B, C queued at boot. A and B both fail; C succeeds and runs.
+    const { deps } = makeDeps([
+      task({ id: "A", status: "queued", order: 0 }),
+      task({ id: "B", status: "queued", order: 1 }),
+      task({ id: "C", status: "queued", order: 2 }),
+    ]);
+    let calls = 0;
+    deps.spawn = vi.fn(async () => {
+      calls++;
+      if (calls <= 2) throw new Error("CLI down");
+      return `convo-${calls}`;
+    });
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flush();
+    const snap = driver.snapshot();
+    // Two spawns fail, one succeeds. The invariant that matters: each failure
+    // frees only its own slot and the next queued task fills it, so exactly two
+    // tasks park in needs-input, exactly one runs, and nothing is left stranded
+    // in queued (no slot leak). (Which two fail depends on the recursion order
+    // through the effect loop; the counts are the contract.)
+    expect(snap.filter((t) => t.status === "needs-input")).toHaveLength(2);
+    expect(snap.filter((t) => t.status === "running")).toHaveLength(1);
+    expect(snap.filter((t) => t.status === "queued")).toHaveLength(0);
+  });
+});
+
+describe("OrchestratorDriver — boot promotes queued tasks", () => {
+  it("boot with a queued task and a free slot auto-promotes and spawns it", async () => {
+    const { deps, spawned } = makeDeps([task({ id: "task-1", status: "queued", order: 0 })]);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flush();
+    const t = driver.snapshot().find((x) => x.id === "task-1")!;
+    expect(t.status).toBe("running");
+    expect(t.convo).toBe("convo-1");
+    expect(spawned).toHaveLength(1);
+  });
+
+  it("boot respects the concurrency cap when more tasks are queued than slots", async () => {
+    const { deps, spawned } = makeDeps([
+      task({ id: "task-1", status: "queued", order: 0 }),
+      task({ id: "task-2", status: "queued", order: 1 }),
+      task({ id: "task-3", status: "queued", order: 2 }),
+    ]);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flush();
+    expect(spawned).toHaveLength(2);
+    const snap = driver.snapshot();
+    expect(snap.filter((t) => t.status === "running")).toHaveLength(2);
+    expect(snap.filter((t) => t.status === "queued").map((t) => t.id)).toEqual(["task-3"]);
+  });
 });
 
 describe("OrchestratorDriver — reconciliation on boot", () => {

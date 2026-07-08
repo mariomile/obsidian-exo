@@ -123,6 +123,12 @@ export class OrchestratorDriver {
 
     this.unsubscribe = this.deps.subscribe((e) => this.onConvoEvent(e));
     this.emitChange();
+
+    // Reconciliation only corrects active statuses and returns no effects — it
+    // never promotes `queued` work. Any task left `queued` from a prior session
+    // (or a leaked slot) with a free slot must start now, so run one scheduler
+    // pass on boot to promote eligible queued tasks and spawn their convos.
+    await this.dispatch({ type: "slot-freed" });
   }
 
   /**
@@ -250,6 +256,12 @@ export class OrchestratorDriver {
     if (effect.type !== "spawn-chat") return;
     try {
       const convoId = await this.deps.spawn(effect.prompt, effect.model ? { model: effect.model } : undefined);
+      // A falsy/empty convo id is a FAILURE, not a success: the real
+      // `startTaskConversation` (main.ts) and `askInNewConversation` (view.ts)
+      // both RESOLVE with "" when the view can't be resolved or the prompt is
+      // empty. Recording "" would leave the task stuck `running` forever with a
+      // convo id that matches no convo-state event. Route it through the catch.
+      if (!convoId) throw new Error("chat failed to start");
       // Record the convo id (and clear any stale chat-missing flag) in memory
       // and on disk. The task is already `running` from the reducer.
       this.tasks = this.tasks.map((t) =>
@@ -267,6 +279,20 @@ export class OrchestratorDriver {
       await this.deps.store.update(effect.taskId, { status: "needs-input" }).catch(() => undefined);
       this.deps.notify(`Couldn't start task: ${msg}`);
       this.emitChange();
+
+      // The failed task freed the running slot it was promoted into. Re-run the
+      // scheduler so that slot is refilled by the next eligible queued task —
+      // otherwise a transient failure (e.g. CLI momentarily down) permanently
+      // leaks a slot when TWO tasks are promoted together in one fillSlots and
+      // one fails. Mirror applyArchive's slot-freed dispatch. A cascading
+      // failure re-enters runEffect via the effect loop below; each failure
+      // frees only its own slot, so the recursion terminates.
+      const result = reduce(this.tasks, { type: "slot-freed" }, this.deps.config());
+      const before = this.tasks;
+      this.tasks = result.tasks;
+      await this.persistDiff(before, this.tasks);
+      this.emitChange();
+      for (const nextEffect of result.effects) await this.runEffect(nextEffect);
     }
   }
 
