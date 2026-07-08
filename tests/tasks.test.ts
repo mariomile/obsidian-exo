@@ -10,6 +10,7 @@ import {
   applyTaskArchive,
   TASKS_PATH,
   promoteToTaskCommandVisible,
+  buildTaskPrompt,
   type TaskEntry,
 } from "../src/core/tasks";
 
@@ -345,5 +346,29 @@ describe("promoteToTaskCommandVisible", () => {
 
   it("is true when orchestrationEnabled is true", () => {
     expect(promoteToTaskCommandVisible({ orchestrationEnabled: true })).toBe(true);
+  });
+});
+
+describe("buildTaskPrompt", () => {
+  it("returns the prompt unchanged when there are no context notes", () => {
+    expect(buildTaskPrompt("do the thing", [])).toBe("do the thing");
+  });
+
+  it("appends a Context notes section with one wikilink per note", () => {
+    expect(buildTaskPrompt("do the thing", ["Note A", "Note B"])).toBe(
+      "do the thing\n\nContext notes:\n- [[Note A]]\n- [[Note B]]"
+    );
+  });
+
+  it("dedupes repeated note names and skips blanks", () => {
+    expect(buildTaskPrompt("p", ["A", "A", "", "  ", "B"])).toBe("p\n\nContext notes:\n- [[A]]\n- [[B]]");
+  });
+
+  it("with an empty prompt, yields just the context section (no leading blank lines)", () => {
+    expect(buildTaskPrompt("", ["A"])).toBe("Context notes:\n- [[A]]");
+  });
+
+  it("does not double-wrap names that already look like wikilinks", () => {
+    expect(buildTaskPrompt("p", ["[[Already Linked]]"])).toBe("p\n\nContext notes:\n- [[Already Linked]]");
   });
 });

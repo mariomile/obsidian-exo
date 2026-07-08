@@ -1180,11 +1180,21 @@ export class ChatView extends ItemView {
    * Additive public entry point for the Orchestration Board: spawn a new
    * conversation seeded with `prompt`, send it immediately, honor an optional
    * model override (falling back to the settings default), and return the new
-   * convo id. Reuses the `askInNewConversation` path verbatim, so it does not
-   * steal focus beyond what that already does. Chat-only — no board coupling.
+   * convo id. Chat-only — no board coupling.
+   *
+   * Focus contract (2026-07-08): a task spawn is a background/system action, so
+   * it must not hijack the user's ACTIVE TAB either — `askInNewConversation`
+   * switches to the new convo to seed and send through the composer, so after
+   * the send we switch back to whatever was active before. Parallel
+   * conversations make this safe: the new convo's turn runs per-convo,
+   * independent of which tab is displayed. When there was no prior active
+   * convo (fresh view), the new one simply stays active.
    */
   startTaskConversation(prompt: string, opts?: { model?: string }): string {
-    return this.askInNewConversation(prompt, true, opts);
+    const prev = this.active ?? null;
+    const id = this.askInNewConversation(prompt, true, opts);
+    if (id && prev && prev.id !== id && this.convos.includes(prev)) this.switchTo(prev);
+    return id;
   }
 
   /**

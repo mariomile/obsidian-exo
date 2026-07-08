@@ -307,3 +307,25 @@ export function applyTaskArchive(entries: TaskEntry[], id: string, now: number =
 export function promoteToTaskCommandVisible(settings: { orchestrationEnabled: boolean }): boolean {
   return settings.orchestrationEnabled;
 }
+
+/**
+ * Assemble the final task prompt from the modal's fields: the prompt body plus
+ * an optional "Context notes" section of `[[wikilinks]]` (one per attached
+ * note). Names are deduped, blanks skipped, and already-wrapped `[[...]]`
+ * names are kept as-is rather than double-wrapped. Context notes stay INSIDE
+ * the prompt on purpose — the ledger's data model is unchanged, and the agent
+ * reads wikilinks natively.
+ */
+export function buildTaskPrompt(prompt: string, contextNotes: string[]): string {
+  const seen = new Set<string>();
+  const links: string[] = [];
+  for (const raw of contextNotes) {
+    const name = raw.trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    links.push(/^\[\[.*\]\]$/.test(name) ? name : `[[${name}]]`);
+  }
+  if (!links.length) return prompt;
+  const section = `Context notes:\n${links.map((l) => `- ${l}`).join("\n")}`;
+  return prompt.trim() ? `${prompt}\n\n${section}` : section;
+}
