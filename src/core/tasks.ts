@@ -152,6 +152,60 @@ export function parseTasksFile(content: string): TaskEntry[] {
   return entries;
 }
 
+/** Render a full list of entries back to on-disk file content — the inverse of
+ *  `parseTasksFile`. Blocks are joined by a blank line, matching the shape
+ *  `addBacklogTask` already produces; entries are never dropped. */
+export function serializeTasks(entries: TaskEntry[]): string {
+  if (entries.length === 0) return "";
+  return `${entries.map(formatTask).join("\n\n")}\n`;
+}
+
+/** Raw `- status: <value>` line for a given block id, read straight from the
+ *  file text — used only to detect whether the ORIGINAL on-disk value was a
+ *  recognized status, since `parseTasksFile` already tolerantly coerces
+ *  anything unrecognized to `backlog` and does not keep the raw value around. */
+function rawStatusValues(content: string): Map<string, string> {
+  const lines = content.split(/\r?\n/);
+  const raw = new Map<string, string>();
+  let currentId: string | undefined;
+  for (const line of lines) {
+    const head = HEADER.exec(line);
+    if (head) {
+      currentId = head[1];
+      continue;
+    }
+    if (!currentId) continue;
+    const m = META.exec(line);
+    if (m && m[1] === "status") raw.set(currentId, m[2].trim());
+  }
+  return raw;
+}
+
+/**
+ * Same parse as `parseTasksFile`, but also surfaces non-fatal "warnings" for
+ * blocks that look malformed — missing title, missing/unparseable timestamps,
+ * or a status value that had to be tolerantly coerced to `backlog`. Parsing
+ * NEVER throws either way; this exists so a caller (the board UI) can show a
+ * notice like "2 tasks had malformed data" without re-implementing detection.
+ */
+export function parseTasksFileWithWarnings(content: string): { tasks: TaskEntry[]; warnings: string[] } {
+  const tasks = parseTasksFile(content);
+  const rawStatus = rawStatusValues(content);
+  const warnings: string[] = [];
+  for (const t of tasks) {
+    const problems: string[] = [];
+    if (!t.title) problems.push("missing title");
+    if (!t.created || !Number.isFinite(Date.parse(t.created))) problems.push("missing/invalid created date");
+    if (!t.updated || !Number.isFinite(Date.parse(t.updated))) problems.push("missing/invalid updated date");
+    const raw = rawStatus.get(t.id);
+    if (raw !== undefined && !VALID_STATUSES.has(raw as TaskStatus)) {
+      problems.push(`unrecognized status "${raw}" (defaulted to backlog)`);
+    }
+    if (problems.length) warnings.push(`${t.id}: ${problems.join(", ")}`);
+  }
+  return { tasks, warnings };
+}
+
 /** Fields the caller supplies to create a new backlog task. */
 export interface NewBacklogTask {
   title: string;
@@ -191,6 +245,55 @@ export function addBacklogTask(
   const trimmed = content.replace(/\s+$/, "");
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { content: next, entry };
+}
+
+/** Fields patchable via `applyTaskPatch` — anything but `id`/`created` (immutable identity/history). */
+export type TaskPatch = Partial<Pick<TaskEntry, "title" | "status" | "prompt" | "model" | "convo" | "order">>;
+
+/**
+ * Apply a partial update to one entry in `entries`, bumping `updated` to
+ * `now`. Every other entry is returned unchanged (new array either way — pure).
+ * Throws if `id` isn't present: a patch that silently no-ops would look like
+ * success but lose the caller's change, the same contract as `closeLoop`.
+ */
+export function applyTaskPatch(
+  entries: TaskEntry[],
+  id: string,
+  patch: TaskPatch,
+  now: number = Date.now()
+): TaskEntry[] {
+  let found = false;
+  const next = entries.map((e) => {
+    if (e.id !== id) return e;
+    found = true;
+    return { ...e, ...patch, updated: new Date(now).toISOString() };
+  });
+  if (!found) throw new Error(`Task not found: ${id}`);
+  return next;
+}
+
+/**
+ * Move a task to a new `status`/`order` (board drag-and-drop, column change),
+ * bumping `updated`. Throws if `id` isn't present (same no-silent-no-op contract).
+ */
+export function applyTaskMove(
+  entries: TaskEntry[],
+  id: string,
+  status: TaskStatus,
+  order: number,
+  now: number = Date.now()
+): TaskEntry[] {
+  return applyTaskPatch(entries, id, { status, order }, now);
+}
+
+/**
+ * Archive a task: sets `status` to `archived`, bumps `updated`. The block
+ * itself — title, prompt, history — is NEVER removed from the list; there is
+ * no deletion code path for tasks, mirroring the Open-Loops Ledger and Memory
+ * Union Store's append-only spirit. Throws if `id` isn't present.
+ */
+export function applyTaskArchive(entries: TaskEntry[], id: string, now: number = Date.now()): TaskEntry[] {
+  return applyTaskPatch(entries, id, { status: "archived" }, now);
 }
 
 /**
