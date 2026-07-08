@@ -28,6 +28,7 @@ import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
 import { inlineAiExtension } from "./editor/inline-ai";
 import { selectionObserverExtension } from "./editor/selection-observer";
 import { WriteQueue } from "./core/write-queue";
+import { promoteToTaskCommandVisible } from "./core/tasks";
 import { makeTolerantSetMaxListeners, isTolerantShim } from "./core/node-interop";
 import {
   initialAutoCommitState,
@@ -58,6 +59,16 @@ export default class ExoPlugin extends Plugin {
    *  .tmp path without a queue can regress or temporarily remove the main file. */
   private readonly conversationWriteQueue = new WriteQueue();
   private readonly dreamSnapshotWriteQueue = new WriteQueue();
+  /**
+   * THE ONE shared write path for every append to the Orchestration Board
+   * tasks ledger (`_system/orchestration/tasks.md`). Both the `add_task` SDK
+   * tool (chat-driven) and the "Promote to task" command enqueue on this SAME
+   * queue — same contract as `memoryWriteQueue` above — so board and
+   * chat-driven task creation never interleave a read-modify-write cycle.
+   * Injected into `createObsidianToolServer` (src/view.ts) and used directly
+   * by `ChatView.cmdPromoteToTask`.
+   */
+  readonly tasksWriteQueue = new WriteQueue();
 
   /** Git auto-commit safety net — debounce/cadence bookkeeping (in-memory
    *  only; resets on reload, which is fine, it's just scheduling state). */
@@ -141,6 +152,19 @@ export default class ExoPlugin extends Plugin {
       id: "toggle-plan",
       name: "Toggle plan mode",
       callback: withView((v) => v.cmdTogglePlan()),
+    });
+
+    // Orchestration Board — flag-gated the same way the setting says: OFF by
+    // default, and invisible (not just disabled) in the command palette when
+    // off, via checkCallback returning false. Never touches chat when off.
+    this.addCommand({
+      id: "promote-to-task",
+      name: "Promote to task (add to Orchestration Board backlog)",
+      checkCallback: (checking) => {
+        if (!promoteToTaskCommandVisible(this.settings)) return false;
+        if (!checking) withView((v) => void v.cmdPromoteToTask())();
+        return true;
+      },
     });
 
     this.addCommand({

@@ -23,6 +23,7 @@ import type {
 } from "./providers/types";
 import { toolMeta, toolFilePath, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
 import { createObsidianToolServer, OBSIDIAN_READ_TOOLS, OBSIDIAN_MEMORY_TOOLS } from "./obsidian/tools";
+import { adaptAppToTaskVault, createBacklogTask } from "./obsidian/task-store";
 import { MemoryObserver, type ObserverWrite } from "./obsidian/observer";
 import {
   initialCadenceState,
@@ -524,6 +525,7 @@ export class ChatView extends ItemView {
       s.contextSavingMode,
       s.codexSandbox,
       s.codexApproval,
+      s.orchestrationEnabled,
       c.id,
     ].join("|");
   }
@@ -573,7 +575,12 @@ export class ChatView extends ItemView {
           s.memoryReadEnabled,
           // Inject the plugin's ONE shared store write-queue so the `remember`
           // tool serializes against the observer's appends/undo (w1-1 contract).
-          this.plugin.memoryWriteQueue
+          this.plugin.memoryWriteQueue,
+          // Orchestration Board flag — gates `add_task` only; everything else
+          // above is unaffected either way (see settings.ts, tools.ts).
+          s.orchestrationEnabled,
+          // Shared tasks-ledger write-queue, mirroring memoryWriteQueue's contract.
+          this.plugin.tasksWriteQueue
         )
       : undefined;
 
@@ -1109,6 +1116,34 @@ export class ChatView extends ItemView {
   }
   cmdCompact(): void {
     this.compactActive();
+  }
+
+  /** "Promote to task" (flag-gated in main.ts, only registered when
+   *  `orchestrationEnabled` is true): take the active conversation's last user
+   *  message and create a `backlog` task from it, through the SAME task-store
+   *  path (`createBacklogTask` + the plugin's shared `tasksWriteQueue`) the
+   *  `add_task` chat tool uses — never a direct vault write. Scope kept
+   *  minimal per the board design: no new UI, just the simplest reuse of the
+   *  existing quick-add/task-store path. */
+  async cmdPromoteToTask(): Promise<void> {
+    const lastUser = [...this.active.messages].reverse().find((m): m is Extract<Message, { role: "user" }> =>
+      m.role === "user" && m.text.trim().length > 0
+    );
+    if (!lastUser) {
+      new Notice("No user message in this conversation to promote yet.");
+      return;
+    }
+    const vault = adaptAppToTaskVault(this.app);
+    const title = lastUser.text.trim().split("\n")[0].slice(0, 80);
+    try {
+      const entry = await createBacklogTask(vault, this.plugin.tasksWriteQueue, {
+        title,
+        prompt: lastUser.text.trim(),
+      });
+      new Notice(`Added to Backlog: ${entry.title}`);
+    } catch (e) {
+      new Notice(`Couldn't create the task: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   /** Open a fresh conversation (new tab, current default provider/model) seeded
