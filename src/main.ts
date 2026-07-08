@@ -29,6 +29,7 @@ import { inlineAiExtension } from "./editor/inline-ai";
 import { selectionObserverExtension } from "./editor/selection-observer";
 import { WriteQueue } from "./core/write-queue";
 import { promoteToTaskCommandVisible } from "./core/tasks";
+import { TaskStore, adaptAppToTaskVault } from "./obsidian/task-store";
 import { makeTolerantSetMaxListeners, isTolerantShim } from "./core/node-interop";
 import {
   initialAutoCommitState,
@@ -69,6 +70,15 @@ export default class ExoPlugin extends Plugin {
    * by `ChatView.cmdPromoteToTask`.
    */
   readonly tasksWriteQueue = new WriteQueue();
+  /**
+   * THE ONE shared `TaskStore` instance — the typed load/create/update/move/
+   * archive API over the same ledger (`_system/orchestration/tasks.md`),
+   * built on `tasksWriteQueue` above so it can never race a caller still
+   * using the lower-level `createBacklogTask` directly. Constructed in
+   * `onload()` (needs `this.app`); the future board view/driver should read
+   * and mutate tasks ONLY through this instance.
+   */
+  taskStore!: TaskStore;
 
   /** Git auto-commit safety net — debounce/cadence bookkeeping (in-memory
    *  only; resets on reload, which is fine, it's just scheduling state). */
@@ -98,6 +108,11 @@ export default class ExoPlugin extends Plugin {
     }
 
     await this.loadSettings();
+
+    // ONE shared TaskStore for the whole plugin — built on `tasksWriteQueue` so
+    // it can never race the lower-level `createBacklogTask` call in
+    // `src/view.ts`/`src/obsidian/tools.ts`, which enqueues on the same queue.
+    this.taskStore = new TaskStore(adaptAppToTaskVault(this.app), this.tasksWriteQueue);
 
     // Exo brand mark — a concave 4-point star (matches the product logo).
     // addIcon wraps this in an svg with viewBox "0 0 100 100".

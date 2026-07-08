@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   formatTask,
   parseTasksFile,
+  parseTasksFileWithWarnings,
+  serializeTasks,
   addBacklogTask,
+  applyTaskPatch,
+  applyTaskMove,
+  applyTaskArchive,
   TASKS_PATH,
   promoteToTaskCommandVisible,
   type TaskEntry,
@@ -162,6 +167,174 @@ describe("addBacklogTask", () => {
     expect(parsed).toHaveLength(1);
     expect(parsed[0].status).toBe("backlog");
     expect(parsed[0].prompt).toBe("the prompt");
+  });
+});
+
+describe("serializeTasks / parseTasksFile round-trip", () => {
+  it("round-trips a list of entries through serializeTasks -> parseTasksFile", () => {
+    const a: TaskEntry = {
+      id: "task-1",
+      title: "A",
+      status: "backlog",
+      created: "2026-07-08T10:00:00.000Z",
+      updated: "2026-07-08T10:00:00.000Z",
+      prompt: "prompt A",
+    };
+    const b: TaskEntry = {
+      id: "task-2",
+      title: "B",
+      status: "done",
+      created: "2026-07-08T11:00:00.000Z",
+      updated: "2026-07-08T11:30:00.000Z",
+      prompt: "prompt B",
+    };
+    const content = serializeTasks([a, b]);
+    expect(parseTasksFile(content)).toEqual([a, b]);
+  });
+
+  it("returns an empty string for an empty list", () => {
+    expect(serializeTasks([])).toBe("");
+  });
+});
+
+describe("parseTasksFileWithWarnings", () => {
+  it("returns no warnings for a well-formed file", () => {
+    const { tasks, warnings } = parseTasksFileWithWarnings(
+      [
+        "## task-1",
+        "- title: Fine",
+        "- status: backlog",
+        "- created: 2026-07-08T10:00:00.000Z",
+        "- updated: 2026-07-08T10:00:00.000Z",
+        "",
+        "prompt text",
+      ].join("\n")
+    );
+    expect(tasks).toHaveLength(1);
+    expect(warnings).toEqual([]);
+  });
+
+  it("returns an empty task list and no warnings for empty content", () => {
+    const { tasks, warnings } = parseTasksFileWithWarnings("");
+    expect(tasks).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns (never throws) when a block is missing its title", () => {
+    const content = [
+      "## task-1",
+      "- status: backlog",
+      "- created: 2026-07-08T10:00:00.000Z",
+      "- updated: 2026-07-08T10:00:00.000Z",
+      "",
+      "prompt text",
+    ].join("\n");
+    expect(() => parseTasksFileWithWarnings(content)).not.toThrow();
+    const { tasks, warnings } = parseTasksFileWithWarnings(content);
+    expect(tasks).toHaveLength(1);
+    expect(warnings).toEqual([expect.stringContaining("task-1")]);
+  });
+
+  it("warns when a status value is unrecognized (tolerantly coerced to backlog)", () => {
+    const content = [
+      "## task-999",
+      "- title: Weird status",
+      "- status: not-a-real-status",
+      "- created: 2026-07-08T10:00:00.000Z",
+      "- updated: 2026-07-08T10:00:00.000Z",
+      "",
+      "prompt text",
+    ].join("\n");
+    const { tasks, warnings } = parseTasksFileWithWarnings(content);
+    expect(tasks[0].status).toBe("backlog");
+    expect(warnings).toEqual([expect.stringContaining("task-999")]);
+  });
+
+  it("warns when created/updated timestamps are missing", () => {
+    const content = ["## task-2", "- title: No dates", "", "prompt text"].join("\n");
+    const { tasks, warnings } = parseTasksFileWithWarnings(content);
+    expect(tasks).toHaveLength(1);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe("applyTaskPatch", () => {
+  const base: TaskEntry = {
+    id: "task-1",
+    title: "Original",
+    status: "backlog",
+    created: "2026-07-08T09:00:00.000Z",
+    updated: "2026-07-08T09:00:00.000Z",
+    prompt: "original prompt",
+  };
+
+  it("patches title and bumps updated, leaving other entries untouched", () => {
+    const other: TaskEntry = { ...base, id: "task-2", title: "Other" };
+    const next = applyTaskPatch([base, other], "task-1", { title: "Renamed" }, 1720000005000);
+    expect(next[0].title).toBe("Renamed");
+    expect(next[0].updated).toBe(new Date(1720000005000).toISOString());
+    expect(next[1]).toEqual(other);
+  });
+
+  it("never mutates status via patch alone if not provided", () => {
+    const next = applyTaskPatch([base], "task-1", { prompt: "new prompt" }, 1720000005000);
+    expect(next[0].status).toBe("backlog");
+    expect(next[0].prompt).toBe("new prompt");
+  });
+
+  it("throws when the id doesn't exist (never silently no-ops)", () => {
+    expect(() => applyTaskPatch([base], "task-missing", { title: "x" })).toThrow();
+  });
+});
+
+describe("applyTaskMove", () => {
+  const base: TaskEntry = {
+    id: "task-1",
+    title: "Original",
+    status: "backlog",
+    created: "2026-07-08T09:00:00.000Z",
+    updated: "2026-07-08T09:00:00.000Z",
+    prompt: "original prompt",
+  };
+
+  it("updates status and order, bumps updated", () => {
+    const next = applyTaskMove([base], "task-1", "queued", 2, 1720000005000);
+    expect(next[0].status).toBe("queued");
+    expect(next[0].order).toBe(2);
+    expect(next[0].updated).toBe(new Date(1720000005000).toISOString());
+  });
+
+  it("throws when the id doesn't exist", () => {
+    expect(() => applyTaskMove([base], "task-missing", "done", 0)).toThrow();
+  });
+});
+
+describe("applyTaskArchive", () => {
+  const base: TaskEntry = {
+    id: "task-1",
+    title: "Original",
+    status: "review",
+    created: "2026-07-08T09:00:00.000Z",
+    updated: "2026-07-08T09:00:00.000Z",
+    prompt: "original prompt",
+  };
+
+  it("sets status to archived and bumps updated, keeps the block (title/prompt intact)", () => {
+    const next = applyTaskArchive([base], "task-1", 1720000005000);
+    expect(next[0].status).toBe("archived");
+    expect(next[0].title).toBe("Original");
+    expect(next[0].prompt).toBe("original prompt");
+    expect(next[0].updated).toBe(new Date(1720000005000).toISOString());
+  });
+
+  it("never removes the entry from the list — length unchanged", () => {
+    const other: TaskEntry = { ...base, id: "task-2" };
+    const next = applyTaskArchive([base, other], "task-1");
+    expect(next).toHaveLength(2);
+  });
+
+  it("throws when the id doesn't exist", () => {
+    expect(() => applyTaskArchive([base], "task-missing")).toThrow();
   });
 });
 

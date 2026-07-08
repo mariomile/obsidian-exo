@@ -126,8 +126,12 @@ export interface MVASettings {
   vaultAutoCommitIntervalMinutes: number;
   /** Orchestration Board master flag, default OFF. Gates the `add_task` tool,
    *  the "Promote to task" command, and (future) the board view/ribbon icon —
-   *  chat is unaffected either way. See docs/superpowers/specs/2026-07-08-orchestration-board-design.md. */
+   *  chat is unaffected either way. See docs/superpowers/specs/2026-07-08-orchestration-board-design.md.
+   *  Turning this OFF never touches already-running conversations — they keep
+   *  going as normal chats; it only stops new tasks from being queued/started. */
   orchestrationEnabled: boolean;
+  /** Max number of Orchestration Board tasks the driver runs concurrently. */
+  orchestrationMaxConcurrent: number;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -189,6 +193,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   vaultAutoCommit: false,
   vaultAutoCommitIntervalMinutes: 15,
   orchestrationEnabled: false,
+  orchestrationMaxConcurrent: 2,
 };
 
 /** Options for the "Background AI model" dropdown — Sonnet-class only.
@@ -817,9 +822,23 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Enable orchestration",
-      "Turn on the `add_task` chat tool and the \"Promote to task\" command, so a conversation can put work onto the Backlog. Off by default — chat behaves identically either way. Claude only.",
+      "Turns on the Orchestration Board: the `add_task` chat tool, the \"Promote to task\" command, and the board itself, so work can be queued up and run as separate conversations instead of inline in this chat. Off by default. Turning it OFF never touches conversations already running — they keep going as normal chats; it only stops new tasks from being queued or started. Claude only.",
       "orchestrationEnabled"
     );
+
+    new Setting(el)
+      .setName("Max concurrent tasks")
+      .setDesc("How many Orchestration Board tasks the driver runs at the same time. Extra queued tasks wait their turn.")
+      .addText((t) => {
+        const s = this.plugin.settings;
+        t.setPlaceholder("2")
+          .setValue(String(s.orchestrationMaxConcurrent))
+          .onChange(async (v) => {
+            const n = Number.parseInt(v, 10);
+            if (Number.isFinite(n) && n > 0) s.orchestrationMaxConcurrent = n;
+            await this.plugin.saveSettings();
+          });
+      });
 
     void this.renderMcpSection(el);
   }
