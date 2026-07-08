@@ -52,6 +52,7 @@ import { buildRecap, isRecoverableSessionError, resolveRecovery } from "./core/r
 import { TurnWatchdog } from "./core/turn-watchdog";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
+import { terminalConvoState } from "./core/convo-state";
 import { matchPermRule } from "./core/permissions";
 import { describeCliFailure } from "./core/errors";
 import { planInputParts, planStateText } from "./core/plan";
@@ -1146,21 +1147,55 @@ export class ChatView extends ItemView {
     }
   }
 
-  /** Open a fresh conversation (new tab, current default provider/model) seeded
-   *  with `text`. When `autoSend` is true the query is dispatched immediately;
-   *  otherwise it's left in the composer, focused, for the user to edit/send.
-   *  Public so sibling plugins (e.g. Sonar's "Search with Exo" row) can launch
-   *  a default chat from an external query. */
-  askInNewConversation(text: string, autoSend = true): void {
+  /**
+   * Open a fresh conversation (new tab, current default provider/model) seeded
+   * with `text`. When `autoSend` is true the query is dispatched immediately;
+   * otherwise it's left in the composer, focused, for the user to edit/send.
+   * Public so sibling plugins (e.g. Sonar's "Search with Exo" row) can launch a
+   * default chat from an external query.
+   *
+   * Returns the new conversation's id — or "" when `text` is blank and nothing
+   * was created. The return value and `opts.model` override are additive:
+   * existing callers (`askExo` in main.ts) pass neither and ignore the return,
+   * so external behavior is unchanged. The model override falls back to the
+   * settings default per provider.
+   */
+  askInNewConversation(text: string, autoSend = true, opts?: { model?: string }): string {
     const q = text.trim();
-    if (!q) return;
+    if (!q) return "";
     const provider = this.plugin.settings.provider;
-    const model = provider === "claude" ? this.plugin.settings.claudeModel : this.plugin.settings.codexModel;
+    const model =
+      opts?.model ??
+      (provider === "claude" ? this.plugin.settings.claudeModel : this.plugin.settings.codexModel);
     this.newConversation({ provider, model });
+    const id = this.active.id;
     this.composer.setInputValue(q);
     this.composer.autoGrow();
     if (autoSend) this.send();
     else this.composer.focusInput();
+    return id;
+  }
+
+  /**
+   * Additive public entry point for the Orchestration Board: spawn a new
+   * conversation seeded with `prompt`, send it immediately, honor an optional
+   * model override (falling back to the settings default), and return the new
+   * convo id. Reuses the `askInNewConversation` path verbatim, so it does not
+   * steal focus beyond what that already does. Chat-only — no board coupling.
+   */
+  startTaskConversation(prompt: string, opts?: { model?: string }): string {
+    return this.askInNewConversation(prompt, true, opts);
+  }
+
+  /**
+   * Read API for board reconciliation (workstream B5): report whether a convo
+   * still exists in this view and whether it's mid-turn / waiting on input.
+   * Pure read — never mutates chat state.
+   */
+  readConvoState(convoId: string): { exists: boolean; streaming: boolean; hasPending: boolean } {
+    const c = this.convos.find((x) => x.id === convoId) ?? (this.active?.id === convoId ? this.active : undefined);
+    if (!c) return { exists: false, streaming: false, hasPending: false };
+    return { exists: true, streaming: c.streaming, hasPending: !!(c.pendingPerm || c.pendingAsk) };
   }
 
   /** Toggle plan mode (Shift+Tab) — explore & propose before editing. */
@@ -2857,6 +2892,7 @@ export class ChatView extends ItemView {
     // If the user presses Stop while this card is open, cancel it (the provider
     // side is already unblocked via interrupt → deny).
     c.pendingPerm = () => finishCard("Cancelled", { behavior: "deny", message: "Stopped." });
+    this.plugin.emitConvoState(c.id, "needs-input", { reason: "perm" }); // fire-and-forget board hook (no-op when off; can't throw)
     actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Allow once" }).onclick = () =>
       settle({ behavior: "allow" });
     const alwaysBtn = actions.createEl("button", { cls: "mva-btn", text: "Always allow" });
@@ -2951,6 +2987,7 @@ export class ChatView extends ItemView {
 
     // Stop cancels the open card (provider side already unblocked via interrupt).
     c.pendingPerm = () => finish(false, { behavior: "deny", message: "Stopped." });
+    this.plugin.emitConvoState(c.id, "needs-input", { reason: "perm" }); // fire-and-forget board hook (no-op when off; can't throw)
 
     const actions = card.createDiv({ cls: "mva-plan-actions" });
     actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Approve & build" }).onclick = () => {
@@ -3065,6 +3102,7 @@ export class ChatView extends ItemView {
       c.pendingAsk = null;
       reject(new Error("cancelled"));
     };
+    this.plugin.emitConvoState(c.id, "needs-input", { reason: "ask" }); // fire-and-forget board hook (no-op when off; can't throw)
 
     const selections = questions.map(() => new Set<string>());
     const maybeSubmit = () => {
@@ -3369,6 +3407,7 @@ export class ChatView extends ItemView {
 
   private setStreaming(c: Convo, on: boolean): void {
     c.streaming = on;
+    if (on) this.plugin.emitConvoState(c.id, "turn-start"); // fire-and-forget board hook (no-op when off; can't throw)
     if (c === this.active) this.syncSendButton();
     this.renderTabs(); // keep the per-tab streaming dot in sync
     // Never show the tail "Related" section mid-stream — hide it the instant a
@@ -3378,6 +3417,19 @@ export class ChatView extends ItemView {
       c.tailSurfaceEl?.remove();
       c.tailSurfaceEl = null;
     }
+  }
+
+  /**
+   * Terminal convo-state hook, fired once from `runTurn`'s `finally`. Maps the
+   * turn's end state to the board vocabulary: user-stopped → `stopped`;
+   * errored/poisoned → `needs-input` (reason `error`); otherwise a clean
+   * `turn-end` (→ Review). A thin pass-through to the plugin channel, which is
+   * already flag-guarded and try/catches every listener — so this cannot throw,
+   * block, or slow the turn, and is a strict no-op when orchestration is off.
+   */
+  private emitTurnTerminal(c: Convo, poisoned: boolean): void {
+    const { state, reason } = terminalConvoState({ stopped: c.stopped, poisoned });
+    this.plugin.emitConvoState(c.id, state, reason ? { reason } : undefined);
   }
 
   private stop(source: "esc" | "button" = "button"): void {
@@ -3978,6 +4030,7 @@ export class ChatView extends ItemView {
         const recap = buildRecap(c.messages);
         c.queue.unshift({ text, images, sendPrefix: recap, isRecoveryRetry: true });
       }
+      this.emitTurnTerminal(c, poisoned); // fire-and-forget board hook (no-op when off; can't throw)
       this.setStreaming(c, false);
       this.persist();
       this.scrollConvo(c);
