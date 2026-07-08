@@ -3932,69 +3932,47 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 14px;
 }
 
-/* Task modal (create/edit) — follows the plugin's own form language: quiet
-   sentence-case labels (prompt-vars modal), .mva-pv-input-style fields with an
-   accent border on focus, the composer's .mva-sel chip+popover for the model
-   picker, and .mva-btn buttons. Lives OUTSIDE .mva-root (Obsidian modal), so
-   focus resets are declared here. */
+/* Task modal (create/edit) — REUSES the canonical prompt-vars form recipe
+   (.mva-pv-row / .mva-pv-label / .mva-pv-input; see docs/design.md §5). Only
+   the genuinely modal-specific deltas live here. Like PromptVarsModal it lives
+   OUTSIDE .mva-root, so .mva-pv-input's own quiet-focus rule applies. */
 .mva-task-modal-window {
   width: min(560px, 92vw);
 }
-.mva-task-modal .mva-task-modal-field {
-  position: relative; /* anchors the autocomplete popup */
-  margin-bottom: 12px;
+/* .mva-pv-row anchors the field's autocomplete popup in this modal. */
+.mva-task-modal .mva-pv-row {
+  position: relative;
 }
-.mva-task-modal .mva-task-modal-label {
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-.mva-task-modal input[type="text"],
-.mva-task-modal textarea {
-  width: 100%;
-  font-size: 13px;
-  padding: 8px 12px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r2);
-  background: var(--background-primary);
-  color: var(--text-normal);
-  box-shadow: none;
-}
-.mva-task-modal input[type="text"]:focus,
-.mva-task-modal textarea:focus {
-  outline: none;
-  box-shadow: none;
-  border-color: var(--interactive-accent);
-}
-.mva-task-modal textarea {
-  resize: none;
+/* Shared textarea behavior layered on .mva-pv-input (prompt + context box). */
+.mva-task-modal textarea.mva-pv-input {
   min-height: 96px;
+  resize: none;
   overflow-y: auto;
   font-family: inherit;
   line-height: 1.45;
 }
+/* The context-note box is a one-line affordance, not a prose field. */
 .mva-task-modal .mva-task-modal-ctx-input {
   min-height: 34px;
   height: 34px;
 }
+/* Model row: label + chip on one line. */
 .mva-task-modal .mva-task-modal-row {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.mva-task-modal .mva-task-modal-row > .mva-task-modal-label {
+.mva-task-modal .mva-task-modal-row > .mva-pv-label {
   margin-bottom: 0;
 }
-/* Model chip — toolbar .mva-sel-chip language, sized up a touch for the modal
-   and uncapped (the 120px toolbar cap would ellipsize model names for no reason
-   here). Quiet at rest, hover/is-open backgrounds only — no decorative surface. */
+/* Model chip — toolbar .mva-sel-chip language, sized up a touch and uncapped
+   (the 120px toolbar cap would ellipsize model names for no reason here). */
 .mva-task-modal .mva-sel-chip.mva-task-modal-model {
   font-size: 12.5px;
   padding: 4px 9px;
   max-width: none;
 }
-/* The popover opens upward from the chip (same rule as the composer toolbar);
-   the model row sits low in the modal, so upward is the roomy direction. */
+/* Context-note chips (removable → 999px per design.md). */
 .mva-task-modal .mva-task-modal-chips {
   display: flex;
   flex-wrap: wrap;
@@ -4027,6 +4005,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 11px;
   height: 11px;
 }
+/* Footer: run-immediately (create only) + submit. */
 .mva-task-modal .mva-task-modal-footer {
   display: flex;
   align-items: center;

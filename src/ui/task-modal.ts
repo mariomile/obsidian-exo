@@ -8,11 +8,13 @@
  * model picker, and — in create mode only — a "Run immediately" toggle that
  * enqueues the task as soon as it's created.
  *
- * Design language: this modal follows the plugin's own patterns, not generic
- * Obsidian-modal defaults — quiet sentence-case labels (`--font-ui-smaller`,
- * muted, like the prompt-vars modal), `.mva-pv-input`-style fields (accent
- * border on focus), the composer's chip + `.mva-sel-pop` popover for the model
- * picker (never a native <select>), and `.mva-btn` buttons.
+ * Design language (docs/design.md): this modal REUSES the canonical form recipe
+ * rather than restyling — fields are the same `.mva-pv-row` / `.mva-pv-label` /
+ * `.mva-pv-input` classes as `PromptVarsModal` (quiet sentence-case labels,
+ * accent border on focus), the model picker is the composer's chip + `.mva-sel`
+ * popover (never a native <select>), and buttons are `.mva-btn`. Only the
+ * modal-specific deltas (textarea sizing, context chips, footer, run toggle)
+ * carry `.mva-task-modal-*` classes.
  *
  * The modal is deliberately dumb: it collects values and hands a
  * `TaskModalResult` to `onSubmit`. The BoardView owns what happens next
@@ -67,19 +69,23 @@ export class TaskModal extends Modal {
     contentEl.addClass("mva-task-modal");
     this.titleEl.setText(this.opts.mode === "create" ? "New task" : "Edit task");
 
-    // Title.
-    const titleField = contentEl.createDiv({ cls: "mva-task-modal-field" });
-    titleField.createDiv({ cls: "mva-task-modal-label", text: "Title" });
+    // Title. Reuses the canonical prompt-vars form recipe (.mva-pv-row /
+    // .mva-pv-label / .mva-pv-input, see docs/design.md §5) rather than
+    // re-styling fields — same classes PromptVarsModal uses.
+    const titleField = contentEl.createDiv({ cls: "mva-pv-row" });
+    titleField.createDiv({ cls: "mva-pv-label", text: "Title" });
     this.titleInput = titleField.createEl("input", {
+      cls: "mva-pv-input",
       attr: { type: "text", placeholder: "What should this task achieve?" },
     }) as HTMLInputElement;
     this.titleInput.value = this.opts.initial?.title ?? "";
 
     // Prompt — auto-growing textarea with `@` note mentions (composer muscle
     // memory: same trigger, inserts a [[wikilink]] inline).
-    const promptField = contentEl.createDiv({ cls: "mva-task-modal-field" });
-    promptField.createDiv({ cls: "mva-task-modal-label", text: "Prompt" });
+    const promptField = contentEl.createDiv({ cls: "mva-pv-row" });
+    promptField.createDiv({ cls: "mva-pv-label", text: "Prompt" });
     this.promptInput = promptField.createEl("textarea", {
+      cls: "mva-pv-input",
       attr: { placeholder: "Instructions for the agent — @ to mention a note", rows: "5" },
     }) as HTMLTextAreaElement;
     this.promptInput.value = this.opts.initial?.prompt ?? "";
@@ -90,11 +96,11 @@ export class TaskModal extends Modal {
 
     // Context notes — chips + an `@` search box; selected notes are appended
     // to the prompt as a "Context notes" wikilink list on submit.
-    const ctxField = contentEl.createDiv({ cls: "mva-task-modal-field" });
-    ctxField.createDiv({ cls: "mva-task-modal-label", text: "Context notes" });
+    const ctxField = contentEl.createDiv({ cls: "mva-pv-row" });
+    ctxField.createDiv({ cls: "mva-pv-label", text: "Context notes" });
     this.chipsEl = ctxField.createDiv({ cls: "mva-task-modal-chips" });
     const ctxInput = ctxField.createEl("textarea", {
-      cls: "mva-task-modal-ctx-input",
+      cls: "mva-pv-input mva-task-modal-ctx-input",
       attr: { placeholder: "@ to attach a note", rows: "1" },
     }) as HTMLTextAreaElement;
     new Autocomplete(ctxInput, ctxField, [
@@ -115,8 +121,8 @@ export class TaskModal extends Modal {
     // Model — the composer's chip + popover pattern (.mva-sel), never a native
     // <select>. The popover opens upward from the chip, same as the toolbar.
     this.selectedModel = this.opts.initial?.model ?? this.opts.defaultModel;
-    const modelField = contentEl.createDiv({ cls: "mva-task-modal-field mva-task-modal-row" });
-    modelField.createDiv({ cls: "mva-task-modal-label", text: "Model" });
+    const modelField = contentEl.createDiv({ cls: "mva-pv-row mva-task-modal-row" });
+    modelField.createDiv({ cls: "mva-pv-label", text: "Model" });
     this.buildModelPicker(modelField);
 
     // Footer: run-immediately (create only) + submit.
