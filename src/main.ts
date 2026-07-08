@@ -29,6 +29,13 @@ import { inlineAiExtension } from "./editor/inline-ai";
 import { selectionObserverExtension } from "./editor/selection-observer";
 import { WriteQueue } from "./core/write-queue";
 import { promoteToTaskCommandVisible } from "./core/tasks";
+import {
+  ConvoStateChannel,
+  type ConvoState,
+  type ConvoStateReason,
+  type ConvoStateListener,
+  type Unsubscribe,
+} from "./core/convo-state";
 import { TaskStore, adaptAppToTaskVault } from "./obsidian/task-store";
 import { makeTolerantSetMaxListeners, isTolerantShim } from "./core/node-interop";
 import {
@@ -79,6 +86,18 @@ export default class ExoPlugin extends Plugin {
    * and mutate tasks ONLY through this instance.
    */
   taskStore!: TaskStore;
+
+  /**
+   * THE ONE plugin-level convo-state notification channel — how ChatView tells
+   * the (optional) Orchestration Board how each conversation's turn lifecycle is
+   * moving (turn-start / turn-end / needs-input / stopped / error). Synchronous,
+   * in-memory, one-way (board observes; chat never depends on it). Guarded on
+   * `orchestrationEnabled`: a strict no-op when the flag is off, so chat runtime
+   * behavior is identical to a build without the board. See
+   * src/core/convo-state.ts and the isolation contract in
+   * docs/superpowers/specs/2026-07-08-orchestration-board-design.md.
+   */
+  readonly convoState = new ConvoStateChannel(() => this.settings.orchestrationEnabled);
 
   /** Git auto-commit safety net — debounce/cadence bookkeeping (in-memory
    *  only; resets on reload, which is fine, it's just scheduling state). */
@@ -310,6 +329,49 @@ export default class ExoPlugin extends Plugin {
   noteVaultWrite(fileCount: number): void {
     if (!this.settings.vaultAutoCommit) return;
     this.gitAutoCommitState = recordVaultWrite(this.gitAutoCommitState, Date.now(), fileCount);
+  }
+
+  /**
+   * Convo-state notification — modeled on `noteVaultWrite()` above: synchronous,
+   * in-memory, and unable to block, delay, or throw back into a chat turn (the
+   * channel guards on `orchestrationEnabled` and try/catches every listener). The
+   * ChatView hook sites call THIS at the exact points they already flip
+   * `streaming` / open a pending card / stop, so a board crash is invisible to
+   * chat and toggling the flag off makes it a strict no-op.
+   */
+  emitConvoState(convoId: string, state: ConvoState, detail?: { reason?: ConvoStateReason }): void {
+    this.convoState.emit(convoId, state, detail);
+  }
+
+  /** Register a convo-state listener (the board driver). Returns an unsubscribe
+   *  handle. Listeners never influence chat — throwing is swallowed. */
+  onConvoState(listener: ConvoStateListener): Unsubscribe {
+    return this.convoState.subscribe(listener);
+  }
+
+  /**
+   * Read API for board reconciliation (workstream B5): given a convo id, report
+   * whether it still exists in the live view and whether it's mid-turn / waiting
+   * on input. Returns `{ exists: false }` when the view isn't open or the convo
+   * is gone. Pure read — never mutates chat state.
+   */
+  readConvoState(convoId: string): { exists: boolean; streaming: boolean; hasPending: boolean } {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (view instanceof ChatView) return view.readConvoState(convoId);
+    return { exists: false, streaming: false, hasPending: false };
+  }
+
+  /**
+   * Plugin-level wrapper around `ChatView.startTaskConversation` for callers that
+   * don't hold the view (e.g. the Orchestration Board driver). Reveals Exo,
+   * spawns a fresh conversation seeded with `prompt`, and returns its convo id.
+   * The view is created on demand; if it still can't be resolved (shouldn't
+   * happen once activated) it returns "".
+   */
+  async startTaskConversation(prompt: string, opts?: { model?: string }): Promise<string> {
+    await this.activateView();
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    return view instanceof ChatView ? view.startTaskConversation(prompt, opts) : "";
   }
 
   /**
