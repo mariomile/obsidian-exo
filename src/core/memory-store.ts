@@ -279,3 +279,105 @@ export function guardSupersede(
 export function isMemoryKind(s: string): s is MemoryKind {
   return (KINDS as readonly string[]).includes(s);
 }
+
+/* ---------------------- proactive recall selection ---------------------- */
+
+/**
+ * Tuning knobs for {@link selectRecall}. Every value is a token-discipline lever:
+ * loosening any of them costs the user context budget on turns that don't need it.
+ */
+export interface RecallOpts {
+  /** Max entries injected per turn (cap). */
+  k: number;
+  /**
+   * BM25-lite relevance floor — an entry must score AT LEAST this to be injected.
+   * Deliberately STRICTER than the `recall` tool's `score > 0`: the tool is
+   * model-initiated (the model already judged the query relevant), whereas
+   * proactive recall fires on *every* message, so it must reject the long tail of
+   * spurious single-common-word matches on its own. Calibration below.
+   */
+  minScore: number;
+  /** Cumulative char budget across the whole injected LIST (never truncates an entry). */
+  maxChars: number;
+  /** Below this word count the message is too thin to recall against → inject nothing. */
+  minQueryWords: number;
+}
+
+/**
+ * Spec defaults (design `2026-07-09-proactive-recall`).
+ *
+ * `minScore = 3.0` was calibrated against Mario's real Union Store (~59 active
+ * entries) by sweeping the floor over a set of genuinely-relevant queries and a
+ * set of generic chatter. Findings that fixed the value:
+ *  - The shared `scoreEntries` does NO stopword removal, so ultra-common words
+ *    ("today", "like", "you") carry non-trivial idf and let generic messages
+ *    score deceptively high. A scalar floor therefore degrades *gracefully*
+ *    rather than cleanly separating relevant from generic.
+ *  - At `3.0` every relevant probe still fired (100% recall of the wanted
+ *    memories) while it is comfortably stricter than the tool's `> 0`. Raising it
+ *    to `4.0` began dropping real hits without eliminating the residual spurious
+ *    ones — so `3.0` is the knee.
+ *  - Residual generic firing is bounded-cost by the OTHER guards (per-convo dedup
+ *    pays each entry once, `k`/`maxChars` cap the turn) and is always visible via
+ *    the transparency affordance — never silent. This is the accepted trade-off;
+ *    a semantic scorer is explicitly out of scope for this feature.
+ */
+export const DEFAULT_RECALL_OPTS: RecallOpts = {
+  k: 3,
+  minScore: 3.0,
+  maxChars: 800,
+  minQueryWords: 3,
+};
+
+/** Count word-shaped tokens (same tokenizer the scorer uses) — punctuation is not a word. */
+function countWords(s: string): number {
+  return tokenize(s).length;
+}
+
+/**
+ * Pure per-turn memory selector for proactive recall (no Obsidian imports,
+ * deterministic, fully unit-testable). Given the full parsed store and the
+ * user's outbound message, return the entries worth injecting into THIS turn.
+ *
+ * Pipeline (each stage strictly narrows):
+ *  1. Guard: a message under `minQueryWords` words recalls nothing (a bare
+ *     "ok" / "thanks" must cost zero).
+ *  2. `resolveSupersedence` → drop retired entries (never resurface stale truth).
+ *  3. `scoreEntries` (the SAME BM25-lite the `recall` tool uses — no new search
+ *     infra) → rank by relevance to the message.
+ *  4. Floor: drop anything below `minScore` (stricter than the tool's `> 0`).
+ *  5. Dedup: drop ids already injected earlier in this conversation, so each
+ *     memory is paid for once and then lives in cached history.
+ *  6. Top-`k`.
+ *  7. Cumulative `maxChars`: keep whole entries in rank order until the next one
+ *     would overflow the budget, then stop — the LIST is truncated, an entry's
+ *     verbatim text is NEVER sliced.
+ *
+ * Ordering is inherited from `scoreEntries` (score desc, then newest first), so
+ * the result is stable across identical calls.
+ */
+export function selectRecall(
+  entries: MemoryEntry[],
+  message: string,
+  alreadyInjected: Set<string>,
+  opts: RecallOpts
+): MemoryEntry[] {
+  if (countWords(message) < opts.minQueryWords) return [];
+  if (opts.k <= 0) return [];
+
+  const pool = resolveSupersedence(entries);
+  const ranked = scoreEntries(message, pool)
+    .filter((s) => s.score >= opts.minScore && !alreadyInjected.has(s.entry.id))
+    .slice(0, opts.k);
+
+  const out: MemoryEntry[] = [];
+  let used = 0;
+  for (const { entry } of ranked) {
+    const next = used + entry.text.length;
+    if (out.length > 0 && next > opts.maxChars) break; // list truncation, never entry truncation
+    out.push(entry);
+    used = next;
+    if (used >= opts.maxChars) break; // budget exhausted after this whole entry
+  }
+  return out;
+}

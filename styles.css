@@ -517,6 +517,92 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding-right: 2px;
   user-select: none;
 }
+/* ---- proactive-recall affordance (quiet "N memories recalled" under a user turn) ---- */
+/* Trust surface: injected memory is never invisible. Quiet at rest (law 2) —
+   no fill; hierarchy from the caret + hover only. Register C label (§3). */
+.mva-recall {
+  margin-top: 3px;
+  padding-right: 2px;
+  max-width: 100%;
+  user-select: none;
+}
+.mva-recall-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 11px;
+  border-radius: var(--mva-r1);
+  padding: 1px 4px;
+  transition: color var(--mva-t), background var(--mva-t);
+}
+.mva-recall-header:hover,
+.mva-recall.is-open .mva-recall-header {
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+}
+.mva-recall-header:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.mva-recall-icon {
+  display: inline-flex;
+}
+.mva-recall-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.mva-recall-caret {
+  display: inline-flex;
+  transition: transform var(--mva-t);
+}
+.mva-recall-caret svg {
+  width: 12px;
+  height: 12px;
+}
+.mva-recall.is-open .mva-recall-caret {
+  transform: rotate(90deg);
+}
+.mva-recall-list {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r2);
+  /* subtle raised surface via color-mix (law 4), never a flat hard-coded fill */
+  background: color-mix(in srgb, var(--background-primary) 92%, var(--background-secondary));
+  text-align: left;
+  max-width: min(420px, 100%);
+}
+.mva-recall.is-open .mva-recall-list {
+  display: flex;
+}
+.mva-recall-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.mva-recall-meta {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.mva-recall-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  word-break: break-word;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mva-recall-header,
+  .mva-recall-caret {
+    transition: none;
+  }
+}
+
 .mva-assistant {
   align-items: stretch;
   /* align assistant content (text + tool cards) with the composer's text column */

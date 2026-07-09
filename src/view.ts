@@ -56,8 +56,15 @@ import { terminalConvoState } from "./core/convo-state";
 import { matchPermRule } from "./core/permissions";
 import { describeCliFailure } from "./core/errors";
 import { planInputParts, planStateText } from "./core/plan";
+import { parseStoreFile, selectRecall, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
+import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
 
 export type { AskQuestion } from "./core/model";
+
+/** Folder holding the append-only Memory Union Store — mirrors the constant in
+ *  `obsidian/tools.ts` (the `recall` tool's read path). Duplicated rather than
+ *  exported to avoid a view→tools value import for one string. */
+const MEMORY_STORE_DIR = "_system/memory/store";
 
 /** Prompt surface for the Memory Union Store — appended to the boot preamble only
  *  when the store tools are registered. Kept short: the tool descriptions carry
@@ -66,6 +73,14 @@ const MEMORY_STORE_NOTE =
   "### Memory union store\n" +
   "A persistent, append-only memory store lives in `_system/memory/store/` — verbatim preferences, facts, decisions, and lessons from past sessions. " +
   "Call `recall` before answering anything that may depend on prior sessions instead of guessing, and use `remember` to store new durable statements in the user's exact words (never summarized).";
+
+/** Variant used when proactive recall is ON: the plugin auto-injects the relevant
+ *  memories, so the model no longer needs to *decide* to call `recall`. Kept short —
+ *  `recall`/`remember` tool descriptions carry the detail. */
+const MEMORY_STORE_NOTE_PROACTIVE =
+  "### Memory union store\n" +
+  "A persistent, append-only memory store lives in `_system/memory/store/`. Relevant past memories are auto-provided each turn inside `[recalled-memory]…[/recalled-memory]` blocks — treat them as trusted verbatim context. " +
+  "Use `recall` for a deeper or explicit search (e.g. `as_of` point-in-time queries), and `remember` to store new durable statements in the user's exact words (never summarized).";
 
 export const VIEW_TYPE = "exo-view";
 /** Custom Obsidian icon id for the Exo brand mark (registered in main.ts). */
@@ -125,6 +140,12 @@ export interface Convo {
    *  one-shot guard so the Haiku title call runs at most once (after the first
    *  assistant turn). Runtime-only (never persisted). */
   titledByAi?: boolean;
+  /** Proactive recall (design 2026-07-09): ids of store entries already injected
+   *  into THIS conversation's outbound turns, so each memory is paid for once and
+   *  then lives in cached history. Runtime-only — never persisted (a reloaded
+   *  conversation re-injects from scratch, which is correct: the cached history is
+   *  gone too). Mirrors the runtime-only pattern of `titledByAi` above. */
+  injectedMemoryIds?: Set<string>;
   /** Controller for the in-flight AI-title call, so disposing the conversation
    *  (close/delete/reset) aborts it. Runtime-only. */
   titleAbort?: AbortController | null;
@@ -591,7 +612,12 @@ export class ChatView extends ItemView {
       memoryPreamble = this.memoryPreamble || undefined;
       // Tell the agent the union store exists whenever its tools are registered
       // (obsidian tools on + memory read on ⇒ `recall`, +write ⇒ `remember`).
-      if (useObsidian) memoryPreamble = (memoryPreamble ? `${memoryPreamble}\n\n` : "") + MEMORY_STORE_NOTE;
+      // With proactive recall ON, swap in the variant that says memories are
+      // auto-provided (the model needn't decide to call `recall`).
+      if (useObsidian) {
+        const note = s.proactiveRecall ? MEMORY_STORE_NOTE_PROACTIVE : MEMORY_STORE_NOTE;
+        memoryPreamble = (memoryPreamble ? `${memoryPreamble}\n\n` : "") + note;
+      }
     }
 
     const session = ADAPTERS[c.provider].createSession({
@@ -1718,6 +1744,69 @@ export class ChatView extends ItemView {
     return this.memoryObserver;
   }
 
+  /* --------------------------- proactive recall --------------------------- */
+
+  /** True when proactive recall may run for `c`: the master flag is on and the
+   *  same preconditions that register the `recall` tool hold (obsidian tools +
+   *  memory read + agentic Claude). Any false → the send path is byte-identical
+   *  to before this feature existed. */
+  private proactiveRecallEligible(c: Convo): boolean {
+    const s = this.plugin.settings;
+    return (
+      s.proactiveRecall &&
+      s.memoryReadEnabled &&
+      s.obsidianToolsEnabled &&
+      s.toolsEnabled &&
+      c.provider === "claude"
+    );
+  }
+
+  /** Read + parse the whole Union Store (all monthly files) — the SAME cheap
+   *  cached-read path the `recall` tool uses. Never throws; an unreadable file is
+   *  skipped, and a missing store yields `[]`. */
+  private async readMemoryStore(): Promise<MemoryEntry[]> {
+    const files = this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${MEMORY_STORE_DIR}/`));
+    const all: MemoryEntry[] = [];
+    for (const f of files) {
+      try {
+        all.push(...parseStoreFile(await this.app.vault.cachedRead(f)));
+      } catch {
+        /* skip unreadable file */
+      }
+    }
+    return all;
+  }
+
+  /** Format the selected entries as the delimited `[recalled-memory]` block that
+   *  travels ONLY in the outbound payload (never the rendered/persisted bubble).
+   *  One bullet per entry: `- (kind, YYYY-MM-DD) …verbatim text…`. */
+  private formatRecallBlock(entries: MemoryEntry[]): string {
+    const lines = entries.map((e) => {
+      const date = new Date(e.at).toISOString().slice(0, 10);
+      const text = e.text.replace(/\s+/g, " ").trim();
+      return `- (${e.kind}, ${date}) ${text}`;
+    });
+    return `${RECALLED_MEMORY_OPEN}\n${lines.join("\n")}\n${RECALLED_MEMORY_CLOSE}`;
+  }
+
+  /** Select the memories to inject into THIS outbound turn (or `[]` when
+   *  ineligible / nothing relevant). Records the chosen ids into the convo's
+   *  per-conversation dedup set so each memory is injected at most once. `message`
+   *  is the clean user text (context-notes prefix and all) — never the rendered
+   *  bubble, which stays free of the injected block. */
+  private async selectTurnRecall(c: Convo, message: string): Promise<MemoryEntry[]> {
+    if (!this.proactiveRecallEligible(c)) return [];
+    const entries = await this.readMemoryStore();
+    if (entries.length === 0) return [];
+    if (!c.injectedMemoryIds) c.injectedMemoryIds = new Set<string>();
+    const picked = selectRecall(entries, message, c.injectedMemoryIds, {
+      ...DEFAULT_RECALL_OPTS,
+      k: this.plugin.settings.proactiveRecallK,
+    });
+    for (const e of picked) c.injectedMemoryIds.add(e.id);
+    return picked;
+  }
+
   /** Self-Writing Memory: after a HEALTHY turn, fire the observer off the critical
    *  path. Gated to Claude + both toggles; never blocks the turn or the next one.
    *  On a successful write, render a discreet veto row (review · undo) into the turn. */
@@ -1840,6 +1929,43 @@ export class ChatView extends ItemView {
       });
   }
 
+  /** Quiet, expandable "N memories recalled" row under a user turn — the
+   *  transparency surface for proactive recall, so injection is never invisible.
+   *  Collapsed by default: a brain icon + count (register C label). Click toggles
+   *  a list of the injected entries (kind · date · verbatim text). No fill at rest;
+   *  state comes from the caret + hover only (design laws 2 & 4). */
+  private renderRecallAffordance(turnEl: HTMLElement, entries: MemoryEntry[]): void {
+    const n = entries.length;
+    const wrap = turnEl.createDiv({ cls: "mva-recall" });
+    const header = wrap.createDiv({ cls: "mva-recall-header", attr: { role: "button", tabindex: "0" } });
+    setIcon(header.createSpan({ cls: "mva-recall-icon" }), "brain");
+    header.createSpan({ cls: "mva-recall-label", text: `${n} ${n === 1 ? "memory" : "memories"} recalled` });
+    const caret = header.createSpan({ cls: "mva-recall-caret" });
+    setIcon(caret, "chevron-right");
+
+    const list = wrap.createDiv({ cls: "mva-recall-list" });
+    for (const e of entries) {
+      const item = list.createDiv({ cls: "mva-recall-item" });
+      const date = new Date(e.at).toISOString().slice(0, 10);
+      item.createSpan({ cls: "mva-recall-meta", text: `${e.kind} · ${date}` });
+      item.createSpan({ cls: "mva-recall-text", text: e.text.replace(/\s+/g, " ").trim() });
+    }
+
+    const toggle = () => {
+      const open = wrap.hasClass("is-open");
+      wrap.toggleClass("is-open", !open);
+      header.setAttr("aria-expanded", String(!open));
+    };
+    header.setAttr("aria-expanded", "false");
+    this.clickable(header, toggle);
+    header.addEventListener("keydown", (ev: KeyboardEvent) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        toggle();
+      }
+    });
+  }
+
   /** Discreet, non-blocking "N memories written — review · undo" indicator. */
   private renderMemoryVeto(el: HTMLElement, write: ObserverWrite): void {
     const n = write.entries.length;
@@ -1870,7 +1996,7 @@ export class ChatView extends ItemView {
     });
   }
 
-  private addUserTurn(c: Convo, text: string, images?: ImageAttachment[]): void {
+  private addUserTurn(c: Convo, text: string, images?: ImageAttachment[]): HTMLElement {
     this.clearEmptyState(c);
     // Derive the tab title from the first user message. The untitled state is
     // represented inconsistently across the view — every render site falls back
@@ -1899,6 +2025,7 @@ export class ChatView extends ItemView {
     this.appendMsgTime(el, at);
     this.scrollConvo(c);
     if (c === this.active) this.rebuildOutline();
+    return el;
   }
 
   /** Small muted HH:MM under a user bubble. No-op when `at` is absent (pre-0.14 messages). */
@@ -3600,11 +3727,21 @@ export class ChatView extends ItemView {
       if (embedded.length) imgs = [...(imgs ?? []), ...embedded];
     }
 
+    // Proactive recall (design 2026-07-09): pick the relevant, not-yet-injected
+    // memories for THIS turn. Runs off the store's cached read; `[]` when the flag
+    // is off or nothing clears the floor — in which case the outbound payload
+    // below is built exactly as before this feature existed. Recovery retries skip
+    // it: they reuse the prior turn's bubble and already carry a recap prefix.
+    const recalled = opts?.isRecoveryRetry ? [] : await this.selectTurnRecall(c, message);
+
     // A recovery retry reuses the user bubble the poisoned turn already rendered —
     // don't render (or re-persist) a duplicate. The original message is still the
     // only "user" entry in c.messages for this turn.
     if (!opts?.isRecoveryRetry) {
-      this.addUserTurn(c, text, imgs);
+      const userEl = this.addUserTurn(c, text, imgs);
+      // Quiet "N memories recalled" affordance under the bubble — the trust
+      // surface, so the injection is never invisible. Only when there were any.
+      if (recalled.length) this.renderRecallAffordance(userEl, recalled);
       // Flush the user's message to disk immediately: it lives only in RAM until
       // the turn's finally otherwise, so an Obsidian crash mid-turn would lose the
       // exchange from the UI. The atomic write keeps this cheap and safe.
@@ -3890,10 +4027,12 @@ export class ChatView extends ItemView {
     try {
       wd.bump();
       const session = await this.ensureSession(c);
-      // sendPrefix (recovery recap) is prepended to the OUTBOUND provider message
-      // only — never to the rendered/persisted user text, so it can't leak into the
-      // transcript, c.messages, or serialize().
-      const outbound = opts?.sendPrefix ? `${opts.sendPrefix}\n\n${message}` : message;
+      // sendPrefix (recovery recap) and the proactive-recall block are prepended to
+      // the OUTBOUND provider message only — never to the rendered/persisted user
+      // text, so they can't leak into the transcript, c.messages, or serialize().
+      // Order: recap (if any) → recalled memory → the user's message.
+      const recallBlock = recalled.length ? this.formatRecallBlock(recalled) : "";
+      const outbound = [opts?.sendPrefix, recallBlock, message].filter(Boolean).join("\n\n");
       await session.send(outbound, onEvent, imgs);
       // Stop the watchdog before reading `wd.fired` so a timer that fires in the
       // gap between send() resolving and `finally` can't trip a false timeout.

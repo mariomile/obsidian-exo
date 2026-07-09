@@ -62,6 +62,14 @@ export interface MVASettings {
   observerCadence: "session-end" | "every-n-steps";
   /** Tool-call step interval for `observerCadence: "every-n-steps"`. */
   observerStepInterval: number;
+  /** Proactive recall: before each user message is sent, run the store's BM25
+   *  scorer and auto-inject the top relevant, not-yet-injected memories into the
+   *  outbound turn (in `[recalled-memory]` blocks). ON by default — this is the
+   *  point of the store. Kill-switch: OFF makes the send path identical to before
+   *  the feature existed. Claude only (memory read must also be on). */
+  proactiveRecall: boolean;
+  /** Max memories proactive recall injects per turn (advanced). */
+  proactiveRecallK: number;
   featureSurfacing: boolean;
   featureWikilinkify: boolean;
   /** Open notes the agent edits in a tab beside the chat, live. */
@@ -166,6 +174,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   selfWritingMemory: false,
   observerCadence: "session-end",
   observerStepInterval: 25,
+  proactiveRecall: true,
+  proactiveRecallK: 3,
   featureSurfacing: true,
   featureWikilinkify: true,
   revealEditedNotes: true,
@@ -647,6 +657,35 @@ export class MVASettingTab extends PluginSettingTab {
       "After each healthy turn, a cheap background observer proposes durable memories and appends them to the store as @generated entries — you can review or undo each write. Off by default; runs only when Write vault memory is also on. Claude only.",
       "selfWritingMemory"
     );
+
+    new Setting(el)
+      .setName("Proactive recall")
+      .setDesc(
+        "Before each message is sent, surface the most relevant stored memories into the turn automatically — so the agent no longer has to decide to call recall. Deduped per conversation and relevance-gated, so irrelevant turns cost nothing. On by default; needs Read vault memory. Claude only."
+      )
+      .addToggle((t) =>
+        t.setValue(s.proactiveRecall).onChange(async (v) => {
+          s.proactiveRecall = v;
+          await this.plugin.saveSettings();
+          this.display(); // show/hide the per-turn count field
+        })
+      );
+
+    if (s.proactiveRecall) {
+      new Setting(el)
+        .setName("Proactive recall — memories per turn")
+        .setDesc("How many relevant memories to inject at most, per message.")
+        .addText((t) =>
+          t
+            .setPlaceholder("3")
+            .setValue(String(s.proactiveRecallK))
+            .onChange(async (v) => {
+              const n = Number.parseInt(v, 10);
+              if (Number.isFinite(n) && n > 0) s.proactiveRecallK = n;
+              await this.plugin.saveSettings();
+            })
+        );
+    }
 
     new Setting(el)
       .setName("Observer cadence")
