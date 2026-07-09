@@ -2,12 +2,18 @@
    Built entirely on Obsidian's native CSS variables so it adapts to ANY theme.
    The only fixed colors are per-provider brand accents (Claude / Codex). */
 
-.mva-root {
+/* Geometry & timing tokens live on :root (not .mva-root) so they resolve in
+   Obsidian Modals too — a Modal renders in `.modal-container`, OUTSIDE `.mva-root`,
+   where a var() scoped to `.mva-root` is undefined and radii silently collapse to
+   0. These are pure design constants; scoping them to the view was the bug. */
+:root {
   --mva-r1: 6px;
   --mva-r2: 9px;
   --mva-r3: 13px;
   --mva-t: 0.14s ease;
   --mva-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+.mva-root {
   --mva-brand: var(--interactive-accent);
   /* Shared card rhythm — one padding/radius/border across every card family
      (tool, permission, ask, capabilities) so they read as one system. */
@@ -2527,6 +2533,37 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-pv-input:focus { outline: none; border-color: var(--interactive-accent); }
 .mva-pv-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+/* Modal reinforcement. A Modal renders in `.modal-container`, OUTSIDE `.mva-root`,
+   where the active theme (e.g. Cosmos) styles `.modal input/textarea/button` and
+   outranks the bare `.mva-pv-input` / `.mva-btn` classes (specificity 0,1,0) —
+   themes also style `input` and `textarea` differently, so the two diverge. Re-
+   assert the recipe's surface scoped to `.modal-container` (0,2,0) so it holds in
+   every modal (prompt-vars, task modal, …). Same tokens: enforcement, not a fork. */
+.modal-container .mva-pv-input {
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r2);
+  box-shadow: none;
+}
+.modal-container .mva-pv-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+.modal-container .mva-btn {
+  border-radius: var(--mva-r1);
+  box-shadow: none;
+}
+.modal-container .mva-btn-primary {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: transparent;
+}
+.modal-container .mva-btn-danger {
+  background: transparent;
+  color: var(--text-error);
+  border-color: color-mix(in srgb, var(--text-error) 35%, transparent);
+}
 
 /* --------------------------- image attachments ------------------------ */
 .mva-images {
