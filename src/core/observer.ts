@@ -43,6 +43,38 @@ export interface Candidate {
   tags: string[];
 }
 
+/**
+ * Delimiters wrapping a proactive-recall injection in the OUTBOUND turn (see the
+ * send path in `view.ts`). Exported so the send path, the observer strip guard,
+ * and their tests share one source of truth for the fence.
+ */
+export const RECALLED_MEMORY_OPEN = "[recalled-memory]";
+export const RECALLED_MEMORY_CLOSE = "[/recalled-memory]";
+
+/** Matches one `[recalled-memory]…[/recalled-memory]` block, or an unterminated
+ *  open fence to end-of-string (defensive: a malformed injection must not leak). */
+const RECALLED_MEMORY_BLOCK = new RegExp(
+  `${escapeRe(RECALLED_MEMORY_OPEN)}[\\s\\S]*?(?:${escapeRe(RECALLED_MEMORY_CLOSE)}|$)`,
+  "g"
+);
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Observer feedback-loop guard (design §3). Strip every proactive-recall
+ * `[recalled-memory]…[/recalled-memory]` block from a piece of turn text BEFORE
+ * the observer extracts memories from it. Without this, memory the plugin
+ * injected into the outbound turn would be re-observed and re-captured as "new"
+ * memory — a self-reinforcing duplication loop. Pure and idempotent; a message
+ * with no block is returned unchanged.
+ */
+export function stripRecalledMemory(text: string): string {
+  if (!text) return text;
+  return text.replace(RECALLED_MEMORY_BLOCK, "");
+}
+
 /** Collapse runaway whitespace and hard-cap a string. */
 function cap(s: string, n: number): string {
   return (s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
@@ -53,7 +85,9 @@ function cap(s: string, n: number): string {
  * a JSON array of durable-memory candidates, each `{ kind, text, tags }`.
  */
 export function buildObserverPrompt(digest: TurnDigest): string {
-  const user = cap(digest.user, MAX_USER_CHARS);
+  // Strip proactive-recall injections BEFORE the observer sees them (§3 guard) —
+  // injected memory must never be re-extracted as new memory.
+  const user = cap(stripRecalledMemory(digest.user), MAX_USER_CHARS);
   const assistant = cap(digest.assistant, MAX_ASSISTANT_CHARS);
   return [
     "You are a memory observer. Read one chat turn between a user and an assistant and extract",
@@ -152,7 +186,10 @@ export function parseObserverOutput(raw: string): Candidate[] {
  * commands, or exchanges below the combined-length threshold.
  */
 export function shouldSkipTurn(digest: TurnDigest): boolean {
-  const user = (digest.user ?? "").trim();
+  // Recall injections are stripped first (§3 guard): a turn whose only novel user
+  // content is an injected block collapses to empty here and is skipped, so the
+  // injected memory can never be re-captured.
+  const user = stripRecalledMemory(digest.user ?? "").trim();
   const assistant = (digest.assistant ?? "").trim();
   if (!user || !assistant) return true;
   if (user.startsWith("/")) return true; // pure slash command — nothing durable
