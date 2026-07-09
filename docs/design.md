@@ -104,6 +104,10 @@ Never a native `<select>` (its value clips and it ignores the theme). Use a chip
 ```
 Sonar's search input takes law 3 to the extreme: fully flat, `!important` resets on `:focus`/`:focus-within` to defeat theme rings — right for a spotlight field, overkill for a normal form.
 
+**Modal gotcha (learned 2026-07-09).** An Obsidian `Modal` renders in `.modal-container`, *outside* `.mva-root` — two things break there that don't inside the view:
+1. **Feature-scoped tokens are undefined.** `--mva-r1/r2/r3` and the timing tokens must live on `:root`, not `.mva-root`, or `var(--mva-r2)` resolves to empty in a modal and radii silently collapse to `0`. (Fixed by hoisting the geometry/timing constants to `:root`.)
+2. **The theme outranks the bare recipe classes.** The active theme (e.g. Cosmos) styles `.modal input/textarea/button` at specificity `0,1,1`, beating `.mva-pv-input` / `.mva-btn` (`0,1,0`) — and it styles `input` and `textarea` *differently*, so the two visibly diverge (one gets a fill, the other doesn't). Re-assert the recipe's surface scoped to `.modal-container .mva-pv-input` / `.modal-container .mva-btn*` (`0,2,0`), using the same tokens — enforcement, not a fork. Do this once at the canonical level so every modal (prompt-vars, task modal, …) inherits the fix.
+
 ### Card — the shared grid card (Masonry / TabX are near-identical twins)
 1px `--background-modifier-border`, card-radius (11px), background = the §4 card recipe. Hover: `border-color: var(--background-modifier-border-hover)` + soft lift shadow `0 5px 16px color-mix(in srgb, var(--background-modifier-box-shadow) 18%, transparent)` on `--mv-lift`/wash. Active: accent-tinted border (55%) + inset ring (16%). Focus: `outline: 2px solid var(--interactive-accent); outline-offset: 2px` (outset for grid cards; inset `-2px` for tab rows so layout doesn't shift). Exo tokenizes its own card family as `--mva-card-pad/radius/border` so tool/permission/ask/capabilities cards read as one system.
 
@@ -158,4 +162,4 @@ animation: {prefix}-shimmer 1.25s linear infinite;   /* 180% 0 → -40% 0 */
 3. **Tokens, not literals** — your prefix's `--*-ease`/`--*-radius`, native `--background-*`/`--text-*`/`--size-4-*`, `color-mix` for blends.
 4. **Quiet by default** — no fill at rest; state only on hover/active/open. Form fields get quiet focus.
 5. **Reduced-motion guard** on every transition.
-6. **Verify in Obsidian** — reload the plugin and screenshot (`obsidian plugin:reload id=…` → `obsidian dev:screenshot`), don't trust the CSS by eye. Modals render outside the plugin root; check their focus and width there.
+6. **Verify in Obsidian** — reload the plugin and screenshot (`obsidian plugin:reload id=…` → `obsidian dev:screenshot`), don't trust the CSS by eye. For modals, also inspect *computed* styles (`getComputedStyle` via `obsidian eval`) on the fields vs the button — a modal renders outside `.mva-root`, so verify tokens resolve and the recipe wins over the theme (see §5 Modal gotcha).
