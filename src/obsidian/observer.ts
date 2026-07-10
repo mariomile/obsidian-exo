@@ -11,9 +11,11 @@ import {
 import {
   buildObserverPrompt,
   parseObserverOutput,
+  parseNowProposal,
   shouldSkipTurn,
   dedupeCandidates,
   type TurnDigest,
+  type NowProposal,
 } from "../core/observer";
 
 /** Folder holding the append-only Memory Union Store (monthly markdown files). */
@@ -44,6 +46,20 @@ export interface ObserverAttempt {
   /** Another observer pass was already active; callers may retry after whenIdle(). */
   busy: boolean;
   write: ObserverWrite | null;
+  /**
+   * The Agent Is the Folder (design §5): a proposed `now.md` rewrite the observer
+   * flagged because the turn shifted what matters right now. `null` when the
+   * caller passed no `nowContext` (feature off) or the turn wasn't now-worthy
+   * (zero-noise). The Obsidian side does NOT write it — it's proposed; the Apply
+   * click writes through the governed `AgentFolder` path.
+   */
+  nowProposal: NowProposal | null;
+}
+
+/** Extra options for a detailed observe pass. */
+export interface ObserveOpts {
+  /** Current `now.md` body (agent folder ON) — enables the now.md proposal path (§5). */
+  nowContext?: string;
 }
 
 /** Runs a transient, tool-less CLI prompt and resolves the raw text (never throws). */
@@ -88,24 +104,37 @@ export class MemoryObserver {
   }
 
   /** Detailed variant used by cadence wiring so a busy skip is never mistaken
-   *  for content that was actually shown to the observer model. */
-  async observeDetailed(digest: TurnDigest, sessionId: string): Promise<ObserverAttempt> {
-    if (shouldSkipTurn(digest)) return { attempted: false, busy: false, write: null };
-    if (this.running) return { attempted: false, busy: true, write: null };
+   *  for content that was actually shown to the observer model. `opts.nowContext`
+   *  (agent folder ON) additionally enables the `now.md` proposal path (§5). */
+  async observeDetailed(
+    digest: TurnDigest,
+    sessionId: string,
+    opts: ObserveOpts = {}
+  ): Promise<ObserverAttempt> {
+    if (shouldSkipTurn(digest)) return { attempted: false, busy: false, write: null, nowProposal: null };
+    if (this.running) return { attempted: false, busy: true, write: null, nowProposal: null };
 
     this.running = true;
     const ctrl = new AbortController();
     this.controller = ctrl;
     try {
-      const raw = await this.runSession(buildObserverPrompt(digest), ctrl.signal);
-      if (ctrl.signal.aborted || !raw) return { attempted: true, busy: false, write: null };
+      const prompt = buildObserverPrompt(
+        digest,
+        opts.nowContext !== undefined ? { nowContext: opts.nowContext } : {}
+      );
+      const raw = await this.runSession(prompt, ctrl.signal);
+      if (ctrl.signal.aborted || !raw) return { attempted: true, busy: false, write: null, nowProposal: null };
+
+      // The now.md proposal is independent of whether any durable memory was
+      // captured — a turn can shift "what matters now" without adding a memory.
+      const nowProposal = opts.nowContext !== undefined ? parseNowProposal(raw) : null;
 
       const candidates = parseObserverOutput(raw);
-      if (candidates.length === 0) return { attempted: true, busy: false, write: null };
+      if (candidates.length === 0) return { attempted: true, busy: false, write: null, nowProposal };
 
       const existing = await this.readActiveEntryTexts();
       const novel = dedupeCandidates(candidates, existing);
-      if (novel.length === 0) return { attempted: true, busy: false, write: null };
+      if (novel.length === 0) return { attempted: true, busy: false, write: null, nowProposal };
 
       const at0 = Date.now();
       const session = sessionId || "unknown";
@@ -121,9 +150,9 @@ export class MemoryObserver {
       }));
 
       const snapshot = await this.append(entries, at0);
-      return { attempted: true, busy: false, write: { entries, snapshot } };
+      return { attempted: true, busy: false, write: { entries, snapshot }, nowProposal };
     } catch {
-      return { attempted: true, busy: false, write: null }; // CLI missing / parse / write error
+      return { attempted: true, busy: false, write: null, nowProposal: null }; // CLI missing / parse / write error
     } finally {
       this.running = false;
       this.controller = null;

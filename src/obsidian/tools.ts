@@ -40,6 +40,16 @@ interface AskQuestion {
   multiSelect?: boolean;
 }
 
+/** A `rethink_memory` request handed to the view-side bridge. The tool has NOT
+ *  yet decided the tier — the bridge resolves `planRethink`, enacts the write
+ *  (now/human) or records a pending proposal card (persona), and returns a short
+ *  status line for the model. Kept minimal to avoid a tools→view import cycle. */
+export interface RethinkRequest {
+  block: "persona" | "human" | "now";
+  content: string;
+  rationale?: string;
+}
+
 const MAX_CONTENT = 8000;
 const SKIP_LARGER_THAN = 200_000;
 const MAX_SCAN_FILES = 2000; // cap the built-in fallback scan (Omnisearch has no such limit)
@@ -106,7 +116,15 @@ export function createObsidianToolServer(
   /** Shared write-queue for the tasks ledger (`_system/orchestration/tasks.md`),
    *  injected by the plugin the same way `memoryWriteQueue` is — so `add_task`
    *  and any future board-side writer serialize on the SAME queue. */
-  tasksWriteQueue: WriteQueue = new WriteQueue()
+  tasksWriteQueue: WriteQueue = new WriteQueue(),
+  /** The Agent Is the Folder master flag (default OFF). Gates `rethink_memory`
+   *  ONLY (in addition to memoryWrite) — every other tool is byte-identical to
+   *  before this parameter existed when this is false. */
+  agentFolderEnabled = false,
+  /** View-side bridge that enacts a `rethink_memory` request: resolves the tier,
+   *  writes (now/human) or records a pending proposal card (persona), and renders
+   *  the feed diff+undo. Absent → the tool is not registered. */
+  rethinkBridge?: (req: RethinkRequest) => Promise<string>
 ) {
   const need = (target: string): TFile => {
     const f = resolveLink(app, target);
@@ -629,6 +647,31 @@ export function createObsidianToolServer(
     }
   );
 
+  /* ------------------- agent identity (rethink) ------------------- */
+
+  const rethinkMemory = tool(
+    "rethink_memory",
+    "Rewrite one of your identity blocks when your MODEL OF THE WORLD changes — not for episodic notes (those go to `remember`). `now.md` = what matters right now (hot projects, focus); `human.md` = your distilled working model of the user (pass a `rationale` — it's surfaced with the change); `persona.md` = how you behave (this only PROPOSES a change for the user to approve, it does not write). Pass the WHOLE new block content, not a patch.",
+    {
+      block: z.enum(["persona", "human", "now"]),
+      new_content: z.string().describe("The complete new content for the block (replaces it whole; never truncated)."),
+      rationale: z.string().optional().describe("Why the change — required for human.md, surfaced prominently in the change."),
+    },
+    async (args) => {
+      if (!rethinkBridge) return err("The agent identity layer is off.");
+      try {
+        const status = await rethinkBridge({
+          block: args.block,
+          content: args.new_content,
+          ...(args.rationale ? { rationale: args.rationale } : {}),
+        });
+        return ok(status);
+      } catch (e) {
+        return err(`Couldn't rethink ${args.block}.md: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  );
+
   /* --------------------------- open loops -------------------------- */
 
   /** `YYYY-MM-DD`, matching the ledger's on-disk tickler-date format. */
@@ -765,6 +808,9 @@ export function createObsidianToolServer(
       editNote, insertAtCursor, renameNote,
       ...(memoryRead ? [recall] : []),
       ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
+      // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
+      // agent-folder flag, plus a live view bridge to render its diff/proposal.
+      ...(memoryWrite && agentFolderEnabled && rethinkBridge ? [rethinkMemory] : []),
       ...(orchestrationEnabled ? [addTask] : []),
     ],
   });
@@ -791,6 +837,7 @@ export const OBSIDIAN_MEMORY_TOOLS = new Set([
   "mcp__obsidian__remember",
   "mcp__obsidian__open_loop",
   "mcp__obsidian__close_loop",
+  "mcp__obsidian__rethink_memory",
 ]);
 
 /** Orchestration tool names — gated separately by the `orchestrationEnabled` setting. */

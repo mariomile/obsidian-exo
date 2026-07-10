@@ -9,6 +9,10 @@ import {
   MAX_CANDIDATES,
   MAX_CANDIDATE_TEXT_CHARS,
   MIN_TURN_CHARS,
+  parseNowProposal,
+  NOW_UPDATE_OPEN,
+  NOW_UPDATE_CLOSE,
+  MAX_NOW_PROPOSAL_CHARS,
   type Candidate,
 } from "../src/core/observer";
 import { formatEntry, parseStoreFile, removeEntriesById, type MemoryEntry } from "../src/core/memory-store";
@@ -278,5 +282,57 @@ describe("shared WriteQueue serialization (observer vs remember)", () => {
       Number(store.get().includes("REMEMBER @user R")) +
       Number(store.get().includes("OBSERVER @generated B"));
     expect(survived).toBe(1);
+  });
+});
+
+/* -------------------- now.md observer proposal (§5) --------------------- */
+
+describe("buildObserverPrompt — now-proposal addition", () => {
+  it("is byte-identical to the memory-only form when no nowContext is given", () => {
+    const digest = { user: "u text here", assistant: "a text here" };
+    expect(buildObserverPrompt(digest)).toBe(buildObserverPrompt(digest, {}));
+  });
+
+  it("adds the now-update instruction and the current now.md when nowContext is given", () => {
+    const p = buildObserverPrompt(
+      { user: "we pivoted to the identity layer", assistant: "noted" },
+      { nowContext: "Focus: proactive recall." }
+    );
+    expect(p).toContain(NOW_UPDATE_OPEN);
+    expect(p).toContain(NOW_UPDATE_CLOSE);
+    expect(p).toContain("Focus: proactive recall.");
+  });
+
+  it("does not mention now.md at all without nowContext", () => {
+    const p = buildObserverPrompt({ user: "hi there friend", assistant: "hello" });
+    expect(p).not.toContain(NOW_UPDATE_OPEN);
+    expect(p).not.toContain("now.md");
+  });
+});
+
+describe("parseNowProposal", () => {
+  it("extracts a fenced now.md rewrite", () => {
+    const raw = "[]\n" + NOW_UPDATE_OPEN + "\nFocus: shipping the identity layer.\n" + NOW_UPDATE_CLOSE;
+    expect(parseNowProposal(raw)).toEqual({ text: "Focus: shipping the identity layer." });
+  });
+
+  it("returns null when there is no fence (zero-noise)", () => {
+    expect(parseNowProposal(JSON.stringify([{ kind: "fact", text: "x", tags: [] }]))).toBeNull();
+    expect(parseNowProposal("")).toBeNull();
+    expect(parseNowProposal("no proposal here")).toBeNull();
+  });
+
+  it("returns null for a whitespace-only body", () => {
+    expect(parseNowProposal(NOW_UPDATE_OPEN + "   \n  " + NOW_UPDATE_CLOSE)).toBeNull();
+  });
+
+  it("returns null for an unterminated fence", () => {
+    expect(parseNowProposal(NOW_UPDATE_OPEN + "\nhalf a proposal with no close")).toBeNull();
+  });
+
+  it("caps the proposal at MAX_NOW_PROPOSAL_CHARS", () => {
+    const big = "z".repeat(MAX_NOW_PROPOSAL_CHARS + 500);
+    const raw = NOW_UPDATE_OPEN + big + NOW_UPDATE_CLOSE;
+    expect(parseNowProposal(raw)?.text.length).toBe(MAX_NOW_PROPOSAL_CHARS);
   });
 });
