@@ -1770,6 +1770,105 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   gap: 8px;
   padding-left: 14px;
 }
+/* ---- steps timeline — Notion interaction, Craft skin -------------------
+   A contiguous run of work (thinking + generic tools) on a vertical rail;
+   folds into a "N steps ⌄" header at run close. Geometry + states only —
+   no surfaces (design system, Filone B). */
+.mva-steps {
+  margin: 4px 0;
+}
+.mva-steps-head {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t);
+}
+.mva-steps.is-collapsed .mva-steps-head,
+.mva-steps.is-settled .mva-steps-head {
+  display: flex;
+}
+.mva-steps-head:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-steps:not(.is-collapsed) .mva-steps-head .mva-reason-chevron {
+  transform: rotate(90deg);
+}
+.mva-steps.is-collapsed .mva-steps-body {
+  display: none;
+}
+/* the rail: one vertical connector, dots per step (the tool row's own status
+   icon doubles as the dot; thinking steps carry their chevron on the rail) */
+.mva-steps-body {
+  position: relative;
+  padding-left: 10px;
+}
+.mva-steps-body::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--background-modifier-border);
+}
+
+/* thinking step */
+.mva-step-think-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t);
+}
+.mva-step-think-head:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-step-think:not(.is-collapsed) .mva-step-think-head .mva-reason-chevron {
+  transform: rotate(90deg);
+}
+.mva-step-think.is-collapsed .mva-step-think-body {
+  display: none;
+}
+.mva-step-think-body {
+  padding: 2px 4px 4px 20px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* shimmer — active work only, sweeping the text ramp (accent is neutral gray,
+   never a colored highlight). Craft motion: linear, quiet. */
+@keyframes mva-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.mva-steps:not(.is-settled) .mva-tool.is-running .mva-tool-name,
+.mva-step-think.is-active .mva-step-think-label {
+  background: linear-gradient(
+      90deg,
+      var(--text-faint) 20%,
+      var(--text-normal) 50%,
+      var(--text-faint) 80%
+    )
+    0 0 / 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: mva-shimmer 2s linear infinite;
+}
 /* Touched-notes footer: only the LATEST turn keeps its chips expanded — every
    older turn collapses to a one-line "N notes ▸" toggle (03-07 feedback: old
    footers pile up and crowd the transcript). Both forms are in the DOM; the
@@ -3173,6 +3272,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
     transition-duration: 0.001ms !important;
   }
   .mva-caret { animation: none; opacity: 1; }
+  .mva-steps .mva-tool.is-running .mva-tool-name,
+  .mva-step-think.is-active .mva-step-think-label {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: var(--text-muted);
+  }
 }
 
 /* ---------------------- gallery card delete --------------------------- */
