@@ -56,7 +56,7 @@ import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { groupRuns } from "./core/group-runs";
 import { planPersistedConvos } from "./core/persistence";
-import { buildRecap, isRecoverableSessionError, resolveRecovery } from "./core/recovery";
+import { buildRecap, isRecoverableSessionError, resolveRecovery, stopAction } from "./core/recovery";
 import { workingAffordance } from "./core/working-visibility";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
@@ -3831,11 +3831,22 @@ export class ChatView extends ItemView {
 
   private stop(source: "esc" | "button" = "button"): void {
     const c = this.active;
+    // `stopped` resets at turn start, so true here means a PRIOR stop this turn
+    // didn't settle it — the interrupt was swallowed (stuck transport, zombie
+    // CLI). Escalate: dispose the session so the parked send() rejects, the
+    // turn closes, and the composer unblocks. Next message starts fresh (the
+    // on-disk transcript is still resumable). See stopAction in core/recovery.
+    const action = stopAction(c.stopped);
     c.stopped = true;
     c.queue = [];
     this.renderQueue(c);
     c.pendingPerm?.(); // cancel any open permission card
     c.pendingAsk?.(); // cancel any open ask card
+    if (action === "dispose") {
+      this.dropSession(c);
+      new Notice("Exo — session force-reset");
+      return;
+    }
     c.session?.interrupt();
     // Esc is heavily overloaded in Obsidian and the view-level handler catches it
     // wherever focus sits inside the view — an accidental press silently killed
@@ -3997,6 +4008,10 @@ export class ChatView extends ItemView {
     this.ensureWorking(ctx);
     const workingTimer = window.setInterval(() => {
       if (ctx.workingElapsed) ctx.workingElapsed.setText(`· ${this.fmtDuration(Date.now() - turnStart)}`);
+      // Self-healing invariant: even if some future event branch forgets its
+      // syncWorking call, the affordance repairs itself within a second — the
+      // non-gated backstop that keeps a streaming turn from ever looking dead.
+      this.syncWorking(ctx);
     }, 1000);
 
     const adapter = ADAPTERS[c.provider];
@@ -4283,7 +4298,10 @@ export class ChatView extends ItemView {
     } catch (err) {
       this.flushRender(ctx);
       this.dropSession(c); // a failed turn likely poisoned the session
-      if (isAbort(err)) {
+      // `c.stopped` = the user asked for this (Stop/Esc, possibly the force-
+      // dispose escalation whose "Session disposed." rejection is not an
+      // AbortError) — render it as a clean stop, never a scary error.
+      if (isAbort(err) || c.stopped) {
         ctx.el.addClass("mva-aborted");
         if (!ctx.fullText && ctx.cards.size === 0) {
           ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
