@@ -49,6 +49,8 @@ import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
+import { StepsRun } from "./ui/steps";
+import { stepPlacement } from "./core/steps";
 import { Composer } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { buildRelatedChips } from "./ui/related";
@@ -208,9 +210,10 @@ interface AssistantCtx {
   fullText: string;
   userText: string;
   thinkingEl: HTMLElement | null;
-  reasonEl: HTMLElement | null;
-  reasonBody: HTMLElement | null;
-  reasonRaw: string;
+  /** Open steps-timeline run (contiguous thinking + generic tool work). Null
+   *  when no run is open; closed (folded to "N steps") when reply text resumes,
+   *  an excluded card appears, or the turn ends. */
+  stepsRun: StepsRun | null;
   sources: Set<string>;
   touched: TouchedNote[];
   /** Tool-use id → file path, for write tools (to reveal the note on result). */
@@ -2278,9 +2281,7 @@ export class ChatView extends ItemView {
       fullText: "",
       userText,
       thinkingEl: thinking,
-      reasonEl: null,
-      reasonBody: null,
-      reasonRaw: "",
+      stepsRun: null,
       sources: new Set(),
       touched: [],
       writeById: new Map(),
@@ -2307,22 +2308,24 @@ export class ChatView extends ItemView {
 
   private appendReasoning(ctx: AssistantCtx, text: string): void {
     this.dropThinking(ctx);
-    if (!ctx.reasonEl) {
-      const block = ctx.bodyEl.createDiv({ cls: "mva-reason is-collapsed" });
-      const head = block.createDiv({ cls: "mva-reason-head" });
-      setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
-      head.createSpan({ cls: "mva-reason-label", text: "Reasoning" });
-      this.clickable(head, () => block.toggleClass("is-collapsed", !block.hasClass("is-collapsed")));
-      ctx.reasonBody = block.createDiv({ cls: "mva-reason-body" });
-      ctx.reasonEl = block;
-    }
-    ctx.reasonRaw += text;
-    ctx.reasonBody?.setText(ctx.reasonRaw);
+    this.ensureStepsRun(ctx).appendThinking(text);
   }
 
   private dropThinking(ctx: AssistantCtx): void {
     ctx.thinkingEl?.remove();
     ctx.thinkingEl = null;
+  }
+
+  /** Open (or reuse) the current steps-timeline run for this turn. */
+  private ensureStepsRun(ctx: AssistantCtx): StepsRun {
+    if (!ctx.stepsRun || ctx.stepsRun.closed) ctx.stepsRun = new StepsRun(ctx.bodyEl);
+    return ctx.stepsRun;
+  }
+
+  /** Close the current run (fold to "N steps ⌄"). Safe to over-call. */
+  private closeStepsRun(ctx: AssistantCtx): void {
+    ctx.stepsRun?.close(ctx.convo.listEl);
+    ctx.stepsRun = null;
   }
 
   /* ------------------------- working indicator ---------------------- */
@@ -2444,6 +2447,7 @@ export class ChatView extends ItemView {
   private appendText(ctx: AssistantCtx, text: string): void {
     this.dropThinking(ctx);
     if (!ctx.curTextEl) {
+      this.closeStepsRun(ctx);
       ctx.curTextEl = ctx.bodyEl.createDiv({ cls: "mva-bubble markdown-rendered" });
       ctx.curRaw = "";
       ctx.stableLen = 0;
@@ -2466,6 +2470,7 @@ export class ChatView extends ItemView {
     if (!Array.isArray(todos)) return;
     this.dropThinking(ctx);
     this.resetTextStream(ctx);
+    this.closeStepsRun(ctx);
     if (!ctx.todosEl) ctx.todosEl = ctx.bodyEl.createDiv({ cls: "mva-todos" });
     const el = ctx.todosEl;
     el.empty();
@@ -2577,6 +2582,7 @@ export class ChatView extends ItemView {
     }
     this.renderText(ctx, false);
     this.clearCaret(ctx);
+    this.closeStepsRun(ctx);
     // Final-cleanup fallback: the tracked ref covers every live path, but the
     // turn is over — sweep the transcript so no caret can survive a desync.
     ctx.convo.listEl.querySelectorAll(".mva-caret").forEach((el) => el.remove());
@@ -2973,6 +2979,7 @@ export class ChatView extends ItemView {
 
   /** Persist + render a live preview card for a generated file (vault-relative path). */
   private renderArtifactCard(ctx: AssistantCtx, path: string): void {
+    this.closeStepsRun(ctx);
     ctx.segments.push({ t: "artifact", path });
     this.buildArtifactCard(ctx.bodyEl, path);
   }
@@ -3117,7 +3124,15 @@ export class ChatView extends ItemView {
   private addToolCard(ctx: AssistantCtx, id: string, name: string, input: unknown): void {
     this.dropThinking(ctx);
     this.resetTextStream(ctx);
-    const refs = this.createToolCard(ctx.bodyEl, name, input);
+    let parent: HTMLElement = ctx.bodyEl;
+    if (stepPlacement(name, input, toolFilePath(name, input) ?? null) === "timeline") {
+      const run = this.ensureStepsRun(ctx);
+      parent = run.body;
+      run.noteToolAdded();
+    } else {
+      this.closeStepsRun(ctx); // excluded card breaks the run and stays flat
+    }
+    const refs = this.createToolCard(parent, name, input);
     ctx.cards.set(id, refs);
     const seg: Segment = { t: "tool", name, input, ok: null, output: "" };
     ctx.segments.push(seg);
@@ -3283,6 +3298,7 @@ export class ChatView extends ItemView {
   ): void {
     this.dropThinking(ctx);
     this.resetTextStream(ctx);
+    this.closeStepsRun(ctx);
     const meta = toolMeta(tool, input);
     const card = ctx.bodyEl.createDiv({ cls: "mva-perm" });
     const head = card.createDiv({ cls: "mva-perm-head" });
@@ -3369,6 +3385,7 @@ export class ChatView extends ItemView {
   ): Promise<void> {
     this.dropThinking(ctx);
     this.resetTextStream(ctx);
+    this.closeStepsRun(ctx);
     const parts = planInputParts(input);
     let planMd = parts.md;
     if (!planMd && parts.filePath) planMd = await this.readPlanFile(parts.filePath);
@@ -3497,6 +3514,7 @@ export class ChatView extends ItemView {
   ): void {
     this.dropThinking(ctx);
     this.resetTextStream(ctx);
+    this.closeStepsRun(ctx);
     this.notifyOnce(ctx, "waiting", "Exo — waiting for you", "The agent asked a question / needs permission.");
     const card = ctx.bodyEl.createDiv({ cls: "mva-ask" });
     this.openCard(ctx); // the ask card is now the feedback (working row hides)
@@ -4287,6 +4305,7 @@ export class ChatView extends ItemView {
           this.diag.push("error", e.message);
           this.dropThinking(ctx);
           this.resetTextStream(ctx);
+          this.closeStepsRun(ctx);
           this.removeWorking(ctx);
           if (c.stopped) {
             // User pressed Stop — the provider reports an execution error as it
@@ -4328,8 +4347,6 @@ export class ChatView extends ItemView {
       // matching live tool-call rows so the same file isn't shown twice (the
       // #1 finding of the 2026-07-03 impeccable critique on this surface).
       for (const id of ctx.noteTouchIds) ctx.cards.get(id)?.card.remove();
-      // Turn settled: fold long runs of remaining tool rows into a closed accordion.
-      this.groupToolRows(ctx.bodyEl);
       if (ctx.fullText.trim()) {
         this.attachActions(ctx.el, ctx.fullText, text, c);
         // Turn duration (Feature 2): live-only, only when it's worth showing.
