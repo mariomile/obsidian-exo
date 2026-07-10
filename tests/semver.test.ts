@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { compareSemver } from "../src/core/semver";
+import { compareSemver, cliVerifyStatus } from "../src/core/semver";
 
 describe("compareSemver", () => {
   it("orders by major, then minor, then patch", () => {
@@ -39,5 +39,32 @@ describe("compareSemver", () => {
 
   it("ignores build metadata", () => {
     expect(compareSemver("1.2.3+build.9", "1.2.3")).toBe(0);
+  });
+});
+
+describe("cliVerifyStatus", () => {
+  const range = { min: "2.1.195", maxVerified: "2.1.201" };
+
+  it("inside the verified range (bounds included) → verified", () => {
+    expect(cliVerifyStatus("v2.1.195", range)).toBe("verified");
+    expect(cliVerifyStatus("v2.1.197", range)).toBe("verified");
+    expect(cliVerifyStatus("2.1.201", range)).toBe("verified");
+  });
+
+  it("beyond maxVerified → newer (CLI drift: behaviors Exo depends on are per-version)", () => {
+    expect(cliVerifyStatus("v2.1.202", range)).toBe("newer");
+    expect(cliVerifyStatus("v2.2.0", range)).toBe("newer");
+    expect(cliVerifyStatus("v3.0.0", range)).toBe("newer");
+  });
+
+  it("below min → older", () => {
+    expect(cliVerifyStatus("v2.1.194", range)).toBe("older");
+    expect(cliVerifyStatus("v1.0.0", range)).toBe("older");
+  });
+
+  it("null/garbage version → unknown (never nag on a failed probe)", () => {
+    expect(cliVerifyStatus(null, range)).toBe("unknown");
+    expect(cliVerifyStatus("", range)).toBe("unknown");
+    expect(cliVerifyStatus("not-a-version", range)).toBe("unknown");
   });
 });

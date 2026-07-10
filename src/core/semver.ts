@@ -36,3 +36,24 @@ function toInt(x: string | undefined): number {
   const n = parseInt(x ?? "", 10);
   return Number.isFinite(n) ? n : 0;
 }
+
+/** The Claude CLI range Exo's session behaviors are verified against.
+ *  Exo depends on per-version CLI behaviors (interrupt → error_during_execution
+ *  classification, system/init caps in streaming-input mode, result.usage), so
+ *  drift outside this range should be *visible*, not a mystery bug. Bump
+ *  maxVerified after running `npm run smoke` against a newer CLI. */
+export const VERIFIED_CLAUDE_CLI = { min: "2.1.195", maxVerified: "2.1.201" };
+
+export type CliVerifyStatus = "verified" | "newer" | "older" | "unknown";
+
+/** Classify an installed CLI version against a verified range. `null` or a
+ *  garbage string (failed probe) → "unknown" — never nag on a bad read. */
+export function cliVerifyStatus(
+  version: string | null,
+  range: { min: string; maxVerified: string }
+): CliVerifyStatus {
+  if (!version || !/\d+\.\d+\.\d+/.test(version)) return "unknown";
+  if (compareSemver(version, range.min) < 0) return "older";
+  if (compareSemver(version, range.maxVerified) > 0) return "newer";
+  return "verified";
+}
