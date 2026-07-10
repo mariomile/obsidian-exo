@@ -2,6 +2,7 @@ import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Plu
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
+import { DiagLog } from "./core/diag";
 import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
@@ -60,6 +61,10 @@ const execFileAsync = promisify(execFile);
 
 export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
+
+  /** Turn-lifecycle diagnostics ring buffer (see core/diag.ts). The view logs
+   *  the critical path into it; "Copy diagnostics" pastes it for bug reports. */
+  readonly diag = new DiagLog();
 
   /**
    * THE ONE shared write path for every append to the Memory Union Store
@@ -179,6 +184,22 @@ export default class ExoPlugin extends Plugin {
       id: "open-chat",
       name: "Open chat",
       callback: () => this.activateView(),
+    });
+
+    // Paste-ready turn-lifecycle diagnostics (names/kinds/counts only — never
+    // vault content). The first thing to ask for when "Exo si è bloccato".
+    this.addCommand({
+      id: "copy-diagnostics",
+      name: "Copy diagnostics",
+      callback: () => {
+        const report = this.diag.dump({
+          version: this.manifest.version,
+          platform: process.platform,
+          generated: new Date().toISOString(),
+        });
+        void navigator.clipboard.writeText(report);
+        new Notice("Exo — diagnostics copied to clipboard");
+      },
     });
 
     const withView = (fn: (v: ChatView) => void) => () => {

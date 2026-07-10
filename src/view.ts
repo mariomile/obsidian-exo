@@ -64,7 +64,7 @@ import { terminalConvoState } from "./core/convo-state";
 import { matchPermRule } from "./core/permissions";
 import { describeCliFailure } from "./core/errors";
 import { planInputParts, planStateText } from "./core/plan";
-import { parseStoreFile, selectRecall, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
+import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
 import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
 
 export type { AskQuestion } from "./core/model";
@@ -264,6 +264,12 @@ export class ChatView extends ItemView {
   private prePlanMode: PermissionMode = "default";
 
   /** Active conversation is streaming (drives the send/stop button). */
+  /** Turn-lifecycle diagnostics (plugin-scoped ring buffer, core/diag.ts).
+   *  Log NAMES/KINDS/COUNTS only — never message or vault content. */
+  private get diag() {
+    return this.plugin.diag;
+  }
+
   private get streaming(): boolean {
     return this.active?.streaming ?? false;
   }
@@ -591,6 +597,7 @@ export class ChatView extends ItemView {
     // Claim a spawn slot: any older in-flight spawn is superseded from now on.
     const seq = (this.spawnSeq.get(c) ?? 0) + 1;
     this.spawnSeq.set(c, seq);
+    this.diag.push("session", `spawn provider=${c.provider} resume=${c.sessionId ? c.sessionId.slice(0, 8) : "no"}`);
     c.session?.dispose();
     const s = this.plugin.settings;
     const bin = c.provider === "claude" ? s.claudeBin : s.codexBin;
@@ -692,6 +699,7 @@ export class ChatView extends ItemView {
   }
 
   private dropSession(c: Convo): void {
+    if (c.session) this.diag.push("session", `drop convo=${c.id}`);
     // Supersede any in-flight spawn so it can't install a session after the drop.
     this.spawnSeq.set(c, (this.spawnSeq.get(c) ?? 0) + 1);
     this.sessionInit.delete(c);
@@ -1995,6 +2003,10 @@ export class ChatView extends ItemView {
       ...DEFAULT_RECALL_OPTS,
       k: this.plugin.settings.proactiveRecallK,
     });
+    // Diagnostics: recall decisions are exactly where cue-list drift will show
+    // up (false skips / spurious injections) — make both outcomes readable.
+    if (isBackReference(message)) this.diag.push("recall", "skipped (back-reference)");
+    else if (picked.length) this.diag.push("recall", `injected ${picked.length}`);
     for (const e of picked) c.injectedMemoryIds.add(e.id);
     return picked;
   }
@@ -2368,6 +2380,7 @@ export class ChatView extends ItemView {
    *  feedback, so the working row hides. */
   private openCard(ctx: AssistantCtx): void {
     ctx.openCards++;
+    this.diag.push("card", `open n=${ctx.openCards}`);
     this.syncWorking(ctx);
   }
 
@@ -2377,6 +2390,7 @@ export class ChatView extends ItemView {
    *  card that never rendered can't leave the turn without an affordance. */
   private closeCard(ctx: AssistantCtx): void {
     if (ctx.openCards > 0) ctx.openCards--;
+    this.diag.push("card", `close n=${ctx.openCards}`);
     this.syncWorking(ctx);
   }
 
@@ -3837,6 +3851,7 @@ export class ChatView extends ItemView {
     // turn closes, and the composer unblocks. Next message starts fresh (the
     // on-disk transcript is still resumable). See stopAction in core/recovery.
     const action = stopAction(c.stopped);
+    this.diag.push("stop", `${source} → ${action}`);
     c.stopped = true;
     c.queue = [];
     this.renderQueue(c);
@@ -4030,14 +4045,29 @@ export class ChatView extends ItemView {
     // re-errors. Track it here and reset the session at turn end.
     let poisoned = false;
 
+    // Diagnostics: first-delta latency markers (logged once per turn, deltas are
+    // otherwise never logged — noise) + tool-id → name so result lines read well.
+    this.diag.push("turn", `start convo=${c.id} provider=${c.provider}${opts?.isRecoveryRetry ? " (recovery-retry)" : ""}`);
+    let sawText = false;
+    let sawThinking = false;
+    const toolNames = new Map<string, string>();
+
     const onEvent = (e: AgentEvent) => {
       switch (e.kind) {
         case "text-delta":
+          if (!sawText) {
+            sawText = true;
+            this.diag.push("stream", "first text delta");
+          }
           ctx.textStreaming = true;
           this.appendText(ctx, e.text);
           this.syncWorking(ctx); // the streaming caret is the feedback
           break;
         case "thinking-delta":
+          if (!sawThinking) {
+            sawThinking = true;
+            this.diag.push("stream", "first thinking delta");
+          }
           ctx.textStreaming = false;
           this.appendReasoning(ctx, e.text);
           this.setWorkingLabel(ctx, "Thinking…");
@@ -4051,6 +4081,8 @@ export class ChatView extends ItemView {
             break;
           }
           if (e.name === "mcp__obsidian__ask_user") {
+            this.diag.push("tool", "ask_user start");
+            toolNames.set(e.id, "ask_user");
             // The ask card is rendered later by askBridge (which opens a card via
             // openCard). Until it appears, keep the working row visible so a stalled
             // or never-rendered card can never leave the turn looking dead.
@@ -4058,6 +4090,8 @@ export class ChatView extends ItemView {
             break;
           }
           // A real (non-interactive) tool is now running.
+          toolNames.set(e.id, e.name);
+          this.diag.push("tool", `${e.name} start${e.parentId ? " (sub)" : ""}`);
           // Observer cadence (W2-3): count this real tool-call as one step. Only
           // meaningful in "every-n-steps" mode; a no-op (state kept, never fires)
           // otherwise since the setting gate below short-circuits first.
@@ -4103,6 +4137,7 @@ export class ChatView extends ItemView {
         }
         case "tool-call-result": {
           ctx.textStreaming = false;
+          this.diag.push("tool", `${e.ok ? "ok" : "FAIL"} ${toolNames.get(e.id) ?? e.id.slice(0, 12)}`);
           // Feature 4: a nested subagent result updates its mini-row, not a card —
           // but the reveal path below still runs for nested writes.
           const nested = this.resolveSubagentRow(ctx, e.id, e.ok);
@@ -4150,6 +4185,7 @@ export class ChatView extends ItemView {
           // not the generic permission card. openCard makes the card the feedback;
           // closeCard on any exit brings the working row back.
           if (e.tool === "ExitPlanMode") {
+            this.diag.push("perm", "ExitPlanMode → plan card");
             this.openCard(ctx); // the plan card is the feedback while it waits
             this.notifyOnce(ctx, "waiting", "Exo — plan ready", "The agent proposed a plan for your review.");
             void this.renderPlanCard(ctx, c, e.input, (d) => {
@@ -4180,16 +4216,20 @@ export class ChatView extends ItemView {
           };
           const argText = this.permArgText(e.tool, e.input);
           if (matchPermRule(s.permDenyRules, e.tool, argText)) {
+            this.diag.push("perm", `${e.tool} → rule-deny`);
             e.resolve({ behavior: "deny", message: "Denied by an Exo permission rule (settings)." });
           } else if (
             (s.autoAllowRead && isRead) ||
             c.allow.has(this.allowKey(e.tool, e.input)) ||
             matchPermRule(s.permAllowRules, e.tool, argText)
           ) {
+            this.diag.push("perm", `${e.tool} → auto-allow`);
             allow({ behavior: "allow" });
           } else if (OBSIDIAN_MEMORY_TOOLS.has(e.tool) && !s.memoryWriteEnabled) {
+            this.diag.push("perm", `${e.tool} → memory-deny`);
             e.resolve({ behavior: "deny", message: "Memory writing is disabled in Exo settings." });
           } else {
+            this.diag.push("perm", `${e.tool} → card`);
             this.openCard(ctx); // the card waiting for the user is the feedback
             this.notifyOnce(
               ctx,
@@ -4222,6 +4262,7 @@ export class ChatView extends ItemView {
           }
           break;
         case "compact": {
+          this.diag.push("turn", "compact boundary");
           const div = c.listEl.createDiv({ cls: "mva-compact-divider" });
           setIcon(div.createSpan({ cls: "mva-compact-icon" }), "scissors");
           div.createSpan({ text: "Context compacted" });
@@ -4229,9 +4270,11 @@ export class ChatView extends ItemView {
           break;
         }
         case "turn-end":
+          this.diag.push("turn", `result session=${e.sessionId ? e.sessionId.slice(0, 8) : "?"}`);
           if (e.sessionId) c.sessionId = e.sessionId;
           break;
         case "error":
+          this.diag.push("error", e.message);
           this.dropThinking(ctx);
           this.resetTextStream(ctx);
           this.removeWorking(ctx);
@@ -4332,6 +4375,10 @@ export class ChatView extends ItemView {
         }
       }
     } finally {
+      this.diag.push(
+        "turn",
+        `end ${Math.round((Date.now() - turnStart) / 1000)}s stopped=${c.stopped} poisoned=${poisoned}`
+      );
       window.clearInterval(workingTimer); // stop the elapsed ticker
       this.removeWorking(ctx); // drop the working row for good
       await Promise.all(snapshots); // finalize the checkpoint even if the turn errored
