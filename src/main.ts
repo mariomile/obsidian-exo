@@ -844,6 +844,11 @@ export default class ExoPlugin extends Plugin {
       written++;
     }
 
+    // Seeded blocks nudge the git-autocommit debounce like any other vault
+    // write (integration audit 2026-07-10) — the fresh identity should reach
+    // git on the fast path, not only the periodic cadence.
+    if (written > 0) this.noteVaultWrite(written);
+
     new Notice(
       `Agent folder seeded — wrote ${written} block(s)${skipped ? `, kept ${skipped} existing` : ""}. Review human.md, then enable "The agent is the folder" in settings.`
     );
