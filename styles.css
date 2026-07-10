@@ -1861,7 +1861,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 /* The "N files" head is always visible; clicking it opens AND closes the group.
    Chevron points right when collapsed, rotates down when the chips are showing
-   (same grammar as .mva-reason / .mva-tool-group). */
+   (same grammar as .mva-reason / .mva-steps). */
 .mva-sources:not(.is-collapsed) .mva-reason-chevron {
   transform: rotate(90deg);
 }
