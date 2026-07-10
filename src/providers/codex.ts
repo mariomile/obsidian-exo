@@ -225,12 +225,15 @@ export const codexAdapter: ProviderAdapter = {
   brandColor: "#19c37d",
 
   models(): ModelOption[] {
-    // Verified-accessible via the installed `codex` CLI (checked 2026-07-01).
-    // Users can also type any custom model id in settings.
+    // Verified via `codex debug models` on codex-cli 0.144.1 (checked 2026-07-10),
+    // in catalog priority order. Users can also type any custom model id in settings.
     return [
+      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+      { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+      { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
       { id: "gpt-5.5", label: "GPT-5.5" },
-      { id: "gpt-5-codex", label: "GPT-5 Codex" },
       { id: "gpt-5.4", label: "GPT-5.4" },
+      { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
     ];
   },
 

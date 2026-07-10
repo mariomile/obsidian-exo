@@ -120,6 +120,11 @@ export interface MVASettings {
   backgroundModel: string;
   /** W0 persisted daily budget ledger. */
   backgroundBudgetLedger: { dateUTC: string; tokensUsed: number };
+  /** Exo Queue ("Exo in tasca"): il desktop evade note-richiesta scritte dal
+   *  telefono in exoQueueFolder (via Obsidian Sync), headless e read-only. */
+  exoQueueEnabled: boolean;
+  /** Cartella della coda richieste (vault-relative). */
+  exoQueueFolder: string;
   /** Scheduled playbook runs — one per line: "<Prompt name> | daily" or "<Prompt name> | weekly". */
   scheduledRuns: string;
   /** Per-playbook last-run timestamps (scheduler bookkeeping). */
@@ -152,7 +157,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   claudeBin: "",
   codexBin: "",
   claudeModel: "claude-fable-5",
-  codexModel: "gpt-5.5",
+  codexModel: "gpt-5.6-sol",
   claudeCustomModels: "",
   codexCustomModels: "",
   effort: "default",
@@ -202,6 +207,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   backgroundDailyTokenBudget: 200000,
   backgroundModel: "claude-sonnet-5",
   backgroundBudgetLedger: { dateUTC: "", tokensUsed: 0 },
+  exoQueueEnabled: true,
+  exoQueueFolder: "_system/exo-queue",
   scheduledRuns: "",
   scheduledLastRun: {},
   cliUpdateCheckAt: 0,
@@ -386,7 +393,7 @@ export class MVASettingTab extends PluginSettingTab {
       .setDesc("Extra Codex model ids (comma- or newline-separated) added to the model picker and the default-model dropdown above.")
       .addTextArea((t) =>
         t
-          .setPlaceholder("gpt-5-codex\no3")
+          .setPlaceholder("gpt-5.6-terra\ngpt-5.4-mini")
           .setValue(s.codexCustomModels)
           .onChange(async (v) => {
             s.codexCustomModels = v;
@@ -827,6 +834,31 @@ export class MVASettingTab extends PluginSettingTab {
           });
         t.inputEl.rows = 3;
       });
+
+    new Setting(el)
+      .setName("Exo Queue — Exo in tasca")
+      .setDesc(
+        "Il desktop evade le note-richiesta scritte (dal telefono, via Obsidian Sync) nella cartella coda: esegue il corpo della nota headless e READ-ONLY e appende la risposta nella stessa nota, che sincronizza indietro. Poll ogni 60s."
+      )
+      .addToggle((t) =>
+        t.setValue(s.exoQueueEnabled).onChange(async (v) => {
+          s.exoQueueEnabled = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(el)
+      .setName("Cartella della coda")
+      .setDesc("Percorso vault-relative delle note richiesta.")
+      .addText((t) =>
+        t
+          .setPlaceholder("_system/exo-queue")
+          .setValue(s.exoQueueFolder)
+          .onChange(async (v) => {
+            s.exoQueueFolder = v.trim() || "_system/exo-queue";
+            await this.plugin.saveSettings();
+          })
+      );
   }
 
   /* ------------------------------ Advanced ------------------------------ */
