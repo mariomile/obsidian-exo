@@ -46,7 +46,7 @@ export async function readBootContext(app: App): Promise<string> {
   if (rules.length) parts.push(`### Active rules (read the file for detail)\n${rules.join("\n")}`);
 
   const log = await read("_system/memory/session-log.md", 1200);
-  if (log) parts.push(`### Recent sessions\n${log}`);
+  if (log) parts.push(`### Recent sessions (prior sessions — background, NOT the current conversation)\n${log}`);
 
   const loopsRaw = await read("_system/memory/open-loops.md", MAX_LOOPS_RAW);
   if (loopsRaw) {
@@ -72,6 +72,7 @@ export async function readBootContext(app: App): Promise<string> {
     [
       "## Vault memory — you are Exo, embedded in this Obsidian vault.",
       "Honor these conventions: prefer the `mcp__obsidian__*` tools for vault operations (they respect links/tags/frontmatter); follow the tag system (#type/*, #status/*, #domain/*) and the object schema; use [[wikilinks]] for internal references; never create files at the vault root.",
+      "Precedence: the sections below (especially `Recent sessions`) are BACKGROUND from prior sessions. The conversation you are in right now is authoritative — when the user says 'continue', refers to 'the proposed/other things', 'as above', or otherwise points back, resolve it from the CURRENT conversation's own history, never from a prior session's topic.",
       ...parts,
     ].join("\n\n"),
     MAX_BOOT

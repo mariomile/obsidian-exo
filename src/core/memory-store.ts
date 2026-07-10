@@ -356,6 +356,41 @@ function countWords(s: string): number {
  * Ordering is inherited from `scoreEntries` (score desc, then newest first), so
  * the result is stable across identical calls.
  */
+/** Continuation / back-reference cues (IT + EN). A message carrying one of these
+ *  ("continua", "le altre cose", "as above") points at THIS conversation's own
+ *  thread, not at other sessions' memory. Claude Code resolves such deixis from
+ *  the transcript and injects nothing — proactive recall must do the same, or it
+ *  competes with (and can hijack) the intended in-thread referent. */
+const BACK_REFERENCE_CUES: RegExp[] = [
+  // Italian — continuation verbs
+  /\bcontinu(?:a|iamo|ate|iare|o)\b/i,
+  /\bprosegu(?:i|iamo|ite|ire|o)\b/i,
+  /\bproced(?:i|iamo|ete|ere|o)\b/i,
+  /\briprend(?:i|iamo|ete|ere|o)\b/i,
+  /\b(?:vai|andiamo|andate)\s+avanti\b/i,
+  // Italian — back-deixis
+  /\bcome\s+(?:sopra|detto|dicevamo)\b/i,
+  /\b(?:di|quanto)\s+sopra\b/i,
+  /\b(?:le\s+altre|l['’]altra)\s+cos[ae]\b/i,
+  /\bcose\s+propost[ae]\b/i,
+  // English — continuation
+  /\bcontinue\b/i,
+  /\b(?:go|carry)\s+on\b/i,
+  /\bgo\s+ahead\b/i,
+  /\bproceed\b/i,
+  /\bkeep\s+going\b/i,
+  /\bresume\b/i,
+  // English — back-deixis
+  /\bas\s+(?:above|discussed|mentioned|said)\b/i,
+  /\bthe\s+(?:above|rest|remaining)\b/i,
+];
+
+/** True when the message is a continuation / back-reference to the current
+ *  conversation (see {@link BACK_REFERENCE_CUES}). */
+export function isBackReference(message: string): boolean {
+  return BACK_REFERENCE_CUES.some((re) => re.test(message));
+}
+
 export function selectRecall(
   entries: MemoryEntry[],
   message: string,
@@ -364,6 +399,9 @@ export function selectRecall(
 ): MemoryEntry[] {
   if (countWords(message) < opts.minQueryWords) return [];
   if (opts.k <= 0) return [];
+  // A back-reference resolves from the current thread, not other sessions'
+  // memory — skip recall so it can't compete with the intended referent.
+  if (isBackReference(message)) return [];
 
   const pool = resolveSupersedence(entries);
   const ranked = scoreEntries(message, pool)
