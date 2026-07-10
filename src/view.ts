@@ -66,6 +66,7 @@ import { describeCliFailure } from "./core/errors";
 import { planInputParts, planStateText } from "./core/plan";
 import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
 import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
+import { caretHost, type CaretNode } from "./core/caret-host";
 
 export type { AskQuestion } from "./core/model";
 
@@ -2527,7 +2528,11 @@ export class ChatView extends ItemView {
       // reset), so an in-flight tick can't resurrect an orphaned caret.
       if (ctx.tailEl !== tail || !tail.isConnected) return;
       this.clearCaret(ctx);
-      ctx.caretEl = tail.createSpan({ cls: "mva-caret" });
+      // Inline placement: inside the last text-bearing block, after its last
+      // character. A tail with no host (empty, trailing hr/image, blank
+      // paragraph) gets no caret this tick — never a lone caret on its own line.
+      const host = caretHost(tail as unknown as CaretNode) as HTMLElement | null;
+      if (host) ctx.caretEl = host.createSpan({ cls: "mva-caret" });
     });
   }
 
