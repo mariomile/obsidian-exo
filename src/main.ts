@@ -6,7 +6,8 @@ import { DiagLog } from "./core/diag";
 import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
-import { resolveCli } from "./cli";
+import { resolveCli, cliDiagnostics } from "./cli";
+import { cliVerifyStatus, VERIFIED_CLAUDE_CLI } from "./core/semver";
 import { InlineEditModal } from "./ui/inline-edit";
 import type { AgentEvent } from "./providers/types";
 import {
@@ -202,6 +203,11 @@ export default class ExoPlugin extends Plugin {
       },
     });
 
+    // CLI drift gate: Exo depends on per-version CLI behaviors (interrupt
+    // classification, init caps, result.usage). Outside the verified range,
+    // say so ONCE per version — drift becomes a signal, not a mystery bug.
+    void this.checkCliVerified();
+
     const withView = (fn: (v: ChatView) => void) => () => {
       const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
       if (view instanceof ChatView) fn(view);
@@ -339,6 +345,31 @@ export default class ExoPlugin extends Plugin {
    * Obsidian's `requestUrl` (not node fetch — desktop CSP/proxy safe). Never
    * throws; a failed check just records the attempt so we don't hammer the API.
    */
+  /** One-shot (per CLI version) drift notice: probe `claude --version` and warn
+   *  when it falls outside {@link VERIFIED_CLAUDE_CLI}. The "already noticed"
+   *  marker lives in Obsidian localStorage (not settings/data.json) so it never
+   *  collides with settings writes and never syncs across devices. Best-effort:
+   *  a failed probe is silent ("unknown" never nags). */
+  private async checkCliVerified(): Promise<void> {
+    try {
+      const d = await cliDiagnostics("claude", this.settings.claudeBin);
+      const status = cliVerifyStatus(d.version, VERIFIED_CLAUDE_CLI);
+      if (status === "verified" || status === "unknown") return;
+      const KEY = "exo-cli-verify-noticed";
+      if (this.app.loadLocalStorage(KEY) === d.version) return; // told once already
+      this.app.saveLocalStorage(KEY, d.version);
+      this.diag.push("cli", `version ${d.version} ${status} (verified ${VERIFIED_CLAUDE_CLI.min}–${VERIFIED_CLAUDE_CLI.maxVerified})`);
+      new Notice(
+        status === "newer"
+          ? `Exo — Claude CLI ${d.version} is newer than the verified range (≤ v${VERIFIED_CLAUDE_CLI.maxVerified}). If turns misbehave, run "Copy diagnostics" and check for an Exo update.`
+          : `Exo — Claude CLI ${d.version} is older than the minimum verified v${VERIFIED_CLAUDE_CLI.min}. Please update the CLI.`,
+        10000
+      );
+    } catch {
+      /* best-effort — never block or noise the boot */
+    }
+  }
+
   async maybeCheckCliUpdate(force = false): Promise<void> {
     const DAY = 24 * 60 * 60 * 1000;
     const now = Date.now();

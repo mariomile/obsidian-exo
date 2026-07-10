@@ -13,9 +13,17 @@
  *      init/system message must list it. This guards the whole
  *      "createSdkMcpServer instances bind to their first query() session" class
  *      of regression, where the server silently fails to attach and every custom
- *      tool vanishes.
+ *      tool vanishes;
+ *   3. the persistent-session contracts Exo's turn lifecycle leans on (verified
+ *      on CLI 2.1.195–2.1.201 — see VERIFIED_CLAUDE_CLI in core/semver.ts):
+ *      partial stream deltas arrive (includePartialMessages), `result.usage`
+ *      carries per-turn tokens (W0 cost tracking), an SDK interrupt() comes
+ *      back classified as `error_during_execution` (what route()'s
+ *      interruptRequested flag decodes), and the session SURVIVES the
+ *      interrupt (stop ≠ session death — the whole Stop/Esc UX rests on this).
  *
  * …and that a minimal streaming-input turn completes without an error result.
+ * When a newer CLI passes all phases, bump VERIFIED_CLAUDE_CLI.maxVerified.
  *
  * Exit code 0 = pass, 1 = fail, with clear console output either way.
  */
@@ -155,8 +163,127 @@ async function main() {
   }
   ok(`turn completed: ${String(result.result).slice(0, 60)}`);
 
+  await phase3(bin, cwd);
+
   console.log("\n✓ SMOKE PASS");
   process.exit(0);
+}
+
+/** Phase 3 — persistent streaming-input session (the shape ClaudeSession uses):
+ *  three turns on ONE process. A: trivial, asserts partial deltas + result.usage.
+ *  B: long output, interrupt() on the first delta, asserts the result comes back
+ *  as `error_during_execution` (route()'s interruptRequested contract). C: a
+ *  fresh turn on the SAME session, asserting it survived the interrupt. */
+async function phase3(bin, cwd) {
+  const queue = [];
+  let wake = null;
+  let ended = false;
+  async function* input() {
+    while (!ended) {
+      if (queue.length === 0) await new Promise((r) => (wake = r));
+      if (ended) return;
+      const text = queue.shift();
+      if (text == null) continue;
+      yield { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null };
+    }
+  }
+  const send = (text) => {
+    queue.push(text);
+    const w = wake;
+    wake = null;
+    w?.();
+  };
+
+  const q = query({
+    prompt: input(),
+    options: {
+      model: MODEL,
+      systemPrompt: { type: "preset", preset: "claude_code" },
+      cwd,
+      includePartialMessages: true,
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      mcpServers: {},
+      strictMcpConfig: true,
+      pathToClaudeCodeExecutable: bin,
+    },
+  });
+
+  const timer = setTimeout(() => fail(`phase 3 timed out after ${(TIMEOUT_MS * 2) / 1000}s`), TIMEOUT_MS * 2);
+  let phase = "A";
+  let sawDelta = false;
+  let interrupted = false;
+  let resultA = null;
+  let resultB = null;
+  let resultC = null;
+
+  send("Reply with exactly: OK");
+  try {
+    for await (const msg of q) {
+      if (msg.type === "stream_event" && msg.event?.type === "content_block_delta") {
+        sawDelta = true;
+        // First sign of turn B's output → interrupt mid-turn, exactly like Stop/Esc.
+        if (phase === "B" && !interrupted) {
+          interrupted = true;
+          q.interrupt().catch(() => {});
+        }
+      }
+      if (msg.type === "result") {
+        if (phase === "A") {
+          resultA = msg;
+          phase = "B";
+          send("Count from 1 to 300, one number per line. Do not stop early.");
+        } else if (phase === "B") {
+          resultB = msg;
+          phase = "C";
+          send("Reply with exactly: STILL ALIVE");
+        } else {
+          resultC = msg;
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    clearTimeout(timer);
+    fail(`phase 3 query threw: ${e?.message || e}`);
+  }
+  clearTimeout(timer);
+  ended = true;
+  const w = wake;
+  wake = null;
+  w?.();
+  try {
+    q.close?.();
+  } catch {
+    /* ignore */
+  }
+
+  if (!sawDelta) fail("no partial stream deltas arrived (includePartialMessages contract)");
+  ok("partial stream deltas arrive (includePartialMessages)");
+
+  if (resultA?.subtype !== "success") fail(`phase 3 turn A failed: subtype=${resultA?.subtype}`);
+  const usage = resultA.usage;
+  if (typeof usage?.input_tokens !== "number" || typeof usage?.output_tokens !== "number") {
+    fail("result.usage missing input/output tokens (W0 per-turn cost contract)");
+  }
+  ok(`result.usage present (in=${usage.input_tokens} out=${usage.output_tokens})`);
+
+  if (!interrupted) fail("turn B produced no deltas to interrupt — cannot verify the interrupt contract");
+  if (resultB?.subtype !== "error_during_execution") {
+    fail(
+      `interrupt was classified as "${resultB?.subtype}" — Exo's route() expects "error_during_execution" ` +
+        "(interruptRequested contract). The CLI changed behavior: update route() and VERIFIED_CLAUDE_CLI."
+    );
+  }
+  ok('interrupt() → result subtype "error_during_execution" (route() contract)');
+
+  if (resultC?.subtype !== "success" || !/STILL ALIVE/i.test(String(resultC.result))) {
+    fail(
+      `session did NOT survive the interrupt (turn C: subtype=${resultC?.subtype}) — ` +
+        "the Stop/Esc UX assumes the session lives on."
+    );
+  }
+  ok("session survived the interrupt (turn C completed on the same process)");
 }
 
 main().catch((e) => fail(e?.message || String(e)));
