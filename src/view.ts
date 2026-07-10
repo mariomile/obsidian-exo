@@ -1812,6 +1812,12 @@ export class ChatView extends ItemView {
 
     // now.md / human.md — governed direct write with feed diff + undo.
     const write = await agent.writeBlock(block, req.content);
+    // Identity edits nudge the git-autocommit debounce like any other vault
+    // write (integration audit 2026-07-10): without this, a rethink followed by
+    // a crash inside the 15-min cadence window would leave the identity change
+    // uncommitted — the safety net's fast path should cover it, not just the
+    // periodic fallback.
+    this.plugin.noteVaultWrite(1);
     this.renderBlockDiff(ctx.bodyEl, write, req.rationale);
     return plan.requireRationale
       ? `Rewrote ${block}.md (rationale surfaced in the change). Review · undo shown in the feed.`
@@ -1894,6 +1900,9 @@ export class ChatView extends ItemView {
       void this.agent()
         .writeBlock(block, proposed)
         .then((write) => {
+          // Same git-autocommit debounce nudge as the direct-write tier (see
+          // rethinkBridge) — an Applied proposal is a vault write too.
+          this.plugin.noteVaultWrite(1);
           card.removeClass("mva-rethink-proposal");
           actions.remove();
           this.renderBlockUndoRow(card, write);
