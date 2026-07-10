@@ -2552,7 +2552,15 @@ export class ChatView extends ItemView {
       // character. A tail with no host (empty, trailing hr/image, blank
       // paragraph) gets no caret this tick — never a lone caret on its own line.
       const host = caretHost(tail as unknown as CaretNode) as HTMLElement | null;
-      if (host) ctx.caretEl = host.createSpan({ cls: "mva-caret" });
+      if (host) {
+        ctx.caretEl = host.createSpan({ cls: "mva-caret" });
+      } else if (streaming && ctx.textStreaming) {
+        // No caret could be placed, so the "caret" affordance would be a lie —
+        // hand liveness back to the working row until the next delta renders a
+        // caret again. State-derived, no timers (see core/working-visibility.ts).
+        ctx.textStreaming = false;
+        this.syncWorking(ctx);
+      }
     });
   }
 
