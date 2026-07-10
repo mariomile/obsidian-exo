@@ -2479,24 +2479,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 
 /* ----------------------------- reasoning ------------------------------ */
-.mva-reason {
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r2);
-  background: color-mix(in srgb, var(--text-normal) 2%, transparent);
-  font-size: 12px;
-}
-.mva-reason-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 9px;
-  cursor: pointer;
-  color: var(--text-muted);
-  user-select: none;
-}
-.mva-reason-head:hover {
-  color: var(--text-normal);
-}
+/* .mva-reason container rules removed (2026-07-11, task-7): the container is
+   dead — only .mva-reason-chevron spans are still created, by steps timeline,
+   plan cards, and sources footer. Sizing/rotation rules below stay in use. */
 .mva-reason-chevron {
   display: inline-flex;
   transition: transform var(--mva-t);
@@ -2504,24 +2489,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-reason-chevron .svg-icon {
   width: 13px;
   height: 13px;
-}
-.mva-reason:not(.is-collapsed) .mva-reason-chevron {
-  transform: rotate(90deg);
-}
-.mva-reason-label {
-  font-weight: 600;
-}
-.mva-reason-body {
-  padding: 0 9px 9px 24px;
-  color: var(--text-muted);
-  white-space: pre-wrap;
-  line-height: 1.5;
-  max-height: 240px;
-  overflow-y: auto;
-  user-select: text; /* copyable reasoning text — see .mva-bubble for why this is needed */
-}
-.mva-reason.is-collapsed .mva-reason-body {
-  display: none;
 }
 
 /* ---------------------------- context ring ---------------------------- */
