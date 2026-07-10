@@ -2338,13 +2338,18 @@ export class ChatView extends ItemView {
       el.createSpan({ cls: "mva-working-hint", text: "esc to stop" });
       ctx.workingEl = el;
     }
-    ctx.bodyEl.appendChild(el); // re-append: always the last element
-    el.show();
+    // Hot path (every thinking delta, every tool event, the 1s tick via
+    // syncWorking): skip the DOM ops when the row is already the visible last
+    // child — an unconditional appendChild is a remove+insert that invalidates
+    // layout on every call even when nothing moved.
+    if (ctx.bodyEl.lastElementChild !== el) ctx.bodyEl.appendChild(el); // re-append: always the last element
+    if (el.style.display === "none") el.show();
   }
 
   /** Hide the working row (streaming text / an open interactive card takes over). */
   private hideWorking(ctx: AssistantCtx): void {
-    ctx.workingEl?.hide();
+    const el = ctx.workingEl;
+    if (el && el.style.display !== "none") el.hide(); // no-op when already hidden (called per text delta)
   }
 
   /** Set the working row's phase label (no-op if the row was never created). */
