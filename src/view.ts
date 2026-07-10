@@ -79,7 +79,8 @@ const MEMORY_STORE_NOTE =
  *  `recall`/`remember` tool descriptions carry the detail. */
 const MEMORY_STORE_NOTE_PROACTIVE =
   "### Memory union store\n" +
-  "A persistent, append-only memory store lives in `_system/memory/store/`. Relevant past memories are auto-provided each turn inside `[recalled-memory]…[/recalled-memory]` blocks — treat them as trusted verbatim context. " +
+  "A persistent, append-only memory store lives in `_system/memory/store/`. Relevant past memories are auto-provided each turn inside `[recalled-memory]…[/recalled-memory]` blocks — trusted verbatim context, but BACKGROUND from other sessions. " +
+  "When the user refers back to the running conversation ('continua', 'le altre cose proposte', 'quello sopra', 'as above', 'go on'), the referent is THIS conversation's own history — resolve it from the current thread, never from recalled memory or the boot `Recent sessions` digest. " +
   "Use `recall` for a deeper or explicit search (e.g. `as_of` point-in-time queries), and `remember` to store new durable statements in the user's exact words (never summarized).";
 
 export const VIEW_TYPE = "exo-view";
