@@ -6,8 +6,8 @@ import { DiagLog } from "./core/diag";
 import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
-import { resolveCli, cliDiagnostics } from "./cli";
-import { cliVerifyStatus, VERIFIED_CLAUDE_CLI } from "./core/semver";
+import { resolveCli, cliDiagnostics, updateClaudeCli } from "./cli";
+import { cliVerifyStatus, compareSemver, VERIFIED_CLAUDE_CLI } from "./core/semver";
 import { InlineEditModal } from "./ui/inline-edit";
 import type { AgentEvent } from "./providers/types";
 import {
@@ -203,6 +203,14 @@ export default class ExoPlugin extends Plugin {
       },
     });
 
+    // One-click CLI update, discoverable from the palette (the settings pane
+    // has its own button, but nobody should have to dig for it).
+    this.addCommand({
+      id: "update-claude-cli",
+      name: "Update Claude CLI",
+      callback: () => void this.runCliUpdate(),
+    });
+
     // CLI drift gate: Exo depends on per-version CLI behaviors (interrupt
     // classification, init caps, result.usage). Outside the verified range,
     // say so ONCE per version — drift becomes a signal, not a mystery bug.
@@ -334,8 +342,58 @@ export default class ExoPlugin extends Plugin {
 
     this.addSettingTab(new MVASettingTab(this.app, this));
 
-    // Daily, non-blocking Claude-CLI update check (failures silent).
-    void this.maybeCheckCliUpdate();
+    // Daily, non-blocking Claude-CLI update check (failures silent) — then, if a
+    // newer CLI was published, offer a one-click update right from a notice.
+    void this.maybeCheckCliUpdate().then(() => this.maybeOfferCliUpdate());
+  }
+
+  /** One-click Claude-CLI update, shared by the command and the boot notice.
+   *  Wraps the existing updateClaudeCli() (npm install -g, 3-min cap) with
+   *  progress + result notices and a diag entry. New sessions pick the new
+   *  binary up automatically (the resolve caches are cleared on success). */
+  private async runCliUpdate(): Promise<void> {
+    this.diag.push("cli", "one-click update started");
+    new Notice("Exo — updating Claude CLI…");
+    const { ok, output } = await updateClaudeCli();
+    if (ok) {
+      this.diag.push("cli", "one-click update ok");
+      new Notice("Exo — Claude CLI updated. New sessions use it automatically.", 8000);
+    } else {
+      const tail = output.split("\n").filter(Boolean).slice(-4).join("\n");
+      this.diag.push("cli", "one-click update FAILED");
+      new Notice(`Exo — CLI update failed:\n${tail || "unknown error"}`, 10000);
+    }
+  }
+
+  /** If the daily check found a newer published CLI, surface a persistent
+   *  notice with an Update button — once per published version (localStorage
+   *  marker), so Mario never has to dig into Settings to stay current. */
+  private async maybeOfferCliUpdate(): Promise<void> {
+    try {
+      const latest = this.settings.cliLatestKnown;
+      if (!latest) return;
+      const d = await cliDiagnostics("claude", this.settings.claudeBin); // cached — shared with checkCliVerified
+      if (!d.version || compareSemver(d.version, latest) >= 0) return; // unknown or already current
+      const KEY = "exo-cli-update-offered";
+      if (this.app.loadLocalStorage(KEY) === latest) return; // offered once already
+      this.app.saveLocalStorage(KEY, latest);
+      this.diag.push("cli", `update available ${d.version} → ${latest}`);
+      const frag = document.createDocumentFragment();
+      const span = document.createElement("span");
+      span.textContent = `Exo — Claude CLI ${latest} available (installed ${d.version}). `;
+      const btn = document.createElement("button");
+      btn.textContent = "Update now";
+      frag.append(span, btn);
+      const n = new Notice(frag, 0); // sticky until clicked/dismissed
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = "Updating…";
+        await this.runCliUpdate();
+        n.hide();
+      };
+    } catch {
+      /* best-effort — never noise the boot */
+    }
   }
 
   /**
