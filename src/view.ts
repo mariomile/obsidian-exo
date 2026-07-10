@@ -49,7 +49,7 @@ import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { groupRuns } from "./core/group-runs";
 import { planPersistedConvos } from "./core/persistence";
 import { buildRecap, isRecoverableSessionError, resolveRecovery } from "./core/recovery";
-import { TurnWatchdog } from "./core/turn-watchdog";
+import { workingAffordance } from "./core/working-visibility";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
 import { terminalConvoState } from "./core/convo-state";
@@ -222,17 +222,15 @@ interface AssistantCtx {
   workingEl: HTMLElement | null;
   workingLabel: HTMLElement | null;
   workingElapsed: HTMLElement | null;
+  /** Interactive cards (permission / ask_user / plan) currently awaiting the
+   *  user. While > 0 the card IS the feedback, so the working row hides. */
+  openCards: number;
+  /** A text segment is actively streaming — the caret is the live feedback, so
+   *  the working row hides. Reset when the segment ends (thinking, tool, turn). */
+  textStreaming: boolean;
   /** System-notification dedupe keys fired this turn (Feature 3): "done" | "waiting" | "error". */
   notified: Set<string>;
 }
-
-/** Abort a turn if no event arrives for this long (avoids infinite loading). */
-const IDLE_TIMEOUT = 120_000;
-/** While ≥1 tool is in-flight, a long-running tool (e.g. a multi-minute Bash)
- *  legitimately emits NO events between its start and result — so the watchdog
- *  waits this much longer before reaping. Not a full suspension: a silently-dead
- *  session must still be caught. Claude Code just waits on such tools. */
-const TOOL_TIMEOUT = 600_000;
 
 let convoSeed = 0;
 
@@ -2082,6 +2080,8 @@ export class ChatView extends ItemView {
       workingEl: null,
       workingLabel: null,
       workingElapsed: null,
+      openCards: 0,
+      textStreaming: false,
       notified: new Set(),
     };
     this.scrollConvo(c);
@@ -2142,6 +2142,38 @@ export class ChatView extends ItemView {
     ctx.workingEl = null;
     ctx.workingLabel = null;
     ctx.workingElapsed = null;
+  }
+
+  /** Single source of truth for the in-turn feedback affordance. Keeps exactly
+   *  one of {working row, open card, streaming caret} on screen while streaming,
+   *  so a turn can never look dead ("incantato"). This replaces the removed
+   *  TurnWatchdog: like Codex/Claude Code, no client timer kills the turn — the
+   *  always-visible, interruptible working row + Esc is the whole safety net.
+   *  See core/working-visibility.ts. */
+  private syncWorking(ctx: AssistantCtx): void {
+    const a = workingAffordance({
+      streaming: ctx.convo.streaming,
+      openCards: ctx.openCards,
+      textStreaming: ctx.textStreaming,
+    });
+    if (a === "working") this.ensureWorking(ctx);
+    else this.hideWorking(ctx);
+  }
+
+  /** An interactive card (permission / ask_user / plan) opened — it becomes the
+   *  feedback, so the working row hides. */
+  private openCard(ctx: AssistantCtx): void {
+    ctx.openCards++;
+    this.syncWorking(ctx);
+  }
+
+  /** An interactive card resolved, was cancelled, or failed to render — release
+   *  its slot and bring the working row back if nothing else is on screen. Safe
+   *  to over-call (floored at 0), which is what closes the freeze class: even a
+   *  card that never rendered can't leave the turn without an affordance. */
+  private closeCard(ctx: AssistantCtx): void {
+    if (ctx.openCards > 0) ctx.openCards--;
+    this.syncWorking(ctx);
   }
 
   /** Human elapsed: `37s` under a minute, `1m 12s` past it. */
@@ -3237,9 +3269,9 @@ export class ChatView extends ItemView {
   ): void {
     this.dropThinking(ctx);
     this.resetTextStream(ctx);
-    this.hideWorking(ctx); // the ask card is the feedback while it waits
     this.notifyOnce(ctx, "waiting", "Exo — waiting for you", "The agent asked a question / needs permission.");
     const card = ctx.bodyEl.createDiv({ cls: "mva-ask" });
+    this.openCard(ctx); // the ask card is now the feedback (working row hides)
     const answers: Record<string, string> = {};
     const seg: Segment = { t: "ask", questions, answers };
     ctx.segments.push(seg);
@@ -3252,6 +3284,7 @@ export class ChatView extends ItemView {
       // Collapse to the same compact summary used when the transcript is restored,
       // so live-resolved and reloaded cards look identical.
       this.renderAskSummary(card, questions, answers);
+      this.closeCard(ctx); // release the card slot — working row returns if needed
       resolve(answers);
     };
     // Stop (or turn teardown) cancels the card → the tool reports a dismissal.
@@ -3259,6 +3292,7 @@ export class ChatView extends ItemView {
       if (done) return;
       done = true;
       c.pendingAsk = null;
+      this.closeCard(ctx); // cancelled (Stop / teardown) → release the slot
       reject(new Error("cancelled"));
     };
     this.plugin.emitConvoState(c.id, "needs-input", { reason: "ask" }); // fire-and-forget board hook (no-op when off; can't throw)
@@ -3776,46 +3810,35 @@ export class ChatView extends ItemView {
     // dropSession never runs — the CLI session stays poisoned and every later turn
     // re-errors. Track it here and reset the session at turn end.
     let poisoned = false;
-    // Watchdog: re-armed on every event; fires (interrupting the turn) if it stalls
-    // with no output. Owns the idle-vs-tool window, in-flight tool tracking, and
-    // card-suspend bookkeeping — see core/turn-watchdog.ts.
-    const wd = new TurnWatchdog({
-      idleMs: IDLE_TIMEOUT,
-      toolMs: TOOL_TIMEOUT,
-      onTimeout: () => c.session?.interrupt(),
-    });
-    // Tool-use ids of pending ask_user calls, so their result resumes the watchdog.
-    const askIds = new Set<string>();
 
     const onEvent = (e: AgentEvent) => {
-      wd.bump();
       switch (e.kind) {
         case "text-delta":
-          this.hideWorking(ctx); // the streaming caret takes over
+          ctx.textStreaming = true;
           this.appendText(ctx, e.text);
+          this.syncWorking(ctx); // the streaming caret is the feedback
           break;
         case "thinking-delta":
+          ctx.textStreaming = false;
           this.appendReasoning(ctx, e.text);
           this.setWorkingLabel(ctx, "Thinking…");
-          this.ensureWorking(ctx); // re-append last; thinking may be collapsed
+          this.syncWorking(ctx); // working row stays visible during thinking
           break;
         case "tool-call-start": {
+          ctx.textStreaming = false; // any text segment ends when a tool runs
           if (e.name === "TodoWrite") {
             this.renderTodos(ctx, e.input);
-            this.ensureWorking(ctx); // keep the row below the todos panel
+            this.syncWorking(ctx); // keep the row below the todos panel
             break;
           }
           if (e.name === "mcp__obsidian__ask_user") {
-            // The card is rendered by askBridge; suspend the watchdog until answered.
-            askIds.add(e.id);
-            wd.suspendCard();
-            this.hideWorking(ctx); // the ask card is the feedback
+            // The ask card is rendered later by askBridge (which opens a card via
+            // openCard). Until it appears, keep the working row visible so a stalled
+            // or never-rendered card can never leave the turn looking dead.
+            this.syncWorking(ctx);
             break;
           }
-          // A real (non-interactive) tool is now running. Track it and re-arm the
-          // watchdog on the longer tool window — a legit multi-minute tool emits no
-          // events until its result, and must not be mistaken for a dead session.
-          wd.toolStart(e.id);
+          // A real (non-interactive) tool is now running.
           // Observer cadence (W2-3): count this real tool-call as one step. Only
           // meaningful in "every-n-steps" mode; a no-op (state kept, never fires)
           // otherwise since the setting gate below short-circuits first.
@@ -3850,7 +3873,7 @@ export class ChatView extends ItemView {
           // Working row: phase verb from the tool metadata, re-appended last so it
           // stays visible below the tool card during execution.
           this.setWorkingLabel(ctx, toolWorkingLabel(e.name, e.input));
-          this.ensureWorking(ctx);
+          this.syncWorking(ctx);
           // Context panel goes live: show what this tool is doing right now. Guarded
           // to the active convo + wide main so nothing runs in the sidebar.
           if (c === this.active && this.isWideMain()) {
@@ -3860,16 +3883,7 @@ export class ChatView extends ItemView {
           break;
         }
         case "tool-call-result": {
-          if (askIds.has(e.id)) {
-            askIds.delete(e.id);
-            wd.resumeCard(); // the ask card has been answered/dismissed
-            this.setWorkingLabel(ctx, "Thinking…");
-            this.ensureWorking(ctx); // the turn continues
-            break;
-          }
-          // A tracked tool resolved (no-op for unknown/duplicate ids). Re-arm on
-          // the idle window once the last tool drains.
-          wd.toolEnd(e.id);
+          ctx.textStreaming = false;
           // Feature 4: a nested subagent result updates its mini-row, not a card —
           // but the reveal path below still runs for nested writes.
           const nested = this.resolveSubagentRow(ctx, e.id, e.ok);
@@ -3898,7 +3912,7 @@ export class ChatView extends ItemView {
           // The text segment (if any) ended before this tool ran — re-show the
           // working row while the agent decides what to do next.
           this.setWorkingLabel(ctx, "Thinking…");
-          this.ensureWorking(ctx);
+          this.syncWorking(ctx);
           // The tool resolved: drop the live current row and fold the now-resolved
           // segment into the accumulated Context sections.
           if (c === this.active && this.isWideMain()) {
@@ -3914,17 +3928,19 @@ export class ChatView extends ItemView {
             break;
           }
           // ExitPlanMode → the dedicated plan-approval card (the thing to review),
-          // not the generic permission card. Suspend the watchdog like any other
-          // interactive card; resolve resumes it (the suspend already happened
-          // before this event via the SDK's canUseTool round-trip).
+          // not the generic permission card. openCard makes the card the feedback;
+          // closeCard on any exit brings the working row back.
           if (e.tool === "ExitPlanMode") {
-            wd.suspendCard();
-            this.hideWorking(ctx); // the plan card is the feedback while it waits
+            this.openCard(ctx); // the plan card is the feedback while it waits
             this.notifyOnce(ctx, "waiting", "Exo — plan ready", "The agent proposed a plan for your review.");
             void this.renderPlanCard(ctx, c, e.input, (d) => {
-              wd.resumeCard();
-              this.ensureWorking(ctx); // the turn continues once resolved
+              this.closeCard(ctx); // the turn continues once resolved
               e.resolve(d);
+            }).catch(() => {
+              // Card failed to render — release the slot (working row returns) and
+              // unblock the SDK so the turn can't park on an unresolved permission.
+              this.closeCard(ctx);
+              e.resolve({ behavior: "deny", message: "Exo couldn't render the plan card." });
             });
             break;
           }
@@ -3955,9 +3971,7 @@ export class ChatView extends ItemView {
           } else if (OBSIDIAN_MEMORY_TOOLS.has(e.tool) && !s.memoryWriteEnabled) {
             e.resolve({ behavior: "deny", message: "Memory writing is disabled in Exo settings." });
           } else {
-            // An open permission card also suspends the watchdog while the user decides.
-            wd.suspendCard();
-            this.hideWorking(ctx); // the card waiting for the user is the feedback
+            this.openCard(ctx); // the card waiting for the user is the feedback
             this.notifyOnce(
               ctx,
               "waiting",
@@ -3965,8 +3979,7 @@ export class ChatView extends ItemView {
               "The agent asked a question / needs permission."
             );
             this.addPermissionCard(ctx, c, e.tool, e.input, (d) => {
-              wd.resumeCard();
-              this.ensureWorking(ctx); // the turn continues once resolved
+              this.closeCard(ctx); // the turn continues once resolved
               if (d.behavior === "allow") allow(d);
               else e.resolve(d);
             });
@@ -4025,7 +4038,6 @@ export class ChatView extends ItemView {
     };
 
     try {
-      wd.bump();
       const session = await this.ensureSession(c);
       // sendPrefix (recovery recap) and the proactive-recall block are prepended to
       // the OUTBOUND provider message only — never to the rendered/persisted user
@@ -4034,19 +4046,8 @@ export class ChatView extends ItemView {
       const recallBlock = recalled.length ? this.formatRecallBlock(recalled) : "";
       const outbound = [opts?.sendPrefix, recallBlock, message].filter(Boolean).join("\n\n");
       await session.send(outbound, onEvent, imgs);
-      // Stop the watchdog before reading `wd.fired` so a timer that fires in the
-      // gap between send() resolving and `finally` can't trip a false timeout.
-      wd.clear();
       this.flushRender(ctx);
       await Promise.all(snapshots); // ensure every pre-write snapshot landed before we read the checkpoint
-      if (wd.fired && !ctx.fullText && ctx.cards.size === 0) {
-        this.renderError(
-          ctx,
-          wd.firedByTool
-            ? `No response — a tool ran ${TOOL_TIMEOUT / 1000}s with no output and was stopped.`
-            : `No response — timed out after ${IDLE_TIMEOUT / 1000}s.`
-        );
-      }
       // Touched-notes footer renders collapsed by default (03-07 feedback), so
       // there's nothing to fold on older turns — every footer is already a quiet
       // "N files" toggle that opens on click.
@@ -4078,10 +4079,10 @@ export class ChatView extends ItemView {
     } catch (err) {
       this.flushRender(ctx);
       this.dropSession(c); // a failed turn likely poisoned the session
-      if (isAbort(err) || wd.fired) {
+      if (isAbort(err)) {
         ctx.el.addClass("mva-aborted");
         if (!ctx.fullText && ctx.cards.size === 0) {
-          ctx.bodyEl.createSpan({ cls: "mva-faint", text: wd.fired ? "Timed out." : "Stopped." });
+          ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
         }
       } else {
         this.dropThinking(ctx);
@@ -4109,7 +4110,6 @@ export class ChatView extends ItemView {
         }
       }
     } finally {
-      wd.clear(); // turn is over — cancel the timer and drop unresolved tool ids
       window.clearInterval(workingTimer); // stop the elapsed ticker
       this.removeWorking(ctx); // drop the working row for good
       await Promise.all(snapshots); // finalize the checkpoint even if the turn errored
