@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRecap, isRecoverableSessionError, resolveRecovery } from "../src/core/recovery";
+import { buildRecap, isRecoverableSessionError, resolveRecovery, stopAction } from "../src/core/recovery";
 import type { Message, Segment } from "../src/core/model";
 
 const user = (text: string): Message => ({ role: "user", text });
@@ -196,5 +196,19 @@ describe("resolveRecovery", () => {
     expect(
       resolveRecovery({ poisoned: true, stopped: true, isRecoveryRetry: false, resumeRisky: false })
     ).toEqual({ footer: null, session: "none", nextResumeRisky: false, enqueueRecapRetry: false });
+  });
+});
+
+describe("stopAction", () => {
+  it("first stop of a turn interrupts (session survives, CC parity)", () => {
+    expect(stopAction(false)).toBe("interrupt");
+  });
+
+  it("second stop while the turn is STILL streaming escalates to dispose", () => {
+    // The interrupt didn't settle the turn (stuck transport / zombie CLI).
+    // Pressing Stop/Esc again must force-dispose the session so the parked
+    // send() rejects and the composer unblocks — the user-driven successor
+    // to the removed TurnWatchdog's rescue role.
+    expect(stopAction(true)).toBe("dispose");
   });
 });

@@ -148,3 +148,15 @@ export function buildRecap(messages: Message[]): string {
     "\n</conversation-recap>"
   );
 }
+
+/**
+ * What a Stop press should do, given whether this turn was already stopped.
+ * First press → `interrupt` (graceful; the CLI session survives — Claude Code
+ * parity). A second press while the turn is STILL in flight means the interrupt
+ * didn't settle it (stuck transport, zombie process): escalate to `dispose`,
+ * which rejects the parked send() so the turn closes and the composer unblocks.
+ * User-driven successor to the removed TurnWatchdog's rescue role.
+ */
+export function stopAction(alreadyStopped: boolean): "interrupt" | "dispose" {
+  return alreadyStopped ? "dispose" : "interrupt";
+}
