@@ -54,6 +54,11 @@ export interface MVASettings {
    *  proposes durable memories and writes them to the store (with veto/undo).
    *  OFF by default — only runs when this AND memoryWriteEnabled are on. */
   selfWritingMemory: boolean;
+  /** The Agent Is the Folder: hydrate boot from `_system/agent/` (persona/human/now)
+   *  and enable the governed `rethink_memory` tool + observer now-proposals.
+   *  DEFAULT OFF — with it off, boot is byte-identical and the folder is never read.
+   *  Natural rollout: seed the folder → review → flip this on. */
+  agentFolderEnabled: boolean;
   /** Observer cadence (W2-3): "session-end" is the original always-on
    *  end-of-turn capture (default, behavior-neutral). "every-n-steps" ALSO
    *  flushes a delta capture every `observerStepInterval` tool-call steps
@@ -172,6 +177,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   memoryReadEnabled: true,
   memoryWriteEnabled: true,
   selfWritingMemory: false,
+  agentFolderEnabled: false,
   observerCadence: "session-end",
   observerStepInterval: 25,
   proactiveRecall: true,
@@ -656,6 +662,12 @@ export class MVASettingTab extends PluginSettingTab {
       "Self-writing memory",
       "After each healthy turn, a cheap background observer proposes durable memories and appends them to the store as @generated entries — you can review or undo each write. Off by default; runs only when Write vault memory is also on. Claude only.",
       "selfWritingMemory"
+    );
+    this.toggleSetting(
+      el,
+      "The agent is the folder (identity)",
+      "Hydrate every conversation from _system/agent/ — three short blocks (persona = how Exo behaves, human = a distilled model of you, now = what matters right now) that give Exo AND any external tool (Claude Code, Codex) a coherent identity. Adds the rethink_memory tool (now/human rewrite freely, persona is propose-only) and an observer that proposes now.md updates after a turn. Off by default; with it off, boot is unchanged and the folder is never read. Rollout: run \"Exo: Seed agent folder\", review human.md, then flip this on. Claude only.",
+      "agentFolderEnabled"
     );
 
     new Setting(el)

@@ -1,4 +1,4 @@
-import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Plugin, WorkspaceLeaf, addIcon, requestUrl } from "obsidian";
+import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf, addIcon, requestUrl } from "obsidian";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
@@ -18,6 +18,13 @@ import {
   type DreamSnapshot,
 } from "./obsidian/dream";
 import { runDreamLlm, type DreamLlmResult } from "./obsidian/dream-llm";
+import {
+  AGENT_DIR,
+  AGENT_BLOCK_NAMES,
+  buildSeedPrompt,
+  parseSeedBlocks,
+  manifestContent,
+} from "./core/agent-self";
 import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidian/claudemem";
 import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
@@ -262,6 +269,19 @@ export default class ExoPlugin extends Plugin {
     });
     // Hourly check; runs a scheduled pass only when due per settings.
     this.registerInterval(window.setInterval(() => void this.maybeScheduledDreamPass(), 60 * 60 * 1000));
+
+    this.addCommand({
+      id: "seed-agent-folder",
+      name: "Seed agent folder",
+      // Visible whenever vault-memory writes are allowed. Seeding is safe with the
+      // agent-folder flag OFF (boot ignores the folder until it's flipped on) — it
+      // IS the natural rollout: seed → review human.md → enable the flag.
+      checkCallback: (checking: boolean) => {
+        if (!this.settings.memoryWriteEnabled) return false;
+        if (!checking) void this.seedAgentFolder();
+        return true;
+      },
+    });
 
     this.addCommand({
       id: "run-playbook",
@@ -757,6 +777,108 @@ export default class ExoPlugin extends Plugin {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
     }
+  }
+
+  /**
+   * The Agent Is the Folder — seeder (design §6). Read the vault's existing
+   * scattered identity sources, distill the three blocks with the CHAT's default
+   * (frontier) model — NOT the background floor: this is a one-shot, high-stakes
+   * distillation — and write ONLY the block files that don't already exist (never
+   * overwrite a hand-authored block). Also (re)writes the manifest and opens
+   * `human.md` for review. Runs regardless of the `agentFolderEnabled` flag: with
+   * the flag off the folder is simply never read, which is the safe rollout path.
+   */
+  private async seedAgentFolder(): Promise<void> {
+    const readSource = async (path: string): Promise<string> => {
+      const f = this.app.vault.getAbstractFileByPath(path);
+      if (f instanceof TFile) {
+        try {
+          return await this.app.vault.cachedRead(f);
+        } catch {
+          /* unreadable — treat as empty */
+        }
+      }
+      return "";
+    };
+
+    const sources = {
+      mentalModel: await readSource("_system/memory/mario-mental-model.md"),
+      preferences: await readSource("_system/memory/preferences/preferences.md"),
+      vaultContext: await readSource("_system/vault-context.md"),
+    };
+    if (!sources.mentalModel && !sources.preferences && !sources.vaultContext) {
+      new Notice("Nothing to seed from — the _system/ source files are empty or missing.");
+      return;
+    }
+
+    new Notice("Seeding the agent folder — distilling identity blocks…");
+    const ctrl = new AbortController();
+    // The CHAT's default model (settings' provider default), not backgroundModel:
+    // seeding is one-shot and high-stakes, so it uses the frontier model.
+    const raw = await this.runUtilityPass(buildSeedPrompt(sources), {
+      signal: ctrl.signal,
+      model: this.settings.claudeModel,
+      timeoutMs: 120_000,
+    });
+    const blocks = parseSeedBlocks(raw);
+    if (Object.keys(blocks).length === 0) {
+      new Notice("Seeding failed — the model returned no usable blocks. Try again.");
+      return;
+    }
+
+    // Manifest first (contract doc), then only the MISSING block files.
+    let written = 0;
+    let skipped = 0;
+    await this.ensureFolder(AGENT_DIR);
+    await this.writeIfMissing(`${AGENT_DIR}/manifest.md`, manifestContent(), () => {}, true);
+    for (const name of AGENT_BLOCK_NAMES) {
+      const content = blocks[name];
+      if (!content) continue;
+      const path = `${AGENT_DIR}/${name}.md`;
+      const existed = this.app.vault.getAbstractFileByPath(path) instanceof TFile;
+      if (existed) {
+        skipped++;
+        continue;
+      }
+      await this.app.vault.create(path, `${content.replace(/\s+$/, "")}\n`);
+      written++;
+    }
+
+    new Notice(
+      `Agent folder seeded — wrote ${written} block(s)${skipped ? `, kept ${skipped} existing` : ""}. Review human.md, then enable "The agent is the folder" in settings.`
+    );
+    // Open human.md for review (the block most worth a human check).
+    const humanPath = `${AGENT_DIR}/human.md`;
+    if (this.app.vault.getAbstractFileByPath(humanPath) instanceof TFile) {
+      await this.app.workspace.openLinkText(humanPath, "", true);
+    }
+  }
+
+  /** Create a folder if it doesn't exist (idempotent, race-safe). */
+  private async ensureFolder(path: string): Promise<void> {
+    if (this.app.vault.getAbstractFileByPath(path)) return;
+    try {
+      await this.app.vault.createFolder(path);
+    } catch {
+      /* already exists (race) — fine */
+    }
+  }
+
+  /** Write a file only when it's absent; `manifest` forces an overwrite so the
+   *  contract doc stays current on every re-seed (it's Exo-owned, not hand-edited). */
+  private async writeIfMissing(
+    path: string,
+    content: string,
+    onWrite: () => void,
+    overwrite = false
+  ): Promise<void> {
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof TFile) {
+      if (overwrite) await this.app.vault.modify(existing, content);
+      return;
+    }
+    await this.app.vault.create(path, content);
+    onWrite();
   }
 
   /** Rough fallback estimate (chars/4-equivalent order of magnitude) for the

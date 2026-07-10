@@ -22,9 +22,17 @@ import type {
   SessionCaps,
 } from "./providers/types";
 import { toolMeta, toolFilePath, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
-import { createObsidianToolServer, OBSIDIAN_READ_TOOLS, OBSIDIAN_MEMORY_TOOLS } from "./obsidian/tools";
+import {
+  createObsidianToolServer,
+  OBSIDIAN_READ_TOOLS,
+  OBSIDIAN_MEMORY_TOOLS,
+  type RethinkRequest,
+} from "./obsidian/tools";
 import { adaptAppToTaskVault, createBacklogTask } from "./obsidian/task-store";
 import { MemoryObserver, type ObserverWrite } from "./obsidian/observer";
+import { AgentFolder, type BlockWrite } from "./obsidian/agent-folder";
+import { planRethink, type BlockName } from "./core/agent-self";
+import type { NowProposal } from "./core/observer";
 import {
   initialCadenceState,
   recordStep,
@@ -82,6 +90,15 @@ const MEMORY_STORE_NOTE_PROACTIVE =
   "A persistent, append-only memory store lives in `_system/memory/store/`. Relevant past memories are auto-provided each turn inside `[recalled-memory]…[/recalled-memory]` blocks — trusted verbatim context, but BACKGROUND from other sessions. " +
   "When the user refers back to the running conversation ('continua', 'le altre cose proposte', 'quello sopra', 'as above', 'go on'), the referent is THIS conversation's own history — resolve it from the current thread, never from recalled memory or the boot `Recent sessions` digest. " +
   "Use `recall` for a deeper or explicit search (e.g. `as_of` point-in-time queries), and `remember` to store new durable statements in the user's exact words (never summarized).";
+
+/** Prompt surface for the identity layer — appended when the agent folder is on
+ *  and `rethink_memory` is registered. Explains WHEN to rethink (world-model
+ *  change) vs `remember` (episodic), and the propose-only persona tier. */
+const AGENT_FOLDER_NOTE =
+  "### Identity — `rethink_memory`\n" +
+  "Your identity lives in `_system/agent/` (persona, human, now) and is already in your boot context above. " +
+  "Call `rethink_memory` only when your MODEL OF THE WORLD changes — a shifted priority (now.md), a durable update to how you understand the user (human.md, pass a rationale). NOT for episodic notes — those go to `remember`. " +
+  "`persona.md` is propose-only: a `rethink_memory` on it records a proposal for the user to approve, it does not write.";
 
 export const VIEW_TYPE = "exo-view";
 /** Custom Obsidian icon id for the Exo brand mark (registered in main.ts). */
@@ -277,6 +294,8 @@ export class ChatView extends ItemView {
   private recapResizeObserver: ResizeObserver | null = null;
   /** Self-Writing Memory observer — lazily created, one per view, disposed on close. */
   private memoryObserver: MemoryObserver | null = null;
+  /** The Agent Is the Folder — block reader/writer, lazily created (one per view). */
+  private agentFolder: AgentFolder | null = null;
   /** In-flight tool phrase for the Context panel's live activity row while a turn
    *  streams (set on tool-call-start, cleared on result/turn-end). Only the idle
    *  path — `updateRecap()` — ignores it; `updateContextLive()` renders it. */
@@ -601,13 +620,20 @@ export class ChatView extends ItemView {
           // above is unaffected either way (see settings.ts, tools.ts).
           s.orchestrationEnabled,
           // Shared tasks-ledger write-queue, mirroring memoryWriteQueue's contract.
-          this.plugin.tasksWriteQueue
+          this.plugin.tasksWriteQueue,
+          // The Agent Is the Folder — gates `rethink_memory` only.
+          s.agentFolderEnabled,
+          // Per-convo bridge: rethink_memory renders into THIS conversation's turn.
+          (req) => this.rethinkBridge(c, req)
         )
       : undefined;
 
     let memoryPreamble: string | undefined;
     if (s.memoryReadEnabled && c.provider === "claude") {
-      if (!this.memoryPreamble) this.memoryPreamble = await readBootContext(this.app);
+      if (!this.memoryPreamble)
+        this.memoryPreamble = await readBootContext(this.app, {
+          agentFolderEnabled: s.agentFolderEnabled,
+        });
       memoryPreamble = this.memoryPreamble || undefined;
       // Tell the agent the union store exists whenever its tools are registered
       // (obsidian tools on + memory read on ⇒ `recall`, +write ⇒ `remember`).
@@ -616,6 +642,12 @@ export class ChatView extends ItemView {
       if (useObsidian) {
         const note = s.proactiveRecall ? MEMORY_STORE_NOTE_PROACTIVE : MEMORY_STORE_NOTE;
         memoryPreamble = (memoryPreamble ? `${memoryPreamble}\n\n` : "") + note;
+        // The Agent Is the Folder: when the identity layer is on and its tool is
+        // registered, tell the model when to `rethink` (world-model change, not
+        // episodic notes — those go to `remember`).
+        if (s.memoryWriteEnabled && s.agentFolderEnabled) {
+          memoryPreamble = `${memoryPreamble}\n\n${AGENT_FOLDER_NOTE}`;
+        }
       }
     }
 
@@ -1743,6 +1775,158 @@ export class ChatView extends ItemView {
     return this.memoryObserver;
   }
 
+  /* ----------------------- the agent is the folder ------------------------ */
+
+  /** Lazily build the identity block reader/writer for this view — one per view,
+   *  sharing the plugin's store write-queue so block writes serialize against
+   *  every other store writer (w1-1). */
+  private agent(): AgentFolder {
+    if (!this.agentFolder) {
+      this.agentFolder = new AgentFolder(this.app, this.plugin.memoryWriteQueue);
+    }
+    return this.agentFolder;
+  }
+
+  /**
+   * Enact a `rethink_memory` tool call for conversation `c` (design §3). The
+   * tier is resolved purely by {@link planRethink}:
+   *  - `now.md`   → write freely, render the diff + undo row into the turn.
+   *  - `human.md` → write, render the diff + undo row WITH the rationale surfaced.
+   *  - `persona.md` → record a pending proposal card (diff + Apply/Dismiss); the
+   *    write happens only on the Apply click. Nothing is written here.
+   * Returns the short status line the tool reports back to the model.
+   */
+  private async rethinkBridge(c: Convo, req: RethinkRequest): Promise<string> {
+    const ctx = c.currentCtx;
+    if (!ctx) throw new Error("no active turn");
+    const block = req.block as BlockName;
+    const plan = planRethink(block);
+    const agent = this.agent();
+    const current = (await agent.readBlock(block))?.content ?? "";
+
+    if (plan.verb === "propose") {
+      // persona.md — propose-only: render an Apply/Dismiss card, write on Apply.
+      this.renderBlockProposalCard(ctx.bodyEl, block, current, req.content, req.rationale);
+      return `Proposed a change to ${block}.md — waiting for the user to Apply or Dismiss it. Not written yet.`;
+    }
+
+    // now.md / human.md — governed direct write with feed diff + undo.
+    const write = await agent.writeBlock(block, req.content);
+    this.renderBlockDiff(ctx.bodyEl, write, req.rationale);
+    return plan.requireRationale
+      ? `Rewrote ${block}.md (rationale surfaced in the change). Review · undo shown in the feed.`
+      : `Rewrote ${block}.md. Review · undo shown in the feed.`;
+  }
+
+  /** Render a compact old→new diff for a block, plus a review·undo row. Reuses the
+   *  `.mva-diff` line recipe (design.md §diff) and the observer-veto row idiom.
+   *  When a `rationale` is present (human.md tier), it's surfaced prominently
+   *  above the diff (design §3). */
+  private renderBlockDiff(el: HTMLElement, write: BlockWrite, rationale?: string): void {
+    const wrap = el.createDiv({ cls: "mva-rethink" });
+    wrap.createSpan({ cls: "mva-rethink-chip", text: `${write.block}.md updated` });
+    if (rationale) {
+      const r = wrap.createDiv({ cls: "mva-rethink-rationale" });
+      r.createSpan({ cls: "mva-rethink-rationale-k", text: "Why: " });
+      r.createSpan({ text: rationale });
+    }
+    this.renderTextDiff(wrap, write.previous, write.next);
+    this.renderBlockUndoRow(wrap, write);
+  }
+
+  /** The discreet "reverted"-capable undo row for a governed block write. */
+  private renderBlockUndoRow(wrap: HTMLElement, write: BlockWrite): void {
+    const row = wrap.createDiv({ cls: "mva-faint mva-mem-veto" });
+    const review = row.createEl("a", { text: "review", href: "#" });
+    this.clickable(review, (e) => {
+      e.preventDefault();
+      void this.app.workspace.openLinkText(write.path, "", "tab");
+    });
+    row.createSpan({ text: " · " });
+    const undo = row.createEl("a", { text: "undo", href: "#" });
+    this.clickable(undo, (e) => {
+      e.preventDefault();
+      void this.agent()
+        .undo(write)
+        .then(() => {
+          row.empty();
+          row.createSpan({ text: `${write.block}.md reverted.` });
+        })
+        .catch(() => {
+          row.empty();
+          row.createSpan({ text: "Couldn't undo — the block may have changed." });
+        });
+    });
+  }
+
+  /** Render a pending block proposal card (persona tier or observer now-proposal):
+   *  a diff with Apply / Dismiss. Apply writes through the governed path and
+   *  swaps in a review·undo row; Dismiss leaves the block untouched. */
+  private renderBlockProposalCard(
+    parent: HTMLElement,
+    block: BlockName,
+    current: string,
+    proposed: string,
+    rationale?: string
+  ): void {
+    const card = parent.createDiv({ cls: "mva-rethink mva-rethink-proposal" });
+    card.createSpan({ cls: "mva-rethink-chip", text: `Proposed: ${block}.md` });
+    if (rationale) {
+      const r = card.createDiv({ cls: "mva-rethink-rationale" });
+      r.createSpan({ cls: "mva-rethink-rationale-k", text: "Why: " });
+      r.createSpan({ text: rationale });
+    }
+    this.renderTextDiff(card, current, proposed);
+
+    const actions = card.createDiv({ cls: "mva-rethink-actions" });
+    const apply = actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Apply" });
+    const dismiss = actions.createEl("button", { cls: "mva-btn", text: "Dismiss" });
+    let done = false;
+    const finish = (label: string) => {
+      done = true;
+      card.removeClass("mva-rethink-proposal");
+      actions.remove();
+      card.createDiv({ cls: "mva-faint", text: label });
+    };
+    this.clickable(apply, () => {
+      if (done) return;
+      done = true; // guard double-click while the write is in flight
+      void this.agent()
+        .writeBlock(block, proposed)
+        .then((write) => {
+          card.removeClass("mva-rethink-proposal");
+          actions.remove();
+          this.renderBlockUndoRow(card, write);
+        })
+        .catch(() => {
+          done = false; // let the user retry
+          new Notice(`Couldn't apply ${block}.md.`);
+        });
+    });
+    this.clickable(dismiss, () => {
+      if (done) return;
+      finish(`${block}.md proposal dismissed.`);
+    });
+  }
+
+  /** Minimal line-level old→new diff into a `.mva-diff` block. Whole-line adds/dels
+   *  (no intraline) — the blocks are short, and the recipe's `.mva-add`/`.mva-del`
+   *  line classes carry the color. Unchanged lines render muted. */
+  private renderTextDiff(parent: HTMLElement, before: string, after: string): void {
+    const box = parent.createDiv({ cls: "mva-diff" });
+    const beforeLines = before.split("\n");
+    const afterLines = after.split("\n");
+    const beforeSet = new Set(beforeLines);
+    const afterSet = new Set(afterLines);
+    for (const line of beforeLines) {
+      if (!afterSet.has(line)) box.createDiv({ cls: "mva-diff-line mva-del", text: `- ${line}` });
+    }
+    for (const line of afterLines) {
+      const cls = beforeSet.has(line) ? "mva-diff-line" : "mva-diff-line mva-add";
+      box.createDiv({ cls, text: `${beforeSet.has(line) ? "  " : "+ "}${line}` });
+    }
+  }
+
   /* --------------------------- proactive recall --------------------------- */
 
   /** True when proactive recall may run for `c`: the master flag is on and the
@@ -1808,7 +1992,9 @@ export class ChatView extends ItemView {
 
   /** Self-Writing Memory: after a HEALTHY turn, fire the observer off the critical
    *  path. Gated to Claude + both toggles; never blocks the turn or the next one.
-   *  On a successful write, render a discreet veto row (review · undo) into the turn. */
+   *  On a successful write, render a discreet veto row (review · undo) into the turn.
+   *  When the agent folder is on, ALSO pass `now.md` as context so the pass can
+   *  propose a now.md update (design §5) — rendered as an Apply/Dismiss card. */
   private observeTurn(c: Convo, el: HTMLElement, userText: string, assistantText: string): void {
     const s = this.plugin.settings;
     if (!s.selfWritingMemory || !s.memoryWriteEnabled) return;
@@ -1819,20 +2005,28 @@ export class ChatView extends ItemView {
       return;
     }
     const observer = this.observer();
-    const run = async (): Promise<ObserverWrite | null> => {
-      let result = await observer.observeDetailed({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown");
+    const wantNow = s.agentFolderEnabled;
+    const run = async (): Promise<{ write: ObserverWrite | null; nowProposal: NowProposal | null }> => {
+      const opts = wantNow ? { nowContext: await this.agent().nowContext() } : {};
+      let result = await observer.observeDetailed({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown", opts);
       if (result.busy) {
         await observer.whenIdle();
-        if (!this.plugin.canRunObserver()) return null;
-        result = await observer.observeDetailed({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown");
+        if (!this.plugin.canRunObserver()) return { write: null, nowProposal: null };
+        result = await observer.observeDetailed({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown", opts);
       }
-      return result.write;
+      return { write: result.write, nowProposal: result.nowProposal };
     };
     void run()
-      .then((write) => {
-        if (!write || write.entries.length === 0) return;
+      .then(async ({ write, nowProposal }) => {
         if (!this.convos.includes(c) || !el.isConnected) return; // turn removed/rebuilt
-        this.renderMemoryVeto(el, write);
+        if (write && write.entries.length > 0) this.renderMemoryVeto(el, write);
+        // Observer now.md proposal (§5): propose only — the Apply click writes.
+        if (nowProposal) {
+          const current = (await this.agent().readBlock("now"))?.content ?? "";
+          if (this.convos.includes(c) && el.isConnected) {
+            this.renderBlockProposalCard(el, "now", current, nowProposal.text);
+          }
+        }
       })
       .catch(() => {
         /* never surface into the turn */

@@ -43,6 +43,21 @@ export interface Candidate {
   tags: string[];
 }
 
+/** Max chars accepted for a proposed `now.md` rewrite (advisory now-block limit). */
+export const MAX_NOW_PROPOSAL_CHARS = 1500;
+
+/** A proposed `now.md` rewrite the observer emits when the turn shifts what
+ *  matters right now (design §5). `text` is the WHOLE new `now.md` body — the
+ *  proposal is a full-block replacement, applied only on the user's click. */
+export interface NowProposal {
+  text: string;
+}
+
+/** Fence delimiters for the optional `now.md` proposal appended to the observer
+ *  output. Kept distinct from the recall fence so the two never collide. */
+export const NOW_UPDATE_OPEN = "[now-update]";
+export const NOW_UPDATE_CLOSE = "[/now-update]";
+
 /**
  * Delimiters wrapping a proactive-recall injection in the OUTBOUND turn (see the
  * send path in `view.ts`). Exported so the send path, the observer strip guard,
@@ -80,15 +95,33 @@ function cap(s: string, n: number): string {
   return (s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
 }
 
+/** Options for {@link buildObserverPrompt}. */
+export interface ObserverPromptOpts {
+  /**
+   * The CURRENT `now.md` body (design §5). When provided, the prompt additionally
+   * asks the observer to emit a `now.md` update PROPOSAL — but only when the turn
+   * genuinely shifts what matters right now (new hot project, closed focus, shifted
+   * priority). Omitted → the prompt is byte-identical to the memory-only form, so
+   * every existing behavior and test is untouched.
+   */
+  nowContext?: string;
+}
+
 /**
  * Build the observer prompt from a capped digest. The model is asked to return
  * a JSON array of durable-memory candidates, each `{ kind, text, tags }`.
+ *
+ * When `opts.nowContext` is supplied (agent-folder ON), a MINIMAL addition asks
+ * the observer to ALSO propose a rewritten `now.md` — fenced separately so it
+ * never contaminates the candidate-array parse — but only when the turn shifted
+ * what matters right now. No now-worthy change ⇒ no fence ⇒ zero-noise (§5).
  */
-export function buildObserverPrompt(digest: TurnDigest): string {
+export function buildObserverPrompt(digest: TurnDigest, opts: ObserverPromptOpts = {}): string {
   // Strip proactive-recall injections BEFORE the observer sees them (§3 guard) —
   // injected memory must never be re-extracted as new memory.
   const user = cap(stripRecalledMemory(digest.user), MAX_USER_CHARS);
   const assistant = cap(digest.assistant, MAX_ASSISTANT_CHARS);
+  const wantsNow = typeof opts.nowContext === "string";
   return [
     "You are a memory observer. Read one chat turn between a user and an assistant and extract",
     "any DURABLE memories worth remembering across future sessions — stable preferences, lasting",
@@ -101,11 +134,44 @@ export function buildObserverPrompt(digest: TurnDigest): string {
     '  - "tags": an array of 0-3 short lowercase tags',
     "If there is nothing durable to remember, return an empty array [].",
     "Do not invent memories. Prefer the user's own words. No prose outside the JSON.",
+    ...(wantsNow
+      ? [
+          "",
+          "SEPARATELY: `now.md` is the user's short 'what matters right now' note (hot projects, current",
+          "focus, priorities). If — and ONLY if — this turn clearly shifted what matters right now (a new hot",
+          `project, a closed focus, a changed priority), append AFTER the JSON array a rewritten now.md wrapped`,
+          `in ${NOW_UPDATE_OPEN} … ${NOW_UPDATE_CLOSE} (the WHOLE new body, ≤${MAX_NOW_PROPOSAL_CHARS} chars). If nothing`,
+          "now-worthy changed, DO NOT emit the block at all.",
+          "",
+          `Current now.md:\n${cap(opts.nowContext ?? "", MAX_NOW_PROPOSAL_CHARS)}`,
+        ]
+      : []),
     "",
     `User: ${user}`,
     "",
     `Assistant: ${assistant}`,
   ].join("\n");
+}
+
+/** Matches one `[now-update]…[/now-update]` block (non-greedy). */
+const NOW_UPDATE_BLOCK = new RegExp(
+  `${escapeRe(NOW_UPDATE_OPEN)}([\\s\\S]*?)${escapeRe(NOW_UPDATE_CLOSE)}`
+);
+
+/**
+ * Extract the observer's proposed `now.md` rewrite from its raw output, or null
+ * when no now-worthy change was flagged (design §5). Tolerant: the fence may sit
+ * after the candidate JSON, wrapped in prose; a missing, empty, or unterminated
+ * fence yields null (zero-noise). The body is trimmed and hard-capped; whitespace-
+ * only content is treated as no proposal.
+ */
+export function parseNowProposal(raw: string): NowProposal | null {
+  if (!raw || typeof raw !== "string") return null;
+  const m = NOW_UPDATE_BLOCK.exec(raw);
+  if (!m) return null;
+  const text = m[1].trim().slice(0, MAX_NOW_PROPOSAL_CHARS);
+  if (!text) return null;
+  return { text };
 }
 
 /** Normalize one raw object into a Candidate, or null if unusable. */
