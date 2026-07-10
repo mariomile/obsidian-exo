@@ -3,11 +3,14 @@
  * The composer's Effort control derives from the chosen model (it hides for
  * models with no effort support, and offers only that model's tiers).
  *
- * Source of truth: the claude-api reference (checked 2026-07-05):
+ * Source of truth: the claude-api reference (checked 2026-07-05) and
+ * `codex debug models` on codex-cli 0.144.1 (checked 2026-07-10):
  * - `xhigh` exists on Opus 4.7+, Opus 4.8, Fable 5, Sonnet 5.
  * - `max` exists on Opus 4.6 and later, Sonnet 4.6 and later.
  * - Haiku 4.5 (and earlier Sonnets) reject `effort` outright.
- * - Codex `model_reasoning_effort` accepts low..xhigh — no `max`.
+ * - Codex GPT-5.6 Sol/Terra accept low..ultra; Luna low..max;
+ *   GPT-5.5/5.4 and unknown Codex ids stay low..xhigh (Codex rejects
+ *   unsupported tiers outright, so unknowns get the conservative set).
  * Unknown/custom Claude ids get the full ladder: a wrong tier degrades to a
  * CLI warning, while hiding the control would block valid new models.
  */
@@ -20,6 +23,7 @@ const LADDER: EffortOption[] = [
   ["high", "High"],
   ["xhigh", "Extra high"],
   ["max", "Max"],
+  ["ultra", "Ultra"],
 ];
 
 const pick = (...values: string[]): EffortOption[] =>
@@ -32,7 +36,11 @@ export function effortOptionsFor(
   modelId: string
 ): EffortOption[] | null {
   const id = (modelId || "").toLowerCase();
-  if (provider === "codex") return pick("low", "medium", "high", "xhigh");
+  if (provider === "codex") {
+    if (id.includes("gpt-5.6-luna")) return pick("low", "medium", "high", "xhigh", "max");
+    if (id.includes("gpt-5.6")) return pick("low", "medium", "high", "xhigh", "max", "ultra");
+    return pick("low", "medium", "high", "xhigh");
+  }
   if (id.includes("haiku")) return null;
   if (id.includes("opus-4-6") || id.includes("sonnet-4-6")) return pick("low", "medium", "high", "max");
   return pick("low", "medium", "high", "xhigh", "max");
@@ -40,7 +48,8 @@ export function effortOptionsFor(
 
 /** Keep the current effort only when the model offers it; otherwise fall back
  *  to "default" (the CLI's own choice) so an invalid tier never reaches the
- *  provider (Codex rejects `model_reasoning_effort="max"`, Claude warns). */
+ *  provider (Codex rejects unsupported `model_reasoning_effort` tiers, Claude
+ *  warns). */
 export function clampEffort(effort: string, options: EffortOption[] | null): string {
   if (!options) return "default";
   return options.some(([v]) => v === effort) ? effort : "default";

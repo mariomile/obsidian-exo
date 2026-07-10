@@ -2,9 +2,10 @@ import { describe, expect, test } from "vitest";
 import { clampEffort, effortOptionsFor } from "../src/core/model-tuning";
 
 /** Effort tiers are a consequence of the chosen model (per the claude-api
- *  reference, 2026-07): xhigh exists on Opus 4.7+/Fable 5/Sonnet 5; max on
- *  Opus 4.6+/Sonnet 4.6+; Haiku 4.5 rejects effort entirely; Codex's
- *  model_reasoning_effort has no "max". */
+ *  reference, 2026-07, and `codex debug models` on codex-cli 0.144.1):
+ *  xhigh exists on Opus 4.7+/Fable 5/Sonnet 5; max on Opus 4.6+/Sonnet 4.6+;
+ *  Haiku 4.5 rejects effort entirely; Codex GPT-5.6 Sol/Terra go up to
+ *  "ultra", Luna up to "max", older/unknown Codex ids stop at "xhigh". */
 describe("effortOptionsFor", () => {
   const values = (provider: string, model: string) =>
     effortOptionsFor(provider as "claude" | "codex", model)?.map(([v]) => v) ?? null;
@@ -31,9 +32,20 @@ describe("effortOptionsFor", () => {
     expect(values("claude", "default")).toEqual(["default", "low", "medium", "high", "xhigh", "max"]);
   });
 
-  test("Codex models have no max tier", () => {
+  test("Codex GPT-5.6 Sol/Terra get max and ultra", () => {
+    for (const m of ["gpt-5.6-sol", "gpt-5.6-terra"]) {
+      expect(values("codex", m)).toEqual(["default", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    }
+  });
+
+  test("Codex GPT-5.6 Luna stops at max", () => {
+    expect(values("codex", "gpt-5.6-luna")).toEqual(["default", "low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("older and unknown Codex ids stop at xhigh", () => {
     expect(values("codex", "gpt-5.5")).toEqual(["default", "low", "medium", "high", "xhigh"]);
-    expect(values("codex", "gpt-5-codex")).toEqual(["default", "low", "medium", "high", "xhigh"]);
+    expect(values("codex", "gpt-5.4-mini")).toEqual(["default", "low", "medium", "high", "xhigh"]);
+    expect(values("codex", "some-custom-model")).toEqual(["default", "low", "medium", "high", "xhigh"]);
   });
 });
 

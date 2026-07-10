@@ -32,6 +32,7 @@ import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
 import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport } from "./headless";
+import { drainExoQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle } from "./core/title";
 import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
@@ -331,6 +332,11 @@ export default class ExoPlugin extends Plugin {
       },
     });
     this.registerInterval(window.setInterval(() => void this.checkScheduledRuns(), 30 * 60 * 1000));
+
+    // Exo Queue ("Exo in tasca"): evade le note-richiesta arrivate via Sync.
+    // Poll leggero ogni 60s (list di una cartella); drain sequenziale con
+    // flag busy — mai due giri concorrenti (una richiesta può durare minuti).
+    this.registerInterval(window.setInterval(() => void this.maybeDrainExoQueue(), 60 * 1000));
 
     // Git auto-commit safety net: ticks frequently, but only ever runs git
     // commands once the pure debounce/cadence decision says a check is due —
@@ -1378,6 +1384,21 @@ export default class ExoPlugin extends Plugin {
   }
 
   /** Run any scheduled playbooks that are due (off by default — empty list). */
+  /** Exo Queue: drain con guardia anti-concorrenza (le richieste headless
+   *  possono durare minuti; il poll a 60s NON deve accavallarsi). */
+  private exoQueueBusy = false;
+  private async maybeDrainExoQueue(): Promise<void> {
+    if (!this.settings.exoQueueEnabled || this.exoQueueBusy) return;
+    this.exoQueueBusy = true;
+    try {
+      await drainExoQueue(this.app, this.settings);
+    } catch (err) {
+      console.warn("[Exo] queue drain failed:", err);
+    } finally {
+      this.exoQueueBusy = false;
+    }
+  }
+
   private async checkScheduledRuns(): Promise<void> {
     const lines = this.settings.scheduledRuns.split("\n").map((l) => l.trim()).filter(Boolean);
     if (!lines.length) return;

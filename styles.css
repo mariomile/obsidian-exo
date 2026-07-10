@@ -3857,7 +3857,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 12px;
+  /* Vertical rhythm follows the theme's content margin (--file-margins, native
+     Obsidian var) so the board breathes like a note — including focus-view,
+     where themes inflate the top margin to make up for the hidden tab bar.
+     Horizontal stays tight: the board is full-bleed, not readable-line width. */
+  padding: var(--file-margins, 12px);
+  padding-inline: 12px;
   gap: 10px;
 }
 
