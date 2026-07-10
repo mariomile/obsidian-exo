@@ -1740,36 +1740,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   opacity: 0.85;
 }
 /* Background Bash tasks (F3): accent border-tint + badge chip. */
-/* Progressive-disclosure group for runs of ≥3 settled tool rows: closed by
-   default, "N steps" header in the Reasoning-block grammar (chevron rotates
-   when open). Rows inside are the original cards, re-parented untouched. */
-.mva-tool-group-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  padding: 3px 6px;
-  border-radius: var(--mva-r1);
-  cursor: pointer;
-  user-select: none;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.mva-tool-group-head:hover {
-  background: color-mix(in srgb, var(--background-modifier-hover) 60%, transparent);
-}
-.mva-tool-group:not(.is-collapsed) .mva-reason-chevron {
-  transform: rotate(90deg);
-}
-.mva-tool-group.is-collapsed .mva-tool-group-rows {
-  display: none;
-}
-.mva-tool-group-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-left: 14px;
-}
 /* ---- steps timeline — Notion interaction, Craft skin -------------------
    A contiguous run of work (thinking + generic tools) on a vertical rail;
    folds into a "N steps ⌄" header at run close. Geometry + states only —

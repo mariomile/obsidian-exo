@@ -56,7 +56,6 @@ import { renderEmptyState } from "./ui/empty-state";
 import { buildRelatedChips } from "./ui/related";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
-import { groupRuns } from "./core/group-runs";
 import { planPersistedConvos } from "./core/persistence";
 import { buildRecap, isRecoverableSessionError, resolveRecovery, stopAction } from "./core/recovery";
 import { workingAffordance } from "./core/working-visibility";
@@ -1707,20 +1706,29 @@ export class ChatView extends ItemView {
         const body = el.createDiv({ cls: "mva-assistant-body" });
         let full = "";
         const touched: TouchedNote[] = [];
+        let run: StepsRun | null = null;
+        const flushRun = () => {
+          run?.close();
+          run = null;
+        };
         for (const s of m.segments) {
           if (s.t === "text") {
+            flushRun();
             void MarkdownRenderer.render(this.app, s.md, body.createDiv({ cls: "mva-bubble markdown-rendered" }), "", this);
             full += s.md;
           } else if (s.t === "ask") {
+            flushRun();
             const card = body.createDiv({ cls: "mva-ask" });
             this.renderAskSummary(card, s.questions, s.answers);
           } else if (s.t === "plan") {
             // Restored plan: settled read-only card (collapsed, expandable). A
             // still-pending plan (approved null, e.g. an interrupted turn) shows
             // as "proposed" but treated as not-approved for the state line.
+            flushRun();
             const card = body.createDiv({ cls: "mva-plan-card" });
             this.renderPlanSettled(card, s.md, s.approved === true);
           } else if (s.t === "artifact") {
+            flushRun();
             this.buildArtifactCard(body, s.path, m.checkpoint);
           } else {
             const fp = toolFilePath(s.name, s.input);
@@ -1728,14 +1736,21 @@ export class ChatView extends ItemView {
               // Note-touching calls dissolve into the touched-notes footer below
               // instead of also rendering their own row — this is a restored (not
               // live) turn, so there's no streaming status to show in the first place.
+              flushRun();
               mergeTouched(touched, fp, WRITE_TOOLS.test(s.name) ? "write" : "read");
-            } else {
+            } else if (stepPlacement(s.name, s.input, null) === "flat") {
+              flushRun();
               const refs = this.createToolCard(body, s.name, s.input);
+              this.finishToolCard(refs, s.ok !== false, s.output);
+            } else {
+              if (!run) run = new StepsRun(body);
+              const refs = this.createToolCard(run.body, s.name, s.input);
+              run.noteToolAdded();
               this.finishToolCard(refs, s.ok !== false, s.output);
             }
           }
         }
-        this.groupToolRows(body); // restored transcripts fold long tool runs too
+        flushRun(); // message end closes the last run (renders folded, no animation)
         this.attachTouched(el, touched, m.checkpoint);
         if (full.trim()) this.attachActions(el, full, lastUser || undefined, c);
       }
@@ -2912,34 +2927,6 @@ export class ChatView extends ItemView {
     const base = this.vaultPath();
     if (base && p.startsWith(base)) p = p.slice(base.length).replace(/^\/+/, "");
     void this.app.workspace.openLinkText(p, "", false);
-  }
-
-  /** Progressive disclosure for a settled transcript: runs of ≥3 consecutive
-   *  collapsed generic tool rows fold into a closed "N steps" accordion (03-07
-   *  feedback — a stack of "Run command" rows is noise once the turn is over).
-   *  Streaming keeps rows flat (live visibility); this runs at turn end and on
-   *  restore. Re-parents the original row elements, so their click handlers and
-   *  expanded bodies survive. Rows the user expanded, and background-task cards
-   *  (their badge is live status), break the run and stay visible. */
-  private groupToolRows(bodyEl: HTMLElement): void {
-    const children = Array.from(bodyEl.children) as HTMLElement[];
-    const flags = children.map(
-      (el) =>
-        el.classList.contains("mva-tool") &&
-        el.classList.contains("is-collapsed") &&
-        !el.classList.contains("mva-tool-bg")
-    );
-    for (const [start, end] of groupRuns(flags, 3).reverse()) {
-      const rows = children.slice(start, end + 1);
-      const group = createDiv({ cls: "mva-tool-group is-collapsed" });
-      const head = group.createDiv({ cls: "mva-tool-group-head" });
-      setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
-      head.createSpan({ cls: "mva-tool-group-label", text: `${rows.length} steps` });
-      this.clickable(head, () => group.toggleClass("is-collapsed", !group.hasClass("is-collapsed")));
-      const rowsEl = group.createDiv({ cls: "mva-tool-group-rows" });
-      bodyEl.insertBefore(group, rows[0]);
-      for (const row of rows) rowsEl.appendChild(row);
-    }
   }
 
   /** Obsidian-native page preview on hover (same popover as wikilinks). Fires the
