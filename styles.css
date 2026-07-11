@@ -1740,35 +1740,104 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   opacity: 0.85;
 }
 /* Background Bash tasks (F3): accent border-tint + badge chip. */
-/* Progressive-disclosure group for runs of ≥3 settled tool rows: closed by
-   default, "N steps" header in the Reasoning-block grammar (chevron rotates
-   when open). Rows inside are the original cards, re-parented untouched. */
-.mva-tool-group-head {
-  display: flex;
+/* ---- steps timeline — Notion interaction, Craft skin -------------------
+   A contiguous run of work (thinking + generic tools) on a vertical rail;
+   folds into a "N steps ⌄" header at run close. Geometry + states only —
+   no surfaces (design system, Filone B). */
+.mva-steps {
+  margin: 4px 0;
+}
+.mva-steps-head {
+  display: none;
   align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  padding: 3px 6px;
-  border-radius: var(--mva-r1);
-  cursor: pointer;
-  user-select: none;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
   color: var(--text-muted);
-  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t);
 }
-.mva-tool-group-head:hover {
-  background: color-mix(in srgb, var(--background-modifier-hover) 60%, transparent);
+.mva-steps.is-collapsed .mva-steps-head,
+.mva-steps.is-settled .mva-steps-head {
+  display: flex;
 }
-.mva-tool-group:not(.is-collapsed) .mva-reason-chevron {
+.mva-steps-head:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-steps:not(.is-collapsed) .mva-steps-head .mva-reason-chevron {
   transform: rotate(90deg);
 }
-.mva-tool-group.is-collapsed .mva-tool-group-rows {
+.mva-steps.is-collapsed .mva-steps-body {
   display: none;
 }
-.mva-tool-group-rows {
+/* the rail: one vertical connector, dots per step (the tool row's own status
+   icon doubles as the dot; thinking steps carry their chevron on the rail) */
+.mva-steps-body {
+  position: relative;
+  padding-left: 10px;
+}
+.mva-steps-body::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--background-modifier-border);
+}
+
+/* thinking step */
+.mva-step-think-head {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-left: 14px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t);
+}
+.mva-step-think-head:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-step-think:not(.is-collapsed) .mva-step-think-head .mva-reason-chevron {
+  transform: rotate(90deg);
+}
+.mva-step-think.is-collapsed .mva-step-think-body {
+  display: none;
+}
+.mva-step-think-body {
+  padding: 2px 4px 4px 20px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* shimmer — active work only, sweeping the text ramp (accent is neutral gray,
+   never a colored highlight). Craft motion: linear, quiet. */
+@keyframes mva-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.mva-steps:not(.is-settled) .mva-tool.is-running .mva-tool-name,
+.mva-step-think.is-active .mva-step-think-label {
+  background: linear-gradient(
+      90deg,
+      var(--text-faint) 20%,
+      var(--text-normal) 50%,
+      var(--text-faint) 80%
+    )
+    0 0 / 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: mva-shimmer 2s linear infinite;
 }
 /* Touched-notes footer: only the LATEST turn keeps its chips expanded — every
    older turn collapses to a one-line "N notes ▸" toggle (03-07 feedback: old
@@ -1792,7 +1861,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 /* The "N files" head is always visible; clicking it opens AND closes the group.
    Chevron points right when collapsed, rotates down when the chips are showing
-   (same grammar as .mva-reason / .mva-tool-group). */
+   (same grammar as .mva-reason / .mva-steps). */
 .mva-sources:not(.is-collapsed) .mva-reason-chevron {
   transform: rotate(90deg);
 }
@@ -2410,24 +2479,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 
 /* ----------------------------- reasoning ------------------------------ */
-.mva-reason {
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r2);
-  background: color-mix(in srgb, var(--text-normal) 2%, transparent);
-  font-size: 12px;
-}
-.mva-reason-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 9px;
-  cursor: pointer;
-  color: var(--text-muted);
-  user-select: none;
-}
-.mva-reason-head:hover {
-  color: var(--text-normal);
-}
+/* .mva-reason container rules removed (2026-07-11, task-7): the container is
+   dead — only .mva-reason-chevron spans are still created, by steps timeline,
+   plan cards, and sources footer. Sizing/rotation rules below stay in use. */
 .mva-reason-chevron {
   display: inline-flex;
   transition: transform var(--mva-t);
@@ -2435,24 +2489,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-reason-chevron .svg-icon {
   width: 13px;
   height: 13px;
-}
-.mva-reason:not(.is-collapsed) .mva-reason-chevron {
-  transform: rotate(90deg);
-}
-.mva-reason-label {
-  font-weight: 600;
-}
-.mva-reason-body {
-  padding: 0 9px 9px 24px;
-  color: var(--text-muted);
-  white-space: pre-wrap;
-  line-height: 1.5;
-  max-height: 240px;
-  overflow-y: auto;
-  user-select: text; /* copyable reasoning text — see .mva-bubble for why this is needed */
-}
-.mva-reason.is-collapsed .mva-reason-body {
-  display: none;
 }
 
 /* ---------------------------- context ring ---------------------------- */
@@ -3173,6 +3209,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
     transition-duration: 0.001ms !important;
   }
   .mva-caret { animation: none; opacity: 1; }
+  .mva-steps .mva-tool.is-running .mva-tool-name,
+  .mva-step-think.is-active .mva-step-think-label {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: var(--text-muted);
+  }
 }
 
 /* ---------------------- gallery card delete --------------------------- */
