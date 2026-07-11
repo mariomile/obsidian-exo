@@ -47,6 +47,10 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 - **Context as document cards** — the active note and anything you attach (via `@` or "+ Note") appear as uniform cards above the composer: images preview as thumbnails, notes show a text preview, other files show an icon — each with a title, a *Current Document* / *Document* label, click-to-open and remove.
 - **History** — conversations **persist to disk** (survive reload, with session resume). The history button opens a **card gallery** with per-conversation previews (title, snippet, provider, message count, date); click a card to reopen it. Copy any reply.
 
+## Mobile
+
+**Unsupported** — `isDesktopOnly: true` in `manifest.json`; `src/cli.ts` imports Node's `child_process`, `os`, `fs`, and `path` to spawn the local `claude`/`codex` CLI, which isn't available on mobile.
+
 ## Requirements
 
 - Desktop Obsidian (uses Node child processes — `isDesktopOnly`).
