@@ -15,6 +15,7 @@ import { ADAPTERS } from "./providers/registry";
 import type {
   AgentEvent,
   AgentSession,
+  ContextUsage,
   ImageAttachment,
   PermissionMode,
   ProviderId,
@@ -124,6 +125,7 @@ interface ConvoData {
   model: string;
   sessionId?: string;
   updatedAt?: number;
+  usage?: ContextUsage;
   messages: PersistedMessage[];
 }
 
@@ -136,6 +138,10 @@ export interface Convo {
   model: string;
   allow: Set<string>;
   updatedAt?: number;
+  /** Last known context-window usage of this conversation's session — kept
+   *  per-convo (and persisted) so tab switches and restarts restore the ring
+   *  instead of blanking it until the next turn completes. */
+  usage?: ContextUsage;
   messages: Message[];
   // Per-conversation runtime (enables parallel conversations).
   session: AgentSession | null;
@@ -221,6 +227,9 @@ interface AssistantCtx {
    *  live `.mva-tool` row is streaming-only feedback — removed once the turn
    *  settles, since the touched-notes footer then carries the same fact. */
   noteTouchIds: Set<string>;
+  /** Tool-call id → owning steps run, so dissolving note rows at turn end can
+   *  re-count (or remove) the folded run they live in. */
+  runById: Map<string, StepsRun>;
   /** Notes already revealed this turn (dedupe). */
   revealed: Set<string>;
   /** Vault-relative paths that got a preview card this turn (dedupe, first write wins). */
@@ -776,6 +785,7 @@ export class ChatView extends ItemView {
     this.active.sessionId = undefined;
     this.active.allow.clear();
     this.dropSession(this.active);
+    this.active.usage = undefined;
     this.composer.updateUsage(null);
     this.refreshProviderUI();
     this.composer.refreshPerm();
@@ -861,6 +871,7 @@ export class ChatView extends ItemView {
         model,
         allow: new Set(),
         updatedAt: d.updatedAt,
+        usage: d.usage,
         messages: d.messages.map((m) => this.reviveMessage(m)),
         session: null,
         sessionSig: "",
@@ -927,6 +938,7 @@ export class ChatView extends ItemView {
       model: c.model,
       sessionId: c.sessionId,
       updatedAt: c.updatedAt,
+      usage: c.usage,
       messages: c.messages.map((m) =>
         m.role === "assistant"
           ? {
@@ -1043,7 +1055,7 @@ export class ChatView extends ItemView {
     if (c.listEl.childElementCount === 0) this.renderEmptyState();
     this.refreshProviderUI();
     this.syncSendButton();
-    this.composer.updateUsage(null);
+    this.composer.updateUsage(c.usage ?? null);
     // Reflect the newly-active convo's session quota (if any) on the badge.
     this.composer.setLastRateLimit((c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null);
     this.composer.updateRateBadge();
@@ -1159,6 +1171,7 @@ export class ChatView extends ItemView {
     c.listEl.empty();
     c.pendingEl = null;
     this.renderEmptyState();
+    c.usage = undefined;
     this.composer.updateUsage(null);
     this.renderTabs();
     this.persist();
@@ -1564,7 +1577,7 @@ export class ChatView extends ItemView {
     if (next.listEl.childElementCount === 0) this.renderEmptyState();
     this.refreshProviderUI();
     this.syncSendButton();
-    this.composer.updateUsage(null);
+    this.composer.updateUsage(next.usage ?? null);
     this.renderTabs();
     this.persistTabs();
   }
@@ -1735,10 +1748,10 @@ export class ChatView extends ItemView {
             if (fp) {
               // Note-touching calls dissolve into the touched-notes footer below
               // instead of also rendering their own row — this is a restored (not
-              // live) turn, so there's no streaming status to show in the first place.
-              flushRun();
+              // live) turn, so there's no streaming status to show in the first
+              // place. They leave no trace, so the run continues across them.
               mergeTouched(touched, fp, WRITE_TOOLS.test(s.name) ? "write" : "read");
-            } else if (stepPlacement(s.name, s.input, null) === "flat") {
+            } else if (stepPlacement(s.name, s.input) === "flat") {
               flushRun();
               const refs = this.createToolCard(body, s.name, s.input);
               this.finishToolCard(refs, s.ok !== false, s.output);
@@ -2301,6 +2314,7 @@ export class ChatView extends ItemView {
       touched: [],
       writeById: new Map(),
       noteTouchIds: new Set(),
+      runById: new Map(),
       revealed: new Set(),
       artifacts: new Set(),
       createdPaths: new Set(),
@@ -2668,6 +2682,7 @@ export class ChatView extends ItemView {
     c.queue = [];
     this.renderQueue(c);
     c.updatedAt = Date.now();
+    c.usage = undefined;
     this.composer.updateUsage(null);
     if (c === this.active) {
       this.rebuildOutline();
@@ -2757,6 +2772,7 @@ export class ChatView extends ItemView {
     c.queue = [];
     this.renderQueue(c);
     c.updatedAt = Date.now();
+    c.usage = undefined;
     this.composer.updateUsage(null);
     if (c === this.active) this.rebuildOutline();
     this.persist();
@@ -3120,10 +3136,11 @@ export class ChatView extends ItemView {
     this.dropThinking(ctx);
     this.resetTextStream(ctx);
     let parent: HTMLElement = ctx.bodyEl;
-    if (stepPlacement(name, input, toolFilePath(name, input) ?? null) === "timeline") {
+    if (stepPlacement(name, input) === "timeline") {
       const run = this.ensureStepsRun(ctx);
       parent = run.body;
       run.noteToolAdded();
+      ctx.runById.set(id, run);
     } else {
       this.closeStepsRun(ctx); // excluded card breaks the run and stays flat
     }
@@ -4269,6 +4286,10 @@ export class ChatView extends ItemView {
           break;
         }
         case "usage":
+          // Arrives after turn-end (async control round-trip), so the turn's own
+          // persist() has already run — persist again so a restart keeps it.
+          c.usage = e.usage;
+          this.persist();
           if (c === this.active) this.composer.updateUsage(e.usage);
           break;
         case "rate-limit":
@@ -4341,7 +4362,15 @@ export class ChatView extends ItemView {
       // The footer above now carries every note this turn touched — drop the
       // matching live tool-call rows so the same file isn't shown twice (the
       // #1 finding of the 2026-07-03 impeccable critique on this surface).
-      for (const id of ctx.noteTouchIds) ctx.cards.get(id)?.card.remove();
+      // Rows living inside a (folded) steps run dissolve through it, so its
+      // count re-labels and an emptied run disappears entirely.
+      for (const id of ctx.noteTouchIds) {
+        const card = ctx.cards.get(id)?.card;
+        if (!card) continue;
+        const run = ctx.runById.get(id);
+        if (run) run.dissolve(card);
+        else card.remove();
+      }
       if (ctx.fullText.trim()) {
         this.attachActions(ctx.el, ctx.fullText, text, c);
         // Turn duration (Feature 2): live-only, only when it's worth showing.

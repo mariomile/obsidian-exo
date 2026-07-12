@@ -1,9 +1,10 @@
 /**
  * Steps-timeline membership (pure). Generic work (tool calls + thinking) folds
- * into the chronological "N steps" timeline; surfaces with their own live
- * meaning stay flat in the transcript and break the run:
- *   - note-touching calls (filePath non-null) — streaming-only rows that
- *     dissolve into the touched-notes footer at turn end
+ * into the chronological "N steps" timeline. Note-touching calls (filePath
+ * non-null) join the timeline too — their live row dissolves into the
+ * touched-notes footer at turn end WITHOUT breaking the run, so a stretch of
+ * work like Skill → read_note → search_vault folds as one run, not three.
+ * Surfaces with their own live meaning stay flat and break the run:
  *   - background Bash + BashOutput/KillShell — their badge is live status
  * Interactive cards (permission/ask/plan/todos) never reach this decision;
  * their render paths close the run directly.
@@ -11,8 +12,7 @@
 
 export type StepPlacement = "timeline" | "flat";
 
-export function stepPlacement(name: string, input: unknown, filePath: string | null): StepPlacement {
-  if (filePath) return "flat";
+export function stepPlacement(name: string, input: unknown): StepPlacement {
   if (name === "BashOutput" || name === "KillShell") return "flat";
   if (name === "Bash") {
     const i = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
