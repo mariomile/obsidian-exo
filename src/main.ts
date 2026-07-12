@@ -32,7 +32,7 @@ import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
 import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport } from "./headless";
-import { drainExoQueue } from "./queue";
+import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle } from "./core/title";
 import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
@@ -67,6 +67,11 @@ export default class ExoPlugin extends Plugin {
   /** Turn-lifecycle diagnostics ring buffer (see core/diag.ts). The view logs
    *  the critical path into it; "Copy diagnostics" pastes it for bug reports. */
   readonly diag = new DiagLog();
+
+  /** Latest capability snapshot from any session's system/init (pushed by the
+   *  view) — lets settings show live per-server MCP status. Best-effort: null
+   *  until a session has spawned this app run. */
+  lastSessionCaps: import("./providers/types").SessionCaps | null = null;
 
   /**
    * THE ONE shared write path for every append to the Memory Union Store
@@ -332,6 +337,24 @@ export default class ExoPlugin extends Plugin {
       },
     });
     this.registerInterval(window.setInterval(() => void this.checkScheduledRuns(), 30 * 60 * 1000));
+
+    this.addCommand({
+      id: "queue-drain",
+      name: "Drain Exo Queue now",
+      callback: () => {
+        if (!this.settings.exoQueueEnabled) {
+          new Notice("Exo Queue is off — enable it in settings.");
+          return;
+        }
+        new Notice("Draining Exo Queue…");
+        void this.maybeDrainExoQueue();
+      },
+    });
+    this.addCommand({
+      id: "queue-new-request",
+      name: "New Exo Queue request",
+      callback: () => void this.createQueueRequest(),
+    });
 
     // Exo Queue ("Exo in tasca"): evade le note-richiesta arrivate via Sync.
     // Poll leggero ogni 60s (list di una cartella); drain sequenziale con
@@ -1397,6 +1420,29 @@ export default class ExoPlugin extends Plugin {
     } finally {
       this.exoQueueBusy = false;
     }
+  }
+
+  /** "New Exo Queue request": create an empty request note in the queue folder
+   *  and open it — the same note a phone capture would write; the next drain
+   *  (60s poll or "Drain now") answers it in place. */
+  async createQueueRequest(): Promise<void> {
+    const folder = this.settings.exoQueueFolder;
+    try {
+      if (!this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+      const stamp = new Date();
+      const p = (x: number) => String(x).padStart(2, "0");
+      const name = `Richiesta ${stamp.getFullYear()}-${p(stamp.getMonth() + 1)}-${p(stamp.getDate())} ${p(stamp.getHours())}${p(stamp.getMinutes())}${p(stamp.getSeconds())}`;
+      const file = await this.app.vault.create(`${folder}/${name}.md`, "");
+      await this.app.workspace.getLeaf("tab").openFile(file);
+      new Notice("Scrivi la richiesta nel corpo della nota — Exo risponde al prossimo drain.");
+    } catch (err) {
+      new Notice(`Couldn't create the queue request: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** Pending queue requests (for the Autonomy card). */
+  countQueuePending(): Promise<number> {
+    return countPendingQueue(this.app, this.settings);
   }
 
   private async checkScheduledRuns(): Promise<void> {

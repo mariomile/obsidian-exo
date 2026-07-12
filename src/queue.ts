@@ -63,6 +63,23 @@ function stampAnswered(note: ParsedNote, iso: string): string {
   return `---\n${line}---\n` + note.body;
 }
 
+/** Conta le richieste pendenti nella coda (per il pannello Autonomy) —
+ *  stesso criterio del drain: nota .md, corpo non vuoto, niente exo-answered. */
+export async function countPendingQueue(app: App, settings: MVASettings): Promise<number> {
+  const folder = app.vault.getAbstractFileByPath(settings.exoQueueFolder);
+  if (!(folder instanceof TFolder)) return 0;
+  let n = 0;
+  for (const child of folder.children) {
+    if (!(child instanceof TFile) || child.extension !== "md") continue;
+    try {
+      if (isPending(await app.vault.cachedRead(child))) n++;
+    } catch {
+      /* unreadable — skip */
+    }
+  }
+  return n;
+}
+
 /** Un giro di drain della coda. Ritorna quante richieste ha evaso. */
 export async function drainExoQueue(
   app: App,

@@ -693,6 +693,7 @@ export class ChatView extends ItemView {
     // and the Capabilities panel; older CLIs simply never fire this (no gate).
     session.onCaps = (caps) => {
       this.sessionCaps = caps;
+      this.plugin.lastSessionCaps = caps; // settings MCP manager reads live status from here
       this.composer.resetSlashCache(); // menus rebuild with the enriched lists
       if (this.capsEl) {
         this.hideCapabilities();
@@ -1416,6 +1417,7 @@ export class ChatView extends ItemView {
       openSettings: () => this.openSettings(),
       dreamSnapshotPresent: () => this.plugin.loadDreamSnapshot().then((s) => !!s),
       lastAutoCommitEpoch: () => this.plugin.lastAutoCommitEpoch(),
+      queuePending: () => this.plugin.countQueuePending(),
     });
   }
 
