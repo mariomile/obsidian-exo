@@ -27,7 +27,15 @@ export interface HubStat {
 
 /** An action row → maps by `id` to an existing command / file open in the panel. */
 export interface HubAction {
-  id: "dream-run" | "dream-undo" | "open-store" | "open-loops" | "open-review";
+  id:
+    | "dream-run"
+    | "dream-undo"
+    | "open-store"
+    | "open-loops"
+    | "open-review"
+    | "queue-drain"
+    | "queue-new"
+    | "run-playbook";
   label: string;
   /** When false the chip renders inert (e.g. undo with no snapshot). */
   enabled: boolean;
@@ -41,7 +49,7 @@ export interface HubAction {
 
 /** A read-only status row → deep-links to Exo settings; the dot reflects `enabled`. */
 export interface HubStatus {
-  id: "autocommit" | "observer";
+  id: "autocommit" | "observer" | "queue" | "schedules";
   label: string;
   value: string;
   enabled: boolean;
@@ -154,6 +162,111 @@ export function memoryActions(input: MemoryActionsInput): HubAction[] {
   ];
   if (input.reviewExists) actions.push({ id: "open-review", label: "Open review.md", enabled: true });
   return actions;
+}
+
+/* ----------------------------- Autonomy card ----------------------------- */
+
+export interface ScheduledPlaybook {
+  name: string;
+  cadence: "daily" | "weekly";
+}
+
+/** Parse the `scheduledRuns` setting ("Name | daily" per line) into playbook
+ *  schedules. Unknown cadences and malformed lines are dropped — mirrors the
+ *  tolerance of the executor in main.ts. */
+export function parseScheduledRuns(raw: string): ScheduledPlaybook[] {
+  const out: ScheduledPlaybook[] = [];
+  for (const line of raw.split("\n")) {
+    const i = line.lastIndexOf("|");
+    if (i < 0) continue;
+    const name = line.slice(0, i).trim();
+    const cadence = line.slice(i + 1).trim().toLowerCase();
+    if (name && (cadence === "daily" || cadence === "weekly")) out.push({ name, cadence });
+  }
+  return out;
+}
+
+/** Same periods the executor uses (deliberately under 24h/7d so a "daily" run
+ *  drifts earlier, never skips a day). */
+const CADENCE_MS: Record<ScheduledPlaybook["cadence"], number> = {
+  daily: 20 * 60 * 60 * 1000,
+  weekly: 6.5 * 24 * 60 * 60 * 1000,
+};
+
+/** The next scheduled playbook to fire: name + ms until due (≤ 0 = due now). */
+export function nextScheduled(
+  scheduled: ScheduledPlaybook[],
+  lastRun: Record<string, number>,
+  now: number
+): { name: string; dueInMs: number } | null {
+  let best: { name: string; dueInMs: number } | null = null;
+  for (const s of scheduled) {
+    const dueInMs = (lastRun[s.name] ?? 0) + CADENCE_MS[s.cadence] - now;
+    if (!best || dueInMs < best.dueInMs) best = { name: s.name, dueInMs };
+  }
+  return best;
+}
+
+/** "due now" / "in 3h" / "in 2d" — rough is fine, it's a glance. */
+function formatDueIn(ms: number): string {
+  if (ms <= 0) return "due now";
+  const HOUR = 3_600_000;
+  if (ms < HOUR) return `in ${Math.max(1, Math.floor(ms / 60_000))}m`;
+  if (ms < 24 * HOUR) return `in ${Math.floor(ms / HOUR)}h`;
+  return `in ${Math.floor(ms / (24 * HOUR))}d`;
+}
+
+export interface AutonomyInput {
+  exoQueueEnabled: boolean;
+  /** Pending request notes in the queue folder; null = unknown (still loading). */
+  queuePending: number | null;
+  scheduled: ScheduledPlaybook[];
+  scheduledLastRun: Record<string, number>;
+  /** Any custom prompts exist → "Run playbook…" is meaningful. */
+  hasPlaybooks: boolean;
+  now: number;
+}
+
+/** The Autonomy card's status rows: queue (with pending count) + schedules
+ *  (with the next playbook due). */
+export function autonomyStatuses(input: AutonomyInput): HubStatus[] {
+  const pending = input.queuePending;
+  const queueValue = !input.exoQueueEnabled
+    ? "off"
+    : pending == null
+      ? "on"
+      : pending > 0
+        ? `on · ${pending} pending`
+        : "on · idle";
+  const next = nextScheduled(input.scheduled, input.scheduledLastRun, input.now);
+  const schedValue = !input.scheduled.length
+    ? "none"
+    : `${input.scheduled.length} active · ${next!.name} ${formatDueIn(next!.dueInMs)}`;
+  return [
+    { id: "queue", label: "Exo Queue", value: queueValue, enabled: input.exoQueueEnabled },
+    { id: "schedules", label: "Schedules", value: schedValue, enabled: input.scheduled.length > 0 },
+  ];
+}
+
+/** The Autonomy card's action rows. Drain carries the pending count as a badge;
+ *  queue actions render inert when the queue is off. */
+export function autonomyActions(input: AutonomyInput): HubAction[] {
+  const pending = input.queuePending ?? 0;
+  return [
+    {
+      id: "queue-drain",
+      label: "Drain queue now",
+      enabled: input.exoQueueEnabled,
+      ...(pending > 0 ? { badge: `${pending} pending` } : {}),
+    },
+    { id: "queue-new", label: "New queue request", enabled: input.exoQueueEnabled },
+    {
+      id: "run-playbook",
+      label: "Run playbook…",
+      enabled: input.hasPlaybooks,
+      ...(input.hasPlaybooks ? {} : { hint: "no playbooks yet" }),
+    },
+  ];
 }
 
 /* ------------------------------ System card ------------------------------ */

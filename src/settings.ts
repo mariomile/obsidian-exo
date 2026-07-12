@@ -1,10 +1,23 @@
 import { App, DropdownComponent, Notice, PluginSettingTab, Setting } from "obsidian";
+import { readFile } from "fs/promises";
+import { homedir } from "os";
 import type ExoPlugin from "./main";
 import type { PermissionMode, ProviderId } from "./providers/types";
 import { cliDiagnostics, updateClaudeCli } from "./cli";
 import { compareSemver } from "./core/semver";
 import { ADAPTERS } from "./providers/registry";
 import { modelOptions } from "./core/model-options";
+import {
+  parseMcpJson,
+  serializeMcpJson,
+  upsertServer,
+  removeServer,
+  setServerEnabled,
+  summarizeServer,
+  buildServerConfig,
+  type McpServerEntry,
+  type ServerFormInput,
+} from "./core/mcp-config";
 
 export interface MVASettings {
   provider: ProviderId;
@@ -926,69 +939,240 @@ export class MVASettingTab extends PluginSettingTab {
     void this.renderMcpSection(el);
   }
 
-  /** In-app management of the project's `.mcp.json` (loads when Fast startup is off). */
+  /** Structured MCP manager over the project's `.mcp.json` (vault root) plus a
+   *  read-only view of global servers (~/.claude.json). Toggling a server off
+   *  moves it to `mcpServersDisabled` in the same file (Claude ignores that key)
+   *  so a disable is reversible. Live per-server status comes from the latest
+   *  session's init snapshot when one exists. */
   private async renderMcpSection(containerEl: HTMLElement): Promise<void> {
     new Setting(containerEl).setName("MCP servers").setHeading();
-    containerEl.createEl("p", {
-      cls: "setting-item-description",
-      text: "Manage external MCP servers in the project's .mcp.json (vault root). These load into Claude when Fast startup is OFF.",
-    });
+    const root = containerEl.createDiv();
+    await this.drawMcpManager(root);
+  }
 
+  private async drawMcpManager(root: HTMLElement): Promise<void> {
+    root.empty();
+    const redraw = () => void this.drawMcpManager(root);
     const adapter = this.plugin.app.vault.adapter;
     const path = ".mcp.json";
-    let current = '{\n  "mcpServers": {}\n}';
+    const s = this.plugin.settings;
+
+    root.createEl("p", {
+      cls: "setting-item-description",
+      text: "Vault servers live in .mcp.json (vault root) and load into new Claude sessions. Global servers (~/.claude.json) are shown read-only.",
+    });
+
+    // Fast-startup gate: external MCP is skipped entirely while it's on. Say it
+    // loudly, with the fix one click away — this was the #1 "where are my MCPs?"
+    // confusion with the old raw-JSON editor.
+    if (s.fastStartup) {
+      new Setting(root)
+        .setName("External MCP is OFF — Fast startup is on")
+        .setDesc("Fast startup spawns sessions with strict MCP (Obsidian-native tools only). Turn it off to load the servers below.")
+        .addButton((b) =>
+          b.setButtonText("Turn off Fast startup").onClick(async () => {
+            s.fastStartup = false;
+            await this.plugin.saveSettings();
+            redraw();
+          })
+        );
+    }
+
+    let raw = '{\n  "mcpServers": {}\n}';
     try {
-      if (await adapter.exists(path)) current = await adapter.read(path);
+      if (await adapter.exists(path)) raw = await adapter.read(path);
     } catch {
       /* missing — use template */
     }
-
-    const status = containerEl.createEl("div", { cls: "setting-item-description" });
-    const setStatus = (msg: string, ok: boolean) => {
-      status.setText(msg);
-      status.style.color = ok ? "var(--text-success, var(--text-muted))" : "var(--text-error)";
+    const parsed = parseMcpJson(raw);
+    const liveStatus = new Map((this.plugin.lastSessionCaps?.mcpServers ?? []).map((m) => [m.name, m.status]));
+    const save = async (servers: McpServerEntry[]) => {
+      await adapter.write(path, serializeMcpJson(servers));
+      redraw();
     };
 
-    // Detected servers summary.
-    const summary = containerEl.createEl("div", { cls: "setting-item-description" });
-    const refreshSummary = (text: string) => {
-      try {
-        const names = Object.keys((JSON.parse(text)?.mcpServers ?? {}) as Record<string, unknown>);
-        summary.setText(names.length ? `Servers: ${names.join(", ")}` : "No servers configured.");
-      } catch {
-        summary.setText("");
+    if (parsed.error) {
+      new Setting(root)
+        .setName("Couldn't parse .mcp.json")
+        .setDesc(`${parsed.error} — fix it in the raw editor below; structured editing is disabled to avoid clobbering the file.`);
+    } else {
+      if (!parsed.servers.length) {
+        root.createEl("p", { cls: "setting-item-description", text: "No vault servers yet — add one below." });
       }
-    };
-    refreshSummary(current);
+      for (const srv of parsed.servers) {
+        const status = liveStatus.get(srv.name);
+        const statusPart = status ? ` — ${status}` : "";
+        const row = new Setting(root)
+          .setName(srv.name)
+          .setDesc(`${summarizeServer(srv.config)}${srv.enabled ? statusPart : " — disabled"}`);
+        // Live dot: green when the running session reports it connected.
+        if (srv.enabled && status) {
+          row.nameEl.createSpan({
+            text: status === "connected" ? " ●" : " ○",
+            attr: { style: `color: ${status === "connected" ? "var(--color-green)" : "var(--color-orange)"}` },
+          });
+        }
+        row.addExtraButton((b) =>
+          b
+            .setIcon("pencil")
+            .setTooltip("Edit in the form below")
+            .onClick(() => this.prefillMcpForm(srv))
+        );
+        row.addExtraButton((b) => {
+          let armed = false;
+          b.setIcon("trash").setTooltip("Remove (click twice)").onClick(async () => {
+            if (!armed) {
+              armed = true;
+              b.setIcon("alert-triangle").setTooltip("Click again to remove");
+              window.setTimeout(() => {
+                armed = false;
+                b.setIcon("trash").setTooltip("Remove (click twice)");
+              }, 3000);
+              return;
+            }
+            await save(removeServer(parsed.servers, srv.name));
+          });
+        });
+        row.addToggle((t) =>
+          t.setValue(srv.enabled).onChange((v) => void save(setServerEnabled(parsed.servers, srv.name, v)))
+        );
+      }
+    }
 
-    const area = new Setting(containerEl).setName(".mcp.json").setDesc("Edit and save. Must be valid JSON.");
+    // Global servers (read-only): visibility, not management — editing a
+    // cross-project file from inside one vault is a footgun.
+    try {
+      const globalRaw = await readFile(`${homedir()}/.claude.json`, "utf8");
+      const names = Object.keys((JSON.parse(globalRaw) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {});
+      if (names.length) {
+        for (const n of names) {
+          const status = liveStatus.get(n);
+          new Setting(root).setName(n).setDesc(`global · ~/.claude.json${status ? ` — ${status}` : ""}`);
+        }
+      }
+    } catch {
+      /* no global config — fine */
+    }
+
+    if (!parsed.error) this.renderMcpAddForm(root, parsed.servers, save);
+
+    // Raw escape hatch, collapsed: structured editing covers the common cases;
+    // exotic configs (or a broken file) still have a direct path.
+    const details = root.createEl("details");
+    details.createEl("summary", { text: "Advanced: edit raw .mcp.json", cls: "setting-item-description" });
+    const status = details.createEl("div", { cls: "setting-item-description" });
+    const area = new Setting(details).setName(".mcp.json").setDesc("Must be valid JSON with an mcpServers key.");
     area.addTextArea((t) => {
-      t.setValue(current);
+      t.setValue(raw);
       t.inputEl.rows = 10;
       t.inputEl.style.width = "100%";
       t.inputEl.style.fontFamily = "var(--font-monospace)";
-      t.onChange(() => refreshSummary(t.getValue()));
       area.addButton((b) =>
         b
           .setButtonText("Save")
           .setCta()
           .onClick(async () => {
-            const raw = t.getValue();
-            try {
-              const parsed = JSON.parse(raw);
-              if (typeof parsed !== "object" || parsed === null || typeof parsed.mcpServers !== "object") {
-                setStatus('Invalid: expected an object with an "mcpServers" key.', false);
-                return;
-              }
-              await adapter.write(path, JSON.stringify(parsed, null, 2));
-              refreshSummary(raw);
-              setStatus("Saved .mcp.json. Turn Fast startup off to load these servers.", true);
-            } catch (e) {
-              setStatus(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`, false);
+            const next = t.getValue();
+            const check = parseMcpJson(next);
+            if (check.error) {
+              status.setText(check.error);
+              status.style.color = "var(--text-error)";
+              return;
             }
+            await adapter.write(path, next);
+            redraw();
           })
       );
     });
+
+    root.createEl("p", {
+      cls: "setting-item-description",
+      text: "Changes apply to NEW sessions — start a new session (or new tab) to pick them up.",
+    });
+  }
+
+  /** The add/edit form's live field components, so an Edit click can prefill them. */
+  private mcpForm: {
+    name?: import("obsidian").TextComponent;
+    type?: DropdownComponent;
+    target?: import("obsidian").TextComponent;
+    args?: import("obsidian").TextComponent;
+    extra?: import("obsidian").TextAreaComponent;
+  } = {};
+
+  private prefillMcpForm(srv: McpServerEntry): void {
+    const f = this.mcpForm;
+    const c = srv.config;
+    const isStdio = !c.url;
+    f.name?.setValue(srv.name);
+    f.type?.setValue(isStdio ? "stdio" : typeof c.type === "string" ? c.type : "http");
+    f.target?.setValue(String((isStdio ? c.command : c.url) ?? ""));
+    f.args?.setValue(Array.isArray(c.args) ? c.args.map(String).join(" ") : "");
+    const extra = isStdio ? c.env : c.headers;
+    f.extra?.setValue(extra ? JSON.stringify(extra, null, 2) : "");
+  }
+
+  private renderMcpAddForm(
+    root: HTMLElement,
+    servers: McpServerEntry[],
+    save: (servers: McpServerEntry[]) => Promise<void>
+  ): void {
+    const form: ServerFormInput = { name: "", type: "stdio", target: "", args: "", extraJson: "" };
+    const err = root.createEl("div", { cls: "setting-item-description" });
+    const setErr = (msg: string) => {
+      err.setText(msg);
+      err.style.color = "var(--text-error)";
+    };
+
+    const row = new Setting(root).setName("Add / edit server").setDesc("Same name overwrites (edit).");
+    row.addText((t) => {
+      this.mcpForm.name = t;
+      t.setPlaceholder("name").onChange((v) => (form.name = v));
+    });
+    row.addDropdown((d) => {
+      this.mcpForm.type = d;
+      d.addOption("stdio", "stdio").addOption("http", "http").addOption("sse", "sse");
+      d.onChange((v) => {
+        form.type = v as ServerFormInput["type"];
+        this.mcpForm.target?.setPlaceholder(v === "stdio" ? "command (e.g. npx)" : "https://…");
+      });
+    });
+    row.addText((t) => {
+      this.mcpForm.target = t;
+      t.setPlaceholder("command (e.g. npx)").onChange((v) => (form.target = v));
+    });
+
+    const row2 = new Setting(root)
+      .setName("Options")
+      .setDesc("Args (stdio, space-separated) · env/headers as a JSON object.");
+    row2.addText((t) => {
+      this.mcpForm.args = t;
+      t.setPlaceholder("-y my-mcp-server").onChange((v) => (form.args = v));
+    });
+    row2.addTextArea((t) => {
+      this.mcpForm.extra = t;
+      t.setPlaceholder('{"API_KEY": "…"}').onChange((v) => (form.extraJson = v));
+      t.inputEl.rows = 2;
+    });
+    row2.addButton((b) =>
+      b
+        .setButtonText("Save server")
+        .setCta()
+        .onClick(async () => {
+          // Read the live components (prefill writes to them, not to `form`).
+          form.name = this.mcpForm.name?.getValue() ?? form.name;
+          form.type = (this.mcpForm.type?.getValue() as ServerFormInput["type"]) ?? form.type;
+          form.target = this.mcpForm.target?.getValue() ?? form.target;
+          form.args = this.mcpForm.args?.getValue() ?? form.args;
+          form.extraJson = this.mcpForm.extra?.getValue() ?? form.extraJson;
+          const built = buildServerConfig(form);
+          if ("error" in built) {
+            setErr(built.error);
+            return;
+          }
+          await save(upsertServer(servers, built.name, built.config));
+        })
+    );
   }
 
   /** Muted line under a binary-path field showing the RESOLVED path + CLI

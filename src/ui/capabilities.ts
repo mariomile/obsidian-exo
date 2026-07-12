@@ -5,7 +5,14 @@ import type { MVASettings } from "../settings";
 import { clickable } from "./dom";
 import { monthFileName, parseStoreFile, type MemoryEntry } from "../core/memory-store";
 import { parseLoopsFile, type LoopEntry } from "../core/open-loops";
-import { memoryStats, memoryActions, systemStatuses } from "../core/actions-hub";
+import {
+  memoryStats,
+  memoryActions,
+  systemStatuses,
+  autonomyStatuses,
+  autonomyActions,
+  parseScheduledRuns,
+} from "../core/actions-hub";
 
 interface NamedItem {
   name: string;
@@ -169,6 +176,8 @@ interface Ctx {
   dreamSnapshotPresent?: () => Promise<boolean>;
   /** Actions hub: epoch ms of the last `exo: auto-commit` (async, git-log parse). */
   lastAutoCommitEpoch?: () => Promise<number | null>;
+  /** Autonomy card: pending Exo Queue requests (async folder scan). */
+  queuePending?: () => Promise<number>;
 }
 
 /* --------------------------- actions hub (W2-UX) --------------------------- */
@@ -304,11 +313,12 @@ export async function renderCapabilitiesPanel(
   tier("Actions", "▸ run now  ·  ⚙ open settings");
   {
     const now = Date.now();
-    const [storeEntries, loops, reviewExists, snapshotPresent] = await Promise.all([
+    const [storeEntries, loops, reviewExists, snapshotPresent, queuePending] = await Promise.all([
       gatherStoreEntries(app),
       gatherLoops(app),
       app.vault.adapter.exists(REVIEW_PATH).catch(() => false),
       ctx.dreamSnapshotPresent?.() ?? Promise.resolve(false),
+      ctx.queuePending?.().catch(() => null) ?? Promise.resolve(null),
     ]);
 
     // Memory card — live stats + one-click actions.
@@ -334,6 +344,32 @@ export async function renderCapabilitiesPanel(
         "open-review": openMain(REVIEW_PATH),
       };
       for (const a of memoryActions({ snapshotPresent, reviewExists, loops, now, dreamLlmEnabled: s.dreamLlmEnabled })) {
+        actionChip(b, a, a.enabled ? handler[a.id] : undefined);
+      }
+    }
+
+    // Autonomy card — the machinery that acts WITHOUT a chat turn (queue,
+    // scheduled playbooks): live status + the three verbs that drive it.
+    {
+      const b = card("Autonomy", "queue · schedules");
+      const input = {
+        exoQueueEnabled: s.exoQueueEnabled,
+        queuePending,
+        scheduled: parseScheduledRuns(s.scheduledRuns ?? ""),
+        scheduledLastRun: s.scheduledLastRun ?? {},
+        hasPlaybooks: (s.customPrompts ?? []).length > 0,
+        now,
+      };
+      for (const st of autonomyStatuses(input)) {
+        configChip(b, `${st.label}: ${st.value}`, st.enabled, () => ctx.openSettings?.());
+      }
+      const run = (id: string) => () => ctx.runCommand?.(id);
+      const handler: Record<string, () => void> = {
+        "queue-drain": run("exo:queue-drain"),
+        "queue-new": run("exo:queue-new-request"),
+        "run-playbook": run("exo:run-playbook"),
+      };
+      for (const a of autonomyActions(input)) {
         actionChip(b, a, a.enabled ? handler[a.id] : undefined);
       }
     }
