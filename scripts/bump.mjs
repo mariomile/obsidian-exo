@@ -16,7 +16,7 @@
  * dependency versions in the lockfile — only the two top-level project fields.
  * After running, rebuild (`pnpm build`) to refresh main.js.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -53,10 +53,17 @@ writeJson("package.json", pkg);
 
 // package-lock.json (lockfileVersion 3) carries the project version twice: the
 // top-level field and packages[""].version. Leave every dependency version alone.
-const lock = readJson("package-lock.json");
-lock.version = version;
-if (lock.packages && lock.packages[""]) lock.packages[""].version = version;
-writeJson("package-lock.json", lock);
+// The repo is pnpm-managed (pnpm-lock.yaml carries no project version), so the
+// npm lockfile only exists on machines that ran `npm install` — skip when absent
+// rather than dying mid-bump with manifest/package updated but versions.json not
+// (this exact partial-bump happened on the 0.24.0 release).
+const hasNpmLock = existsSync(join(root, "package-lock.json"));
+if (hasNpmLock) {
+  const lock = readJson("package-lock.json");
+  lock.version = version;
+  if (lock.packages && lock.packages[""]) lock.packages[""].version = version;
+  writeJson("package-lock.json", lock);
+}
 
 // versions.json maps plugin version → minAppVersion. Reuse the previous latest
 // entry's minAppVersion for the new key (Object insertion order = chronological).
@@ -69,6 +76,6 @@ writeJson("versions.json", versions);
 console.log(`Bumped ${fromVersion} → ${version}`);
 console.log(`  manifest.json      version = ${version}`);
 console.log(`  package.json       version = ${version}`);
-console.log(`  package-lock.json  version = ${version} (project fields only)`);
+if (hasNpmLock) console.log(`  package-lock.json  version = ${version} (project fields only)`);
 console.log(`  versions.json      "${version}": "${prevMinApp}"`);
 console.log(`\nNext: pnpm build`);
