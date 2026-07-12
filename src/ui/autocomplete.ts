@@ -1,4 +1,5 @@
 import { setIcon } from "obsidian";
+import { parseAcToken } from "../core/ac-token";
 
 export interface AcItem {
   label: string;
@@ -11,6 +12,8 @@ export interface AcItem {
 
 export interface AcProvider {
   trigger: string; // single char, e.g. "/" or "@"
+  /** Keep matching past spaces so multi-word queries can refine the search. */
+  allowSpaces?: boolean;
   getItems: (query: string) => AcItem[] | Promise<AcItem[]>;
 }
 
@@ -28,6 +31,13 @@ export class Autocomplete {
   private tokenEnd = -1;
   private reqId = 0;
   private fetchTimer: number | null = null;
+  // Suppression: after Esc or a completed pick, a space-allowing token would
+  // keep re-matching as the user types the rest of the sentence (the inserted
+  // "@path " itself still parses as a token). Remember where the dismissed
+  // token started and how long its query was; stay closed while the user only
+  // types FORWARD from there. Deleting back into the query re-engages.
+  private suppressedStart = -1;
+  private suppressedLen = 0;
 
   constructor(
     private ta: HTMLTextAreaElement,
@@ -44,19 +54,26 @@ export class Autocomplete {
   private onInput(): void {
     const pos = this.ta.selectionStart;
     const before = this.ta.value.slice(0, pos);
-    const m = before.match(/(^|\s)([/@$])([^\s]*)$/);
-    if (!m) {
+    const tok = parseAcToken(before, this.providers);
+    if (!tok) {
+      this.suppressedStart = -1;
       this.close();
       return;
     }
-    const trigger = m[2];
-    const query = m[3];
-    const prov = this.providers.find((p) => p.trigger === trigger);
+    if (tok.start === this.suppressedStart) {
+      if (tok.query.length >= this.suppressedLen) {
+        this.close();
+        return;
+      }
+      this.suppressedStart = -1; // deleted back into the token — re-engage
+    }
+    const prov = this.providers.find((p) => p.trigger === tok.trigger);
     if (!prov) {
       this.close();
       return;
     }
-    this.tokenStart = pos - (1 + query.length);
+    const query = tok.query;
+    this.tokenStart = tok.start;
     this.tokenEnd = pos; // token end at parse time — caret may move before selection
     // Debounce the fetch: getItems can scan the whole vault (e.g. the "@" provider),
     // so don't run it on every keystroke — only after a short typing pause.
@@ -116,6 +133,7 @@ export class Autocomplete {
     } else if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
+      this.suppress(Math.max(0, this.tokenEnd - this.tokenStart - 1));
       this.close();
     }
   }
@@ -130,10 +148,18 @@ export class Autocomplete {
     this.ta.value = v.slice(0, this.tokenStart) + it.insert + v.slice(end);
     const caret = this.tokenStart + it.insert.length;
     this.ta.setSelectionRange(caret, caret);
+    // The inserted text (e.g. "@path ") still parses as a token for
+    // space-allowing triggers — suppress so the popup doesn't pop right back.
+    this.suppress(Math.max(0, it.insert.length - 1));
     this.close();
     it.onSelect?.();
     this.ta.dispatchEvent(new Event("input"));
     this.ta.focus();
+  }
+
+  private suppress(queryLen: number): void {
+    this.suppressedStart = this.tokenStart;
+    this.suppressedLen = queryLen;
   }
 
   private close(): void {
