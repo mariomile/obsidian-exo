@@ -81,6 +81,21 @@ export class StepsRun {
     this.steps++;
   }
 
+  /** Remove a card from this run (note-touching rows dissolve into the
+   *  touched-notes footer at turn end). Works on closed runs too: the folded
+   *  label re-counts, and a run left empty removes itself. */
+  dissolve(card: HTMLElement): void {
+    if (card.parentElement !== this.bodyEl) return;
+    card.remove();
+    this.steps = Math.max(0, this.steps - 1);
+    if (!this.closed) return;
+    if (this.bodyEl.childElementCount === 0) {
+      this.rootEl.remove();
+      return;
+    }
+    this.labelEl.setText(stepsLabel(this.steps));
+  }
+
   /** Fold the run: "N steps ⌄" header, body hidden, live states neutralized.
    *  Empty runs remove themselves. `scroller` (the conversation list element)
    *  gets its scrollTop compensated when the fold collapses content above the
