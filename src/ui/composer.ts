@@ -30,6 +30,7 @@ import {
   windowLabel,
 } from "../core/rate-limit";
 import { buildOptionRows, type SelectOption } from "../core/option-filter";
+import { queryWords, matchesWords } from "../core/ac-token";
 import { selectionPreview } from "../core/selection-preview";
 import { clampEffort, effortOptionsFor } from "../core/model-tuning";
 
@@ -229,7 +230,10 @@ export class Composer {
     new Autocomplete(this.inputEl, box, [
       { trigger: "/", getItems: (q) => this.slashItems(q) },
       { trigger: "$", getItems: (q) => this.skillItems(q) },
-      { trigger: "@", getItems: (q) => this.atItems(q) },
+      // Vault file names use spaces, so the file picker keeps matching past
+      // whitespace: "@mario mil" narrows word-by-word instead of dying at the
+      // first space.
+      { trigger: "@", allowSpaces: true, getItems: (q) => this.atItems(q) },
     ]);
 
     this.buildToolbar(box);
@@ -428,17 +432,19 @@ export class Composer {
   }
 
   private async atItems(query: string): Promise<AcItem[]> {
-    const q = query.toLowerCase();
+    // AND-match on words: "@people mario" finds Atlas/People/Mario Miletta.md
+    // regardless of word order — each space-separated word must appear in the path.
+    const words = queryWords(query);
     const out: AcItem[] = [];
     // Subagents first — reference a vault agent by @mention.
     const { agents } = await this.loadSlash();
     for (const a of agents) {
-      if (q && !a.toLowerCase().includes(q)) continue;
+      if (!matchesWords(a, words)) continue;
       out.push({ label: a, detail: "subagent", icon: "bot", insert: `@${a} ` });
     }
     for (const f of this.app.vault.getAllLoadedFiles()) {
       if (!f.path || f.path === "/") continue;
-      if (q && !f.path.toLowerCase().includes(q)) continue;
+      if (!matchesWords(f.path, words)) continue;
       const isFolder = f instanceof TFolder;
       if (!isFolder && !(f instanceof TFile)) continue;
       const parent = f.parent && f.parent.path !== "/" ? f.parent.path : "";
