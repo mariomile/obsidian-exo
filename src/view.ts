@@ -51,7 +51,7 @@ import { buildRecap as buildConvoRecap } from "./core/recap";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
 import { StepsRun } from "./ui/steps";
-import { stepPlacement } from "./core/steps";
+import { firstErrorLine, stepPlacement } from "./core/steps";
 import { Composer } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { buildRelatedChips } from "./ui/related";
@@ -3145,10 +3145,36 @@ export class ChatView extends ItemView {
     c.card.addClass(ok ? "is-ok" : "is-error");
     c.statusEl.empty();
     setIcon(c.statusEl, ok ? "check" : "x");
+    // On failure, surface the reason on the row itself (visible while collapsed),
+    // so a red mark isn't a dead end that forces an expand to learn "why".
+    if (!ok) {
+      const line = firstErrorLine(output);
+      if (line) c.card.querySelector(".mva-tool-head")?.insertAdjacentElement(
+        "afterend",
+        createDiv({ cls: "mva-tool-error-preview", text: line })
+      );
+    }
     if (output) {
       const out = c.bodyEl.createEl("pre", { cls: "mva-tool-output" });
-      const text = output.length > 4000 ? output.slice(0, 4000) + "\n… (truncated)" : output;
-      out.createEl("code", { text });
+      const capped = output.length > 4000;
+      out.createEl("code", { text: capped ? output.slice(0, 4000) + "\n… (truncated)" : output });
+      if (capped) {
+        const actions = c.bodyEl.createDiv({ cls: "mva-tool-output-actions" });
+        const more = actions.createEl("button", { cls: "mva-btn", text: "Show more" });
+        more.onclick = () => {
+          out.empty();
+          out.createEl("code", {
+            text: output.length > 20000 ? output.slice(0, 20000) + "\n… (truncated)" : output,
+          });
+          more.remove();
+        };
+        const copy = actions.createEl("button", { cls: "mva-btn", text: "Copy full output" });
+        copy.onclick = () => {
+          void navigator.clipboard.writeText(output);
+          copy.setText("Copied");
+          window.setTimeout(() => copy.setText("Copy full output"), 1200);
+        };
+      }
     }
   }
 
