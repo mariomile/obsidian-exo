@@ -1760,7 +1760,7 @@ export class ChatView extends ItemView {
             } else {
               if (!run) run = new StepsRun(body);
               const refs = this.createToolCard(run.body, s.name, s.input);
-              run.noteToolAdded();
+              run.noteToolAdded(s.name, s.input);
               this.finishToolCard(refs, s.ok !== false, s.output);
             }
           }
@@ -3141,7 +3141,7 @@ export class ChatView extends ItemView {
     if (stepPlacement(name, input) === "timeline") {
       const run = this.ensureStepsRun(ctx);
       parent = run.body;
-      run.noteToolAdded();
+      run.noteToolAdded(name, input);
       ctx.runById.set(id, run);
     } else {
       this.closeStepsRun(ctx); // excluded card breaks the run and stays flat
@@ -4065,6 +4065,7 @@ export class ChatView extends ItemView {
     this.ensureWorking(ctx);
     const workingTimer = window.setInterval(() => {
       if (ctx.workingElapsed) ctx.workingElapsed.setText(`· ${this.fmtDuration(Date.now() - turnStart)}`);
+      ctx.stepsRun?.tick((ms) => this.fmtDuration(ms));
       // Self-healing invariant: even if some future event branch forgets its
       // syncWorking call, the affordance repairs itself within a second — the
       // non-gated backstop that keeps a streaming turn from ever looking dead.
