@@ -1701,33 +1701,29 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-tool.is-collapsed .mva-tool-head:hover {
   background: color-mix(in srgb, var(--background-modifier-hover) 60%, transparent);
 }
-/* Status icon → 7px dot; tool-type icon hidden in the row. */
+/* Collapsed row: the type icon IS the row's mark — colored by status so one
+   glyph carries both "what kind of tool" and "what state" (geometry + states,
+   no separate dot). */
+.mva-tool.is-collapsed .mva-tool-status {
+  display: none;
+}
 .mva-tool.is-collapsed .mva-tool-icon {
-  display: none;
+  display: inline-flex;
+  color: var(--text-muted);
 }
-.mva-tool.is-collapsed .mva-tool-status .svg-icon {
-  display: none;
+.mva-tool.is-collapsed .mva-tool-icon .svg-icon {
+  width: 13px;
+  height: 13px;
 }
-.mva-tool.is-collapsed .mva-tool-status::before {
-  content: "";
-  display: block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-faint);
-}
-.mva-tool.is-running.is-collapsed .mva-tool-status {
-  animation: none; /* the icon spin is meaningless on a dot */
-}
-.mva-tool.is-running.is-collapsed .mva-tool-status::before {
-  background: var(--mva-brand, var(--interactive-accent));
+.mva-tool.is-running.is-collapsed .mva-tool-icon {
+  color: var(--mva-brand, var(--interactive-accent));
   animation: mva-pulse 1.2s ease-in-out infinite;
 }
-.mva-tool.is-ok.is-collapsed .mva-tool-status::before {
-  background: var(--color-green, #19c37d);
+.mva-tool.is-ok.is-collapsed .mva-tool-icon {
+  color: var(--text-muted);
 }
-.mva-tool.is-error.is-collapsed .mva-tool-status::before {
-  background: var(--text-error);
+.mva-tool.is-error.is-collapsed .mva-tool-icon {
+  color: var(--text-error);
 }
 .mva-tool.is-collapsed .mva-tool-name {
   font-size: 12px;
