@@ -1679,6 +1679,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.mva-tool-elapsed {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .mva-tool-body {
   padding: 2px 10px 10px;
 }

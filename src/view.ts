@@ -115,6 +115,8 @@ interface ToolCard {
   card: HTMLElement;
   statusEl: HTMLElement;
   bodyEl: HTMLElement;
+  elapsedEl: HTMLElement;
+  startedAt: number;
 }
 
 /* ----- persisted data model (types in ./core/model) ----- */
@@ -3134,15 +3136,17 @@ export class ChatView extends ItemView {
         };
       }
     }
+    const elapsedEl = head.createSpan({ cls: "mva-tool-elapsed", text: "" });
     const bodyEl = card.createDiv({ cls: "mva-tool-body" });
     renderToolDetail(bodyEl, name, input, null);
     this.clickable(head, () => card.toggleClass("is-collapsed", !card.hasClass("is-collapsed")));
-    return { card, statusEl, bodyEl };
+    return { card, statusEl, bodyEl, elapsedEl, startedAt: Date.now() };
   }
 
   private finishToolCard(c: ToolCard, ok: boolean, output: string): void {
     c.card.removeClass("is-running");
     c.card.addClass(ok ? "is-ok" : "is-error");
+    c.elapsedEl.setText(""); // running-only; the row is settled now
     c.statusEl.empty();
     setIcon(c.statusEl, ok ? "check" : "x");
     // On failure, surface the reason on the row itself (visible while collapsed),
@@ -4110,6 +4114,15 @@ export class ChatView extends ItemView {
     const workingTimer = window.setInterval(() => {
       if (ctx.workingElapsed) ctx.workingElapsed.setText(`· ${this.fmtDuration(Date.now() - turnStart)}`);
       ctx.stepsRun?.tick((ms) => this.fmtDuration(ms));
+      // Per-row elapsed (Task 4): tick every card still running, not just the
+      // working-row/steps-header aggregates — a slow single tool (e.g. a long
+      // Bash call) gets its own visible ticking time, including in parallel
+      // subagent scenarios where several cards are running at once.
+      for (const card of ctx.cards.values()) {
+        if (card.card.hasClass("is-running")) {
+          card.elapsedEl.setText(this.fmtDuration(Date.now() - card.startedAt));
+        }
+      }
       // Self-healing invariant: even if some future event branch forgets its
       // syncWorking call, the affordance repairs itself within a second — the
       // non-gated backstop that keeps a streaming turn from ever looking dead.
