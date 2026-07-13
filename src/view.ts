@@ -4366,6 +4366,7 @@ export class ChatView extends ItemView {
         case "rate-limit":
           // The badge is a single view-level control, so only the active convo's
           // quota drives it. Late reads (tab switch) come from session.rateLimit.
+          this.plugin.lastRateLimit = { status: e.status, utilization: e.utilization, resetsAt: e.resetsAt, windowType: e.windowType };
           if (c === this.active) {
             this.composer.setLastRateLimit({
               status: e.status,
@@ -4672,6 +4673,30 @@ export class ChatView extends ItemView {
     const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
     setting?.open();
     setting?.openTabById("exo");
+  }
+
+  /** Live attention snapshot for the Cockpit: conversations blocked on a
+   *  permission/ask card, or currently streaming. Plain data — no DOM refs. */
+  convoAttention(): { id: string; title: string; blocked: boolean; streaming: boolean }[] {
+    const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
+    return all
+      .map((c) => ({
+        id: c.id,
+        title: c.title,
+        blocked: !!(c.pendingPerm || c.pendingAsk),
+        streaming: c.streaming,
+      }))
+      .filter((c) => c.blocked || c.streaming);
+  }
+
+  /** Open a conversation by id (Cockpit "Resume" rows). False when unknown. */
+  openConvoById(id: string): boolean {
+    const c = this.convos.find((x) => x.id === id);
+    if (!c) return false;
+    if (this.galleryEl) this.hideGallery();
+    this.hideCapabilities();
+    this.switchTo(c);
+    return true;
   }
 
   private vaultPath(): string {
