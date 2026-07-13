@@ -4328,3 +4328,49 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
     transition: none;
   }
 }
+
+/* ---------------------------- Exo Cockpit ---------------------------- */
+.mva-ck { padding: 16px 20px 32px; overflow-y: auto; }
+.mva-ck-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.mva-ck-mark svg { width: 18px; height: 18px; color: var(--interactive-accent); }
+.mva-ck-title { font-weight: 600; font-size: var(--font-ui-medium); }
+.mva-ck-spacer { flex: 1; }
+.mva-ck-stamp { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.mva-ck-refresh { cursor: pointer; color: var(--text-muted); display: inline-flex; }
+.mva-ck-refresh:hover { color: var(--text-normal); }
+.mva-ck-refresh svg { width: 14px; height: 14px; }
+
+.mva-ck-attention { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.mva-ck-att { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border); cursor: pointer; font-size: var(--font-ui-small); }
+.mva-ck-att:hover { border-color: var(--background-modifier-border-hover); }
+.mva-ck-att-icon svg { width: 14px; height: 14px; }
+.mva-ck-att.is-blocked .mva-ck-att-icon { color: var(--color-orange); }
+.mva-ck-att.is-streaming .mva-ck-att-icon { color: var(--interactive-accent); }
+.mva-ck-att.is-answer .mva-ck-att-icon { color: var(--color-green); }
+
+.mva-ck-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+.mva-ck-input { flex: 1; background: transparent; border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m); padding: 8px 12px; font-size: var(--font-ui-small); }
+.mva-ck-input:focus { border-color: var(--interactive-accent); outline: none; box-shadow: none; }
+.mva-ck-send { cursor: pointer; display: inline-flex; padding: 6px; border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border); color: var(--text-muted); }
+.mva-ck-send:hover { color: var(--text-normal); border-color: var(--background-modifier-border-hover); }
+.mva-ck-send svg { width: 14px; height: 14px; }
+
+.mva-ck-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.mva-ck-card { border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); padding: 10px 12px; }
+.mva-ck-card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.mva-ck-card-icon svg { width: 14px; height: 14px; color: var(--text-muted); }
+.mva-ck-card-title { font-weight: 600; font-size: var(--font-ui-small); }
+.mva-ck-status { margin-bottom: 6px; }
+.mva-ck-row { padding: 4px 6px; border-radius: var(--radius-s); cursor: pointer; }
+.mva-ck-row:hover { background: var(--background-modifier-hover); }
+.mva-ck-row-label { font-size: var(--font-ui-small); }
+.mva-ck-row-sub { color: var(--text-faint); font-size: var(--font-ui-smaller); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.mva-ck-badge { float: right; color: var(--text-muted); font-size: var(--font-ui-smaller);
+  border: 1px solid var(--background-modifier-border); border-radius: 999px; padding: 0 6px; }
+.mva-ck-empty { color: var(--text-faint); font-size: var(--font-ui-smaller); padding: 4px 6px; }
+.mva-ck-foot { color: var(--text-faint); font-size: var(--font-ui-smaller); cursor: pointer; margin-top: 6px; }
+.mva-ck-foot:hover { color: var(--text-muted); }
