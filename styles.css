@@ -1679,6 +1679,21 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Expanded header = a quiet meta strip, not a bold titled row (a bold label read
+   like an outline heading). The de-bolded label recedes; status moves to the
+   right next to the elapsed; command tools drop the duplicate command from the
+   header (it shows once in the body). Collapsed row is unaffected. */
+.mva-tool:not(.is-collapsed) .mva-tool-name {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.mva-tool:not(.is-collapsed) .mva-tool-status {
+  order: 1; /* after the auto-margin gap → right cluster with the elapsed */
+  margin-left: 6px;
+}
+.mva-tool.is-command:not(.is-collapsed) .mva-tool-target {
+  display: none;
+}
 .mva-tool-elapsed {
   margin-left: auto;
   padding-left: 8px;
@@ -2003,8 +2018,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-tool-note {
   color: var(--text-muted);
-  margin-top: 6px;
-  font-style: italic;
+  margin-bottom: 6px;
+  font-size: 11.5px;
 }
 
 /* ------------------------------- diff --------------------------------- */

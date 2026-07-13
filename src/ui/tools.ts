@@ -178,9 +178,12 @@ export function renderToolDetail(el: HTMLElement, name: string, input: unknown, 
     return;
   }
   if (name === "Bash") {
-    const pre = el.createEl("pre", { cls: "mva-code" });
-    pre.createEl("code", { text: asString(i.command) });
+    // Order (what → command → result): the description caption first, then the
+    // command once with a `$` prompt. The command is NOT repeated in the header
+    // when expanded (see .mva-tool.is-command in styles.css) — it lives here only.
     if (i.description) el.createDiv({ cls: "mva-tool-note", text: asString(i.description) });
+    const pre = el.createEl("pre", { cls: "mva-code" });
+    pre.createEl("code", { text: "$ " + asString(i.command) });
     return;
   }
   // Generic: a couple of meaningful params.

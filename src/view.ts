@@ -3129,6 +3129,9 @@ export class ChatView extends ItemView {
   private createToolCard(parent: HTMLElement, name: string, input: unknown): ToolCard {
     const meta = toolMeta(name, input);
     const card = parent.createDiv({ cls: "mva-tool is-running is-collapsed" });
+    // Command tools show the command in their body ($-prefixed); marking the card
+    // lets the expanded header drop the (duplicate) truncated command from its target.
+    if (name === "Bash") card.addClass("is-command");
     const head = card.createDiv({ cls: "mva-tool-head" });
     const statusEl = head.createDiv({ cls: "mva-tool-status" });
     setIcon(statusEl, "loader");
