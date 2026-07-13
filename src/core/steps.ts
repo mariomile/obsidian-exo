@@ -59,3 +59,16 @@ export function summarizeSteps(tools: number, files: number, commands: number): 
   if (commands) parts.push(`${commands} command${commands === 1 ? "" : "s"}`);
   return parts.join(" · ");
 }
+
+/** First non-empty line of a tool's output, trimmed and capped — for the
+ *  collapsed error preview so a failure's reason shows without expanding. */
+export function firstErrorLine(output: string, max = 120): string {
+  const line = output.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
+  return line.length > max ? line.slice(0, max) + "…" : line;
+}
+
+/** Whether content is long enough to collapse behind a "+N lines" toggle. */
+export function isLargeContent(text: string, maxLines = 20): boolean {
+  if (!text) return false;
+  return text.split("\n").length > maxLines;
+}
