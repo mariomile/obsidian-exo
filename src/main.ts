@@ -73,6 +73,10 @@ export default class ExoPlugin extends Plugin {
    *  until a session has spawned this app run. */
   lastSessionCaps: import("./providers/types").SessionCaps | null = null;
 
+  /** Latest Claude-plan quota snapshot (pushed by the chat view) — the Cockpit
+   *  renders it in the System tile. Null for API-key sessions. */
+  lastRateLimit: import("./providers/types").RateLimitInfo | null = null;
+
   /**
    * THE ONE shared write path for every append to the Memory Union Store
    * (`_system/memory/store/`). Plugin-scoped so all store writers — the
@@ -1443,6 +1447,19 @@ export default class ExoPlugin extends Plugin {
   /** Pending queue requests (for the Autonomy card). */
   countQueuePending(): Promise<number> {
     return countPendingQueue(this.app, this.settings);
+  }
+
+  /** Live attention data for the Cockpit (blocked / streaming conversations). */
+  liveAttention(): { id: string; title: string; blocked: boolean; streaming: boolean }[] {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    return view instanceof ChatView ? view.convoAttention() : [];
+  }
+
+  /** Open the chat view on a specific conversation (Cockpit "Resume" rows). */
+  async openConvo(id: string): Promise<void> {
+    await this.activateView();
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (view instanceof ChatView) view.openConvoById(id);
   }
 
   private async checkScheduledRuns(): Promise<void> {

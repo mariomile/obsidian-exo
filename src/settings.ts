@@ -138,6 +138,8 @@ export interface MVASettings {
   exoQueueEnabled: boolean;
   /** Cartella della coda richieste (vault-relative). */
   exoQueueFolder: string;
+  /** Open the Cockpit view automatically when Obsidian's layout is ready. */
+  cockpitOnStartup: boolean;
   /** Scheduled playbook runs — one per line: "<Prompt name> | daily" or "<Prompt name> | weekly". */
   scheduledRuns: string;
   /** Per-playbook last-run timestamps (scheduler bookkeeping). */
@@ -222,6 +224,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   backgroundBudgetLedger: { dateUTC: "", tokensUsed: 0 },
   exoQueueEnabled: true,
   exoQueueFolder: "_system/exo-queue",
+  cockpitOnStartup: false,
   scheduledRuns: "",
   scheduledLastRun: {},
   cliUpdateCheckAt: 0,
