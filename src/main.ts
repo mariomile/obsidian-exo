@@ -1483,7 +1483,9 @@ export default class ExoPlugin extends Plugin {
   async openConvo(id: string): Promise<void> {
     await this.activateView();
     const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) view.openConvoById(id);
+    if (view instanceof ChatView && !view.openConvoById(id)) {
+      new Notice("Conversation not found — it may have been deleted.");
+    }
   }
 
   private async checkScheduledRuns(): Promise<void> {
