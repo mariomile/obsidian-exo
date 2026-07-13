@@ -1,3 +1,5 @@
+import { isLargeContent } from "../core/steps";
+
 /** Read-only tools that can be auto-allowed (no side effects). */
 export const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead"]);
 
@@ -164,7 +166,15 @@ export function renderToolDetail(el: HTMLElement, name: string, input: unknown, 
     return;
   }
   if (name === "Write") {
-    renderDiff(el, "", asString(i.content));
+    const content = asString(i.content);
+    if (isLargeContent(content)) {
+      const n = content.split("\n").length;
+      const details = el.createEl("details", { cls: "mva-diff-collapse" });
+      details.createEl("summary", { text: `+${n} lines` });
+      renderDiff(details, "", content);
+    } else {
+      renderDiff(el, "", content);
+    }
     return;
   }
   if (name === "Bash") {
