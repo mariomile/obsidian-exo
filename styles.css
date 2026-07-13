@@ -1765,6 +1765,20 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-normal);
   background: var(--background-modifier-hover);
 }
+.mva-steps-status {
+  display: inline-flex;
+  align-items: center;
+}
+.mva-steps-status .svg-icon {
+  width: 12px;
+  height: 12px;
+}
+.mva-steps-status.is-ok {
+  color: var(--color-green, #19c37d);
+}
+.mva-steps-status.is-error {
+  color: var(--text-error);
+}
 .mva-steps-elapsed {
   margin-left: auto;
   color: var(--text-faint);

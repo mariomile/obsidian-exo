@@ -2360,9 +2360,11 @@ export class ChatView extends ItemView {
     return ctx.stepsRun;
   }
 
-  /** Close the current run (fold to "N steps ⌄"). Safe to over-call. */
-  private closeStepsRun(ctx: AssistantCtx): void {
-    ctx.stepsRun?.close(ctx.convo.listEl);
+  /** Close the current run (fold to "N steps ⌄"). Safe to over-call.
+   *  `interrupted` threads through to the header's status glyph (x vs check) —
+   *  pass true only where the turn's stopped/errored state is already known. */
+  private closeStepsRun(ctx: AssistantCtx, interrupted = false): void {
+    ctx.stepsRun?.close(ctx.convo.listEl, interrupted);
     ctx.stepsRun = null;
   }
 
@@ -2634,14 +2636,14 @@ export class ChatView extends ItemView {
     }, delay);
   }
 
-  private flushRender(ctx: AssistantCtx): void {
+  private flushRender(ctx: AssistantCtx, interrupted = false): void {
     if (ctx.renderTimer !== null) {
       window.clearTimeout(ctx.renderTimer);
       ctx.renderTimer = null;
     }
     this.renderText(ctx, false);
     this.clearCaret(ctx);
-    this.closeStepsRun(ctx);
+    this.closeStepsRun(ctx, interrupted);
     // Final-cleanup fallback: the tracked ref covers every live path, but the
     // turn is over — sweep the transcript so no caret can survive a desync.
     ctx.convo.listEl.querySelectorAll(".mva-caret").forEach((el) => el.remove());
@@ -4381,7 +4383,9 @@ export class ChatView extends ItemView {
           this.diag.push("error", e.message);
           this.dropThinking(ctx);
           this.resetTextStream(ctx);
-          this.closeStepsRun(ctx);
+          // Every path through this handler is a non-clean finish (user-stopped
+          // or an in-band execution error that will be marked `poisoned` below).
+          this.closeStepsRun(ctx, true);
           this.removeWorking(ctx);
           if (c.stopped) {
             // User pressed Stop — the provider reports an execution error as it
@@ -4413,7 +4417,11 @@ export class ChatView extends ItemView {
       const recallBlock = recalled.length ? this.formatRecallBlock(recalled) : "";
       const outbound = [opts?.sendPrefix, recallBlock, message].filter(Boolean).join("\n\n");
       await session.send(outbound, onEvent, imgs);
-      this.flushRender(ctx);
+      // `session.send` can resolve cleanly even after a user Stop/Esc — the
+      // adapter swallows the abort rather than throwing or emitting an
+      // in-band "error" event, so `c.stopped` (set synchronously by stop())
+      // is the only signal here that this wasn't a clean finish.
+      this.flushRender(ctx, c.stopped);
       await Promise.all(snapshots); // ensure every pre-write snapshot landed before we read the checkpoint
       // Touched-notes footer renders collapsed by default (03-07 feedback), so
       // there's nothing to fold on older turns — every footer is already a quiet
@@ -4450,7 +4458,9 @@ export class ChatView extends ItemView {
         this.notifyOnce(ctx, "done", "Exo — turn finished", preview);
       }
     } catch (err) {
-      this.flushRender(ctx);
+      // Reaching this catch at all means the turn didn't finish cleanly (abort,
+      // user-stop, or a thrown session error) — fold the run with the x glyph.
+      this.flushRender(ctx, true);
       this.dropSession(c); // a failed turn likely poisoned the session
       // `c.stopped` = the user asked for this (Stop/Esc, possibly the force-
       // dispose escalation whose "Session disposed." rejection is not an
