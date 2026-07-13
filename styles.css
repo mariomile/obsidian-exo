@@ -1806,20 +1806,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-steps.is-collapsed .mva-steps-body {
   display: none;
 }
-/* the rail: one vertical connector, dots per step (the tool row's own status
-   icon doubles as the dot; thinking steps carry their chevron on the rail) */
+/* steps body: rows nested under the folded header. No vertical connector line —
+   it read as a stray line running through the type-icon column once the status
+   dots (which it used to thread through) were replaced by icons. */
 .mva-steps-body {
   position: relative;
   padding-left: 10px;
-}
-.mva-steps-body::before {
-  content: "";
-  position: absolute;
-  left: 19px; /* aligns with the center of each row's .mva-tool-status dot — see comment above */
-  top: 8px;
-  bottom: 8px;
-  width: 1px;
-  background: var(--background-modifier-border);
 }
 
 /* thinking step */
