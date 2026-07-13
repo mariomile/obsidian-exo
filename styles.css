@@ -3401,10 +3401,29 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   pointer-events: none;
   background: linear-gradient(transparent, var(--background-primary));
 }
-.mva-artifact-missing {
-  padding: 10px 12px;
+.mva-artifact-deleted {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  margin: 4px 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+.mva-artifact-deleted-ico {
+  display: inline-flex;
+  color: var(--text-error);
+}
+.mva-artifact-deleted-ico .svg-icon {
+  width: 13px;
+  height: 13px;
+}
+.mva-artifact-deleted-name {
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+.mva-artifact-deleted .mva-btn {
+  margin-left: auto;
 }
 
 /* ---------------------- working indicator (F1) ------------------------ */

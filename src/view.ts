@@ -3031,6 +3031,33 @@ export class ChatView extends ItemView {
     const file = this.app.vault.getAbstractFileByPath(path);
     const exists = file instanceof TFile;
 
+    // Deleted markdown preview: a full card for a non-event is too heavy — show
+    // a one-line row (✕ name deleted · Restore) instead. (Live/existing previews
+    // and HTML artifacts keep their card below.)
+    if (!exists && !isHtml) {
+      const row = parent.createDiv({ cls: "mva-artifact-deleted" });
+      setIcon(row.createSpan({ cls: "mva-artifact-deleted-ico" }), "x");
+      row.createSpan({ cls: "mva-artifact-deleted-name", text: `${noteBasename(path)} deleted` });
+      const rel = this.relPath(path);
+      const before = checkpoint?.get(rel);
+      if (typeof before === "string") {
+        const restore = row.createEl("button", { cls: "mva-btn", text: "Restore" });
+        restore.onclick = async () => {
+          try {
+            await this.app.vault.create(rel, before);
+            new Notice(`Restored ${noteBasename(path)} from this turn's snapshot.`);
+            const holder = createDiv();
+            this.buildArtifactCard(holder, path, checkpoint);
+            const fresh = holder.firstElementChild;
+            if (fresh) row.replaceWith(fresh);
+          } catch {
+            new Notice(`Couldn't restore ${noteBasename(path)}.`);
+          }
+        };
+      }
+      return;
+    }
+
     const card = parent.createDiv({ cls: "mva-artifact" });
     const head = card.createDiv({ cls: "mva-artifact-head" });
     setIcon(head.createSpan({ cls: "mva-artifact-ico" }), isHtml ? "file-code-2" : "file-text");
@@ -3051,30 +3078,9 @@ export class ChatView extends ItemView {
       if (!isHtml) this.addHoverPreview(nameEl, path);
     }
 
-    // File gone (deleted since the card was created, or an out-of-vault HTML path):
-    // markdown shows an explicit note; HTML falls back to a header-only card.
+    // File gone (out-of-vault HTML path — deleted markdown already returned early
+    // above): HTML falls back to a header-only card.
     if (!exists) {
-      if (!isHtml) {
-        const missing = card.createDiv({ cls: "mva-artifact-missing", text: "File deleted" });
-        const rel = this.relPath(path);
-        const before = checkpoint?.get(rel);
-        if (typeof before === "string") {
-          const restore = missing.createEl("button", { cls: "mva-btn", text: "Restore" });
-          restore.onclick = async () => {
-            try {
-              await this.app.vault.create(rel, before);
-              new Notice(`Restored ${noteBasename(path)} from this turn's snapshot.`);
-              // Re-render the card in place, now that the file exists again.
-              const holder = createDiv();
-              this.buildArtifactCard(holder, path, checkpoint);
-              const fresh = holder.firstElementChild;
-              if (fresh) card.replaceWith(fresh);
-            } catch {
-              new Notice(`Couldn't restore ${noteBasename(path)}.`);
-            }
-          };
-        }
-      }
       return;
     }
 
