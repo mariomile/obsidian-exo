@@ -2495,14 +2495,27 @@ export class ChatView extends ItemView {
     this.scheduleRender(ctx);
   }
 
-  /** Render/refresh the agent's TodoWrite list as a live checklist panel. */
+  /** Render/refresh the agent's TodoWrite list as a live checklist panel, nested
+   *  inside the current steps run (does NOT break the timeline — a turn that
+   *  interleaves tool calls and todo updates still folds as one block). The
+   *  panel itself is still a single live element, refreshed in place on every
+   *  TodoWrite call, not one row per call. */
   private renderTodos(ctx: AssistantCtx, input: unknown): void {
     const todos = (input as { todos?: Array<{ content?: string; status?: string }> })?.todos;
     if (!Array.isArray(todos)) return;
     this.dropThinking(ctx);
     this.resetTextStream(ctx);
-    this.closeStepsRun(ctx);
-    if (!ctx.todosEl) ctx.todosEl = ctx.bodyEl.createDiv({ cls: "mva-todos" });
+    const run = this.ensureStepsRun(ctx);
+    if (!ctx.todosEl) {
+      ctx.todosEl = run.body.createDiv({ cls: "mva-todos" });
+      run.noteToolAdded("TodoWrite", input);
+    } else if (ctx.todosEl.parentElement !== run.body) {
+      // The run that used to host this panel already folded (e.g. prose
+      // resumed in between todo updates) — move the live panel into the
+      // current run rather than leaving it stranded inside a collapsed one.
+      run.body.appendChild(ctx.todosEl);
+      run.noteToolAdded("TodoWrite", input);
+    }
     const el = ctx.todosEl;
     el.empty();
     const done = todos.filter((t) => t.status === "completed").length;
