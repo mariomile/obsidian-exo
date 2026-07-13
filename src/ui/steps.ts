@@ -10,18 +10,23 @@
 
 import { setIcon } from "obsidian";
 import { clickable } from "./dom";
-import { stepsLabel } from "../core/steps";
+import { stepsLabel, summarizeSteps, fileEditKey, isCommandTool } from "../core/steps";
 
 export class StepsRun {
   private rootEl: HTMLElement;
   private headEl: HTMLElement;
   private labelEl: HTMLElement;
+  private elapsedEl: HTMLElement;
   private bodyEl: HTMLElement;
   private thinkEl: HTMLElement | null = null;
   private thinkLabelEl: HTMLElement | null = null;
   private thinkBodyEl: HTMLElement | null = null;
   private thinkRaw = "";
   private steps = 0;
+  private toolCount = 0;
+  private fileEdits = new Set<string>();
+  private commands = 0;
+  private startedAt = Date.now();
   closed = false;
 
   constructor(parent: HTMLElement) {
@@ -29,6 +34,7 @@ export class StepsRun {
     this.headEl = this.rootEl.createDiv({ cls: "mva-steps-head" });
     setIcon(this.headEl.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
     this.labelEl = this.headEl.createSpan({ cls: "mva-steps-label", text: "" });
+    this.elapsedEl = this.headEl.createSpan({ cls: "mva-steps-elapsed", text: "" });
     clickable(this.headEl, () =>
       this.rootEl.toggleClass("is-collapsed", !this.rootEl.hasClass("is-collapsed"))
     );
@@ -43,6 +49,16 @@ export class StepsRun {
     return this.steps;
   }
 
+  /** Header text: rich stats once a real tool has run, else the old "N steps"
+   *  (covers a thinking-only burst that never calls noteToolAdded). */
+  private refreshLabel(): void {
+    this.labelEl.setText(
+      this.toolCount > 0
+        ? summarizeSteps(this.toolCount, this.fileEdits.size, this.commands)
+        : stepsLabel(this.steps)
+    );
+  }
+
   /** Open (or reuse) the live thinking step: expanded body, shimmer label. */
   startThinking(): void {
     if (this.thinkEl) return;
@@ -55,6 +71,7 @@ export class StepsRun {
     this.thinkBodyEl = step.createDiv({ cls: "mva-step-think-body" });
     this.thinkEl = step;
     this.steps++;
+    this.refreshLabel();
   }
 
   appendThinking(text: string): void {
@@ -75,10 +92,26 @@ export class StepsRun {
     this.thinkBodyEl = null;
   }
 
-  /** A tool card was appended into `body`: count it and settle any open thinking. */
-  noteToolAdded(): void {
+  /** A tool card was appended into `body`: count it (structural + stats),
+   *  settle any open thinking, refresh the header label. `name`/`input` drive
+   *  the stats (file-edit dedup, command tally) — they're the same values the
+   *  caller already has from the tool-call event. */
+  noteToolAdded(name: string, input: unknown): void {
     this.settleThinking();
     this.steps++;
+    this.toolCount++;
+    const key = fileEditKey(name, input);
+    if (key) this.fileEdits.add(key);
+    if (isCommandTool(name)) this.commands++;
+    this.refreshLabel();
+  }
+
+  /** Called once a second by the turn's ticker while this run is open; no-op
+   *  once folded so an older block's elapsed time freezes rather than counting
+   *  time it wasn't actually running. */
+  tick(fmt: (ms: number) => string): void {
+    if (this.closed) return;
+    this.elapsedEl.setText(fmt(Date.now() - this.startedAt));
   }
 
   /** Remove a card from this run (note-touching rows dissolve into the
@@ -93,7 +126,7 @@ export class StepsRun {
       this.rootEl.remove();
       return;
     }
-    this.labelEl.setText(stepsLabel(this.steps));
+    this.refreshLabel();
   }
 
   /** Fold the run: "N steps ⌄" header, body hidden, live states neutralized.
@@ -112,7 +145,7 @@ export class StepsRun {
     // the folded run — freeze it (keeps its last icon, loses the animation).
     this.rootEl.addClass("is-settled");
     const before = this.rootEl.offsetHeight;
-    this.labelEl.setText(stepsLabel(this.steps));
+    this.refreshLabel();
     this.rootEl.addClass("is-collapsed");
     if (scroller) {
       const delta = before - this.rootEl.offsetHeight;
