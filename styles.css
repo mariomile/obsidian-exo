@@ -2016,6 +2016,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: color-mix(in srgb, var(--color-green, #19c37d) 10%, transparent);
 }
 
+.mva-diff-collapse > summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--color-green, #19c37d);
+  padding: 2px 0;
+  list-style-position: inside;
+}
+.mva-diff-collapse[open] > summary {
+  margin-bottom: 4px;
+}
+
 /* ------------------------------ params -------------------------------- */
 .mva-params {
   display: flex;
