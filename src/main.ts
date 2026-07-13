@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DiagLog } from "./core/diag";
 import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
+import { CockpitView, COCKPIT_VIEW_TYPE, COCKPIT_ICON } from "./ui/cockpit-view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
 import { resolveCli, cliDiagnostics, updateClaudeCli } from "./cli";
@@ -178,6 +179,7 @@ export default class ExoPlugin extends Plugin {
     // If it opens while orchestration is off it renders a "disabled" placeholder
     // and never starts the driver (see BoardView.onOpen).
     this.registerView(BOARD_VIEW_TYPE, (leaf) => new BoardView(leaf, this));
+    this.registerView(COCKPIT_VIEW_TYPE, (leaf) => new CockpitView(leaf, this));
 
     // In-note AI: a floating toolbar over the selection (Edit / Continue / Ask
     // Exo). Registered once; gated live behind the `inlineAi` setting, so
@@ -283,6 +285,18 @@ export default class ExoPlugin extends Plugin {
     // the current flag state so a later toggle in settings re-syncs correctly.
     this.orchestrationApplied = this.settings.orchestrationEnabled;
     this.syncBoardRibbon();
+
+    this.addCommand({
+      id: "open-cockpit",
+      name: "Open Cockpit",
+      callback: () => void this.openCockpit(),
+    });
+    this.addRibbonIcon(COCKPIT_ICON, "Open Exo Cockpit", () => void this.openCockpit());
+    this.app.workspace.onLayoutReady(() => {
+      if (this.settings.cockpitOnStartup && this.app.workspace.getLeavesOfType(COCKPIT_VIEW_TYPE).length === 0) {
+        void this.openCockpit();
+      }
+    });
 
     this.addCommand({
       id: "inline-edit",
@@ -504,6 +518,16 @@ export default class ExoPlugin extends Plugin {
       // Main-area tab (not the sidebar) — the board is a full-width surface.
       leaf = workspace.getLeaf(true);
       await leaf.setViewState({ type: BOARD_VIEW_TYPE, active: true });
+    }
+    workspace.revealLeaf(leaf);
+  }
+
+  async openCockpit(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(COCKPIT_VIEW_TYPE)[0] ?? null;
+    if (!leaf) {
+      leaf = workspace.getLeaf(true);
+      await leaf.setViewState({ type: COCKPIT_VIEW_TYPE, active: true });
     }
     workspace.revealLeaf(leaf);
   }

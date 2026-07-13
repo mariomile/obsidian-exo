@@ -852,6 +852,16 @@ export class MVASettingTab extends PluginSettingTab {
       });
 
     new Setting(el)
+      .setName("Open Cockpit on startup")
+      .setDesc("Open the Exo Cockpit view automatically when Obsidian starts.")
+      .addToggle((t) =>
+        t.setValue(s.cockpitOnStartup).onChange(async (v) => {
+          s.cockpitOnStartup = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(el)
       .setName("Exo Queue — Exo in tasca")
       .setDesc(
         "Il desktop evade le note-richiesta scritte (dal telefono, via Obsidian Sync) nella cartella coda: esegue il corpo della nota headless e READ-ONLY e appende la risposta nella stessa nota, che sincronizza indietro. Poll ogni 60s."
