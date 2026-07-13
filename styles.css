@@ -1748,7 +1748,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   margin: 4px 0;
 }
 .mva-steps-head {
-  display: none;
+  display: flex;
   align-items: center;
   gap: 4px;
   padding: 2px 4px;
@@ -1758,13 +1758,15 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   cursor: pointer;
   transition: color var(--mva-t), background var(--mva-t);
 }
-.mva-steps.is-collapsed .mva-steps-head,
-.mva-steps.is-settled .mva-steps-head {
-  display: flex;
-}
 .mva-steps-head:hover {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
+}
+.mva-steps-elapsed {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
 }
 .mva-steps:not(.is-collapsed) .mva-steps-head .mva-reason-chevron {
   transform: rotate(90deg);
@@ -1781,7 +1783,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-steps-body::before {
   content: "";
   position: absolute;
-  left: 3px;
+  left: 19px; /* aligns with the center of each row's .mva-tool-status dot — see comment above */
   top: 8px;
   bottom: 8px;
   width: 1px;
