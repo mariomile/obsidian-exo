@@ -1751,8 +1751,13 @@ export class ChatView extends ItemView {
               // Note-touching calls dissolve into the touched-notes footer below
               // instead of also rendering their own row — this is a restored (not
               // live) turn, so there's no streaming status to show in the first
-              // place. They leave no trace, so the run continues across them.
+              // place. They leave no trace, so the run continues across them. Still
+              // credited to the run's stats (toolCount/fileEdits) so a reopened
+              // conversation's header matches what it showed live — mirrors how a
+              // live note-touching card counts via noteToolAdded before it dissolves.
               mergeTouched(touched, fp, WRITE_TOOLS.test(s.name) ? "write" : "read");
+              if (!run) run = new StepsRun(body);
+              run.noteToolAdded(s.name, s.input);
             } else if (stepPlacement(s.name, s.input) === "flat") {
               flushRun();
               const refs = this.createToolCard(body, s.name, s.input);
