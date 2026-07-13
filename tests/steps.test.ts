@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { stepPlacement, stepsLabel, fileEditKey, isCommandTool, summarizeSteps } from "../src/core/steps";
+import { firstErrorLine, isLargeContent } from "../src/core/steps";
 
 describe("stepPlacement", () => {
   it("puts generic tools in the timeline", () => {
@@ -90,5 +91,28 @@ describe("summarizeSteps", () => {
 
   it("pluralizes files and commands", () => {
     expect(summarizeSteps(18, 5, 2)).toBe("18 tools · 5 files edited · 2 commands");
+  });
+});
+
+describe("firstErrorLine", () => {
+  it("returns the first non-empty line, trimmed", () => {
+    expect(firstErrorLine("\n\n  Error: nope  \nstack\n")).toBe("Error: nope");
+  });
+  it("truncates to max with an ellipsis", () => {
+    expect(firstErrorLine("x".repeat(200), 10)).toBe("xxxxxxxxxx…");
+  });
+  it("returns empty string for blank output", () => {
+    expect(firstErrorLine("   \n  \n")).toBe("");
+    expect(firstErrorLine("")).toBe("");
+  });
+});
+
+describe("isLargeContent", () => {
+  it("is true past the line threshold", () => {
+    expect(isLargeContent("a\n".repeat(25), 20)).toBe(true);
+  });
+  it("is false at or under the threshold", () => {
+    expect(isLargeContent("a\n".repeat(5), 20)).toBe(false);
+    expect(isLargeContent("", 20)).toBe(false);
   });
 });
