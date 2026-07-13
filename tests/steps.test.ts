@@ -58,6 +58,15 @@ describe("fileEditKey", () => {
     expect(fileEditKey("Write", { file_path: 5 })).toBeNull();
     expect(fileEditKey("Write", undefined)).toBeNull();
   });
+
+  it("keys native mcp__obsidian__* write tools by target/path", () => {
+    expect(fileEditKey("mcp__obsidian__edit_note", { target: "X.md" })).toBe("X.md");
+    expect(fileEditKey("mcp__obsidian__create_note", { path: "Y.md" })).toBe("Y.md");
+  });
+
+  it("returns null for the native read-only mcp__obsidian__read_note tool", () => {
+    expect(fileEditKey("mcp__obsidian__read_note", { target: "Z.md" })).toBeNull();
+  });
 });
 
 describe("isCommandTool", () => {

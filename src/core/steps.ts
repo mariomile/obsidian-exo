@@ -9,6 +9,8 @@
  * Interactive cards (permission/ask/plan/todos) never reach this decision;
  * their render paths close the run directly.
  */
+import { WRITE_TOOLS } from "./touched";
+import { toolFilePath } from "../ui/tools";
 
 export type StepPlacement = "timeline" | "flat";
 
@@ -26,15 +28,21 @@ export function stepsLabel(n: number): string {
   return n === 1 ? "1 step" : `${n} steps`;
 }
 
-const EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
-
-/** Dedup key for "files edited" — the path a Write/Edit/MultiEdit/NotebookEdit
- *  call touches, or null for every other tool (including read-only Read). */
+/** Dedup key for "files edited" — the path a write tool touches (matched by
+ *  the codebase's `WRITE_TOOLS` write-classification, the same one the
+ *  touched-notes footer uses), or null for read-only/non-file tools. Reuses
+ *  `toolFilePath`'s per-tool path-key mapping so SDK tools (file_path/
+ *  notebook_path) and native mcp__obsidian__* tools (target/path) are both
+ *  covered without duplicating that mapping here. `toolFilePath` coerces
+ *  non-string values (e.g. `String(5)`) since it only feeds display code, so
+ *  we re-validate against the raw input here rather than trust its return —
+ *  a non-string file_path/target must still resolve to null. */
 export function fileEditKey(name: string, input: unknown): string | null {
-  if (!EDIT_TOOLS.has(name)) return null;
+  if (!WRITE_TOOLS.test(name)) return null;
   const i = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-  const raw = name === "NotebookEdit" ? i.notebook_path : i.file_path;
-  return typeof raw === "string" && raw ? raw : null;
+  const raw = name === "NotebookEdit" ? i.notebook_path : name.startsWith("mcp__obsidian__") ? i.target ?? i.path : i.file_path;
+  if (typeof raw !== "string" || !raw) return null;
+  return toolFilePath(name, input) ?? null;
 }
 
 /** Whether a tool call counts toward the "commands" tally. */
