@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { stepPlacement, stepsLabel } from "../src/core/steps";
+import { stepPlacement, stepsLabel, fileEditKey, isCommandTool, summarizeSteps } from "../src/core/steps";
 
 describe("stepPlacement", () => {
   it("puts generic tools in the timeline", () => {
@@ -34,5 +34,52 @@ describe("stepsLabel", () => {
   it("pluralizes", () => {
     expect(stepsLabel(1)).toBe("1 step");
     expect(stepsLabel(4)).toBe("4 steps");
+  });
+});
+
+describe("fileEditKey", () => {
+  it("keys Write/Edit/MultiEdit calls by file_path", () => {
+    expect(fileEditKey("Write", { file_path: "/v/a.md" })).toBe("/v/a.md");
+    expect(fileEditKey("Edit", { file_path: "/v/b.md" })).toBe("/v/b.md");
+    expect(fileEditKey("MultiEdit", { file_path: "/v/c.md" })).toBe("/v/c.md");
+  });
+
+  it("keys NotebookEdit by notebook_path", () => {
+    expect(fileEditKey("NotebookEdit", { notebook_path: "/v/n.ipynb" })).toBe("/v/n.ipynb");
+  });
+
+  it("returns null for non-edit tools", () => {
+    expect(fileEditKey("Read", { file_path: "/v/a.md" })).toBeNull();
+    expect(fileEditKey("Bash", { command: "ls" })).toBeNull();
+  });
+
+  it("returns null when the path is missing or not a string", () => {
+    expect(fileEditKey("Write", {})).toBeNull();
+    expect(fileEditKey("Write", { file_path: 5 })).toBeNull();
+    expect(fileEditKey("Write", undefined)).toBeNull();
+  });
+});
+
+describe("isCommandTool", () => {
+  it("is true only for Bash", () => {
+    expect(isCommandTool("Bash")).toBe(true);
+    expect(isCommandTool("BashOutput")).toBe(false);
+    expect(isCommandTool("Read")).toBe(false);
+  });
+});
+
+describe("summarizeSteps", () => {
+  it("always shows the tool count", () => {
+    expect(summarizeSteps(1, 0, 0)).toBe("1 tool");
+    expect(summarizeSteps(3, 0, 0)).toBe("3 tools");
+  });
+
+  it("omits a clause when its count is zero", () => {
+    expect(summarizeSteps(2, 0, 1)).toBe("2 tools · 1 command");
+    expect(summarizeSteps(2, 1, 0)).toBe("2 tools · 1 file edited");
+  });
+
+  it("pluralizes files and commands", () => {
+    expect(summarizeSteps(18, 5, 2)).toBe("18 tools · 5 files edited · 2 commands");
   });
 });

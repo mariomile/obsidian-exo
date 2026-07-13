@@ -25,3 +25,29 @@ export function stepPlacement(name: string, input: unknown): StepPlacement {
 export function stepsLabel(n: number): string {
   return n === 1 ? "1 step" : `${n} steps`;
 }
+
+const EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+/** Dedup key for "files edited" — the path a Write/Edit/MultiEdit/NotebookEdit
+ *  call touches, or null for every other tool (including read-only Read). */
+export function fileEditKey(name: string, input: unknown): string | null {
+  if (!EDIT_TOOLS.has(name)) return null;
+  const i = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const raw = name === "NotebookEdit" ? i.notebook_path : i.file_path;
+  return typeof raw === "string" && raw ? raw : null;
+}
+
+/** Whether a tool call counts toward the "commands" tally. */
+export function isCommandTool(name: string): boolean {
+  return name === "Bash";
+}
+
+/** Turn-summary label: "N tools · M files edited · K commands" — any clause
+ *  whose count is 0 is omitted (a turn with no Bash calls doesn't show
+ *  "0 commands"). Tool count is always shown, even at 1. */
+export function summarizeSteps(tools: number, files: number, commands: number): string {
+  const parts = [`${tools} tool${tools === 1 ? "" : "s"}`];
+  if (files) parts.push(`${files} file${files === 1 ? "" : "s"} edited`);
+  if (commands) parts.push(`${commands} command${commands === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
