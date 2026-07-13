@@ -15,6 +15,7 @@ import { stepsLabel, summarizeSteps, fileEditKey, isCommandTool } from "../core/
 export class StepsRun {
   private rootEl: HTMLElement;
   private headEl: HTMLElement;
+  private statusEl: HTMLElement;
   private labelEl: HTMLElement;
   private elapsedEl: HTMLElement;
   private bodyEl: HTMLElement;
@@ -33,6 +34,7 @@ export class StepsRun {
     this.rootEl = parent.createDiv({ cls: "mva-steps" });
     this.headEl = this.rootEl.createDiv({ cls: "mva-steps-head" });
     setIcon(this.headEl.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
+    this.statusEl = this.headEl.createSpan({ cls: "mva-steps-status" });
     this.labelEl = this.headEl.createSpan({ cls: "mva-steps-label", text: "" });
     this.elapsedEl = this.headEl.createSpan({ cls: "mva-steps-elapsed", text: "" });
     clickable(this.headEl, () =>
@@ -130,10 +132,12 @@ export class StepsRun {
   }
 
   /** Fold the run: "N steps ⌄" header, body hidden, live states neutralized.
-   *  Empty runs remove themselves. `scroller` (the conversation list element)
-   *  gets its scrollTop compensated when the fold collapses content above the
-   *  current reading position. Idempotent. */
-  close(scroller?: HTMLElement): void {
+   *  Empty runs remove themselves. Sets a status glyph on the header — a
+   *  check on a clean finish, an x when `interrupted` (stopped/errored).
+   *  `scroller` (the conversation list element) gets its scrollTop compensated
+   *  when the fold collapses content above the current reading position.
+   *  Idempotent. */
+  close(scroller?: HTMLElement, interrupted = false): void {
     if (this.closed) return;
     this.closed = true;
     this.settleThinking();
@@ -144,6 +148,8 @@ export class StepsRun {
     // Interrupted turns: a never-resolved tool would keep its shimmer inside
     // the folded run — freeze it (keeps its last icon, loses the animation).
     this.rootEl.addClass("is-settled");
+    setIcon(this.statusEl, interrupted ? "x" : "check");
+    this.statusEl.addClass(interrupted ? "is-error" : "is-ok");
     const before = this.rootEl.offsetHeight;
     this.refreshLabel();
     this.rootEl.addClass("is-collapsed");
