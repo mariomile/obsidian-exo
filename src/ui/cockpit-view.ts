@@ -45,6 +45,7 @@ const INBOX_DIR = "_inbox";
 export class CockpitView extends ItemView {
   private refreshedAt = 0;
   private rendering = false;
+  private inputEl: HTMLInputElement | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -66,7 +67,16 @@ export class CockpitView extends ItemView {
   async onOpen(): Promise<void> {
     this.contentEl.addClass("mva-ck");
     await this.refresh();
-    this.registerInterval(window.setInterval(() => void this.refresh(), 60_000));
+    this.registerInterval(
+      window.setInterval(() => {
+        // Don't yank the surface out from under the user: skip the automatic
+        // tick while the tab is hidden or the command bar holds focus/draft.
+        if (!this.containerEl.isShown()) return;
+        const i = this.inputEl;
+        if (i && (document.activeElement === i || i.value.trim())) return;
+        void this.refresh();
+      }, 60_000)
+    );
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         if (leaf === this.leaf) void this.refresh();
@@ -174,7 +184,13 @@ export class CockpitView extends ItemView {
       ]);
 
       const el = this.contentEl;
+      // Preserve the command-bar draft/focus across ANY rebuild (manual
+      // refresh / active-leaf-change / the gated interval tick).
+      const draft = this.inputEl?.value ?? "";
+      const hadFocus = document.activeElement === this.inputEl;
       el.empty();
+
+      this.refreshedAt = now;
 
       // Header
       const head = el.createDiv({ cls: "mva-ck-head" });
@@ -185,7 +201,6 @@ export class CockpitView extends ItemView {
       const rbtn = head.createSpan({ cls: "mva-ck-refresh", attr: { "aria-label": "Refresh" } });
       setIcon(rbtn, "refresh-cw");
       clickable(rbtn, () => void this.refresh());
-      this.refreshedAt = now;
 
       // Attention strip (only when non-empty)
       const attention = buildAttention({ convos: this.plugin.liveAttention(), answers, now });
@@ -193,6 +208,10 @@ export class CockpitView extends ItemView {
 
       // Command bar
       this.renderCommandBar(el);
+      if (this.inputEl) {
+        this.inputEl.value = draft;
+        if (hadFocus) this.inputEl.focus();
+      }
 
       // Tile grid
       const grid = el.createDiv({ cls: "mva-ck-grid" });
@@ -249,6 +268,7 @@ export class CockpitView extends ItemView {
   private renderCommandBar(parent: HTMLElement): void {
     const bar = parent.createDiv({ cls: "mva-ck-bar" });
     const input = bar.createEl("input", { cls: "mva-ck-input", attr: { placeholder: "Ask Exo…", type: "text" } });
+    this.inputEl = input;
     const send = bar.createSpan({ cls: "mva-ck-send", attr: { "aria-label": "Send" } });
     setIcon(send, "arrow-up");
     const go = () => {
