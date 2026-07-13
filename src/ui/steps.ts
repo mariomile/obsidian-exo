@@ -137,7 +137,7 @@ export class StepsRun {
     if (this.closed) return;
     this.closed = true;
     this.settleThinking();
-    if (this.steps === 0) {
+    if (this.steps === 0 || this.bodyEl.childElementCount === 0) {
       this.rootEl.remove();
       return;
     }
