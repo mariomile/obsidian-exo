@@ -257,6 +257,10 @@ interface AssistantCtx {
   todosEl: HTMLElement | null;
   /** Background Bash tasks this turn: tool-call id → card + badge + parsed shell id. */
   bgTasks: Map<string, { cardEl: HTMLElement; badgeEl: HTMLElement; shellId?: string }>;
+  /** Task (subagent) tool-calls currently in flight (added on start, removed on
+   *  result). With bgTasks, drives the per-chat "N agents running" indicators —
+   *  the count of background work THIS conversation owns right now. */
+  runningTasks: Set<string>;
   /** Task (subagent) cards this turn: Task tool-call id → nested activity section. */
   taskCards: Map<string, { container: HTMLElement; summaryEl: HTMLElement; rowsEl: HTMLElement; count: number }>;
   /** Subagent mini-rows this turn (live-only): tool-call id → status dot + parent. */
@@ -314,6 +318,10 @@ export class ChatView extends ItemView {
 
   private tabsEl!: HTMLElement;
   private listWrap!: HTMLElement;
+  /** Pinned "N agents running" chip above the composer, reflecting ONLY the chat
+   *  currently open (its own subagents + background tasks). Always visible while
+   *  that chat has background work, even when the working row scrolls off. */
+  private agentChipEl: HTMLElement | null = null;
   /** Inner scroll host inside listWrap. Holds the (swapped-per-conversation)
    *  `.mva-list` and any full-pane overlay (gallery/capabilities). Split out from
    *  listWrap so the composer — now a bottom sibling of the list — survives the
@@ -411,6 +419,9 @@ export class ChatView extends ItemView {
         window.open(external, "_blank");
       }
     });
+    // Per-chat agents chip: in-flow sibling of listWrap, created BEFORE the composer
+    // so it pins directly above it. Reflects only the OPEN chat's own background work.
+    this.agentChipEl = this.listWrap.createDiv({ cls: "mva-agents is-hidden" });
     this.buildComposer();
     // View-level Esc-to-stop: the composer's own Escape handler only fires while the
     // textarea is focused, but clicking into the transcript blurs it — so "esc to stop"
@@ -1140,6 +1151,19 @@ export class ChatView extends ItemView {
         titleEl.append("New chat");
       } else {
         titleEl.setText(c.title || "New chat");
+      }
+
+      // Per-tab agent count: how many subagents/background tasks THIS chat is
+      // running right now — local to its own tab, so a busy background chat is
+      // visible at a glance without leaking into the chat you're reading.
+      const agents = this.agentCount(c);
+      if (agents > 0) {
+        const badge = tab.createSpan({
+          cls: "mva-tab-agents",
+          attr: { "aria-label": `${agents} agent${agents > 1 ? "s" : ""} running` },
+        });
+        setIcon(badge.createSpan({ cls: "mva-tab-agents-icon" }), "loader");
+        badge.createSpan({ text: String(agents) });
       }
 
       const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
@@ -2390,6 +2414,7 @@ export class ChatView extends ItemView {
       renderTimer: null,
       todosEl: null,
       bgTasks: new Map(),
+      runningTasks: new Set(),
       taskCards: new Map(),
       nestedRows: new Map(),
       workingEl: null,
@@ -3960,7 +3985,7 @@ export class ChatView extends ItemView {
     c.streaming = on;
     if (on) this.plugin.emitConvoState(c.id, "turn-start"); // fire-and-forget board hook (no-op when off; can't throw)
     if (c === this.active) this.syncSendButton();
-    this.renderTabs(); // keep the per-tab streaming dot in sync
+    this.refreshAgentIndicators(); // per-tab streaming dot + agent counts + pinned chip
     // Never show the tail "Related" section mid-stream — hide it the instant a
     // turn starts. The turn-end path (runTurn's `finally`) is responsible for
     // re-showing it once the queue is fully drained.
@@ -3968,6 +3993,33 @@ export class ChatView extends ItemView {
       c.tailSurfaceEl?.remove();
       c.tailSurfaceEl = null;
     }
+  }
+
+  /** How many background agents a conversation owns RIGHT NOW: subagent (Task)
+   *  tool-calls still in flight plus background Bash shells launched this turn.
+   *  Read from the convo's live turn context (each convo has its own), so a chat
+   *  streaming in the background reports its own count. Zero once the turn ends
+   *  (currentCtx is cleared) — Exo never claims work it can no longer observe. */
+  private agentCount(c: Convo): number {
+    const ctx = c.currentCtx;
+    return ctx ? ctx.runningTasks.size + ctx.bgTasks.size : 0;
+  }
+
+  /** Refresh both per-chat agent affordances: the per-tab count badges (via
+   *  renderTabs) and the pinned chip above the composer, which reflects ONLY the
+   *  open chat's own agents. Strictly local — a background chat's work never leaks
+   *  into the chat you're looking at; you see its count on its own tab. */
+  private refreshAgentIndicators(): void {
+    this.renderTabs();
+    const chip = this.agentChipEl;
+    if (!chip) return;
+    const n = this.active ? this.agentCount(this.active) : 0;
+    chip.empty();
+    chip.toggleClass("is-hidden", n === 0);
+    if (n === 0) return;
+    setIcon(chip.createSpan({ cls: "mva-agents-icon" }), "loader");
+    chip.createSpan({ cls: "mva-agents-label", text: n === 1 ? "1 agent running" : `${n} agents running` });
+    this.clickable(chip, () => this.scrollConvo(this.active));
   }
 
   /**
@@ -4263,11 +4315,17 @@ export class ChatView extends ItemView {
           // isn't tracked, so nothing is lost.
           if (!(e.parentId && this.addSubagentRow(ctx, e.parentId, e.id, e.name, e.input))) {
             this.addToolCard(ctx, e.id, e.name, e.input);
-            if (e.name === "Task") this.registerTaskCard(ctx, e.id);
+            if (e.name === "Task") {
+              this.registerTaskCard(ctx, e.id);
+              ctx.runningTasks.add(e.id); // subagent in flight → counts as a running agent
+            }
             this.trackBackgroundTask(ctx, e.id, e.name, e.input);
             // A flat, note-touching card is streaming-only feedback — dropped at
             // turn end once the touched-notes footer carries the same fact.
             if (fp) ctx.noteTouchIds.add(e.id);
+            // Update the per-chat agent count when a subagent or a background shell
+            // just launched (trackBackgroundTask records bg shells in ctx.bgTasks).
+            if (e.name === "Task" || ctx.bgTasks.has(e.id)) this.refreshAgentIndicators();
           }
           // Working row: phase verb from the tool metadata, re-appended last so it
           // stays visible below the tool card during execution.
@@ -4291,6 +4349,9 @@ export class ChatView extends ItemView {
             this.resolveToolCard(ctx, e.id, e.ok, e.output);
             this.linkBackgroundResult(ctx, e.id, e.output);
             this.markTaskDone(ctx, e.id); // Task's own result → mark section done
+            // A subagent finished → drop it from the running count (delete returns
+            // true only when it was a tracked Task, so plain tools don't refresh).
+            if (ctx.runningTasks.delete(e.id)) this.refreshAgentIndicators();
           }
           const wp = ctx.writeById.get(e.id);
           if (e.ok && wp && this.plugin.settings.revealEditedNotes && !ctx.revealed.has(wp)) {

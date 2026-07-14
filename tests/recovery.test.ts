@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { buildRecap, isRecoverableSessionError, resolveRecovery, stopAction } from "../src/core/recovery";
+import {
+  buildRecap,
+  isRecoverableSessionError,
+  resolveRecovery,
+  shouldColdReseed,
+  stopAction,
+} from "../src/core/recovery";
 import type { Message, Segment } from "../src/core/model";
 
 const user = (text: string): Message => ({ role: "user", text });
@@ -196,6 +202,26 @@ describe("resolveRecovery", () => {
     expect(
       resolveRecovery({ poisoned: true, stopped: true, isRecoveryRetry: false, resumeRisky: false })
     ).toEqual({ footer: null, session: "none", nextResumeRisky: false, enqueueRecapRetry: false });
+  });
+});
+
+describe("shouldColdReseed", () => {
+  const base = { hasSessionId: false, hasRecapPrefix: false, hasAssistantHistory: true };
+
+  it("reseeds a cold spawn that is continuing a conversation with history", () => {
+    expect(shouldColdReseed(base)).toBe(true);
+  });
+
+  it("does NOT reseed when the session id survives (warm resume carries context)", () => {
+    expect(shouldColdReseed({ ...base, hasSessionId: true })).toBe(false);
+  });
+
+  it("does NOT reseed when a stage-2 recap prefix is already threaded (never double)", () => {
+    expect(shouldColdReseed({ ...base, hasRecapPrefix: true })).toBe(false);
+  });
+
+  it("does NOT reseed on a convo's first turn (no assistant history yet)", () => {
+    expect(shouldColdReseed({ ...base, hasAssistantHistory: false })).toBe(false);
   });
 });
 
