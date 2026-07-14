@@ -168,6 +168,9 @@ export interface Convo {
   /** True once the learning-loop "save as playbook?" offer has been shown for
    *  this conversation — one-shot per convo, runtime-only (never persisted). */
   playbookNudged?: boolean;
+  /** Provider-only prefix for the NEXT turn (Codex compact emulation: the
+   *  recap that reseeds a fresh session). Consumed once, never UI/persisted. */
+  pendingSendPrefix?: string;
   /** True once an AI-title generation has been fired for this conversation —
    *  one-shot guard so the Haiku title call runs at most once (after the first
    *  assistant turn). Runtime-only (never persisted). */
@@ -311,10 +314,6 @@ export class ChatView extends ItemView {
 
   private tabsEl!: HTMLElement;
   private listWrap!: HTMLElement;
-  /** Persistent "work running in background tabs" strip, pinned above the composer.
-   *  Hidden unless a NON-active conversation is mid-turn — the signal that another
-   *  agent is working where you can't see it. */
-  private bgBarEl: HTMLElement | null = null;
   /** Inner scroll host inside listWrap. Holds the (swapped-per-conversation)
    *  `.mva-list` and any full-pane overlay (gallery/capabilities). Split out from
    *  listWrap so the composer — now a bottom sibling of the list — survives the
@@ -412,10 +411,6 @@ export class ChatView extends ItemView {
         window.open(external, "_blank");
       }
     });
-    // Background-work strip: an in-flow sibling of listWrap, created BEFORE the
-    // composer mounts so it sits directly above it in the flex column. Hidden until
-    // a non-active conversation is streaming.
-    this.bgBarEl = this.listWrap.createDiv({ cls: "mva-bgbar is-hidden" });
     this.buildComposer();
     // View-level Esc-to-stop: the composer's own Escape handler only fires while the
     // textarea is focused, but clicking into the transcript blurs it — so "esc to stop"
@@ -1122,9 +1117,6 @@ export class ChatView extends ItemView {
     this.tabsEl.empty();
     const ids = this.openTabs.filter((id) => this.convos.some((c) => c.id === id));
     this.openTabs = ids;
-    // Keep the composer background-strip in sync on every tab render (streaming
-    // change, tab switch, close) — runs even on the single-tab early return below.
-    this.refreshRunningIndicators();
     // A lone empty tab needs no bar — keep the chrome minimal.
     if (ids.length <= 1) {
       this.tabsEl.addClass("is-hidden");
@@ -1161,22 +1153,6 @@ export class ChatView extends ItemView {
     const add = this.tabsEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
     setIcon(add, "plus");
     this.clickable(add, () => this.newConversation());
-    // Count pill: how many OTHER conversations are mid-turn right now — the
-    // glanceable "another agent is working in the background" number. Counts
-    // streaming turns (state Exo can report honestly), click jumps to the first.
-    const running = this.convos.filter((c) => c.streaming && c !== this.active).length;
-    if (running > 0) {
-      const pill = this.tabsEl.createDiv({
-        cls: "mva-tab-running",
-        attr: { "aria-label": `${running} conversation${running > 1 ? "s" : ""} working in the background` },
-      });
-      setIcon(pill.createSpan({ cls: "mva-tab-running-icon" }), "loader");
-      pill.createSpan({ cls: "mva-tab-running-count", text: String(running) });
-      this.clickable(pill, () => {
-        const first = this.convos.find((c) => c.streaming && c !== this.active);
-        if (first) this.switchTo(first);
-      });
-    }
   }
 
   /** Close a tab (the conversation stays in history; reopen from the gallery). */
@@ -1397,12 +1373,28 @@ export class ChatView extends ItemView {
    *  steered by free-text `instructions` (from the /compact slash command). */
   private compactActive(instructions?: string): void {
     const c = this.active;
-    if (c.provider !== "claude") {
-      new Notice("Compact is available for Claude.");
-      return;
-    }
     if (c.streaming) {
       new Notice("Wait for the current turn to finish, then compact.");
+      return;
+    }
+    if (c.provider !== "claude") {
+      // Codex has no session-level compact API (TUI-only) — emulate by
+      // dropping the session: the cold-reseed invariant (shouldColdReseed in
+      // runTurn) threads a transcript recap into the next turn automatically.
+      // Only the user's compaction focus needs carrying, as a provider-only
+      // prefix (never UI/persisted).
+      if (!c.messages.length) {
+        new Notice("Send a message first — nothing to compact yet.");
+        return;
+      }
+      this.dropSession(c);
+      c.sessionId = undefined;
+      c.pendingSendPrefix = instructions ? `Compaction focus from the user: ${instructions}` : undefined;
+      c.usage = undefined;
+      this.composer.updateUsage(null);
+      c.compactNudged = true;
+      this.composer.hideCompactNudge();
+      new Notice("Compacted — the next message restarts the session with a summary.");
       return;
     }
     if (!c.session?.compact) {
@@ -3978,29 +3970,6 @@ export class ChatView extends ItemView {
     }
   }
 
-  /** Refresh the persistent "work is running in the background" strip above the
-   *  composer. Shown whenever a NON-active conversation is mid-turn — the current
-   *  tab's own work already shows a working row, so this surfaces only the agents
-   *  you can't see. Counts streaming turns (a state Exo can report truthfully,
-   *  unlike a detached background shell it can't poll). Click jumps to the first.
-   *  Idempotent; driven from renderTabs so it stays in sync with every state change. */
-  private refreshRunningIndicators(): void {
-    const bar = this.bgBarEl;
-    if (!bar) return;
-    const others = this.convos.filter((c) => c.streaming && c !== this.active);
-    bar.empty();
-    bar.toggleClass("is-hidden", others.length === 0);
-    if (others.length === 0) return;
-    setIcon(bar.createSpan({ cls: "mva-bgbar-icon" }), "loader");
-    const n = others.length;
-    bar.createSpan({
-      cls: "mva-bgbar-label",
-      text: n === 1 ? "1 chat still working in the background" : `${n} chats still working in the background`,
-    });
-    bar.createSpan({ cls: "mva-bgbar-open", text: "open" });
-    this.clickable(bar, () => this.switchTo(others[0]));
-  }
-
   /**
    * Terminal convo-state hook, fired once from `runTurn`'s `finally`. Maps the
    * turn's end state to the board vocabulary: user-stopped → `stopped`;
@@ -4522,7 +4491,11 @@ export class ChatView extends ItemView {
         ? buildRecap(c.messages)
         : "";
       if (coldRecap) this.diag.push("recall", "cold-spawn recap injected");
-      const outbound = [opts?.sendPrefix, coldRecap, recallBlock, message].filter(Boolean).join("\n\n");
+      // Codex compact emulation: the user's compaction focus rides the next
+      // turn once (the recap itself comes from coldRecap above).
+      const compactPrefix = c.pendingSendPrefix;
+      if (compactPrefix) c.pendingSendPrefix = undefined;
+      const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, recallBlock, message].filter(Boolean).join("\n\n");
       await session.send(outbound, onEvent, imgs);
       // `session.send` can resolve cleanly even after a user Stop/Esc — the
       // adapter swallows the abort rather than throwing or emitting an
