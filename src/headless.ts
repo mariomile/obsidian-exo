@@ -4,6 +4,7 @@ import { ADAPTERS } from "./providers/registry";
 import type { AgentEvent } from "./providers/types";
 import { createObsidianToolServer, OBSIDIAN_READ_TOOLS } from "./obsidian/tools";
 import { READ_ONLY_TOOLS, toolFilePath } from "./ui/tools";
+import { isReadOnlyExternalTool } from "./core/headless-tools";
 import type { MVASettings } from "./settings";
 
 /** Per-step idle timeout — no event for this long aborts the run (bounded autonomy). */
@@ -52,7 +53,10 @@ export async function runHeadlessPlaybook(
       cwd: vaultPath(app),
       permissionMode: "default",
       toolsEnabled: true, // reads allowed; writes denied by the auto-resolver / sandbox
-      fastStartup: true,
+      // External tools (Dia-style digest sources: Gmail/Slack/Calendar via MCP)
+      // opt in per settings: fastStartup=false lets the CLI load external MCP
+      // servers; the resolver below still auto-denies anything that mutates.
+      fastStartup: !settings.playbookExternalTools,
       // Claude: in-process vault tools, memory-write OFF.
       obsidianServer:
         provider === "claude" && settings.obsidianToolsEnabled
@@ -77,7 +81,8 @@ export async function runHeadlessPlaybook(
           const fp = toolFilePath(e.name, e.input);
           if (fp) reads.add(fp);
         } else if (e.kind === "permission-request") {
-          if (READ_ONLY_TOOLS.has(e.tool) || OBSIDIAN_READ_TOOLS.has(e.tool)) {
+          const externalRead = settings.playbookExternalTools && isReadOnlyExternalTool(e.tool);
+          if (READ_ONLY_TOOLS.has(e.tool) || OBSIDIAN_READ_TOOLS.has(e.tool) || externalRead) {
             e.resolve({ behavior: "allow" });
           } else {
             e.resolve({ behavior: "deny", message: "Headless playbook runs are read-only." });
