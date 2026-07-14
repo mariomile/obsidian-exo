@@ -114,6 +114,9 @@ export default class ExoPlugin extends Plugin {
   private codexBridge: CodexBridge | null = null;
   private codexBridgeScriptPath: string | null = null;
 
+  /** One-time guard for the codex-bridge node preflight Notice. */
+  private nodeWarned = false;
+
   /** Latest Claude-plan quota snapshot (pushed by the chat view) — the Cockpit
    *  renders it in the System tile. Null for API-key sessions. */
   lastRateLimit: import("./providers/types").RateLimitInfo | null = null;
@@ -1538,6 +1541,21 @@ export default class ExoPlugin extends Plugin {
       new Notice("Scrivi la richiesta nel corpo della nota — Exo risponde al prossimo drain.");
     } catch (err) {
       new Notice(`Couldn't create the queue request: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** True when `node` resolves on the given PATH — the codex child must be able
+   *  to spawn the bridge script. On failure, warn ONCE per app run. */
+  async checkNodeForBridge(pathEnv: string): Promise<boolean> {
+    try {
+      await execFileAsync("node", ["--version"], { env: { ...process.env, PATH: pathEnv } });
+      return true;
+    } catch {
+      if (!this.nodeWarned) {
+        this.nodeWarned = true;
+        new Notice("Obsidian tools bridge unavailable for Codex — `node` not found on PATH. Codex runs without vault tools.");
+      }
+      return false;
     }
   }
 
