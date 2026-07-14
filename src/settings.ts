@@ -158,6 +158,9 @@ export interface MVASettings {
   playbookExternalTools: boolean;
   /** Set once after seeding the Morning Digest playbook, so it's never re-seeded. */
   seededDigest: boolean;
+  /** Learning loop: after a substantial successful turn, offer to save the flow
+   *  as a reusable playbook (free proposal; LLM distillation only on accept). */
+  learningLoop: boolean;
   /** Per-playbook last-run timestamps (scheduler bookkeeping). */
   scheduledLastRun: Record<string, number>;
   /** Epoch ms of the last daily Claude-CLI update check (0 = never). */
@@ -245,6 +248,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   scheduledRuns: "",
   playbookExternalTools: false,
   seededDigest: false,
+  learningLoop: true,
   scheduledLastRun: {},
   cliUpdateCheckAt: 0,
   cliLatestKnown: "",
@@ -878,6 +882,18 @@ export class MVASettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(s.playbookExternalTools).onChange(async (v) => {
           s.playbookExternalTools = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(el)
+      .setName("Learning loop")
+      .setDesc(
+        "After a substantial successful turn, Exo offers to save the flow as a reusable playbook. The offer is free; the distillation runs only if you accept."
+      )
+      .addToggle((t) =>
+        t.setValue(s.learningLoop).onChange(async (v) => {
+          s.learningLoop = v;
           await this.plugin.saveSettings();
         })
       );

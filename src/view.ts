@@ -69,6 +69,7 @@ import { planInputParts, planStateText } from "./core/plan";
 import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
 import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
 import { caretHost, type CaretNode } from "./core/caret-host";
+import { turnQualifies, buildDistillPrompt, parseDistillReply, uniquePlaybookName } from "./core/learning-loop";
 
 export type { AskQuestion } from "./core/model";
 
@@ -164,6 +165,9 @@ export interface Convo {
   /** True once the proactive ≥75% compaction nudge has been shown for this
    *  conversation — one-shot, so it never re-appears after dismiss or compaction. */
   compactNudged?: boolean;
+  /** True once the learning-loop "save as playbook?" offer has been shown for
+   *  this conversation — one-shot per convo, runtime-only (never persisted). */
+  playbookNudged?: boolean;
   /** True once an AI-title generation has been fired for this conversation —
    *  one-shot guard so the Haiku title call runs at most once (after the first
    *  assistant turn). Runtime-only (never persisted). */
@@ -4473,6 +4477,9 @@ export class ChatView extends ItemView {
             .createDiv({ cls: "mva-turn-meta" })
             .createSpan({ cls: "mva-turn-duration", text: `✻ ${this.fmtDuration(elapsed)}` });
         }
+        // Learning loop: a substantial healthy turn earns a quiet "save as
+        // playbook?" offer. Free until accepted — distillation runs on click.
+        if (!c.stopped && !poisoned) this.maybeProposePlaybook(ctx, c, elapsed);
       }
       // Turn finished normally (Feature 3): notify if it ran long and the window
       // is backgrounded. `poisoned` covers an in-band error already handled above.
@@ -4694,6 +4701,65 @@ export class ChatView extends ItemView {
     const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
     setting?.open();
     setting?.openTabById("exo");
+  }
+
+  /* ------------------------- learning loop ------------------------- */
+
+  /** After a substantial healthy turn, offer to save the flow as a reusable
+   *  playbook (Hermes pattern). One-shot per conversation; free until accepted. */
+  private maybeProposePlaybook(ctx: AssistantCtx, c: Convo, durationMs: number): void {
+    if (!this.plugin.settings.learningLoop || c.playbookNudged) return;
+    const tools = ctx.segments.filter((s): s is Extract<Segment, { t: "tool" }> => s.t === "tool");
+    const stats = {
+      ok: true,
+      toolCount: tools.length,
+      distinctTools: new Set(tools.map((t) => t.name)).size,
+      durationMs,
+      userText: ctx.userText,
+    };
+    if (!turnQualifies(stats)) return;
+    c.playbookNudged = true;
+    const card = ctx.el.createDiv({ cls: "mva-ll" });
+    setIcon(card.createSpan({ cls: "mva-ll-icon" }), "sparkles");
+    card.createSpan({ cls: "mva-ll-label", text: "Flusso riusabile — salvarlo come playbook?" });
+    const save = card.createSpan({ cls: "mva-ll-btn", text: "Salva" });
+    const dismiss = card.createSpan({ cls: "mva-ll-x", attr: { "aria-label": "Dismiss" } });
+    setIcon(dismiss, "x");
+    this.clickable(save, () => void this.distillPlaybook(ctx, card));
+    this.clickable(dismiss, () => card.remove());
+  }
+
+  /** Accepted: run the distillation on a transient utility session and save
+   *  the result into custom prompts. Soft failure — the card says so, nothing
+   *  else changes. */
+  private async distillPlaybook(ctx: AssistantCtx, card: HTMLElement): Promise<void> {
+    card.empty();
+    setIcon(card.createSpan({ cls: "mva-ll-icon is-working" }), "sparkles");
+    card.createSpan({ cls: "mva-ll-label", text: "Distillo il playbook…" });
+    const toolLines = ctx.segments
+      .filter((s): s is Extract<Segment, { t: "tool" }> => s.t === "tool")
+      .slice(0, 30)
+      .map((t) => {
+        const m = toolMeta(t.name, t.input);
+        return `${m.label}${m.target ? `: ${m.target}` : ""}`;
+      });
+    const prompt = buildDistillPrompt({ userText: ctx.userText, toolLines, finalText: ctx.fullText });
+    const ctrl = new AbortController();
+    const raw = await this.plugin.runUtilityPass(prompt, { signal: ctrl.signal, timeoutMs: 90_000 });
+    const parsed = parseDistillReply(raw);
+    card.empty();
+    if (!parsed) {
+      setIcon(card.createSpan({ cls: "mva-ll-icon" }), "circle-alert");
+      card.createSpan({ cls: "mva-ll-label", text: "Distillazione non riuscita — riprova più tardi." });
+      window.setTimeout(() => card.remove(), 6000);
+      return;
+    }
+    const s = this.plugin.settings;
+    const name = uniquePlaybookName(parsed.name, (s.customPrompts ?? []).map((p) => p.name));
+    s.customPrompts.push({ name, prompt: parsed.prompt });
+    await this.plugin.saveSettings();
+    setIcon(card.createSpan({ cls: "mva-ll-icon is-ok" }), "check");
+    card.createSpan({ cls: "mva-ll-label", text: `Salvato: "${name}" — lo trovi nel menu / (modificabile in settings).` });
   }
 
   /** Live attention snapshot for the Cockpit: conversations blocked on a
