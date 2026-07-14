@@ -19,12 +19,6 @@ const EXO_HOUSE_RULES =
   'Do NOT restate them as a prose list, a "Files touched"/"File toccati" section, ' +
   'or a details/accordion — it duplicates the native UI.';
 
-/** All standard tools — denied when tools are off (pure chat). */
-const ALL_TOOLS = [
-  "Bash", "BashOutput", "KillShell", "Edit", "MultiEdit", "Write", "NotebookEdit",
-  "Read", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "Task", "TodoWrite", "SlashCommand",
-];
-
 /**
  * A persistent Claude conversation: one long-lived SDK `query()` driven in
  * streaming-input mode. Follow-up turns push into the same input stream, so the
@@ -204,7 +198,13 @@ class ClaudeSession implements AgentSession {
                   }
                 : {}),
             }
-          : { disallowedTools: ALL_TOOLS }),
+          : // Pure-chat (tools off): use the SDK's `tools: []` switch ("disable all
+            // built-in tools") rather than a hand-maintained disallowedTools denylist.
+            // A denylist can drift as the SDK adds tools and — worse — a deny is read
+            // as a user rule the permission classifier extends to same-intent tools
+            // (the exact cascade that silently killed ask_user). `tools: []` can't drift
+            // or cascade.
+            { tools: [] }),
       },
     });
 

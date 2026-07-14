@@ -93,8 +93,10 @@ export class ConvoStateChannel {
     for (const listener of this.listeners) {
       try {
         listener(event);
-      } catch {
-        /* a board-side crash must never surface in chat — swallow */
+      } catch (err) {
+        // A board-side crash must never surface in chat — but log it, so a
+        // silently-throwing observer is debuggable rather than invisible.
+        console.error("[exo] convo-state listener threw", err);
       }
     }
   }

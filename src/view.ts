@@ -2090,8 +2090,10 @@ export class ChatView extends ItemView {
           }
         }
       })
-      .catch(() => {
-        /* never surface into the turn */
+      .catch((err) => {
+        // Never surface into the turn — but record it, so a broken observer
+        // pipeline is visible in Diagnostics instead of failing silently.
+        this.diag.push("observer", `now-proposal: ${err instanceof Error ? err.message : String(err)}`);
       });
   }
 
@@ -2179,8 +2181,10 @@ export class ChatView extends ItemView {
         if (!this.convos.includes(c) || !el.isConnected) return; // turn removed/rebuilt
         this.renderMemoryVeto(el, write);
       })
-      .catch(() => {
-        /* never surface into the turn — a later boundary gets another chance */
+      .catch((err) => {
+        // Never surface into the turn — a later boundary retries — but log it so
+        // a persistently-failing memory pipeline is visible in Diagnostics.
+        this.diag.push("observer", `memory-veto: ${err instanceof Error ? err.message : String(err)}`);
       });
   }
 
@@ -2757,6 +2761,7 @@ export class ChatView extends ItemView {
     const undone = c.messages.slice(idx);
     const restored = new Set<string>();
     let changed = 0;
+    let failed = 0;
     let missingCheckpoints = false;
     for (const m of undone) {
       if (m.role !== "assistant") continue;
@@ -2782,8 +2787,12 @@ export class ChatView extends ItemView {
             await this.app.vault.create(path, before);
             changed++;
           }
-        } catch {
-          /* skip files we can't restore */
+        } catch (err) {
+          // Don't abort the whole rewind on one locked/denied file — but count it
+          // and log it, so the final Notice tells the truth instead of claiming
+          // every file was restored.
+          failed++;
+          this.diag.push("rewind", `restore failed for ${path}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     }
@@ -2801,7 +2810,9 @@ export class ChatView extends ItemView {
     if (c === this.active) this.rebuildOutline();
     this.persist();
     const note = `Rewound. Restored ${changed} file${changed === 1 ? "" : "s"}; session reset.`;
-    new Notice(missingCheckpoints ? `${note} (some edits had no snapshot — e.g. oversized files are not checkpointed.)` : note);
+    const failNote = failed > 0 ? ` (${failed} file${failed === 1 ? "" : "s"} could not be restored — see Diagnostics.)` : "";
+    const snapNote = missingCheckpoints ? " (some edits had no snapshot — e.g. oversized files are not checkpointed.)" : "";
+    new Notice(`${note}${failNote}${snapNote}`);
   }
 
   /**
