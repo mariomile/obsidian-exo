@@ -4191,7 +4191,9 @@ export class ChatView extends ItemView {
             this.syncWorking(ctx); // keep the row below the todos panel
             break;
           }
-          if (e.name === "mcp__obsidian__ask_user") {
+          if (e.name === "mcp__obsidian__ask_user" || e.name === "AskUserQuestion") {
+            // "AskUserQuestion" is the built-in name the model may emit — the
+            // provider aliases it to mcp__obsidian__ask_user at execution time.
             this.diag.push("tool", "ask_user start");
             toolNames.set(e.id, "ask_user");
             // The ask card is rendered later by askBridge (which opens a card via
@@ -4288,7 +4290,9 @@ export class ChatView extends ItemView {
         }
         case "permission-request": {
           // ask_user is a user interaction, not a gated action — never card it.
-          if (e.tool === "mcp__obsidian__ask_user") {
+          // Both names: the built-in AskUserQuestion is aliased to the MCP tool,
+          // but the permission request may carry either name.
+          if (e.tool === "mcp__obsidian__ask_user" || e.tool === "AskUserQuestion") {
             e.resolve({ behavior: "allow" });
             break;
           }
