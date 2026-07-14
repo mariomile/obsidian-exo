@@ -1,6 +1,7 @@
 import { App, TFile, prepareSimpleSearch, getAllTags } from "obsidian";
 import { z } from "zod";
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import type { SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { resolveLink, neighborhood, basename } from "./graph";
 import {
   formatEntry,
@@ -124,36 +125,55 @@ async function ensureParentFolder(app: App, path: string): Promise<void> {
   }
 }
 
+/** Options bag for {@link buildObsidianTools} — one field per gating/bridge
+ *  input that `createObsidianToolServer` used to take positionally. */
+export interface ObsidianToolOpts {
+  alwaysLoad?: boolean;
+  memoryWrite?: boolean;
+  askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>;
+  memoryRead?: boolean;
+  memoryWriteQueue?: WriteQueue;
+  orchestrationEnabled?: boolean;
+  tasksWriteQueue?: WriteQueue;
+  agentFolderEnabled?: boolean;
+  rethinkBridge?: (req: RethinkRequest) => Promise<string>;
+}
+
 /**
- * In-process MCP server exposing Obsidian-native tools to the agent: graph
+ * Build the gated array of Obsidian-native tool definitions: graph
  * navigation, metadata-aware read/search, convention-aware writes, and
  * `_system/` memory capture. Handlers run in-process and use the Obsidian API
  * (metadataCache/vault/fileManager) — no shell, graph- and frontmatter-aware.
+ * Consumed directly by the Codex↔Obsidian bridge, and wrapped by
+ * {@link createObsidianToolServer} for the Claude Agent SDK.
  */
-export function createObsidianToolServer(
-  app: App,
-  alwaysLoad = true,
-  memoryWrite = true,
-  askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>,
-  memoryRead = true,
-  memoryWriteQueue: WriteQueue = new WriteQueue(),
-  /** Orchestration Board master flag (default OFF). Gates `add_task` only —
-   *  every other tool above is unaffected, and the tool list sent to sessions
-   *  must be byte-identical to before this parameter existed when this is false. */
-  orchestrationEnabled = false,
-  /** Shared write-queue for the tasks ledger (`_system/orchestration/tasks.md`),
-   *  injected by the plugin the same way `memoryWriteQueue` is — so `add_task`
-   *  and any future board-side writer serialize on the SAME queue. */
-  tasksWriteQueue: WriteQueue = new WriteQueue(),
-  /** The Agent Is the Folder master flag (default OFF). Gates `rethink_memory`
-   *  ONLY (in addition to memoryWrite) — every other tool is byte-identical to
-   *  before this parameter existed when this is false. */
-  agentFolderEnabled = false,
-  /** View-side bridge that enacts a `rethink_memory` request: resolves the tier,
-   *  writes (now/human) or records a pending proposal card (persona), and renders
-   *  the feed diff+undo. Absent → the tool is not registered. */
-  rethinkBridge?: (req: RethinkRequest) => Promise<string>
-) {
+export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToolDefinition<any>[] {
+  const {
+    // Server-level flag only (consumed by createObsidianToolServer's
+    // createSdkMcpServer call) — destructured here for ObsidianToolOpts
+    // conformance, not used in tool-building itself.
+    alwaysLoad: _alwaysLoad = true,
+    memoryWrite = true,
+    askBridge,
+    memoryRead = true,
+    memoryWriteQueue = new WriteQueue(),
+    /** Orchestration Board master flag (default OFF). Gates `add_task` only —
+     *  every other tool above is unaffected, and the tool list sent to sessions
+     *  must be byte-identical to before this parameter existed when this is false. */
+    orchestrationEnabled = false,
+    /** Shared write-queue for the tasks ledger (`_system/orchestration/tasks.md`),
+     *  injected by the plugin the same way `memoryWriteQueue` is — so `add_task`
+     *  and any future board-side writer serialize on the SAME queue. */
+    tasksWriteQueue = new WriteQueue(),
+    /** The Agent Is the Folder master flag (default OFF). Gates `rethink_memory`
+     *  ONLY (in addition to memoryWrite) — every other tool is byte-identical to
+     *  before this parameter existed when this is false. */
+    agentFolderEnabled = false,
+    /** View-side bridge that enacts a `rethink_memory` request: resolves the tier,
+     *  writes (now/human) or records a pending proposal card (persona), and renders
+     *  the feed diff+undo. Absent → the tool is not registered. */
+    rethinkBridge,
+  } = opts ?? {};
   const need = (target: string): TFile => {
     const f = resolveLink(app, target);
     if (!f) throw new Error(`Note not found: ${target}`);
@@ -883,24 +903,55 @@ export function createObsidianToolServer(
     }
   );
 
+  return [
+    searchVault, readNote, getBacklinks, getNeighborhood, listNotes, listTags, getActiveContext,
+    listAnnotations, askUser, listLoops,
+    createNote, appendToNote, updateFrontmatter, addLinks, openNote,
+    editNote, insertAtCursor, renameNote, resolveAnnotation,
+    ...(memoryRead ? [recall] : []),
+    ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
+    // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
+    // agent-folder flag, plus a live view bridge to render its diff/proposal.
+    ...(memoryWrite && agentFolderEnabled && rethinkBridge ? [rethinkMemory] : []),
+    ...(orchestrationEnabled ? [addTask] : []),
+  ];
+}
+
+/**
+ * In-process MCP server exposing Obsidian-native tools to the agent via the
+ * Claude Agent SDK. Thin wrapper around {@link buildObsidianTools} — the tool
+ * array itself is built there so the Codex↔Obsidian bridge can consume it
+ * directly without going through `createSdkMcpServer`.
+ */
+export function createObsidianToolServer(
+  app: App,
+  alwaysLoad = true,
+  memoryWrite = true,
+  askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>,
+  memoryRead = true,
+  memoryWriteQueue: WriteQueue = new WriteQueue(),
+  orchestrationEnabled = false,
+  tasksWriteQueue: WriteQueue = new WriteQueue(),
+  agentFolderEnabled = false,
+  rethinkBridge?: (req: RethinkRequest) => Promise<string>
+) {
   return createSdkMcpServer({
     name: "obsidian",
     version: "1.0.0",
     alwaysLoad,
     instructions:
       "Obsidian-native tools. Prefer these over generic file/Bash tools for vault work — they respect links, tags, and frontmatter.",
-    tools: [
-      searchVault, readNote, getBacklinks, getNeighborhood, listNotes, listTags, getActiveContext,
-      listAnnotations, askUser, listLoops,
-      createNote, appendToNote, updateFrontmatter, addLinks, openNote,
-      editNote, insertAtCursor, renameNote, resolveAnnotation,
-      ...(memoryRead ? [recall] : []),
-      ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
-      // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
-      // agent-folder flag, plus a live view bridge to render its diff/proposal.
-      ...(memoryWrite && agentFolderEnabled && rethinkBridge ? [rethinkMemory] : []),
-      ...(orchestrationEnabled ? [addTask] : []),
-    ],
+    tools: buildObsidianTools(app, {
+      alwaysLoad,
+      memoryWrite,
+      askBridge,
+      memoryRead,
+      memoryWriteQueue,
+      orchestrationEnabled,
+      tasksWriteQueue,
+      agentFolderEnabled,
+      rethinkBridge,
+    }),
   });
 }
 
