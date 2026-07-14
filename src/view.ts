@@ -25,6 +25,7 @@ import type {
 import { toolMeta, toolFilePath, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
 import {
   createObsidianToolServer,
+  buildObsidianTools,
   OBSIDIAN_READ_TOOLS,
   OBSIDIAN_MEMORY_TOOLS,
   type RethinkRequest,
@@ -701,6 +702,35 @@ export class ChatView extends ItemView {
       }
     }
 
+    // Codex ↔ Obsidian tools bridge (Tranche B1): same registry as Claude's SDK
+    // server, swapped per session. SANDBOX HONESTY: bridge writes happen in the
+    // Obsidian process and bypass codex's sandbox, so a read-only sandbox gets
+    // read tools only.
+    let codexBridge: { port: number; token: string; scriptPath: string } | undefined;
+    if (c.provider === "codex" && s.obsidianToolsEnabled && s.toolsEnabled) {
+      const b = await this.plugin.ensureCodexBridge();
+      if (b) {
+        const readOnlySandbox = s.codexSandbox === "read-only";
+        const all = buildObsidianTools(this.app, {
+          memoryWrite: s.memoryWriteEnabled && !readOnlySandbox,
+          memoryRead: s.memoryReadEnabled,
+          // Per-session server + per-convo closure: ask_user always renders into
+          // the conversation that owns this session, never a parallel one.
+          askBridge: (qs) => this.askBridge(c, qs),
+          memoryWriteQueue: this.plugin.memoryWriteQueue,
+          orchestrationEnabled: s.orchestrationEnabled && !readOnlySandbox,
+          tasksWriteQueue: this.plugin.tasksWriteQueue,
+        });
+        const READ_BASENAMES = new Set(
+          [...OBSIDIAN_READ_TOOLS].map((n) => n.replace("mcp__obsidian__", ""))
+        );
+        b.bridge.setTools(
+          readOnlySandbox ? all.filter((t) => READ_BASENAMES.has(t.name) || t.name === "ask_user") : all
+        );
+        codexBridge = { port: b.bridge.port, token: b.bridge.token, scriptPath: b.scriptPath };
+      }
+    }
+
     const session = ADAPTERS[c.provider].createSession({
       cli,
       model: c.model,
@@ -718,6 +748,7 @@ export class ChatView extends ItemView {
       autoCompact: s.autoCompactEnabled && c.provider === "claude",
       sandboxMode: s.codexSandbox,
       approvalPolicy: s.codexApproval,
+      codexBridge,
     });
     // Capability snapshot (system/init, CLI ≥2.1.199): the real skills/commands/
     // agents/MCP this session sees. Cache view-wide for the autocomplete menus

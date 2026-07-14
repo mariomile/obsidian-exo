@@ -24,6 +24,16 @@ function imageExt(mediaType: string): string {
  *  stream doesn't report the window size. */
 const CODEX_CONTEXT_WINDOW = 272_000;
 
+/** TOML inline-table override that registers the bridge as codex's `obsidian`
+ *  MCP server. Values are TOML basic strings — escape backslashes and quotes. */
+export function codexMcpOverride(b: { port: number; token: string; scriptPath: string }): string {
+  const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return (
+    `mcp_servers.obsidian={command="node",args=["${esc(b.scriptPath)}"],` +
+    `env={EXO_BRIDGE_PORT="${b.port}",EXO_BRIDGE_TOKEN="${esc(b.token)}"}}`
+  );
+}
+
 export interface CodexParseState {
   sessionId?: string;
   streamed: boolean;
@@ -203,6 +213,10 @@ class CodexSession implements AgentSession {
       args.push("-c", `model_reasoning_effort="${o.effort}"`);
     }
     if (o.fastStartup) args.push("-c", "mcp_servers={}");
+    // Obsidian tools over the loopback bridge. Ordering matters: this comes
+    // AFTER the fastStartup blanket `mcp_servers={}` so the obsidian server
+    // survives it (later -c overrides win in codex config layering).
+    if (o.codexBridge) args.push("-c", codexMcpOverride(o.codexBridge));
 
     return new Promise<void>((resolve, reject) => {
       const child = spawn(o.cli.bin, args, {

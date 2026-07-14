@@ -40,6 +40,8 @@ import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
 import { inlineAiExtension } from "./editor/inline-ai";
 import { selectionObserverExtension } from "./editor/selection-observer";
 import { WriteQueue } from "./core/write-queue";
+import { startCodexBridge, type CodexBridge } from "./obsidian/codex-bridge";
+import { CODEX_BRIDGE_SCRIPT } from "./obsidian/codex-bridge-script";
 import { promoteToTaskCommandVisible } from "./core/tasks";
 import {
   ConvoStateChannel,
@@ -107,6 +109,10 @@ export default class ExoPlugin extends Plugin {
    *  view) — lets settings show live per-server MCP status. Best-effort: null
    *  until a session has spawned this app run. */
   lastSessionCaps: import("./providers/types").SessionCaps | null = null;
+
+  /** Codex ↔ Obsidian tools bridge (lazy singleton; stopped on unload). */
+  private codexBridge: CodexBridge | null = null;
+  private codexBridgeScriptPath: string | null = null;
 
   /** Latest Claude-plan quota snapshot (pushed by the chat view) — the Cockpit
    *  renders it in the System tile. Null for API-key sessions. */
@@ -1533,6 +1539,28 @@ export default class ExoPlugin extends Plugin {
     } catch (err) {
       new Notice(`Couldn't create the queue request: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /** Start (once) the loopback executor and materialize the stdio script the
+   *  codex child spawns. Null when anything fails — Codex then runs without
+   *  obsidian tools, exactly as before the bridge existed. */
+  async ensureCodexBridge(): Promise<{ bridge: CodexBridge; scriptPath: string } | null> {
+    try {
+      if (!this.codexBridge) this.codexBridge = await startCodexBridge();
+      if (!this.codexBridgeScriptPath) {
+        const rel = `${this.manifest.dir}/codex-bridge.mjs`;
+        await this.app.vault.adapter.write(rel, CODEX_BRIDGE_SCRIPT);
+        this.codexBridgeScriptPath = `${this.vaultPath()}/${rel}`;
+      }
+      return { bridge: this.codexBridge, scriptPath: this.codexBridgeScriptPath };
+    } catch (e) {
+      console.warn("[Exo] codex bridge unavailable:", e);
+      return null;
+    }
+  }
+
+  onunload(): void {
+    this.codexBridge?.stop();
   }
 
   /** Pending queue requests (for the Autonomy card). */
