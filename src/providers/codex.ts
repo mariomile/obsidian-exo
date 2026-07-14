@@ -1,12 +1,23 @@
 import { spawn, type ChildProcess } from "child_process";
+import { writeFile, unlink } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 import type {
   AgentEvent,
   AgentSession,
   ContextUsage,
+  ImageAttachment,
   ModelOption,
   ProviderAdapter,
   SessionOpts,
 } from "./types";
+
+/** File extension for an image attachment's media type (codex -i needs a path). */
+function imageExt(mediaType: string): string {
+  const m = /^image\/(png|jpe?g|gif|webp)$/i.exec(mediaType);
+  const sub = m?.[1]?.toLowerCase() ?? "png";
+  return sub === "jpeg" ? "jpg" : sub;
+}
 
 export interface CodexParseState {
   sessionId?: string;
@@ -137,10 +148,30 @@ class CodexSession implements AgentSession {
     this.sessionId = opts.resumeSessionId;
   }
 
-  send(message: string, onEvent: (e: AgentEvent) => void): Promise<void> {
+  async send(message: string, onEvent: (e: AgentEvent) => void, images?: ImageAttachment[]): Promise<void> {
     const o = this.opts;
     const args = ["exec", "--json", "--skip-git-repo-check", "-C", o.cwd];
     if (this.sessionId) args.splice(1, 0, "resume", this.sessionId);
+    // Memory/identity boot (Tranche A parity): Codex has no system-prompt seam,
+    // so the preamble rides the session's FIRST turn as a prefixed block — the
+    // resumed transcript carries it from then on. Never re-injected on resume.
+    if (!this.sessionId && o.memoryPreamble) {
+      message = `<boot-context>\n${o.memoryPreamble}\n</boot-context>\n\n${message}`;
+    }
+    // Images (Tranche A parity): `codex exec -i <file>` on both fresh and
+    // resumed prompts. Attachments arrive as base64 — spill to temp files,
+    // best-effort cleanup after the child exits.
+    const imgPaths: string[] = [];
+    for (const [i, img] of (images ?? []).entries()) {
+      try {
+        const p = join(tmpdir(), `exo-codex-img-${Date.now()}-${i}.${imageExt(img.mediaType)}`);
+        await writeFile(p, Buffer.from(img.dataB64, "base64"));
+        imgPaths.push(p);
+      } catch {
+        /* unwritable temp — send the turn without this image */
+      }
+    }
+    for (const p of imgPaths) args.push("-i", p);
     // Sandbox: forced read-only when tools are off; otherwise the chosen mode.
     const sandbox = o.toolsEnabled ? o.sandboxMode || "workspace-write" : "read-only";
     args.push("-s", sandbox);
@@ -184,6 +215,7 @@ class CodexSession implements AgentSession {
 
       child.on("close", (code) => {
         this.child = null;
+        for (const p of imgPaths) void unlink(p).catch(() => {});
         if (code !== 0 && code !== null) {
           const m = stderr.trim() || `codex exited with code ${code}`;
           onEvent({ kind: "error", message: m });

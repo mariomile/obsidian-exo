@@ -58,7 +58,7 @@ import { buildRelatedChips } from "./ui/related";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { planPersistedConvos } from "./core/persistence";
-import { buildRecap, isRecoverableSessionError, resolveRecovery, stopAction } from "./core/recovery";
+import { buildRecap, isRecoverableSessionError, resolveRecovery, shouldColdReseed, stopAction } from "./core/recovery";
 import { workingAffordance } from "./core/working-visibility";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
@@ -209,6 +209,11 @@ interface AssistantCtx {
   tailEl: HTMLElement | null;
   /** The live streaming caret (at most one per turn), tracked so cleanup is O(1). */
   caretEl: HTMLElement | null;
+  /** Turn finalized (flushRender ran). A render tick's caret placement resolves on
+   *  a microtask, so a tick in flight when the turn ends could otherwise re-add a
+   *  caret AFTER cleanup. This flag is the airtight invariant — no caret may be
+   *  placed once true — closing the whole orphaned-caret race class. */
+  finalized: boolean;
   /** Incremental block-boundary scan state over curRaw (O(delta) per tick):
    *  chars already scanned (complete lines only) … */
   scanPos: number;
@@ -306,6 +311,10 @@ export class ChatView extends ItemView {
 
   private tabsEl!: HTMLElement;
   private listWrap!: HTMLElement;
+  /** Persistent "work running in background tabs" strip, pinned above the composer.
+   *  Hidden unless a NON-active conversation is mid-turn — the signal that another
+   *  agent is working where you can't see it. */
+  private bgBarEl: HTMLElement | null = null;
   /** Inner scroll host inside listWrap. Holds the (swapped-per-conversation)
    *  `.mva-list` and any full-pane overlay (gallery/capabilities). Split out from
    *  listWrap so the composer — now a bottom sibling of the list — survives the
@@ -403,6 +412,10 @@ export class ChatView extends ItemView {
         window.open(external, "_blank");
       }
     });
+    // Background-work strip: an in-flow sibling of listWrap, created BEFORE the
+    // composer mounts so it sits directly above it in the flex column. Hidden until
+    // a non-active conversation is streaming.
+    this.bgBarEl = this.listWrap.createDiv({ cls: "mva-bgbar is-hidden" });
     this.buildComposer();
     // View-level Esc-to-stop: the composer's own Escape handler only fires while the
     // textarea is focused, but clicking into the transcript blurs it — so "esc to stop"
@@ -658,7 +671,9 @@ export class ChatView extends ItemView {
       : undefined;
 
     let memoryPreamble: string | undefined;
-    if (s.memoryReadEnabled && c.provider === "claude") {
+    // Provider-agnostic since Tranche A (Codex parity): Claude appends it to
+    // the system prompt; Codex prefixes it to the session's first turn.
+    if (s.memoryReadEnabled) {
       if (!this.memoryPreamble)
         this.memoryPreamble = await readBootContext(this.app, {
           agentFolderEnabled: s.agentFolderEnabled,
@@ -1107,6 +1122,9 @@ export class ChatView extends ItemView {
     this.tabsEl.empty();
     const ids = this.openTabs.filter((id) => this.convos.some((c) => c.id === id));
     this.openTabs = ids;
+    // Keep the composer background-strip in sync on every tab render (streaming
+    // change, tab switch, close) — runs even on the single-tab early return below.
+    this.refreshRunningIndicators();
     // A lone empty tab needs no bar — keep the chrome minimal.
     if (ids.length <= 1) {
       this.tabsEl.addClass("is-hidden");
@@ -1143,6 +1161,22 @@ export class ChatView extends ItemView {
     const add = this.tabsEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
     setIcon(add, "plus");
     this.clickable(add, () => this.newConversation());
+    // Count pill: how many OTHER conversations are mid-turn right now — the
+    // glanceable "another agent is working in the background" number. Counts
+    // streaming turns (state Exo can report honestly), click jumps to the first.
+    const running = this.convos.filter((c) => c.streaming && c !== this.active).length;
+    if (running > 0) {
+      const pill = this.tabsEl.createDiv({
+        cls: "mva-tab-running",
+        attr: { "aria-label": `${running} conversation${running > 1 ? "s" : ""} working in the background` },
+      });
+      setIcon(pill.createSpan({ cls: "mva-tab-running-icon" }), "loader");
+      pill.createSpan({ cls: "mva-tab-running-count", text: String(running) });
+      this.clickable(pill, () => {
+        const first = this.convos.find((c) => c.streaming && c !== this.active);
+        if (first) this.switchTo(first);
+      });
+    }
   }
 
   /** Close a tab (the conversation stays in history; reopen from the gallery). */
@@ -2021,13 +2055,12 @@ export class ChatView extends ItemView {
    *  to before this feature existed. */
   private proactiveRecallEligible(c: Convo): boolean {
     const s = this.plugin.settings;
-    return (
-      s.proactiveRecall &&
-      s.memoryReadEnabled &&
-      s.obsidianToolsEnabled &&
-      s.toolsEnabled &&
-      c.provider === "claude"
-    );
+    if (!s.proactiveRecall || !s.memoryReadEnabled) return false;
+    // Claude keeps the same preconditions that register the `recall` tool.
+    // Codex (Tranche A parity): the injection is plain text in the outbound
+    // turn — no tool pairing required.
+    if (c.provider === "claude") return s.obsidianToolsEnabled && s.toolsEnabled;
+    return true;
   }
 
   /** Read + parse the whole Union Store (all monthly files) — the SAME cheap
@@ -2088,7 +2121,8 @@ export class ChatView extends ItemView {
   private observeTurn(c: Convo, el: HTMLElement, userText: string, assistantText: string): void {
     const s = this.plugin.settings;
     if (!s.selfWritingMemory || !s.memoryWriteEnabled) return;
-    if (c.provider !== "claude") return;
+    // Provider-agnostic (Tranche A): the observer itself runs on a transient
+    // Claude utility pass regardless of which provider produced the turn.
     if (!userText.trim() || !assistantText.trim()) return;
     if (!this.plugin.canRunObserver()) {
       console.info("[Exo] observer skipped: background budget exhausted or disabled.");
@@ -2166,7 +2200,7 @@ export class ChatView extends ItemView {
     const s = this.plugin.settings;
     if (s.observerCadence !== "every-n-steps") return;
     if (!s.selfWritingMemory || !s.memoryWriteEnabled) return;
-    if (c.provider !== "claude") return;
+    // Provider-agnostic (Tranche A) — see observeTurn.
     const cadence = c.cadence ?? initialCadenceState();
     const stepped = recordStep(cadence, s.observerStepInterval);
     c.cadence = stepped.state;
@@ -2342,6 +2376,7 @@ export class ChatView extends ItemView {
       stableLen: 0,
       tailEl: null,
       caretEl: null,
+      finalized: false,
       scanPos: 0,
       fenceOpen: false,
       lastBoundary: 0,
@@ -2617,6 +2652,13 @@ export class ChatView extends ItemView {
       // the segment was interrupted while this render was in flight (tailEl was
       // reset), so an in-flight tick can't resurrect an orphaned caret.
       if (ctx.tailEl !== tail || !tail.isConnected) return;
+      // Turn already finalized (flushRender ran + swept): a late-resolving render
+      // tick must never resurrect a caret after cleanup — the invariant that closes
+      // the orphaned-caret race regardless of which timing triggered it.
+      if (ctx.finalized) {
+        this.diag.push("caret", "late-place blocked (finalized)");
+        return;
+      }
       this.clearCaret(ctx);
       // Inline placement: inside the last text-bearing block, after its last
       // character. A tail with no host (empty, trailing hr/image, blank
@@ -2669,6 +2711,10 @@ export class ChatView extends ItemView {
   }
 
   private flushRender(ctx: AssistantCtx, interrupted = false): void {
+    // Mark the turn terminal FIRST: any render tick still in flight resolves on a
+    // microtask after this, and the finalized guard at the caret add-site blocks it
+    // from placing a caret past cleanup. Set before anything async below.
+    ctx.finalized = true;
     if (ctx.renderTimer !== null) {
       window.clearTimeout(ctx.renderTimer);
       ctx.renderTimer = null;
@@ -3932,6 +3978,29 @@ export class ChatView extends ItemView {
     }
   }
 
+  /** Refresh the persistent "work is running in the background" strip above the
+   *  composer. Shown whenever a NON-active conversation is mid-turn — the current
+   *  tab's own work already shows a working row, so this surfaces only the agents
+   *  you can't see. Counts streaming turns (a state Exo can report truthfully,
+   *  unlike a detached background shell it can't poll). Click jumps to the first.
+   *  Idempotent; driven from renderTabs so it stays in sync with every state change. */
+  private refreshRunningIndicators(): void {
+    const bar = this.bgBarEl;
+    if (!bar) return;
+    const others = this.convos.filter((c) => c.streaming && c !== this.active);
+    bar.empty();
+    bar.toggleClass("is-hidden", others.length === 0);
+    if (others.length === 0) return;
+    setIcon(bar.createSpan({ cls: "mva-bgbar-icon" }), "loader");
+    const n = others.length;
+    bar.createSpan({
+      cls: "mva-bgbar-label",
+      text: n === 1 ? "1 chat still working in the background" : `${n} chats still working in the background`,
+    });
+    bar.createSpan({ cls: "mva-bgbar-open", text: "open" });
+    this.clickable(bar, () => this.switchTo(others[0]));
+  }
+
   /**
    * Terminal convo-state hook, fired once from `runTurn`'s `finally`. Maps the
    * turn's end state to the board vocabulary: user-stopped → `stopped`;
@@ -4081,17 +4150,11 @@ export class ChatView extends ItemView {
       ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${text}`
       : text;
 
-    // Images are Claude-only; warn and drop for Codex.
+    // Images flow to both providers since Tranche A: Claude gets base64 blocks,
+    // Codex gets temp files via `codex exec -i` (handled in the adapter).
     let imgs = images;
-    if (imgs?.length && c.provider !== "claude") {
-      new Notice("Image attachments are supported on Claude — sending text only.");
-      imgs = undefined;
-    }
-    // Add any `![[image]]` embeds referenced in the text (Claude only).
-    if (c.provider === "claude") {
-      const embedded = await this.composer.embeddedImages(text);
-      if (embedded.length) imgs = [...(imgs ?? []), ...embedded];
-    }
+    const embedded = await this.composer.embeddedImages(text);
+    if (embedded.length) imgs = [...(imgs ?? []), ...embedded];
 
     // Proactive recall (design 2026-07-09): pick the relevant, not-yet-injected
     // memories for THIS turn. Runs off the store's cached read; `[]` when the flag
@@ -4442,7 +4505,24 @@ export class ChatView extends ItemView {
       // text, so they can't leak into the transcript, c.messages, or serialize().
       // Order: recap (if any) → recalled memory → the user's message.
       const recallBlock = recalled.length ? this.formatRecallBlock(recalled) : "";
-      const outbound = [opts?.sendPrefix, recallBlock, message].filter(Boolean).join("\n\n");
+      // Cold-spawn rehydration: a session spawned with no id starts on an EMPTY CLI
+      // transcript, so a "continua/riprendi" has nothing to continue — the model
+      // forages the vault (session-log, open-items) to reconstruct "which
+      // conversation" instead of reading THIS thread. Whenever we spawn cold but the
+      // convo already carries real history, reseed it with the same recap the
+      // stage-2 recovery uses. This generalizes that narrow path to close every
+      // cold-start hole (poisoned-and-stopped, nuclear reset, fresh process after a
+      // crash) with one invariant. Skipped when a stage-2 recap prefix is already
+      // present (never double) and on a convo's first turn (no assistant history).
+      const coldRecap = shouldColdReseed({
+        hasSessionId: !!c.sessionId,
+        hasRecapPrefix: !!opts?.sendPrefix,
+        hasAssistantHistory: c.messages.some((m) => m.role === "assistant"),
+      })
+        ? buildRecap(c.messages)
+        : "";
+      if (coldRecap) this.diag.push("recall", "cold-spawn recap injected");
+      const outbound = [opts?.sendPrefix, coldRecap, recallBlock, message].filter(Boolean).join("\n\n");
       await session.send(outbound, onEvent, imgs);
       // `session.send` can resolve cleanly even after a user Stop/Esc — the
       // adapter swallows the abort rather than throwing or emitting an
