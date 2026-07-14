@@ -706,8 +706,15 @@ export class ChatView extends ItemView {
     // server, swapped per session. SANDBOX HONESTY: bridge writes happen in the
     // Obsidian process and bypass codex's sandbox, so a read-only sandbox gets
     // read tools only.
+    // Known limitation (v1): ONE toolset shared across codex sessions — see "Out of scope" in the design doc for the singleton ask_user routing caveat.
+    // rethink_memory is deliberately not wired over this bridge yet (v1 scope) — see the same doc section.
     let codexBridge: { port: number; token: string; scriptPath: string } | undefined;
-    if (c.provider === "codex" && s.obsidianToolsEnabled && s.toolsEnabled) {
+    if (
+      c.provider === "codex" &&
+      s.obsidianToolsEnabled &&
+      s.toolsEnabled &&
+      (await this.plugin.checkNodeForBridge(cli.pathEnv))
+    ) {
       const b = await this.plugin.ensureCodexBridge();
       if (b) {
         const readOnlySandbox = s.codexSandbox === "read-only";
