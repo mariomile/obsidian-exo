@@ -3031,30 +3031,32 @@ export class ChatView extends ItemView {
     const file = this.app.vault.getAbstractFileByPath(path);
     const exists = file instanceof TFile;
 
-    // Deleted markdown preview: a full card for a non-event is too heavy — show
-    // a one-line row (✕ name deleted · Restore) instead. (Live/existing previews
-    // and HTML artifacts keep their card below.)
+    // Missing markdown preview: only surface a "deleted" row when we can actually
+    // restore it — i.e. a snapshot of this-turn pre-write content exists. A path
+    // that was never a real vault artifact (written outside the vault, e.g.
+    // ~/.claude memory files, or created-and-removed within the turn → null
+    // snapshot) isn't meaningfully "deleted"; a dead ✕ row with no action is just
+    // noise floating in the transcript. Shown as a compact one-line row + Restore.
     if (!exists && !isHtml) {
+      const rel = this.relPath(path);
+      const before = checkpoint?.get(rel);
+      if (typeof before !== "string") return;
       const row = parent.createDiv({ cls: "mva-artifact-deleted" });
       setIcon(row.createSpan({ cls: "mva-artifact-deleted-ico" }), "x");
       row.createSpan({ cls: "mva-artifact-deleted-name", text: `${noteBasename(path)} deleted` });
-      const rel = this.relPath(path);
-      const before = checkpoint?.get(rel);
-      if (typeof before === "string") {
-        const restore = row.createEl("button", { cls: "mva-btn", text: "Restore" });
-        restore.onclick = async () => {
-          try {
-            await this.app.vault.create(rel, before);
-            new Notice(`Restored ${noteBasename(path)} from this turn's snapshot.`);
-            const holder = createDiv();
-            this.buildArtifactCard(holder, path, checkpoint);
-            const fresh = holder.firstElementChild;
-            if (fresh) row.replaceWith(fresh);
-          } catch {
-            new Notice(`Couldn't restore ${noteBasename(path)}.`);
-          }
-        };
-      }
+      const restore = row.createEl("button", { cls: "mva-btn", text: "Restore" });
+      restore.onclick = async () => {
+        try {
+          await this.app.vault.create(rel, before);
+          new Notice(`Restored ${noteBasename(path)} from this turn's snapshot.`);
+          const holder = createDiv();
+          this.buildArtifactCard(holder, path, checkpoint);
+          const fresh = holder.firstElementChild;
+          if (fresh) row.replaceWith(fresh);
+        } catch {
+          new Notice(`Couldn't restore ${noteBasename(path)}.`);
+        }
+      };
       return;
     }
 
