@@ -50,6 +50,19 @@ describe("handleCodexLine — new codex exec --json schema (0.142.x)", () => {
     expect(events[1]).toEqual({ kind: "tool-call-result", id: "item_6:a.md", ok: true, output: "" });
   });
 
+  it("emits context usage from turn.completed (real 0.142 fixture)", () => {
+    const { events } = run([
+      '{"type":"turn.completed","usage":{"input_tokens":25536,"cached_input_tokens":9984,"output_tokens":5,"reasoning_output_tokens":0}}',
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "usage", usage: { used: 25541, total: 272_000 } });
+  });
+
+  it("ignores turn.completed without usage", () => {
+    const { events } = run(['{"type":"turn.completed"}']);
+    expect(events).toHaveLength(0);
+  });
+
   it("emits reasoning as thinking-delta", () => {
     const { events } = run(['{"type":"item.completed","item":{"id":"item_1","type":"reasoning","text":"pondering"}}']);
     expect(events[0]).toEqual({ kind: "thinking-delta", text: "pondering" });
@@ -66,7 +79,9 @@ describe("handleCodexLine — new codex exec --json schema (0.142.x)", () => {
   });
 
   it("ignores noise lines without crashing", () => {
-    const { events } = run(["not json", '{"type":"turn.started"}', '{"type":"turn.completed","usage":{"input_tokens":1}}']);
+    // turn.completed WITH usage is no longer noise (it drives the context
+    // ring) — the zero-usage variant still is.
+    const { events } = run(["not json", '{"type":"turn.started"}', '{"type":"turn.completed","usage":{"input_tokens":0}}']);
     expect(events).toEqual([]);
   });
 });

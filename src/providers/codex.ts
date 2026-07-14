@@ -19,6 +19,11 @@ function imageExt(mediaType: string): string {
   return sub === "jpeg" ? "jpg" : sub;
 }
 
+/** GPT-5-family input context window — the ring's denominator for Codex.
+ *  A constant, not per-model: close enough for a fill gauge, and the JSONL
+ *  stream doesn't report the window size. */
+const CODEX_CONTEXT_WINDOW = 272_000;
+
 export interface CodexParseState {
   sessionId?: string;
   streamed: boolean;
@@ -52,6 +57,19 @@ export function handleCodexLine(
   if (topType === "turn.failed") {
     const err = (obj.error ?? {}) as Record<string, unknown>;
     if (typeof err.message === "string") onEvent({ kind: "error", message: err.message });
+    return;
+  }
+
+  if (topType === "turn.completed") {
+    // `usage.input_tokens` counts the FULL prompt of this turn (system +
+    // transcript + tools), so input+output approximates current context
+    // occupancy — good enough to drive the context ring for Codex too.
+    const usage = (obj.usage ?? {}) as Record<string, unknown>;
+    const input = Number(usage.input_tokens ?? 0);
+    const output = Number(usage.output_tokens ?? 0);
+    if (input > 0) {
+      onEvent({ kind: "usage", usage: { used: input + output, total: CODEX_CONTEXT_WINDOW } });
+    }
     return;
   }
 
