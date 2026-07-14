@@ -69,6 +69,8 @@ const MORNING_DIGEST_PROMPT = `Sei il mio chief of staff. Prepara il MORNING DIG
 
 Raccogli dalle fonti in quest'ordine. Se una fonte non è disponibile (tool assente o permesso negato), scrivi "— non disponibile" nella sua sezione e prosegui senza fermarti.
 
+IMPORTANTE: non scrivere NULLA prima del digest — niente premesse, niente narrazione del processo. La tua risposta deve iniziare esattamente con "# ☀️ Morning Digest". Eventuali caveat sulle fonti vanno solo nella riga "Stato fonti" in fondo.
+
 1. VAULT — leggi: _system/memory/open-loops.md (loop attivi e scaduti), _system/orchestration/tasks.md (task running / needs-input / review), conteggio note in _inbox/, la daily note di ieri e di oggi in Journal/Daily/ se esistono.
 2. CALENDAR — con i tool MCP di Google Calendar: gli eventi di oggi, con orari.
 3. GMAIL — con i tool MCP di Gmail: cerca i thread NON letti o importanti delle ultime 24 ore; riporta al massimo 5: mittente — oggetto — perché conta in una riga.
