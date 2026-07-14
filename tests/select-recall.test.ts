@@ -164,3 +164,33 @@ describe("DEFAULT_RECALL_OPTS", () => {
     expect(DEFAULT_RECALL_OPTS.minScore).toBeGreaterThan(0); // stricter than the recall tool's >0
   });
 });
+
+describe("selectRecall — content-word guards (long dictated prompts)", () => {
+  // Condensed real-world repro (2026-07-14): a long Italian voice-dictated prompt about a
+  // Claude Code playbook recalled DeepAgent memories whose only overlap was stopwords + "uso".
+  const offTopic = entry({
+    id: "mem-deepagent",
+    text: "Ogni agente vocale ha un obiettivo e ogni conversazione ha un esito binario; i casi d'uso principali sono cold calling e customer support",
+  });
+  const onTopic = entry({
+    id: "mem-playbook",
+    text: "Il playbook Claude Code per Alberto copre gestione del contesto, skill e integrazioni",
+  });
+  const LONG =
+    "Fai un playbook pratico per un operator che deve usare Claude Code: come gestire il contesto, come usare le skill in base al tipo di caso d'uso, le integrazioni di front-end e di back-end, e per ogni capitolo definiamo un outline";
+
+  it("does not recall an entry sharing only stopwords plus one content word with a long message", () => {
+    const got = selectRecall([offTopic, onTopic], LONG, new Set(), opts());
+    expect(got.map((e) => e.id)).not.toContain("mem-deepagent");
+  });
+
+  it("still recalls entries sharing several content words with the long message", () => {
+    const got = selectRecall([offTopic, onTopic], LONG, new Set(), opts());
+    expect(got.map((e) => e.id)).toContain("mem-playbook");
+  });
+
+  it("keeps single-content-word recall for short queries", () => {
+    const got = selectRecall([offTopic, onTopic], "parliamo del cold outreach", new Set(), opts());
+    expect(got.map((e) => e.id)).toContain("mem-deepagent");
+  });
+});

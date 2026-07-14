@@ -68,6 +68,8 @@ export function supersededIds(supersedes: string | undefined): string[] {
 export interface ScoredEntry {
   entry: MemoryEntry;
   score: number;
+  /** Distinct content query terms this entry matched (stopwords never count). */
+  hits: number;
 }
 
 /** Block header, e.g. `## mem-1720000000000 preference`. No `g` flag: safe for `.test`. */
@@ -193,8 +195,51 @@ export function monthFileName(at: number): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}.md`;
 }
 
+/** Unicode-aware: accented letters are word characters, so `più` stays one token
+ *  (the old ascii split produced shrapnel like `pi`/`perch` that dodged the
+ *  stopword list and matched shrapnel from unrelated entries). */
 function tokenize(s: string): string[] {
-  return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/**
+ * Function words carrying no topical signal (IT + EN, incl. accented forms and
+ * high-frequency light verbs). Filtered from the QUERY side of scoring only:
+ * in Mario's mixed-language store the *minority*-language stopwords look rare
+ * to idf and score deceptively high, so a long Italian prompt pulled Italian
+ * memories regardless of topic (2026-07-14 recall bug).
+ */
+const STOPWORDS = new Set(
+  (
+    "a ad al allo alla ai agli alle anche ancora avanti bene c che chi ci cioè come con cosa cose cui " +
+    "da dal dallo dalla dai dagli dalle degli dei del dell dello della delle dentro di dove dopo e ed " +
+    "ecco fra gli già ho hai ha abbiamo avete hanno il in io invece l la le lei li lo loro lui ma me mi " +
+    "mia mie miei mio ne nei negli nelle nel nello nella no noi non nostra nostre nostri nostro o ogni " +
+    "oppure per perché però più poi pure qua quale quali qualcosa quando quanta quante quanti quanto " +
+    "quella quelle quelli quello questa queste questi questo qui quindi se sei senza si sia siamo siete " +
+    "solo sono sopra sotto sta sto stai su sua sue suoi suo sul sullo sulla sui sugli sulle te ti tra tu " +
+    "tua tue tuoi tuo tutta tutte tutti tutto un una uno vi via voi vostra vostre vostri vostro è così " +
+    "essere era ero eri eravamo erano sarà sarò sarebbe stato stata stati state avere aveva avevo avevi " +
+    "avevano avrebbe avuto fare faccio fai fa facciamo fate fanno fatto fatta fatti fatte deve devo devi " +
+    "dobbiamo dovete devono dovrebbe può puoi possiamo potete possono potrebbe vuole voglio vuoi " +
+    "vogliamo volete vogliono vorrebbe " +
+    "about above after again against all am an and any are as at be because been before being below " +
+    "between both but by can cannot could did do does doing done down during each few for from further " +
+    "had has have having he her here hers herself him himself his how i if into is it its itself just " +
+    "let may me might more most much must my myself no nor not now of off on once only or other our " +
+    "ours ourselves out over own same shall she should so some such than that the their theirs them " +
+    "themselves then there these they this those through to too under until up upon very was we were " +
+    "what when where which while who whom why will with within without would you your yours yourself " +
+    "yourselves"
+  )
+    .split(/\s+/)
+    .filter(Boolean)
+);
+
+/** Distinct query terms that carry topical signal: stopwords and single-letter
+ *  tokens (apostrophe shrapnel like the `d` in `d'uso`) are dropped. */
+function contentTerms(query: string): string[] {
+  return [...new Set(tokenize(query))].filter((t) => t.length > 1 && !STOPWORDS.has(t));
 }
 
 function docTokens(e: MemoryEntry): string[] {
@@ -205,9 +250,13 @@ function docTokens(e: MemoryEntry): string[] {
  * BM25-lite over lowercase word tokens (fields: text + tags + kind). idf is
  * derived from the entry corpus itself; k1=1.2, b=0.75 with per-entry length
  * normalization. Deterministic order: score desc, then newest first.
+ *
+ * Only CONTENT query terms score (see {@link contentTerms}): a query overlapping
+ * an entry purely on stopwords scores 0, so the `recall` tool's `score > 0`
+ * filter and proactive recall's floor both see silence instead of noise.
  */
 export function scoreEntries(query: string, entries: MemoryEntry[]): ScoredEntry[] {
-  const qTerms = [...new Set(tokenize(query))];
+  const qTerms = contentTerms(query);
   const docs = entries.map(docTokens);
   const N = docs.length || 1;
   const avgdl = docs.reduce((sum, d) => sum + d.length, 0) / N || 1;
@@ -225,16 +274,18 @@ export function scoreEntries(query: string, entries: MemoryEntry[]): ScoredEntry
     const d = docs[idx];
     const dl = d.length || 1;
     let score = 0;
+    let hits = 0;
     for (const term of qTerms) {
       const dfi = df.get(term) ?? 0;
       if (dfi === 0) continue;
       let tf = 0;
       for (const t of d) if (t === term) tf++;
       if (tf === 0) continue;
+      hits++;
       const idf = Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5));
       score += (idf * (tf * (k1 + 1))) / (tf + k1 * (1 - b + (b * dl) / avgdl));
     }
-    return { entry, score };
+    return { entry, score, hits };
   });
 
   scored.sort((a, b2) => b2.score - a.score || b2.entry.at - a.entry.at);
@@ -309,18 +360,20 @@ export interface RecallOpts {
  * `minScore = 3.0` was calibrated against Mario's real Union Store (~59 active
  * entries) by sweeping the floor over a set of genuinely-relevant queries and a
  * set of generic chatter. Findings that fixed the value:
- *  - The shared `scoreEntries` does NO stopword removal, so ultra-common words
- *    ("today", "like", "you") carry non-trivial idf and let generic messages
- *    score deceptively high. A scalar floor therefore degrades *gracefully*
- *    rather than cleanly separating relevant from generic.
  *  - At `3.0` every relevant probe still fired (100% recall of the wanted
  *    memories) while it is comfortably stricter than the tool's `> 0`. Raising it
  *    to `4.0` began dropping real hits without eliminating the residual spurious
  *    ones — so `3.0` is the knee.
  *  - Residual generic firing is bounded-cost by the OTHER guards (per-convo dedup
  *    pays each entry once, `k`/`maxChars` cap the turn) and is always visible via
- *    the transparency affordance — never silent. This is the accepted trade-off;
- *    a semantic scorer is explicitly out of scope for this feature.
+ *    the transparency affordance — never silent.
+ *
+ * Recalibrated 2026-07-14 (recall bug: long dictated prompts): `scoreEntries` now
+ * drops stopwords (IT+EN) from the query, so generic chatter scores 0 instead of
+ * "deceptively high", and long queries additionally require ≥2 distinct
+ * content-term matches (see {@link LONG_QUERY_CONTENT_TERMS}). The 3.0 floor was
+ * re-validated against the real store (96 entries): relevant probes still fire,
+ * the stopword-driven false recalls do not.
  */
 export const DEFAULT_RECALL_OPTS: RecallOpts = {
   k: 3,
@@ -391,6 +444,13 @@ export function isBackReference(message: string): boolean {
   return BACK_REFERENCE_CUES.some((re) => re.test(message));
 }
 
+/** A message with at least this many content terms is a "long" query: BM25 sums
+ *  over matched terms, so on long dictated prompts even a single shared common
+ *  word can clear the scalar floor. Long queries therefore also require
+ *  {@link MIN_HITS_LONG_QUERY} distinct content-term matches per entry. */
+const LONG_QUERY_CONTENT_TERMS = 8;
+const MIN_HITS_LONG_QUERY = 2;
+
 export function selectRecall(
   entries: MemoryEntry[],
   message: string,
@@ -403,9 +463,10 @@ export function selectRecall(
   // memory — skip recall so it can't compete with the intended referent.
   if (isBackReference(message)) return [];
 
+  const minHits = contentTerms(message).length >= LONG_QUERY_CONTENT_TERMS ? MIN_HITS_LONG_QUERY : 1;
   const pool = resolveSupersedence(entries);
   const ranked = scoreEntries(message, pool)
-    .filter((s) => s.score >= opts.minScore && !alreadyInjected.has(s.entry.id))
+    .filter((s) => s.score >= opts.minScore && s.hits >= minHits && !alreadyInjected.has(s.entry.id))
     .slice(0, opts.k);
 
   const out: MemoryEntry[] = [];

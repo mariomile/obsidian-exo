@@ -258,3 +258,34 @@ describe("resolveSupersedence", () => {
     expect(resolveSupersedence([a, b])).toEqual([a, b]);
   });
 });
+
+describe("scoreEntries — stopword & tokenization guards", () => {
+  it("gives zero score to entries whose only overlap with the query is stopwords (IT + EN)", () => {
+    const it_ = entry({ id: "mem-it", text: "il prodotto ha un obiettivo e ogni conversazione ha un esito" });
+    const en = entry({ id: "mem-en", text: "the plan is on track and it has been done for now" });
+    const ranked = scoreEntries(
+      "come possiamo organizzare il lavoro per il progetto e ogni capitolo che abbiamo",
+      [it_, en]
+    );
+    for (const s of ranked) expect(s.score).toBe(0);
+  });
+
+  it("filters accented Italian stopwords instead of matching their ascii shrapnel (più → pi)", () => {
+    const e = entry({ id: "mem-1", text: "il team è più veloce perché usa già strumenti simili" });
+    const ranked = scoreEntries("più perché già così è", [e]);
+    expect(ranked[0].score).toBe(0);
+  });
+
+  it("ignores single-letter tokens such as the d in d'uso", () => {
+    const e = entry({ id: "mem-1", text: "la lista d'attesa è lunga da smaltire" });
+    const ranked = scoreEntries("un caso d'uso nuovo", [e]);
+    expect(ranked[0].score).toBe(0);
+  });
+
+  it("reports the count of distinct matched content terms as hits", () => {
+    const e = entry({ id: "mem-1", text: "playbook per Claude Code con esempi di skill" });
+    const ranked = scoreEntries("playbook skill Claude", [e]);
+    expect(ranked[0].hits).toBe(3);
+    expect(ranked[0].score).toBeGreaterThan(0);
+  });
+});
