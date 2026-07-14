@@ -703,10 +703,15 @@ export class ChatView extends ItemView {
       // Surface it once (not just as a dot in a panel). "unknown" is skipped: it's
       // the transient default before a server finishes connecting at startup.
       for (const s of caps.mcpServers) {
-        if (/fail|error|disconnect/i.test(s.status) && !this.warnedDegradedMcp.has(s.name)) {
-          this.warnedDegradedMcp.add(s.name);
-          this.diag.push("mcp", `server ${s.name} not connected: ${s.status}`);
-          new Notice(`Exo: the "${s.name}" tool server isn't connected (${s.status}) — its tools are unavailable.`);
+        if (/fail|error|disconnect/i.test(s.status)) {
+          if (!this.warnedDegradedMcp.has(s.name)) {
+            this.warnedDegradedMcp.add(s.name);
+            this.diag.push("mcp", `server ${s.name} not connected: ${s.status}`);
+            new Notice(`Exo: the "${s.name}" tool server isn't connected (${s.status}) — its tools are unavailable.`);
+          }
+        } else if (s.status === "connected") {
+          // Recovered → clear the dedupe so a later re-failure warns again.
+          this.warnedDegradedMcp.delete(s.name);
         }
       }
       this.composer.resetSlashCache(); // menus rebuild with the enriched lists
