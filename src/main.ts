@@ -62,6 +62,38 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+/** Seeded "Morning Digest" playbook — Dia-style: vault + connected external
+ *  tools (MCP, read-only). Sources degrade gracefully; the wording keeps the
+ *  report short and phone-readable. Editable like any custom prompt. */
+const MORNING_DIGEST_PROMPT = `Sei il mio chief of staff. Prepara il MORNING DIGEST di oggi, in italiano, leggibile da telefono: righe corte, liste, niente tabelle. Massimo ~60 righe.
+
+Raccogli dalle fonti in quest'ordine. Se una fonte non è disponibile (tool assente o permesso negato), scrivi "— non disponibile" nella sua sezione e prosegui senza fermarti.
+
+1. VAULT — leggi: _system/memory/open-loops.md (loop attivi e scaduti), _system/orchestration/tasks.md (task running / needs-input / review), conteggio note in _inbox/, la daily note di ieri e di oggi in Journal/Daily/ se esistono.
+2. CALENDAR — con i tool MCP di Google Calendar: gli eventi di oggi, con orari.
+3. GMAIL — con i tool MCP di Gmail: cerca i thread NON letti o importanti delle ultime 24 ore; riporta al massimo 5: mittente — oggetto — perché conta in una riga.
+4. SLACK — con i tool MCP di Slack: mention e messaggi rilevanti delle ultime 24 ore; al massimo 5 conversazioni: canale — sintesi in una riga.
+5. LETTURE — con il tool MCP di Readwise (search): 2-3 highlight recenti se disponibili.
+
+Poi scrivi il digest ESATTAMENTE in questo formato:
+
+# ☀️ Morning Digest
+
+## 🎯 Oggi
+(agenda essenziale + le 3 priorità che proponi tu, ognuna con un perché di una riga)
+
+## ✅ Da fare
+(loop scaduti, task fermi in needs-input/review, "N note in inbox da processare" se >0)
+
+## 📧 Mail da guardare
+
+## 💬 Slack da considerare
+
+## 📚 Letture
+
+---
+Stato fonti: (una riga: quali fonti hai letto e quali erano non disponibili)`;
+
 export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
 
@@ -1104,6 +1136,11 @@ export default class ExoPlugin extends Plugin {
     }).open();
   }
 
+  /* Seeded playbook: the Dia-style morning digest — vault + external sources
+   * (Gmail/Slack/Calendar/Readwise via MCP, read-only). Each source degrades
+   * gracefully when unavailable; the report is written by the runner, not the
+   * agent (headless runs are read-only). */
+
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     // Migrate the old "Default" model option (empty id — silently let the CLI's
@@ -1120,6 +1157,15 @@ export default class ExoPlugin extends Plugin {
         { name: "Next actions", prompt: "Turn this note into a short checklist of concrete next actions." },
       ];
       this.settings.seededPrompts = true;
+      await this.saveSettings();
+    }
+    // Seed the Morning Digest playbook once (editable/deletable like any prompt;
+    // never re-seeded). Schedule it with "Morning Digest | daily" in settings.
+    if (!this.settings.seededDigest) {
+      if (!this.settings.customPrompts.some((p) => p.name.toLowerCase() === "morning digest")) {
+        this.settings.customPrompts.push({ name: "Morning Digest", prompt: MORNING_DIGEST_PROMPT });
+      }
+      this.settings.seededDigest = true;
       await this.saveSettings();
     }
   }
@@ -1435,6 +1481,22 @@ export default class ExoPlugin extends Plugin {
     new Notice(
       result.ok ? `Playbook "${name}" done → ${path}` : `Playbook "${name}" failed (report: ${path})`
     );
+    // OS notification when Obsidian isn't focused (scheduled runs usually finish
+    // in the background — this is how the digest announces itself). Click opens
+    // the report. Same gate as the chat's turn notifications.
+    if (this.settings.systemNotifications && !document.hasFocus()) {
+      try {
+        const n = new Notification(`Exo — ${result.ok ? `"${name}" pronto` : `"${name}" fallito`}`, {
+          body: result.ok ? "Il report è nel vault — clicca per aprirlo." : "Il run è fallito — report con l'errore nel vault.",
+          silent: false,
+        });
+        n.onclick = () => {
+          void this.app.workspace.openLinkText(path, "", "tab");
+        };
+      } catch {
+        /* notifications unavailable — Notice above already covered it */
+      }
+    }
   }
 
   /** Run any scheduled playbooks that are due (off by default — empty list). */

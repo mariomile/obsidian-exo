@@ -152,6 +152,12 @@ export interface MVASettings {
   cockpitOnStartup: boolean;
   /** Scheduled playbook runs — one per line: "<Prompt name> | daily" or "<Prompt name> | weekly". */
   scheduledRuns: string;
+  /** Load external MCP tools (Gmail/Slack/Calendar…) in headless playbook runs —
+   *  Dia-style digest sources. Read-only enforced by the headless resolver
+   *  (core/headless-tools.ts): read tools auto-allowed, mutations auto-denied. */
+  playbookExternalTools: boolean;
+  /** Set once after seeding the Morning Digest playbook, so it's never re-seeded. */
+  seededDigest: boolean;
   /** Per-playbook last-run timestamps (scheduler bookkeeping). */
   scheduledLastRun: Record<string, number>;
   /** Epoch ms of the last daily Claude-CLI update check (0 = never). */
@@ -237,6 +243,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   exoQueueFolder: "_system/exo-queue",
   cockpitOnStartup: false,
   scheduledRuns: "",
+  playbookExternalTools: false,
+  seededDigest: false,
   scheduledLastRun: {},
   cliUpdateCheckAt: 0,
   cliLatestKnown: "",
@@ -861,6 +869,18 @@ export class MVASettingTab extends PluginSettingTab {
           });
         t.inputEl.rows = 3;
       });
+
+    new Setting(el)
+      .setName("External tools in playbooks")
+      .setDesc(
+        "Let playbook runs read your connected external tools via MCP (Gmail, Slack, Calendar, Readwise…) — how the Morning Digest pulls from other apps. Strictly read-only: read tools are auto-allowed, anything that mutates is auto-denied. Slower session start when on."
+      )
+      .addToggle((t) =>
+        t.setValue(s.playbookExternalTools).onChange(async (v) => {
+          s.playbookExternalTools = v;
+          await this.plugin.saveSettings();
+        })
+      );
 
     new Setting(el)
       .setName("Open Cockpit on startup")
