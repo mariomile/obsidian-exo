@@ -99,6 +99,10 @@ export interface SessionOpts {
   sandboxMode?: string;
   /** Codex approval policy: untrusted | on-request | on-failure | never. */
   approvalPolicy?: string;
+  /** Codex ↔ Obsidian tools bridge (Tranche B1): loopback executor coordinates
+   *  + the generated stdio script path. Present only for Codex sessions with
+   *  obsidian tools enabled. */
+  codexBridge?: { port: number; token: string; scriptPath: string };
 }
 
 /** Capability snapshot from the CLI's `system/init` message — the real skills /

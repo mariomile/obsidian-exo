@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { handleCodexLine, type CodexParseState } from "../src/providers/codex";
+import { handleCodexLine, codexMcpOverride, type CodexParseState } from "../src/providers/codex";
 import type { AgentEvent } from "../src/providers/types";
 
 function run(lines: string[]): { events: AgentEvent[]; state: CodexParseState } {
@@ -106,5 +106,14 @@ describe("handleCodexLine — legacy msg schema", () => {
     ]);
     expect(events[0]).toMatchObject({ kind: "tool-call-start", id: "c1", name: "Bash" });
     expect(events[1]).toMatchObject({ kind: "tool-call-result", id: "c1", ok: true, output: "hi" });
+  });
+});
+
+describe("codexMcpOverride", () => {
+  it("builds a valid TOML inline table and escapes the path", () => {
+    const s = codexMcpOverride({ port: 7777, token: 'a"b', scriptPath: '/p/with "q"/bridge.mjs' });
+    expect(s).toContain('mcp_servers.obsidian={command="node"');
+    expect(s).toContain('EXO_BRIDGE_PORT="7777"');
+    expect(s).toContain('\\"q\\"');
   });
 });

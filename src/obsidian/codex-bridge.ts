@@ -102,7 +102,10 @@ export function startCodexBridge(): Promise<CodexBridge> {
         port,
         token,
         setTools: (t) => (tools = t),
-        stop: () => server.close(),
+        stop: () => {
+          server.closeAllConnections?.();
+          server.close();
+        },
       });
     });
   });
