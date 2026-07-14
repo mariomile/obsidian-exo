@@ -142,11 +142,30 @@ export function buildRecap(messages: Message[]): string {
   }
   return (
     "<conversation-recap>\n" +
-    "The previous session process crashed (error_during_execution); this fresh " +
-    "session continues an ongoing conversation. Recent transcript (oldest first):\n" +
+    "The previous session is not available in this process (it may have crashed, " +
+    "been stopped, or the app restarted); this fresh session continues an ongoing " +
+    "conversation. Recent transcript (oldest first):\n" +
     body +
     "\n</conversation-recap>"
   );
+}
+
+/**
+ * Whether a turn about to be sent must seed its session with a {@link buildRecap}
+ * of the transcript. True only for a COLD spawn (no resumable session id) that is
+ * continuing a conversation with real history — the case where the CLI process
+ * starts on an empty transcript and a "continua/riprendi" would otherwise forage
+ * the vault instead of continuing the thread. Skipped when a stage-2 recap prefix
+ * is already threaded (never double-seed) and on a convo's first turn (no
+ * assistant history yet). Generalizes the stage-2-only recap to close every
+ * cold-start hole (poisoned-and-stopped, nuclear reset, post-crash fresh process).
+ */
+export function shouldColdReseed(s: {
+  hasSessionId: boolean;
+  hasRecapPrefix: boolean;
+  hasAssistantHistory: boolean;
+}): boolean {
+  return !s.hasSessionId && !s.hasRecapPrefix && s.hasAssistantHistory;
 }
 
 /**

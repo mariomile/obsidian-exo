@@ -226,6 +226,29 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 14px;
   height: 14px;
 }
+/* Per-tab agent count — subagents/background tasks THIS chat is running now. */
+.mva-tab-agents {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 1px 6px 1px 4px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  color: var(--interactive-accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.mva-tab-agents-icon {
+  display: inline-flex;
+  align-items: center;
+}
+.mva-tab-agents-icon .svg-icon {
+  width: 11px;
+  height: 11px;
+  animation: mva-spin 1.1s linear infinite;
+}
 
 /* Chat column + Recap Rail wrapper. A plain vertical flex by default (the chat
    behaves exactly as before); becomes a row only in the wide full-page layout. */
@@ -871,6 +894,42 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 
 /* ------------------------------ composer ------------------------------ */
+/* Pinned agents chip — the OPEN chat's own subagents/background tasks, always
+   visible above the composer even when the working row scrolls off. */
+.mva-agents {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 6px 14px;
+  box-sizing: border-box;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.mva-agents.is-hidden {
+  display: none;
+}
+.mva-agents-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--interactive-accent);
+}
+.mva-agents-icon .svg-icon {
+  width: 13px;
+  height: 13px;
+  animation: mva-spin 1.1s linear infinite;
+}
+.mva-agents-label {
+  color: var(--text-normal);
+}
+.mva-agents:hover .mva-agents-label {
+  text-decoration: underline;
+}
+
 .mva-composer {
   /* In-flow at the bottom of listWrap (a flex column): it centers on the SAME 760
      column as the messages — aligned even with the recap open — without overlapping
