@@ -181,6 +181,9 @@ export function renderToolDetail(el: HTMLElement, name: string, input: unknown, 
     // Order (what → command → result): the description caption first, then the
     // command once with a `$` prompt. The command is NOT repeated in the header
     // when expanded (see .mva-tool.is-command in styles.css) — it lives here only.
+    // NOTE: the header/body de-dup is deliberately scoped to Bash. Generic MCP
+    // tools (WebFetch/WebSearch/…) still repeat their target in the params body
+    // below — not generalized here on purpose.
     if (i.description) el.createDiv({ cls: "mva-tool-note", text: asString(i.description) });
     const pre = el.createEl("pre", { cls: "mva-code" });
     pre.createEl("code", { text: "$ " + asString(i.command) });
