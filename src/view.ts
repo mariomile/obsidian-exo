@@ -4529,6 +4529,14 @@ export class ChatView extends ItemView {
       );
       window.clearInterval(workingTimer); // stop the elapsed ticker
       this.removeWorking(ctx); // drop the working row for good
+      // Force-settle any tool card still 'running' when the turn ended abnormally
+      // (interrupt/error before its result arrived). Otherwise its type icon keeps
+      // CSS-pulsing forever and its elapsed freezes mid-tick — a row stuck
+      // "processing" inside a run whose header already reads done/failed. No-op on
+      // a clean turn: every card is already settled by its tool-result.
+      for (const card of ctx.cards.values()) {
+        if (card.card.hasClass("is-running")) this.finishToolCard(card, false, "");
+      }
       await Promise.all(snapshots); // finalize the checkpoint even if the turn errored
       // Git auto-commit safety net: hand off the count of files this turn wrote
       // (however it ended — success, error, or user-stopped) so the plugin can

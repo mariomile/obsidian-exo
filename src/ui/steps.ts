@@ -145,8 +145,9 @@ export class StepsRun {
       this.rootEl.remove();
       return;
     }
-    // Interrupted turns: a never-resolved tool would keep its shimmer inside
-    // the folded run — freeze it (keeps its last icon, loses the animation).
+    // `is-settled` freezes the running text-shimmer inside a folded run. (A tool
+    // still 'running' when the turn aborts is force-settled by runTurn's finally,
+    // so its icon-pulse/elapsed stop too — this class only covers the name shimmer.)
     this.rootEl.addClass("is-settled");
     setIcon(this.statusEl, interrupted ? "x" : "check");
     this.statusEl.addClass(interrupted ? "is-error" : "is-ok");
