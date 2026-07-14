@@ -104,6 +104,16 @@ export interface MVASettings {
   showSelectionChip: boolean;
   // Tab bar runtime state (not user-facing settings).
   openTabIds: string[];
+  /** Last session capability snapshot (runtime state, not user-facing) — persisted
+   *  so the $/@// menus and the capabilities panel are rich immediately after an
+   *  Obsidian restart, before the first session's init arrives. Refreshed on
+   *  every init; slightly stale is fine (it's menu seeding, not authorization). */
+  cachedSessionCaps: {
+    skills: string[];
+    commands: string[];
+    agents: string[];
+    mcpServers: { name: string; status: string }[];
+  } | null;
   activeTabId: string;
   /** Memory dream pass automation: off | daily | weekly. */
   dreamPassSchedule: "off" | "daily" | "weekly";
@@ -212,6 +222,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   showSelectionChip: true,
   openTabIds: [],
   activeTabId: "",
+  cachedSessionCaps: null,
   dreamPassSchedule: "off",
   lastDreamPass: 0,
   dreamLlmEnabled: false,

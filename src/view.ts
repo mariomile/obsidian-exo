@@ -532,7 +532,9 @@ export class ChatView extends ItemView {
         self.prePlanMode = v;
       },
       get sessionCaps() {
-        return self.sessionCaps;
+        // Fall back to the plugin-cached snapshot so the $ / / menus are rich
+        // even before this view's own session has fired its init.
+        return self.sessionCaps ?? self.plugin.lastSessionCaps;
       },
       register: (cb) => this.register(cb),
       send: () => this.send(),
@@ -697,7 +699,11 @@ export class ChatView extends ItemView {
     // and the Capabilities panel; older CLIs simply never fire this (no gate).
     session.onCaps = (caps) => {
       this.sessionCaps = caps;
-      this.plugin.lastSessionCaps = caps; // settings MCP manager reads live status from here
+      // Settings MCP manager + cockpit read live status here; the persisted copy
+      // seeds menus/panels on the next app run, before any session has spawned.
+      this.plugin.lastSessionCaps = caps;
+      this.plugin.settings.cachedSessionCaps = caps;
+      void this.plugin.saveSettings();
       // A registered MCP server reporting a failure status means its tools are
       // silently absent — the "all my vault tools vanished, senza motivo" case.
       // Surface it once (not just as a dot in a panel). "unknown" is skipped: it's
@@ -1421,7 +1427,7 @@ export class ChatView extends ItemView {
     void renderCapabilitiesPanel(wrap, this.app, this.plugin.settings, {
       provider: this.provider,
       model: this.model,
-      caps: this.sessionCaps,
+      caps: this.sessionCaps ?? this.plugin.lastSessionCaps,
       onInsert: (text) => {
         this.hideCapabilities();
         const el = this.composer.getInputEl();

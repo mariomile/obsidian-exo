@@ -160,6 +160,9 @@ export default class ExoPlugin extends Plugin {
     }
 
     await this.loadSettings();
+    // Seed the capability snapshot from the last app run, so menus and panels
+    // are rich before the first session's init arrives (refreshed on every init).
+    this.lastSessionCaps = this.settings.cachedSessionCaps ?? null;
 
     // ONE shared TaskStore for the whole plugin — built on `tasksWriteQueue` so
     // it can never race the lower-level `createBacklogTask` call in
