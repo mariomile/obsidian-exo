@@ -343,6 +343,8 @@ export class ChatView extends ItemView {
    *  the REAL skills/commands/agents/MCP the CLI sees (global + plugins + vault),
    *  used to enrich the autocomplete menus and the Capabilities panel. */
   private sessionCaps: SessionCaps | null = null;
+  /** MCP servers already warned-about this view (dedupe the degraded Notice). */
+  private warnedDegradedMcp = new Set<string>();
   /** Whether we've already lazily asked for OS notification permission (once). */
   private notifyPermAsked = false;
 
@@ -696,6 +698,17 @@ export class ChatView extends ItemView {
     session.onCaps = (caps) => {
       this.sessionCaps = caps;
       this.plugin.lastSessionCaps = caps; // settings MCP manager reads live status from here
+      // A registered MCP server reporting a failure status means its tools are
+      // silently absent — the "all my vault tools vanished, senza motivo" case.
+      // Surface it once (not just as a dot in a panel). "unknown" is skipped: it's
+      // the transient default before a server finishes connecting at startup.
+      for (const s of caps.mcpServers) {
+        if (/fail|error|disconnect/i.test(s.status) && !this.warnedDegradedMcp.has(s.name)) {
+          this.warnedDegradedMcp.add(s.name);
+          this.diag.push("mcp", `server ${s.name} not connected: ${s.status}`);
+          new Notice(`Exo: the "${s.name}" tool server isn't connected (${s.status}) — its tools are unavailable.`);
+        }
+      }
       this.composer.resetSlashCache(); // menus rebuild with the enriched lists
       if (this.capsEl) {
         this.hideCapabilities();
