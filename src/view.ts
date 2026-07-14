@@ -63,7 +63,7 @@ import { workingAffordance } from "./core/working-visibility";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
 import { terminalConvoState } from "./core/convo-state";
-import { matchPermRule } from "./core/permissions";
+import { matchPermRule, allowKey, permArgText, permRuleLine, decidePermission } from "./core/permissions";
 import { describeCliFailure } from "./core/errors";
 import { planInputParts, planStateText } from "./core/plan";
 import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
@@ -3348,46 +3348,6 @@ export class ChatView extends ItemView {
 
   /* -------------------------- permissions --------------------------- */
 
-  /** Signature for the "Always allow" list — argument-aware so allowing one
-   *  Bash command (or one file edit) does NOT blanket-approve all of them.
-   *  Bash → keyed by the leading command token (the binary); file-mutating
-   *  tools → keyed by target path; everything else → the bare tool name. */
-  private allowKey(tool: string, input: unknown): string {
-    const i = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-    if (tool === "Bash") {
-      const cmd = typeof i.command === "string" ? i.command : "";
-      const first = cmd.trim().split(/\s+/)[0] ?? "";
-      return first ? `Bash:${first}` : "Bash";
-    }
-    const fp = toolFilePath(tool, input);
-    if (fp && WRITE_TOOLS.test(tool)) return `${tool}:${fp}`;
-    return tool;
-  }
-
-  /** The argument text a permission rule matches against — the full command for
-   *  Bash, the target file path for write tools, "" otherwise. Mirrors the
-   *  argument axis of allowKey so hand-written and card-created rules agree. */
-  private permArgText(tool: string, input: unknown): string {
-    const i = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-    if (tool === "Bash") return typeof i.command === "string" ? i.command.trim() : "";
-    const fp = toolFilePath(tool, input);
-    if (fp && WRITE_TOOLS.test(tool)) return fp;
-    return "";
-  }
-
-  /** The permission-rule line equivalent to an "Always allow" card choice —
-   *  `Tool(argPrefix)` scoped like allowKey (leading command token / target path). */
-  private permRuleLine(tool: string, input: unknown): string {
-    const i = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-    if (tool === "Bash") {
-      const first = (typeof i.command === "string" ? i.command : "").trim().split(/\s+/)[0] ?? "";
-      return first ? `Bash(${first})` : "Bash";
-    }
-    const fp = toolFilePath(tool, input);
-    if (fp && WRITE_TOOLS.test(tool)) return `${tool}(${fp})`;
-    return tool;
-  }
-
   private addPermissionCard(
     ctx: AssistantCtx,
     c: Convo,
@@ -3439,10 +3399,10 @@ export class ChatView extends ItemView {
     alwaysBtn.setAttr("aria-label", `Always allow ${scope} in this conversation`);
     alwaysBtn.setAttr("title", `Always allow ${scope} in this conversation`);
     alwaysBtn.onclick = () => {
-      c.allow.add(this.allowKey(tool, input));
+      c.allow.add(allowKey(tool, input));
       // Durable across sessions when enabled: append the equivalent rule line.
       if (this.plugin.settings.rememberAlwaysAllow) {
-        const line = this.permRuleLine(tool, input);
+        const line = permRuleLine(tool, input);
         const rules = this.plugin.settings.permAllowRules;
         if (!rules.split("\n").some((l) => l.trim() === line)) {
           this.plugin.settings.permAllowRules = (rules.trimEnd() ? rules.trimEnd() + "\n" : "") + line;
@@ -4355,34 +4315,46 @@ export class ChatView extends ItemView {
             }
             else e.resolve(d);
           };
-          const argText = this.permArgText(e.tool, e.input);
-          if (matchPermRule(s.permDenyRules, e.tool, argText)) {
-            this.diag.push("perm", `${e.tool} → rule-deny`);
-            e.resolve({ behavior: "deny", message: "Denied by an Exo permission rule (settings)." });
-          } else if (
-            (s.autoAllowRead && isRead) ||
-            c.allow.has(this.allowKey(e.tool, e.input)) ||
-            matchPermRule(s.permAllowRules, e.tool, argText)
-          ) {
-            this.diag.push("perm", `${e.tool} → auto-allow`);
-            allow({ behavior: "allow" });
-          } else if (OBSIDIAN_MEMORY_TOOLS.has(e.tool) && !s.memoryWriteEnabled) {
-            this.diag.push("perm", `${e.tool} → memory-deny`);
-            e.resolve({ behavior: "deny", message: "Memory writing is disabled in Exo settings." });
-          } else {
-            this.diag.push("perm", `${e.tool} → card`);
-            this.openCard(ctx); // the card waiting for the user is the feedback
-            this.notifyOnce(
-              ctx,
-              "waiting",
-              "Exo — waiting for you",
-              "The agent asked a question / needs permission."
-            );
-            this.addPermissionCard(ctx, c, e.tool, e.input, (d) => {
-              this.closeCard(ctx); // the turn continues once resolved
-              if (d.behavior === "allow") allow(d);
-              else e.resolve(d);
-            });
+          const argText = permArgText(e.tool, e.input);
+          const outcome = decidePermission({
+            tool: e.tool,
+            argText,
+            isRead,
+            isMemoryTool: OBSIDIAN_MEMORY_TOOLS.has(e.tool),
+            alreadyAllowed: c.allow.has(allowKey(e.tool, e.input)),
+            autoAllowRead: s.autoAllowRead,
+            memoryWriteEnabled: s.memoryWriteEnabled,
+            permDenyRules: s.permDenyRules,
+            permAllowRules: s.permAllowRules,
+          });
+          switch (outcome) {
+            case "deny-rule":
+              this.diag.push("perm", `${e.tool} → rule-deny`);
+              e.resolve({ behavior: "deny", message: "Denied by an Exo permission rule (settings)." });
+              break;
+            case "auto-allow":
+              this.diag.push("perm", `${e.tool} → auto-allow`);
+              allow({ behavior: "allow" });
+              break;
+            case "memory-deny":
+              this.diag.push("perm", `${e.tool} → memory-deny`);
+              e.resolve({ behavior: "deny", message: "Memory writing is disabled in Exo settings." });
+              break;
+            case "card":
+              this.diag.push("perm", `${e.tool} → card`);
+              this.openCard(ctx); // the card waiting for the user is the feedback
+              this.notifyOnce(
+                ctx,
+                "waiting",
+                "Exo — waiting for you",
+                "The agent asked a question / needs permission."
+              );
+              this.addPermissionCard(ctx, c, e.tool, e.input, (d) => {
+                this.closeCard(ctx); // the turn continues once resolved
+                if (d.behavior === "allow") allow(d);
+                else e.resolve(d);
+              });
+              break;
           }
           break;
         }
