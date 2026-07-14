@@ -192,15 +192,15 @@ class ClaudeSession implements AgentSession {
                     resolve: finish,
                   });
                 }),
-              // When the Obsidian server is active, disable the SDK's UI-less
-              // built-in AskUserQuestion (our mcp__obsidian__ask_user replaces it),
-              // plus the native file tools in native-first mode. One key, emitted once.
+              // When the Obsidian server is active, ALIAS the built-in
+              // AskUserQuestion to our ask_user card UI instead of disallowing it:
+              // a disallowedTools entry is treated as a user deny rule, and the
+              // permission classifier extends that deny to mcp__obsidian__ask_user
+              // (same intent, different tool) — blocking BOTH question paths.
               ...(opts.obsidianServer
                 ? {
-                    disallowedTools: [
-                      ...(opts.nativeFirst ? NATIVE_FIRST_DISALLOW : []),
-                      "AskUserQuestion",
-                    ],
+                    toolAliases: { AskUserQuestion: "mcp__obsidian__ask_user" },
+                    ...(opts.nativeFirst ? { disallowedTools: NATIVE_FIRST_DISALLOW } : {}),
                   }
                 : {}),
             }

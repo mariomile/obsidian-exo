@@ -70,6 +70,34 @@ function getOmnisearch(app: App): OmnisearchApi | null {
   return api && typeof api.search === "function" ? api : null;
 }
 
+/** AIditor's cross-plugin read/action API (when the aiditor plugin is enabled). */
+interface AIditorAnnotation {
+  id: string;
+  notePath: string;
+  quote: string;
+  body: string;
+  status: "active" | "resolved" | "orphaned";
+}
+interface AIditorApi {
+  getAnnotations(filter?: { notePath?: string; status?: string | string[] }): AIditorAnnotation[];
+  resolveAnnotation(id: string): boolean;
+}
+/** Resolve AIditor's public API off its plugin instance, or null when absent/disabled. */
+function getAIditor(app: App): AIditorApi | null {
+  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, Partial<AIditorApi>> } }).plugins;
+  const p = plugins?.plugins?.["aiditor"];
+  return p && typeof p.getAnnotations === "function" && typeof p.resolveAnnotation === "function"
+    ? (p as AIditorApi)
+    : null;
+}
+
+/** One-line rendering of an annotation for tool output — whitespace-collapsed, length-capped. */
+function fmtAnnotation(a: AIditorAnnotation): string {
+  const quote = a.quote.replace(/\s+/g, " ").trim().slice(0, 80);
+  const body = a.body.replace(/\s+/g, " ").trim();
+  return `- ${a.id} · ${a.status} · [[${a.notePath}]] · "${quote}" → ${body}`;
+}
+
 function slugify(s: string): string {
   return s
     .toLowerCase()
@@ -294,7 +322,7 @@ export function createObsidianToolServer(
 
   const getActiveContext = tool(
     "get_active_context",
-    "Get the note the user is currently viewing, the selected text (if any), and its graph neighborhood.",
+    "Get the note the user is currently viewing, the selected text (if any), its graph neighborhood, and any open AIditor comments Mario left on it. Treat those comments as Mario's margin notes — read them as context, and act on any that read as requests.",
     {},
     async () => {
       const file = app.workspace.getActiveFile();
@@ -302,11 +330,57 @@ export function createObsidianToolServer(
       const n = neighborhood(app, file);
       const sel =
         app.workspace.activeEditor?.editor?.getSelection?.() ?? "";
+      // Fold in the note's open annotations so the agent passively notices
+      // comments whenever it orients on a note — no explicit call needed.
+      const anns = getAIditor(app)?.getAnnotations({ notePath: file.path }) ?? [];
+      const annText = anns.length
+        ? `annotations (${anns.length} open — use list_annotations for the full set, resolve_annotation to close one):\n` +
+          anns.slice(0, 8).map(fmtAnnotation).join("\n") + "\n"
+        : "";
       return ok(
         `active: [[${file.path}]]\n` +
           (sel ? `selection:\n${sel}\n` : "") +
+          annText +
           `related: ${[...n.related, ...n.backlinks].slice(0, 8).map(basename).join(", ") || "(none)"}`
       );
+    }
+  );
+
+  const listAnnotations = tool(
+    "list_annotations",
+    "List AIditor margin comments Mario left on notes. Defaults to the active note and the open set (active + orphaned) — the comments awaiting attention. Pass scope:'vault' for every note, or notePath to target one; status 'resolved'/'all' to widen. Use it to read Mario's comments as context or enumerate open ones to act on, then close each with resolve_annotation.",
+    {
+      scope: z.enum(["note", "vault"]).optional(),
+      notePath: z.string().optional(),
+      status: z.enum(["open", "active", "orphaned", "resolved", "all"]).optional(),
+    },
+    async (args) => {
+      const aiditor = getAIditor(app);
+      if (!aiditor) return ok("AIditor plugin isn't enabled — no annotations available.");
+
+      let notePath: string | undefined;
+      if (args.notePath) {
+        notePath = args.notePath;
+      } else if ((args.scope ?? "note") === "note") {
+        const f = app.workspace.getActiveFile();
+        if (!f) return ok("No active note to read annotations from — pass scope:'vault' or a notePath.");
+        notePath = f.path;
+      }
+
+      // 'open' (default) → omit status so aiditor applies its active+orphaned default.
+      // 'all' → every status. Otherwise pass the single status through.
+      const status = args.status ?? "open";
+      const statusArg =
+        status === "open" ? undefined : status === "all" ? ["active", "orphaned", "resolved"] : status;
+
+      const anns = aiditor.getAnnotations({
+        ...(notePath ? { notePath } : {}),
+        ...(statusArg ? { status: statusArg } : {}),
+      });
+      if (!anns.length) {
+        return ok(notePath ? `No matching annotations on [[${notePath}]].` : "No matching annotations.");
+      }
+      return ok(anns.map(fmtAnnotation).join("\n"));
     }
   );
 
@@ -320,7 +394,9 @@ export function createObsidianToolServer(
             question: z.string(),
             header: z.string(),
             options: z
-              .array(z.object({ label: z.string(), description: z.string().optional() }))
+              // `preview` matches the built-in AskUserQuestion shape (aliased to
+              // this tool) — accepted so aliased calls validate, ignored by the UI.
+              .array(z.object({ label: z.string(), description: z.string().optional(), preview: z.string().optional() }))
               .min(2)
               .max(6),
             multiSelect: z.boolean().optional(),
@@ -458,6 +534,18 @@ export function createObsidianToolServer(
       await ensureParentFolder(app, dest);
       await app.fileManager.renameFile(file, dest);
       return ok(`Renamed to [[${dest}]]`);
+    }
+  );
+
+  const resolveAnnotation = tool(
+    "resolve_annotation",
+    "Mark an AIditor comment resolved by id (from list_annotations or get_active_context) — use once you've acted on what the comment asked for. The comment is archived, not deleted, and disappears from the open set.",
+    { id: z.string() },
+    async (args) => {
+      const aiditor = getAIditor(app);
+      if (!aiditor) return err("AIditor plugin isn't enabled — nothing to resolve.");
+      const done = aiditor.resolveAnnotation(args.id);
+      return done ? ok(`Resolved annotation ${args.id}.`) : err(`No annotation with id ${args.id}.`);
     }
   );
 
@@ -803,9 +891,9 @@ export function createObsidianToolServer(
       "Obsidian-native tools. Prefer these over generic file/Bash tools for vault work — they respect links, tags, and frontmatter.",
     tools: [
       searchVault, readNote, getBacklinks, getNeighborhood, listNotes, listTags, getActiveContext,
-      askUser, listLoops,
+      listAnnotations, askUser, listLoops,
       createNote, appendToNote, updateFrontmatter, addLinks, openNote,
-      editNote, insertAtCursor, renameNote,
+      editNote, insertAtCursor, renameNote, resolveAnnotation,
       ...(memoryRead ? [recall] : []),
       ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
       // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
@@ -825,6 +913,7 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__list_notes",
   "mcp__obsidian__list_tags",
   "mcp__obsidian__get_active_context",
+  "mcp__obsidian__list_annotations",
   "mcp__obsidian__recall",
   "mcp__obsidian__list_loops",
 ]);
