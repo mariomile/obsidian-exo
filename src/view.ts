@@ -3206,8 +3206,7 @@ export class ChatView extends ItemView {
     const nameEl = head.createSpan({ cls: "mva-artifact-name", text: noteBasename(path) });
     head.createDiv({ cls: "mva-artifact-spacer" });
     const openAction = () => (isHtml ? this.openArtifactExternally(path) : this.revealNote(path));
-    const openBtn = head.createSpan({ cls: "mva-artifact-open", attr: { "aria-label": "Open" } });
-    setIcon(openBtn, "external-link");
+    const openBtn = head.createEl("button", { cls: "mva-btn mva-artifact-open", text: "View" });
     openBtn.onclick = (e) => {
       e.stopPropagation();
       openAction();

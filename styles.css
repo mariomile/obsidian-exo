@@ -3407,23 +3407,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-artifact-spacer {
   flex: 1;
 }
+/* Compact "View" text button in the card header (on top of .mva-btn base). */
 .mva-artifact-open {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2px;
-  border-radius: var(--mva-r1);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: color var(--mva-t), background var(--mva-t);
-}
-.mva-artifact-open:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-}
-.mva-artifact-open .svg-icon {
-  width: 14px;
-  height: 14px;
+  padding: 2px 9px;
+  font-size: 11.5px;
+  flex-shrink: 0;
 }
 .mva-artifact-frame {
   position: relative;
@@ -3447,7 +3435,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    smaller type + tighter block spacing than the full rendered note. */
 .mva-artifact-md {
   pointer-events: none;
-  font-size: var(--font-smaller);
+  font-size: 11px;
+  line-height: 1.4;
 }
 .mva-artifact-md > :first-child {
   margin-top: 0;
