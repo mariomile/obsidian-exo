@@ -188,11 +188,12 @@ export class Composer {
     const composerResize = new ResizeObserver(syncHeight);
     composerResize.observe(bar);
     this.host.register(() => composerResize.disconnect());
-    this.contextEl = bar.createDiv({ cls: "mva-context" });
-    this.imagesEl = bar.createDiv({ cls: "mva-images is-hidden" });
-
-    // One unified input box (the only surface): textarea on top, controls at the bottom.
+    // One unified input box (the only surface, Craft-style): context cards and
+    // image attachments live INSIDE the box, above the textarea, then controls at
+    // the bottom — everything shares one rounded border instead of floating rows.
     const box = bar.createDiv({ cls: "mva-inputbox" });
+    this.contextEl = box.createDiv({ cls: "mva-context" });
+    this.imagesEl = box.createDiv({ cls: "mva-images is-hidden" });
     this.inputEl = box.createEl("textarea", {
       cls: "mva-input",
       attr: { rows: "3", placeholder: "Message the agent…" },
