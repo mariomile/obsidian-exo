@@ -20,6 +20,9 @@
   --mva-card-pad: 10px 12px;
   --mva-card-radius: var(--mva-r2);
   --mva-card-border: 1px solid var(--background-modifier-border);
+  /* Single reading-column cap shared by the transcript, the agents chip and the
+     composer so they stay centered on the same axis at any pane width. */
+  --mva-content-max: 680px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -507,7 +510,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 /* Cap the reading column so wide panes don't stretch messages edge-to-edge.
    No-op at narrow (sidebar) widths since 100% < 760px already. */
 .mva-list > * {
-  max-width: 760px;
+  max-width: var(--mva-content-max);
   width: 100%;
   margin-left: auto;
   margin-right: auto;
@@ -900,7 +903,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: flex;
   align-items: center;
   gap: 7px;
-  max-width: 760px;
+  max-width: var(--mva-content-max);
   width: 100%;
   margin: 0 auto;
   padding: 6px 14px;
@@ -940,7 +943,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   gap: 6px;
   padding: 10px 12px;
   background: transparent;
-  max-width: 760px;
+  max-width: var(--mva-content-max);
   width: 100%;
   margin-left: auto;
   margin-right: auto;
@@ -1233,16 +1236,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-perm-dot.is-danger  { background: var(--color-red, #e05b5b); }
 
 /* ------------------------------ context ------------------------------- */
+/* Context strip lives at the top of the unified input box (Craft-style): its
+   own horizontal inset roughly matches the textarea's, no border of its own —
+   the box border wraps it. */
 .mva-context {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  /* Inherits the composer's 760px cap; stated explicitly since it's the
-     context strip named in the design spec. */
-  max-width: 760px;
-  width: 100%;
-  margin-left: auto;
-  margin-right: auto;
+  padding: 9px 10px 0;
   box-sizing: border-box;
 }
 .mva-context.is-empty {
@@ -2846,7 +2847,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 6px 2px 0;
+  /* Inside the input box, aligned with the context/textarea inset. */
+  padding: 8px 10px 0;
 }
 .mva-images.is-hidden {
   display: none;
