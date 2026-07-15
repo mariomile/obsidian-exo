@@ -4442,3 +4442,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-ll-x { cursor: pointer; display: inline-flex; color: var(--text-faint); }
 .mva-ll-x:hover { color: var(--text-muted); }
 .mva-ll-x svg { width: 12px; height: 12px; }
+.mva-ll.is-review { flex-direction: column; align-items: stretch; gap: 6px; }
+.mva-ll-head { display: flex; align-items: center; gap: 8px; }
+.mva-ll-preview { white-space: pre-wrap; color: var(--text-faint); background: var(--background-secondary);
+  border-radius: var(--radius-s); padding: 6px 8px; max-height: 140px; overflow-y: auto; }

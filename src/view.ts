@@ -4881,9 +4881,9 @@ export class ChatView extends ItemView {
     this.clickable(dismiss, () => card.remove());
   }
 
-  /** Accepted: run the distillation on a transient utility session and save
-   *  the result into custom prompts. Soft failure — the card says so, nothing
-   *  else changes. */
+  /** Accepted: run the distillation on a transient utility session and show
+   *  the extracted playbook for review — it is saved only on confirm. Soft
+   *  failure — the card says so, nothing else changes. */
   private async distillPlaybook(ctx: AssistantCtx, card: HTMLElement): Promise<void> {
     card.empty();
     setIcon(card.createSpan({ cls: "mva-ll-icon is-working" }), "sparkles");
@@ -4906,10 +4906,32 @@ export class ChatView extends ItemView {
       window.setTimeout(() => card.remove(), 6000);
       return;
     }
+    this.renderPlaybookReview(card, parsed);
+  }
+
+  /** Review step: the card shows exactly what got distilled (name + prompt)
+   *  so the user knows what they are saving. Salva commits, X discards. */
+  private renderPlaybookReview(card: HTMLElement, parsed: { name: string; prompt: string }): void {
+    card.addClass("is-review");
+    const head = card.createDiv({ cls: "mva-ll-head" });
+    setIcon(head.createSpan({ cls: "mva-ll-icon" }), "sparkles");
+    head.createSpan({ cls: "mva-ll-label", text: `Playbook estratto — "${parsed.name}"` });
+    const save = head.createSpan({ cls: "mva-ll-btn", text: "Salva" });
+    const dismiss = head.createSpan({ cls: "mva-ll-x", attr: { "aria-label": "Dismiss" } });
+    setIcon(dismiss, "x");
+    card.createDiv({ cls: "mva-ll-preview", text: parsed.prompt });
+    this.clickable(save, () => void this.savePlaybook(card, parsed));
+    this.clickable(dismiss, () => card.remove());
+  }
+
+  /** Confirmed: dedup the name against existing playbooks and persist. */
+  private async savePlaybook(card: HTMLElement, parsed: { name: string; prompt: string }): Promise<void> {
     const s = this.plugin.settings;
     const name = uniquePlaybookName(parsed.name, (s.customPrompts ?? []).map((p) => p.name));
     s.customPrompts.push({ name, prompt: parsed.prompt });
     await this.plugin.saveSettings();
+    card.empty();
+    card.removeClass("is-review");
     setIcon(card.createSpan({ cls: "mva-ll-icon is-ok" }), "check");
     card.createSpan({ cls: "mva-ll-label", text: `Salvato: "${name}" — lo trovi nel menu / (modificabile in settings).` });
   }
