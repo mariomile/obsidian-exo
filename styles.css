@@ -1022,6 +1022,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 55%;
+}
+.mva-ac-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mva-ac-detail {
   margin-left: auto;
@@ -1033,6 +1044,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 50%;
+  flex-shrink: 0;
 }
 .mva-toolbar {
   display: flex;
