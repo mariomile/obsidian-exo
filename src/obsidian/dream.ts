@@ -1,6 +1,7 @@
 import { App, TFile } from "obsidian";
 import type { WriteQueue } from "../core/write-queue";
 import { renderStoreBlock, targetStoreFile, type LlmWritePlan } from "../core/dream-proposals";
+import { patchFrontmatter } from "../core/frontmatter-patch";
 
 /**
  * Deterministic (no-LLM) memory-consolidation engine — "dream" pass.
@@ -192,10 +193,11 @@ export async function applyPlan(
       if (keepFile) {
         snap(entry.keep, await app.vault.read(keepFile));
         await checkpoint();
-        await app.fileManager.processFrontMatter(keepFile, (f) => {
-          f.evidence = entry.evidence;
-          f.last_confirmed = today();
-        });
+        const content = await app.vault.read(keepFile);
+        await app.vault.modify(keepFile, patchFrontmatter(content, {
+          evidence: entry.evidence,
+          last_confirmed: today(),
+        }));
       }
       for (const dropPath of entry.drop) {
         try {
@@ -227,14 +229,13 @@ export async function applyPlan(
       await app.fileManager.renameFile(fromFile, entry.to);
       const movedFile = asFile(entry.to);
       if (movedFile) {
-        await app.fileManager.processFrontMatter(movedFile, (f) => {
-          f.rule = learningKey(sourceBasename);
-          f.confirmed_sessions = entry.evidence;
-          f.last_updated = today();
-          f.status = "confirmed";
-          delete f.evidence;
-          delete f.last_confirmed;
-        });
+        const content = await app.vault.read(movedFile);
+        await app.vault.modify(movedFile, patchFrontmatter(content, {
+          rule: learningKey(sourceBasename),
+          confirmed_sessions: entry.evidence,
+          last_updated: today(),
+          status: "confirmed",
+        }, ["evidence", "last_confirmed"]));
       }
     } catch (err) {
       if (err instanceof DreamSnapshotPersistenceError) throw err;
@@ -249,9 +250,8 @@ export async function applyPlan(
       if (!file) continue;
       snap(entry.path, await app.vault.read(file));
       await checkpoint();
-      await app.fileManager.processFrontMatter(file, (f) => {
-        f.status = "stale";
-      });
+      const content = await app.vault.read(file);
+      await app.vault.modify(file, patchFrontmatter(content, { status: "stale" }));
     } catch (err) {
       if (err instanceof DreamSnapshotPersistenceError) throw err;
       /* skip this stale entry */

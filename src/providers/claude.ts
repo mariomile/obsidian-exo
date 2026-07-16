@@ -327,11 +327,8 @@ class ClaudeSession implements AgentSession {
       // A locally-requested interrupt comes back as error_during_execution (see
       // interruptRequested): the session is healthy, so skip the fake "CLI
       // crashed" error and settle the turn quietly like a clean abort.
-      if (
-        msg.subtype &&
-        msg.subtype !== "success" &&
-        !(interrupted && msg.subtype === "error_during_execution")
-      ) {
+      const failed = msg.is_error === true || (!!msg.subtype && msg.subtype !== "success");
+      if (failed && !(interrupted && msg.subtype === "error_during_execution")) {
         let message = msg.result || `Claude ended: ${msg.subtype}`;
         if (this.stderrTail.length) {
           message += "\n\nCLI stderr (tail):\n" + this.stderrTail.slice(-6).join("\n");
@@ -569,6 +566,10 @@ interface ClaudeMsg {
   session_id?: string;
   parent_tool_use_id?: string | null;
   result?: string;
+  /** Root-level result failure flag. The CLI can emit `subtype: "success"`
+   *  together with `is_error: true` (for example when authentication is
+   *  missing), so subtype alone is not a reliable success signal. */
+  is_error?: boolean;
   compact_summary?: string;
   // Per-turn token usage on the `result` message (SDKResultMessage.usage in the
   // Agent SDK's types — verified against node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts).
