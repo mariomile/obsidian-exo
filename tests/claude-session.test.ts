@@ -92,6 +92,22 @@ describe("ClaudeSession interrupt vs error_during_execution", () => {
     expect(events.some((e) => e.kind === "error")).toBe(true);
     session.dispose();
   });
+
+  test("reports root is_error even when the CLI labels the result success", async () => {
+    const session = claudeAdapter.createSession(OPTS);
+    const events: AgentEvent[] = [];
+    const turn = session.send("hi", (e) => events.push(e));
+    fake.push({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Not logged in · Please run /login",
+    });
+    await turn;
+    expect(events).toContainEqual({ kind: "error", message: "Not logged in · Please run /login" });
+    expect(events.some((e) => e.kind === "turn-end")).toBe(true);
+    session.dispose();
+  });
 });
 
 /** W0 cost governance: the observer/utility-pass path needs a real per-turn

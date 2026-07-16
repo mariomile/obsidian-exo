@@ -22,7 +22,7 @@ import type {
   RateLimitInfo,
   SessionCaps,
 } from "./providers/types";
-import { toolMeta, toolFilePath, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
+import { toolMeta, toolFilePath, toolFilePaths, toolWorkingLabel, renderToolDetail, READ_ONLY_TOOLS } from "./ui/tools";
 import {
   createObsidianToolServer,
   buildObsidianTools,
@@ -64,7 +64,7 @@ import { workingAffordance } from "./core/working-visibility";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
 import { terminalConvoState } from "./core/convo-state";
-import { matchPermRule, allowKey, permArgText, permRuleLine, decidePermission } from "./core/permissions";
+import { allowKey, permArgText, permRuleLine, decidePermission } from "./core/permissions";
 import { describeCliFailure } from "./core/errors";
 import { planInputParts, planStateText } from "./core/plan";
 import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
@@ -614,6 +614,7 @@ export class ChatView extends ItemView {
       s.codexSandbox,
       s.codexApproval,
       s.orchestrationEnabled,
+      c.provider === "claude" ? s.claudeBin : s.codexBin,
       c.id,
     ].join("|");
   }
@@ -673,7 +674,10 @@ export class ChatView extends ItemView {
           // The Agent Is the Folder — gates `rethink_memory` only.
           s.agentFolderEnabled,
           // Per-convo bridge: rethink_memory renders into THIS conversation's turn.
-          (req) => this.rethinkBridge(c, req)
+          (req) => this.rethinkBridge(c, req),
+          // Same contract for the single-file Open-Loops Ledger. Kept last in
+          // the positional API so existing callers retain their argument slots.
+          this.plugin.loopsWriteQueue
         )
       : undefined;
 
@@ -725,6 +729,7 @@ export class ChatView extends ItemView {
           // the conversation that owns this session, never a parallel one.
           askBridge: (qs) => this.askBridge(c, qs),
           memoryWriteQueue: this.plugin.memoryWriteQueue,
+          loopsWriteQueue: this.plugin.loopsWriteQueue,
           orchestrationEnabled: s.orchestrationEnabled && !readOnlySandbox,
           tasksWriteQueue: this.plugin.tasksWriteQueue,
         });
@@ -1242,13 +1247,15 @@ export class ChatView extends ItemView {
     this.persist();
   }
 
-  /** Fork the active conversation into a new tab (full transcript + resume id). */
+  /** Fork the active conversation into a new tab. The transcript is copied but
+   *  the provider session is not: reusing the same opaque session id makes the
+   *  original and fork share hidden context and breaks branch isolation. */
   private forkConversation(src: Convo): void {
     const c = this.makeConvo();
     c.title = src.title ? `${src.title} (fork)` : "Fork";
     c.provider = src.provider;
     c.model = src.model;
-    c.sessionId = src.sessionId; // best-effort: continue with the same context
+    c.sessionId = undefined;
     c.messages = src.messages.map((m) =>
       m.role === "assistant" ? { role: "assistant", segments: [...m.segments] } : { ...m }
     );
@@ -1982,7 +1989,7 @@ export class ChatView extends ItemView {
     // a crash inside the 15-min cadence window would leave the identity change
     // uncommitted — the safety net's fast path should cover it, not just the
     // periodic fallback.
-    this.plugin.noteVaultWrite(1);
+    this.plugin.noteVaultWrite([write.path]);
     this.renderBlockDiff(ctx.bodyEl, write, req.rationale);
     return plan.requireRationale
       ? `Rewrote ${block}.md (rationale surfaced in the change). Review · undo shown in the feed.`
@@ -2067,7 +2074,7 @@ export class ChatView extends ItemView {
         .then((write) => {
           // Same git-autocommit debounce nudge as the direct-write tier (see
           // rethinkBridge) — an Applied proposal is a vault write too.
-          this.plugin.noteVaultWrite(1);
+          this.plugin.noteVaultWrite([write.path]);
           card.removeClass("mva-rethink-proposal");
           actions.remove();
           this.renderBlockUndoRow(card, write);
@@ -2855,6 +2862,18 @@ export class ChatView extends ItemView {
     const base = this.vaultPath();
     if (base && base !== "." && p.startsWith(base + "/")) return p.slice(base.length + 1);
     return p;
+  }
+
+  /** Resolve a tool's user-facing target/link to the concrete vault path used
+   *  by snapshots and git. Native tools accept `[[Note]]` or a basename, while
+   *  checkpointing must address `Folder/Note.md`; destinations that do not yet
+   *  exist (create/rename) deliberately fall back to the supplied path. */
+  private concreteToolPath(rawPath: string): string {
+    const rel = this.relPath(rawPath);
+    const direct = this.app.vault.getAbstractFileByPath(rel);
+    if (direct instanceof TFile) return direct.path;
+    const linkpath = rel.endsWith(".md") ? rel.slice(0, -3) : rel;
+    return this.app.metadataCache.getFirstLinkpathDest(linkpath, "")?.path ?? rel;
   }
 
   /** Snapshot a file's current content before a write (null = it doesn't exist yet). */
@@ -4333,19 +4352,30 @@ export class ChatView extends ItemView {
           this.maybeStepObserve(c, ctx);
           // File tracking runs before the nesting branch: subagent writes must stay
           // rewindable (checkpoint) and visible in the touched-notes footer.
-          const fp = toolFilePath(e.name, e.input);
-          if (fp) {
+          const paths = toolFilePaths(e.name, e.input);
+          if (e.name === "mcp__obsidian__insert_at_cursor") {
+            const activePath = this.app.workspace.getActiveFile()?.path;
+            if (activePath) paths.push(activePath);
+          }
+          const uniquePaths = [...new Set(paths.map((path) => this.concreteToolPath(path)))];
+          if (uniquePaths.length) {
             const kind = WRITE_TOOLS.test(e.name) ? "write" : "read";
-            if (kind === "read") ctx.sources.add(fp);
-            else snapshots.push(this.snapshot(checkpoint, fp).catch(() => {})); // checkpoint before the write runs
-            if (kind === "write") {
-              ctx.writeById.set(e.id, fp);
-              // A file that doesn't exist yet at write-start is newly created this turn
-              // (drives markdown preview cards; edits of existing notes don't get one).
-              const rel = this.relPath(fp);
-              if (!this.app.vault.getAbstractFileByPath(rel)) ctx.createdPaths.add(rel);
+            for (const fp of uniquePaths) {
+              if (kind === "read") ctx.sources.add(fp);
+              else snapshots.push(this.snapshot(checkpoint, fp).catch(() => {})); // checkpoint before the write runs
+              if (kind === "write") {
+                // A file that doesn't exist yet at write-start is newly created this turn
+                // (drives markdown preview cards; edits of existing notes don't get one).
+                const rel = this.relPath(fp);
+                if (!this.app.vault.getAbstractFileByPath(rel)) ctx.createdPaths.add(rel);
+              }
+              mergeTouched(ctx.touched, fp, kind);
             }
-            mergeTouched(ctx.touched, fp, kind);
+            if (kind === "write") {
+              // Rename reveals/previews its destination; other tools use their
+              // first (and normally only) path.
+              ctx.writeById.set(e.id, uniquePaths[uniquePaths.length - 1]);
+            }
           }
           // Feature 4: a subagent's tool call nests under its parent Task card
           // (ephemeral, live-only). Falls through to a flat card if the parent
@@ -4359,7 +4389,7 @@ export class ChatView extends ItemView {
             this.trackBackgroundTask(ctx, e.id, e.name, e.input);
             // A flat, note-touching card is streaming-only feedback — dropped at
             // turn end once the touched-notes footer carries the same fact.
-            if (fp) ctx.noteTouchIds.add(e.id);
+            if (uniquePaths.length) ctx.noteTouchIds.add(e.id);
             // Update the per-chat agent count when a subagent or a background shell
             // just launched (trackBackgroundTask records bg shells in ctx.bgTasks).
             if (e.name === "Task" || ctx.bgTasks.has(e.id)) this.refreshAgentIndicators();
@@ -4697,8 +4727,8 @@ export class ChatView extends ItemView {
       // schedule a debounced commit. Synchronous and cheap — never awaited, never
       // on the turn's critical path; the plugin no-ops entirely when the setting
       // is off.
-      const writeCount = ctx.touched.filter((t) => t.kind === "write").length;
-      if (writeCount > 0) this.plugin.noteVaultWrite(writeCount);
+      const writtenPaths = ctx.touched.filter((t) => t.kind === "write").map((t) => t.path);
+      if (writtenPaths.length > 0) this.plugin.noteVaultWrite(writtenPaths);
       // If the turn died with an interactive card still open (session crash while a
       // permission/ask was pending), CANCEL it — otherwise the card stays live in
       // the transcript and the in-process ask promise hangs forever. No-op on clean

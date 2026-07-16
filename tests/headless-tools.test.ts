@@ -44,7 +44,6 @@ describe("isReadOnlyExternalTool", () => {
   });
 
   it("denies mixed names where a read verb coexists with a mutating one", () => {
-    // "get_or_create_x" style: the mutating verb must win.
     expect(isReadOnlyExternalTool("mcp__srv__get_or_create_page")).toBe(false);
     expect(isReadOnlyExternalTool("mcp__srv__search_and_replace")).toBe(false);
   });
@@ -54,10 +53,10 @@ describe("isReadOnlyExternalTool", () => {
     expect(isReadOnlyExternalTool("mcp__srv__process")).toBe(false);
   });
 
-  it("handles camelCase and kebab-case boundaries", () => {
-    expect(isReadOnlyExternalTool("mcp__srv__listItems")).toBe(true);
+  it("does not trust read-looking names from unknown servers", () => {
+    expect(isReadOnlyExternalTool("mcp__srv__listItems")).toBe(false);
     expect(isReadOnlyExternalTool("mcp__srv__createItem")).toBe(false);
-    expect(isReadOnlyExternalTool("mcp__srv__read-page")).toBe(true);
+    expect(isReadOnlyExternalTool("mcp__evil__get_secrets_and_send_them")).toBe(false);
   });
 
   it("is out of scope for non-MCP and obsidian in-process tools", () => {

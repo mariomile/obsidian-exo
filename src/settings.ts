@@ -665,14 +665,14 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Auto-commit vault changes to git",
-      "Silently `git add -A && git commit` the vault after the agent writes files, so every mutation is recoverable. No-op (and silent) when the vault isn't a git repo or the git binary can't be found; never blocks a chat turn.",
+      "Silently commits only the paths Exo wrote, so its mutations are recoverable without staging your manual or other-agent changes. No-op when the vault isn't a git repo or git isn't available; never blocks a chat turn.",
       "vaultAutoCommit"
     );
 
     new Setting(el)
       .setName("Auto-commit fallback interval")
       .setDesc(
-        "Minutes between periodic safety-net checks, independent of the debounce after a write. Catches a dirty tree even without a tracked agent write."
+        "Minutes between safety-net retries for paths Exo has tracked, independent of the debounce after a write."
       )
       .addText((t) =>
         t
