@@ -27,14 +27,29 @@ const OBSIDIAN_NOTE_TOOLS = new Set([
   "mcp__obsidian__rename_note",
 ]);
 
-/** The raw file path a tool operates on, if any (for click-to-open). */
-export function toolFilePath(name: string, input: unknown): string | undefined {
+/** Every raw file path a tool mutates/reads. Rename has two paths because a
+ *  correct rewind must restore the source and remove/restore the destination. */
+export function toolFilePaths(name: string, input: unknown): string[] {
   const i = rec(input);
-  if (FILE_TOOLS.has(name)) return asString(i.file_path || i.notebook_path) || undefined;
-  if (OBSIDIAN_NOTE_TOOLS.has(name)) {
-    return asString(i.target || i.path).replace(/^\[\[|\]\]$/g, "") || undefined;
+  if (FILE_TOOLS.has(name)) {
+    const path = asString(i.file_path || i.notebook_path);
+    return path ? [path] : [];
   }
-  return undefined;
+  if (OBSIDIAN_NOTE_TOOLS.has(name)) {
+    const source = asString(i.target || i.path).replace(/^\[\[|\]\]$/g, "");
+    if (name === "mcp__obsidian__rename_note") {
+      const rawDest = asString(i.new_path).replace(/^\[\[|\]\]$/g, "");
+      const dest = rawDest && !rawDest.endsWith(".md") ? `${rawDest}.md` : rawDest;
+      return [source, dest].filter(Boolean);
+    }
+    return source ? [source] : [];
+  }
+  return [];
+}
+
+/** Primary path for click-to-open and permission labels. */
+export function toolFilePath(name: string, input: unknown): string | undefined {
+  return toolFilePaths(name, input)[0];
 }
 
 const OBSIDIAN_META: Record<string, { icon: string; label: string; targetKey?: string }> = {

@@ -21,6 +21,7 @@ import {
   type LoopEntry,
 } from "../core/open-loops";
 import { WriteQueue } from "../core/write-queue";
+import { patchFrontmatter } from "../core/frontmatter-patch";
 import { createBacklogTask, adaptAppToTaskVault } from "./task-store";
 
 /** Folder holding the append-only Memory Union Store (monthly markdown files). */
@@ -133,6 +134,7 @@ export interface ObsidianToolOpts {
   askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>;
   memoryRead?: boolean;
   memoryWriteQueue?: WriteQueue;
+  loopsWriteQueue?: WriteQueue;
   orchestrationEnabled?: boolean;
   tasksWriteQueue?: WriteQueue;
   agentFolderEnabled?: boolean;
@@ -157,6 +159,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     askBridge,
     memoryRead = true,
     memoryWriteQueue = new WriteQueue(),
+    loopsWriteQueue = new WriteQueue(),
     /** Orchestration Board master flag (default OFF). Gates `add_task` only —
      *  every other tool above is unaffected, and the tool list sent to sessions
      *  must be byte-identical to before this parameter existed when this is false. */
@@ -189,11 +192,9 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
    * the `new WriteQueue()` default only exists for standalone callers (tests).
    */
 
-  /** Serialized write path for the single-file Open-Loops Ledger — a separate
-   *  queue from `memoryWriteQueue` since it targets a different file, but the
-   *  same reasoning applies: `open_loop` and `close_loop` both read-modify-write
-   *  the whole ledger file, so concurrent calls must never interleave. */
-  const loopsWriteQueue = new WriteQueue();
+  /** Serialized write path for the single-file Open-Loops Ledger. The plugin
+   *  injects one shared instance across every conversation/session; the local
+   *  default exists only for standalone tool registries in tests. */
 
   /* ----------------------------- read ----------------------------- */
 
@@ -450,12 +451,12 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       const path = args.path.endsWith(".md") ? args.path : `${args.path}.md`;
       if (app.vault.getAbstractFileByPath(path)) return err(`Already exists: ${path}`);
       await ensureParentFolder(app, path);
-      const file = await app.vault.create(path, args.content);
       const fm = args.frontmatter ?? {};
-      await app.fileManager.processFrontMatter(file, (f: Record<string, unknown>) => {
-        Object.assign(f, fm);
-        if (!f.tags) f.tags = ["type/note"];
-      });
+      const hasTags = Object.prototype.hasOwnProperty.call(fm, "tags");
+      await app.vault.create(path, patchFrontmatter(args.content, {
+        ...fm,
+        ...(hasTags ? {} : { tags: ["type/note"] }),
+      }));
       return ok(`Created [[${path}]]`);
     }
   );
@@ -477,9 +478,8 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     { target: z.string(), changes: z.record(z.string(), z.any()) },
     async (args) => {
       const file = need(args.target);
-      await app.fileManager.processFrontMatter(file, (f: Record<string, unknown>) => {
-        Object.assign(f, args.changes);
-      });
+      const content = await app.vault.read(file);
+      await app.vault.modify(file, patchFrontmatter(content, args.changes));
       return ok(`Updated frontmatter of [[${file.path}]]`);
     }
   );
@@ -490,11 +490,11 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     { target: z.string(), targets: z.array(z.string()) },
     async (args) => {
       const file = need(args.target);
-      await app.fileManager.processFrontMatter(file, (f: Record<string, unknown>) => {
-        const cur = new Set<string>(Array.isArray(f.related) ? (f.related as string[]) : []);
-        for (const t of args.targets) cur.add(`[[${t.replace(/^\[\[|\]\]$/g, "")}]]`);
-        f.related = [...cur];
-      });
+      const cached = app.metadataCache.getFileCache(file)?.frontmatter?.related;
+      const cur = new Set<string>(Array.isArray(cached) ? cached.map(String) : cached ? [String(cached)] : []);
+      for (const t of args.targets) cur.add(`[[${t.replace(/^\[\[|\]\]$/g, "")}]]`);
+      const content = await app.vault.read(file);
+      await app.vault.modify(file, patchFrontmatter(content, { related: [...cur] }));
       return ok(`Linked ${args.targets.length} note(s) from [[${file.path}]]`);
     }
   );
@@ -933,7 +933,8 @@ export function createObsidianToolServer(
   orchestrationEnabled = false,
   tasksWriteQueue: WriteQueue = new WriteQueue(),
   agentFolderEnabled = false,
-  rethinkBridge?: (req: RethinkRequest) => Promise<string>
+  rethinkBridge?: (req: RethinkRequest) => Promise<string>,
+  loopsWriteQueue: WriteQueue = new WriteQueue()
 ) {
   return createSdkMcpServer({
     name: "obsidian",
@@ -947,6 +948,7 @@ export function createObsidianToolServer(
       askBridge,
       memoryRead,
       memoryWriteQueue,
+      loopsWriteQueue,
       orchestrationEnabled,
       tasksWriteQueue,
       agentFolderEnabled,

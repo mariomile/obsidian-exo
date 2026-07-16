@@ -130,6 +130,10 @@ export default class ExoPlugin extends Plugin {
    * `createObsidianToolServer` and `MemoryObserver`.
    */
   readonly memoryWriteQueue = new WriteQueue();
+  /** One shared write path for `_system/memory/open-loops.md` across every
+   *  Claude/Codex conversation. Each session gets a fresh tool registry, so a
+   *  queue created inside that registry cannot prevent lost updates. */
+  readonly loopsWriteQueue = new WriteQueue();
   /** Serialize temp/backup rotation for conversation history. Multiple views and
    *  rapid UI updates may call saveConversations concurrently; sharing the same
    *  .tmp path without a queue can regress or temporarily remove the main file. */
@@ -178,6 +182,10 @@ export default class ExoPlugin extends Plugin {
   /** Git auto-commit safety net — debounce/cadence bookkeeping (in-memory
    *  only; resets on reload, which is fine, it's just scheduling state). */
   private gitAutoCommitState: AutoCommitState = initialAutoCommitState();
+  /** Vault-relative paths written by Exo and eligible for the next commit.
+   *  Versions prevent a commit finishing in the background from clearing a
+   *  newer write to the same path. Never stage unrelated worktree changes. */
+  private readonly gitAutoCommitPaths = new Map<string, number>();
   /** Fires at most once per session — repeated failures log to console but
    *  never spam the user with Notices. */
   private gitAutoCommitNoticeShown = false;
@@ -642,9 +650,23 @@ export default class ExoPlugin extends Plugin {
    * ever due) happens later, off a periodic timer (`maybeAutoCommit`), fully
    * decoupled from any turn. No-ops entirely when the setting is off.
    */
-  noteVaultWrite(fileCount: number): void {
+  noteVaultWrite(paths: readonly string[]): void {
     if (!this.settings.vaultAutoCommit) return;
-    this.gitAutoCommitState = recordVaultWrite(this.gitAutoCommitState, Date.now(), fileCount);
+    const cwd = this.vaultPath().replace(/\/$/, "");
+    const normalized = paths
+      .map((raw) => {
+        let path = raw.trim().replace(/\\/g, "/");
+        if (!path) return null;
+        if (path.startsWith(cwd + "/")) path = path.slice(cwd.length + 1);
+        else if (path.startsWith("/")) return null;
+        path = path.replace(/^\.\//, "");
+        if (!path || path.split("/").includes("..")) return null;
+        return path;
+      })
+      .filter((path): path is string => path !== null);
+    if (!normalized.length) return;
+    for (const path of normalized) this.gitAutoCommitPaths.set(path, (this.gitAutoCommitPaths.get(path) ?? 0) + 1);
+    this.gitAutoCommitState = recordVaultWrite(this.gitAutoCommitState, Date.now(), normalized.length);
   }
 
   /**
@@ -738,21 +760,31 @@ export default class ExoPlugin extends Plugin {
     // Cheap pure check first — most ticks bail out here with zero git calls.
     if (!isCommitDue(this.gitAutoCommitState, now, debounceMs, cadenceMs)) return;
 
+    const stateAtStart = this.gitAutoCommitState;
+    const pathVersions = [...this.gitAutoCommitPaths.entries()];
+    // Mark this check before async git I/O. Any write that lands while git is
+    // running records a fresh debounce instead of being erased in `finally`.
+    this.gitAutoCommitState = afterCommitCheck(stateAtStart, now);
+    if (!pathVersions.length) return;
+    const paths = pathVersions.map(([path]) => path);
+    let completed = false;
+
     try {
       const { isGitRepo, gitAvailable } = await checkGitRepo(cwd);
-      const worktreeDirty = isGitRepo && gitAvailable ? await isWorktreeDirty(cwd) : false;
-      const pendingFileCount = this.gitAutoCommitState.pendingWriteCount;
+      const worktreeDirty = isGitRepo && gitAvailable ? await isWorktreeDirty(cwd, paths) : false;
+      const pendingFileCount = paths.length;
       const commit = shouldCommitNow({
         enabled: this.settings.vaultAutoCommit,
         isGitRepo,
         gitAvailable,
         worktreeDirty,
-        state: this.gitAutoCommitState,
+        state: stateAtStart,
         now,
         debounceMs,
         cadenceMs,
       });
-      if (commit) await runGitCommit(cwd, formatCommitMessage(pendingFileCount));
+      if (commit) await runGitCommit(cwd, paths, formatCommitMessage(pendingFileCount));
+      completed = true;
     } catch (err) {
       // Never let a failed commit break anything — log it and surface at most
       // one Notice ever (repeated failures would otherwise spam every tick).
@@ -762,11 +794,11 @@ export default class ExoPlugin extends Plugin {
         new Notice("Exo: git auto-commit failed once — see the developer console for details.");
       }
     } finally {
-      // Whether it committed, found the tree clean, or errored — the check
-      // itself happened, so reset the debounce/cadence bookkeeping for the
-      // next cycle. (On error, this also prevents a hard-failing repo from
-      // being hammered every single tick.)
-      this.gitAutoCommitState = afterCommitCheck(this.gitAutoCommitState, now);
+      if (completed) {
+        for (const [path, version] of pathVersions) {
+          if (this.gitAutoCommitPaths.get(path) === version) this.gitAutoCommitPaths.delete(path);
+        }
+      }
     }
   }
 
@@ -1041,9 +1073,12 @@ export default class ExoPlugin extends Plugin {
 
     // Manifest first (contract doc), then only the MISSING block files.
     let written = 0;
+    const writtenPaths: string[] = [];
     let skipped = 0;
     await this.ensureFolder(AGENT_DIR);
-    await this.writeIfMissing(`${AGENT_DIR}/manifest.md`, manifestContent(), () => {}, true);
+    const manifestPath = `${AGENT_DIR}/manifest.md`;
+    await this.writeIfMissing(manifestPath, manifestContent(), () => {}, true);
+    writtenPaths.push(manifestPath);
     for (const name of AGENT_BLOCK_NAMES) {
       const content = blocks[name];
       if (!content) continue;
@@ -1055,12 +1090,13 @@ export default class ExoPlugin extends Plugin {
       }
       await this.app.vault.create(path, `${content.replace(/\s+$/, "")}\n`);
       written++;
+      writtenPaths.push(path);
     }
 
     // Seeded blocks nudge the git-autocommit debounce like any other vault
     // write (integration audit 2026-07-10) — the fresh identity should reach
     // git on the fast path, not only the periodic cadence.
-    if (written > 0) this.noteVaultWrite(written);
+    if (writtenPaths.length > 0) this.noteVaultWrite(writtenPaths);
 
     new Notice(
       `Agent folder seeded — wrote ${written} block(s)${skipped ? `, kept ${skipped} existing` : ""}. Review human.md, then enable "The agent is the folder" in settings.`
@@ -1336,11 +1372,13 @@ export default class ExoPlugin extends Plugin {
         // Persist applied keys so the next run's gate culls duplicates.
         this.settings.appliedProposalKeys = [...this.settings.appliedProposalKeys, ...llm.writePlan.keys].slice(-500);
         await this.saveSettings();
-        // Descriptive memory commit (Letta context-repositories).
-        await this.commitDreamApply(formatDreamSummary(llm.writePlan.summary));
       }
 
       await this.requireDreamSnapshot(snap);
+      const summary = llm
+        ? formatDreamSummary(llm.writePlan.summary)
+        : `dream — promoted ${plan.promote.length}, merged ${plan.dedup.length}, stale ${plan.stale.length}`;
+      await this.commitDreamApply(snap.files.map((file) => file.path), summary);
       const s = llm?.writePlan.summary;
       const llmBit = s ? `; LLM: merged ${s.merged}, superseded ${s.superseded}, drafts ${s.ruleDrafts}, imported ${s.imported}` : "";
       new Notice(
@@ -1419,13 +1457,15 @@ export default class ExoPlugin extends Plugin {
 
   /** Fire one descriptive git commit for an applied dream pass. Gated on the same
    *  opt-in git safety-net setting; a no-op when the vault isn't a git repo. */
-  private async commitDreamApply(summary: string): Promise<void> {
+  private async commitDreamApply(paths: readonly string[], summary: string): Promise<void> {
     if (!this.settings.vaultAutoCommit) return;
     const cwd = this.vaultPath();
     if (cwd === ".") return;
     try {
       const { isGitRepo, gitAvailable } = await checkGitRepo(cwd);
-      if (isGitRepo && gitAvailable) await runGitCommit(cwd, formatCommitMessage(undefined, summary));
+      if (isGitRepo && gitAvailable && paths.length) {
+        await runGitCommit(cwd, paths, formatCommitMessage(paths.length, summary));
+      }
     } catch (err) {
       console.error("[Exo] dream commit failed:", err);
     }
@@ -1468,6 +1508,10 @@ export default class ExoPlugin extends Plugin {
       const ranAt = new Date().toISOString();
       const snap = await applyPlan(this.app, plan, ranAt, (partial) => this.requireDreamSnapshot(partial));
       await this.requireDreamSnapshot(snap);
+      await this.commitDreamApply(
+        snap.files.map((file) => file.path),
+        `dream — promoted ${plan.promote.length}, merged ${plan.dedup.length}, stale ${plan.stale.length}`
+      );
     } catch (err) {
       console.error("[Exo] scheduled dream pass failed:", err);
       new Notice(err instanceof Error ? err.message : "Scheduled dream pass failed; see the developer console.");
@@ -1481,10 +1525,10 @@ export default class ExoPlugin extends Plugin {
   }
 
   /** Run one playbook headlessly and write its report. */
-  private async runPlaybook(name: string, prompt: string): Promise<void> {
+  private async runPlaybook(name: string, prompt: string): Promise<boolean> {
     if (/\{\{\s*[\w-]+\s*\}\}/.test(prompt)) {
       new Notice(`"${name}" has {{variables}} — run it from the composer instead.`);
-      return;
+      return false;
     }
     new Notice(`Running playbook "${name}"…`);
     const result = await runHeadlessPlaybook(this.app, this.settings, prompt);
@@ -1508,6 +1552,7 @@ export default class ExoPlugin extends Plugin {
         /* notifications unavailable — Notice above already covered it */
       }
     }
+    return result.ok;
   }
 
   /** Run any scheduled playbooks that are due (off by default — empty list). */
@@ -1601,24 +1646,37 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
+  private scheduledRunsBusy = false;
   private async checkScheduledRuns(): Promise<void> {
+    if (this.scheduledRunsBusy) return;
     const lines = this.settings.scheduledRuns.split("\n").map((l) => l.trim()).filter(Boolean);
     if (!lines.length) return;
-    const now = Date.now();
-    for (const line of lines) {
-      const i = line.lastIndexOf("|");
-      if (i < 0) continue;
-      const name = line.slice(0, i).trim();
-      const cadence = line.slice(i + 1).trim().toLowerCase();
-      const period = cadence === "daily" ? 20 * 60 * 60 * 1000 : cadence === "weekly" ? 6.5 * 24 * 60 * 60 * 1000 : 0;
-      if (!period || !name) continue;
-      const p = this.settings.customPrompts.find((x) => x.name.toLowerCase() === name.toLowerCase());
-      if (!p) continue;
-      const last = this.settings.scheduledLastRun[p.name] ?? 0;
-      if (now - last < period) continue;
-      this.settings.scheduledLastRun[p.name] = now;
-      await this.saveSettings();
-      await this.runPlaybook(p.name, p.prompt); // sequential — one at a time
+    this.scheduledRunsBusy = true;
+    try {
+      const now = Date.now();
+      for (const line of lines) {
+        const i = line.lastIndexOf("|");
+        if (i < 0) continue;
+        const name = line.slice(0, i).trim();
+        const cadence = line.slice(i + 1).trim().toLowerCase();
+        const period = cadence === "daily" ? 20 * 60 * 60 * 1000 : cadence === "weekly" ? 6.5 * 24 * 60 * 60 * 1000 : 0;
+        if (!period || !name) continue;
+        const p = this.settings.customPrompts.find((x) => x.name.toLowerCase() === name.toLowerCase());
+        if (!p) continue;
+        const last = this.settings.scheduledLastRun[p.name] ?? 0;
+        if (now - last < period) continue;
+        try {
+          const succeeded = await this.runPlaybook(p.name, p.prompt); // sequential — one at a time
+          if (succeeded) {
+            this.settings.scheduledLastRun[p.name] = Date.now();
+            await this.saveSettings();
+          }
+        } catch (err) {
+          console.warn(`[Exo] scheduled playbook "${p.name}" failed:`, err);
+        }
+      }
+    } finally {
+      this.scheduledRunsBusy = false;
     }
   }
 }
@@ -1676,8 +1734,8 @@ async function checkGitRepo(cwd: string): Promise<{ isGitRepo: boolean; gitAvail
 }
 
 /** `git status --porcelain` — non-empty output means the worktree is dirty. */
-async function isWorktreeDirty(cwd: string): Promise<boolean> {
-  const { stdout } = await execFileAsync("git", ["status", "--porcelain"], { cwd });
+async function isWorktreeDirty(cwd: string, paths: readonly string[]): Promise<boolean> {
+  const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--", ...paths], { cwd });
   return stdout.trim().length > 0;
 }
 
@@ -1685,10 +1743,10 @@ async function isWorktreeDirty(cwd: string): Promise<boolean> {
  *  Exo tick, a manual commit) can beat us to it between the dirty-check and
  *  here — `git commit` then exits non-zero with "nothing to commit", which is
  *  swallowed as benign; any other failure propagates to the caller. */
-async function runGitCommit(cwd: string, message: string): Promise<void> {
-  await execFileAsync("git", ["add", "-A"], { cwd });
+async function runGitCommit(cwd: string, paths: readonly string[], message: string): Promise<void> {
+  await execFileAsync("git", ["add", "-A", "--", ...paths], { cwd });
   try {
-    await execFileAsync("git", ["commit", "-m", message], { cwd });
+    await execFileAsync("git", ["commit", "-m", message, "--", ...paths], { cwd });
   } catch (err) {
     if (/nothing to commit/i.test(errText(err))) return; // race — benign, silent
     throw err;

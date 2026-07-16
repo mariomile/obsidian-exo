@@ -14,7 +14,8 @@
  *   - la risposta è appesa come `## Risposta (Exo · read-only)` e il
  *     frontmatter riceve `exo-answered: <ISO>` — scrittura a TESTO GREZZO,
  *     mai processFrontMatter (rompe i wikilink non quotati).
- *   - errori: sezione `## Errore` + exo-answered comunque (niente retry loop).
+ *   - errori: fino a 3 tentativi con backoff persistito nel frontmatter;
+ *     `exo-failed` chiude solo dopo l'ultimo fallimento.
  *
  * Guardie: flag busy in-memory (mai due drain concorrenti), max 3 richieste
  * per ciclo (anti-valanga dopo un sync arretrato), corpo non vuoto.
@@ -24,8 +25,11 @@ import { Notice, TFile, TFolder, type App } from "obsidian";
 
 import { runHeadlessPlaybook } from "./headless";
 import type { MVASettings } from "./settings";
+import { patchFrontmatter } from "./core/frontmatter-patch";
 
 const MAX_PER_DRAIN = 3;
+const MAX_ATTEMPTS = 3;
+const RETRY_BASE_MS = 5 * 60 * 1000;
 
 interface ParsedNote {
   /** Frontmatter block INCLUSO i delimitatori (o "" se assente). */
@@ -34,7 +38,7 @@ interface ParsedNote {
   body: string;
 }
 
-function parseNote(content: string): ParsedNote {
+export function parseNote(content: string): ParsedNote {
   if (content.startsWith("---\n")) {
     const end = content.indexOf("\n---", 4);
     if (end >= 0) {
@@ -46,21 +50,41 @@ function parseNote(content: string): ParsedNote {
   return { fm: "", body: content };
 }
 
-function isPending(content: string): boolean {
+export function queueRequestBody(body: string): string {
+  return body.split(/\n## Errore \(Exo · tentativo \d+\/\d+\)\n/)[0].trim();
+}
+
+export function isPending(content: string): boolean {
   const { fm, body } = parseNote(content);
   if (/^exo-answered:/m.test(fm)) return false;
-  return body.trim().length > 0;
+  if (/^exo-failed:/m.test(fm)) return false;
+  return queueRequestBody(body).length > 0;
+}
+
+export function isQueueRetryDue(content: string, now = Date.now()): boolean {
+  if (!isPending(content)) return false;
+  const { fm } = parseNote(content);
+  const raw = fm.match(/^exo-retry-after:\s*["']?([^"'\r\n]+)["']?/m)?.[1]?.trim();
+  if (!raw) return true;
+  const retryAt = Date.parse(raw);
+  return !Number.isFinite(retryAt) || retryAt <= now;
 }
 
 /** Inserisce `exo-answered` nel frontmatter (testo grezzo, wikilink-safe). */
 function stampAnswered(note: ParsedNote, iso: string): string {
-  const line = `exo-answered: ${iso}\n`;
-  if (note.fm) {
-    // fm = "---\n…\n---\n" → inserisci prima della riga di chiusura.
-    const closeAt = note.fm.lastIndexOf("---");
-    return note.fm.slice(0, closeAt) + line + note.fm.slice(closeAt) + note.body;
-  }
-  return `---\n${line}---\n` + note.body;
+  return patchFrontmatter(note.fm + note.body, { "exo-answered": iso }, ["exo-attempts", "exo-retry-after"]);
+}
+
+export function stampQueueFailure(note: ParsedNote, attempt: number, now: number): string {
+  const exhausted = attempt >= MAX_ATTEMPTS;
+  const changes: Record<string, unknown> = { "exo-attempts": attempt };
+  if (exhausted) changes["exo-failed"] = new Date(now).toISOString();
+  else changes["exo-retry-after"] = new Date(now + RETRY_BASE_MS * 2 ** (attempt - 1)).toISOString();
+  return patchFrontmatter(
+    note.fm + queueRequestBody(note.body),
+    changes,
+    exhausted ? ["exo-retry-after"] : []
+  );
 }
 
 /** Conta le richieste pendenti nella coda (per il pannello Autonomy) —
@@ -98,20 +122,25 @@ export async function drainExoQueue(
   for (const file of pending) {
     if (done >= MAX_PER_DRAIN) break;
     const content = await app.vault.read(file);
-    if (!isPending(content)) continue;
+    if (!isQueueRetryDue(content)) continue;
 
     const { fm, body } = parseNote(content);
-    const prompt = body.trim();
+    const prompt = queueRequestBody(body);
     const result = await runHeadlessPlaybook(app, settings, prompt);
     const iso = new Date().toISOString().slice(0, 16).replace("T", " ");
 
-    const heading = result.ok ? "## Risposta (Exo · read-only)" : "## Errore";
+    const previousAttempts = Number(fm.match(/^exo-attempts:\s*(\d+)/m)?.[1] ?? 0) || 0;
+    const attempt = previousAttempts + 1;
+    const heading = result.ok
+      ? "## Risposta (Exo · read-only)"
+      : `## Errore (Exo · tentativo ${attempt}/${MAX_ATTEMPTS})`;
     const answer = result.ok
       ? result.output || "*(risposta vuota)*"
       : `${result.error ?? "errore sconosciuto"}\n\n${result.output}`.trim();
-    const next =
-      stampAnswered({ fm, body }, iso).replace(/\s*$/, "") +
-      `\n\n${heading}\n\n${answer}\n`;
+    const base = result.ok
+      ? stampAnswered({ fm, body: prompt }, iso)
+      : stampQueueFailure({ fm, body: prompt }, attempt, Date.now());
+    const next = `${base.replace(/\s*$/, "")}\n\n${heading}\n\n${answer}\n`;
 
     // Rileggi prima di scrivere: se la nota è cambiata durante l'esecuzione
     // (edit dal telefono mid-run), non sovrascrivere — la riprende il
@@ -120,7 +149,9 @@ export async function drainExoQueue(
     if (latest !== content) continue;
     await app.vault.modify(file, next);
     done++;
-    new Notice(`Exo queue: risposta pronta → ${file.basename}`);
+    if (result.ok) new Notice(`Exo queue: risposta pronta → ${file.basename}`);
+    else if (attempt < MAX_ATTEMPTS) new Notice(`Exo queue: tentativo ${attempt} fallito — riprovo più tardi.`);
+    else new Notice(`Exo queue: ${file.basename} fallita dopo ${MAX_ATTEMPTS} tentativi.`);
   }
   return done;
 }
