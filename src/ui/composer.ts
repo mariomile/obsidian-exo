@@ -8,6 +8,7 @@ import {
   Notice,
 } from "obsidian";
 import { Autocomplete, type AcItem } from "./autocomplete";
+import { buildDescIndex, type DescIndex } from "../core/capability-desc";
 import type ExoPlugin from "../main";
 import { ADAPTERS } from "../providers/registry";
 import type {
@@ -353,6 +354,25 @@ export class Composer {
   private slashCache: { commands: string[]; skills: string[]; agents: string[]; ts: number } | null = null;
   private static readonly SLASH_TTL = 30_000;
 
+  // Descriptions are read from frontmatter across vault + global + plugin
+  // scopes (a few hundred small files) — cache longer than the name list and
+  // dedupe concurrent builds behind one promise.
+  private descCache: { idx: DescIndex; ts: number } | null = null;
+  private descBuild: Promise<DescIndex> | null = null;
+  private static readonly DESC_TTL = 300_000;
+
+  private loadDescs(): Promise<DescIndex> {
+    if (this.descCache && Date.now() - this.descCache.ts < Composer.DESC_TTL) {
+      return Promise.resolve(this.descCache.idx);
+    }
+    this.descBuild ??= buildDescIndex(this.app).then((idx) => {
+      this.descCache = { idx, ts: Date.now() };
+      this.descBuild = null;
+      return idx;
+    });
+    return this.descBuild;
+  }
+
   private async loadSlash(): Promise<{ commands: string[]; skills: string[]; agents: string[] }> {
     if (this.slashCache && Date.now() - this.slashCache.ts < Composer.SLASH_TTL) return this.slashCache;
     const commands: string[] = [];
@@ -397,10 +417,10 @@ export class Composer {
   /** `$` trigger — skills. */
   private async skillItems(query: string): Promise<AcItem[]> {
     const q = query.toLowerCase();
-    const { skills } = await this.loadSlash();
+    const [{ skills }, descs] = await Promise.all([this.loadSlash(), this.loadDescs()]);
     return skills
       .filter((sk) => sk.toLowerCase().includes(q))
-      .map((sk) => ({ label: sk, detail: "skill", icon: "sparkles", insert: `$${sk} ` }));
+      .map((sk) => ({ label: sk, desc: descs.skills.get(sk), detail: "skill", icon: "sparkles", insert: `$${sk} ` }));
   }
 
   private async slashItems(query: string): Promise<AcItem[]> {
@@ -422,12 +442,22 @@ export class Composer {
         });
       }
     }
-    const { commands, skills } = await this.loadSlash();
+    const [{ commands, skills }, descs] = await Promise.all([this.loadSlash(), this.loadDescs()]);
     for (const c of commands) {
-      if (c.toLowerCase().includes(q)) out.push({ label: c, detail: "command", icon: "terminal", insert: `/${c} ` });
+      if (c.toLowerCase().includes(q))
+        // Skills surface in the CLI's command list too (`/skill-name`) without a
+        // commands/*.md of their own — fall back to the skill's description.
+        out.push({
+          label: c,
+          desc: descs.commands.get(c) ?? descs.skills.get(c),
+          detail: "command",
+          icon: "terminal",
+          insert: `/${c} `,
+        });
     }
     for (const sk of skills) {
-      if (sk.toLowerCase().includes(q)) out.push({ label: sk, detail: "skill", icon: "sparkles", insert: `/${sk} ` });
+      if (sk.toLowerCase().includes(q))
+        out.push({ label: sk, desc: descs.skills.get(sk), detail: "skill", icon: "sparkles", insert: `/${sk} ` });
     }
     return out;
   }
@@ -438,10 +468,10 @@ export class Composer {
     const words = queryWords(query);
     const out: AcItem[] = [];
     // Subagents first — reference a vault agent by @mention.
-    const { agents } = await this.loadSlash();
+    const [{ agents }, descs] = await Promise.all([this.loadSlash(), this.loadDescs()]);
     for (const a of agents) {
       if (!matchesWords(a, words)) continue;
-      out.push({ label: a, detail: "subagent", icon: "bot", insert: `@${a} ` });
+      out.push({ label: a, desc: descs.agents.get(a), detail: "subagent", icon: "bot", insert: `@${a} ` });
     }
     for (const f of this.app.vault.getAllLoadedFiles()) {
       if (!f.path || f.path === "/") continue;

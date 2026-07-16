@@ -3,6 +3,8 @@ import { parseAcToken } from "../core/ac-token";
 
 export interface AcItem {
   label: string;
+  /** One-line description snippet, rendered muted + truncated after the label. */
+  desc?: string;
   detail?: string;
   icon?: string;
   /** Text that replaces the trigger token (e.g. "/search " or a prompt body). */
@@ -103,6 +105,7 @@ export class Autocomplete {
       const row = this.popup.createDiv({ cls: "mva-ac-item" + (i === this.sel ? " is-sel" : "") });
       if (it.icon) setIcon(row.createSpan({ cls: "mva-ac-icon" }), it.icon);
       row.createSpan({ cls: "mva-ac-label", text: it.label });
+      if (it.desc) row.createSpan({ cls: "mva-ac-desc", text: it.desc });
       if (it.detail) row.createSpan({ cls: "mva-ac-detail", text: it.detail });
       row.onmousedown = (e) => {
         e.preventDefault();
