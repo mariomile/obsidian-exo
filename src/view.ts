@@ -570,7 +570,7 @@ export class ChatView extends ItemView {
       allModelChoices: () => this.allModelChoices(),
       persistModel: () => this.persistModel(),
       openNote: (p) => this.openNote(p),
-      openArtifactExternally: (p) => this.openArtifactExternally(p),
+      openArtifact: (p) => this.openArtifact(p),
     });
     this.composer.mount(this.listWrap);
   }
@@ -3224,7 +3224,7 @@ export class ChatView extends ItemView {
     setIcon(head.createSpan({ cls: "mva-artifact-ico" }), isHtml ? "file-code-2" : "file-text");
     const nameEl = head.createSpan({ cls: "mva-artifact-name", text: noteBasename(path) });
     head.createDiv({ cls: "mva-artifact-spacer" });
-    const openAction = () => (isHtml ? this.openArtifactExternally(path) : this.revealNote(path));
+    const openAction = () => (isHtml ? this.openArtifact(path) : this.revealNote(path));
     const openBtn = head.createEl("button", { cls: "mva-btn mva-artifact-open", text: "View" });
     openBtn.onclick = (e) => {
       e.stopPropagation();
@@ -3268,11 +3268,29 @@ export class ChatView extends ItemView {
     }
   }
 
-  /** Open an HTML artifact in the system browser. In-vault → its app:// resource
-   *  URL; outside the vault → the OS shell on the absolute path. */
-  private openArtifactExternally(path: string): void {
+  /** Open a non-markdown artifact. In-vault with a registered viewer for its
+   *  extension (e.g. an HTML viewer plugin) → the workspace: focus the tab that
+   *  already shows the file, else a new tab. In-vault without a viewer → its
+   *  app:// resource URL. Outside the vault → the OS shell on the absolute path. */
+  private openArtifact(path: string): void {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (file instanceof TFile) {
+      const viewType = (
+        this.app as unknown as {
+          viewRegistry?: { getTypeByExtension?(ext: string): string | undefined };
+        }
+      ).viewRegistry?.getTypeByExtension?.(file.extension.toLowerCase());
+      if (viewType) {
+        const open = this.app.workspace
+          .getLeavesOfType(viewType)
+          .find((l) => (l.view as unknown as { file?: TFile }).file?.path === file.path);
+        if (open) {
+          this.app.workspace.revealLeaf(open);
+          return;
+        }
+        void this.app.workspace.getLeaf("tab").openFile(file);
+        return;
+      }
       window.open(this.app.vault.getResourcePath(file));
       return;
     }

@@ -94,7 +94,7 @@ export interface ComposerHost {
   allModelChoices(): { id: string; label: string; provider: ProviderId }[];
   persistModel(): void;
   openNote(path: string): void;
-  openArtifactExternally(path: string): void;
+  openArtifact(path: string): void;
 }
 
 export class Composer {
@@ -1185,7 +1185,7 @@ export class Composer {
       else this.manualAttached = this.manualAttached.filter((p) => p !== path);
       this.refreshContext();
     });
-    clickable(card, () => (external ? this.host.openArtifactExternally(path) : this.host.openNote(path)));
+    clickable(card, () => (external ? this.host.openArtifact(path) : this.host.openNote(path)));
   }
 
   private static readonly IMAGE_EXT = /^(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
