@@ -100,6 +100,33 @@ function fmtAnnotation(a: AIditorAnnotation): string {
   return `- ${a.id} · ${a.status} · [[${a.notePath}]] · "${quote}" → ${body}`;
 }
 
+/** Sonar's cross-plugin action API (when the sonar plugin is enabled). Mirrors
+ *  Obsidian's command palette: id, human title, owning plugin, and a
+ *  destructive flag Sonar computes so callers can gate risky commands. */
+interface SonarActionInfo {
+  id: string;
+  title: string;
+  source: string;
+  destructive: boolean;
+}
+interface SonarApi {
+  getActions(): SonarActionInfo[];
+  runAction(id: string): Promise<{ ok: boolean; destructive: boolean }>;
+}
+/** Resolve Sonar's public API off its plugin instance, or null when absent/disabled. */
+function getSonar(app: App): SonarApi | null {
+  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, Partial<SonarApi>> } }).plugins;
+  const p = plugins?.plugins?.["sonar"];
+  return p && typeof p.getActions === "function" && typeof p.runAction === "function"
+    ? (p as SonarApi)
+    : null;
+}
+
+/** One-line rendering of a Sonar action for tool output. */
+function fmtSonarAction(a: SonarActionInfo): string {
+  return `- ${a.id} · ${a.title} (${a.source})${a.destructive ? " ⚠ destructive" : ""}`;
+}
+
 function slugify(s: string): string {
   return s
     .toLowerCase()
@@ -405,6 +432,26 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     }
   );
 
+  const listSonarActions = tool(
+    "list_sonar_actions",
+    "List runnable app commands via the Sonar plugin (Obsidian's command palette: every command from core and installed plugins). Use it when Mario asks to perform an app-level action — e.g. an intent handed off from Sonar's '?' mode like 'toggle the sidebar' or 'export this note' — to find the command id, then execute it with run_sonar_action. Pass query to filter (case-insensitive match on title/id/source).",
+    { query: z.string().optional() },
+    async (args) => {
+      const sonar = getSonar(app);
+      if (!sonar) return ok("Sonar plugin isn't enabled — no app actions available.");
+      let actions = sonar.getActions();
+      const q = args.query?.trim().toLowerCase();
+      if (q) {
+        actions = actions.filter((a) => `${a.title} ${a.id} ${a.source}`.toLowerCase().includes(q));
+      }
+      if (!actions.length) return ok(q ? `No actions match "${args.query}".` : "No actions available.");
+      const CAP = 80;
+      const lines = actions.slice(0, CAP).map(fmtSonarAction);
+      if (actions.length > CAP) lines.push(`(+${actions.length - CAP} more — pass query to narrow)`);
+      return ok(lines.join("\n"));
+    }
+  );
+
   const askUser = tool(
     "ask_user",
     "Ask the user structured questions with selectable options. Use this to resolve a genuine choice you can't infer — approach, scope, ambiguity between concrete options. Prefer it over asking in free text. Up to 4 questions; 2–6 options each; set multiSelect for multi-choice.",
@@ -566,6 +613,19 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       if (!aiditor) return err("AIditor plugin isn't enabled — nothing to resolve.");
       const done = aiditor.resolveAnnotation(args.id);
       return done ? ok(`Resolved annotation ${args.id}.`) : err(`No annotation with id ${args.id}.`);
+    }
+  );
+
+  const runSonarAction = tool(
+    "run_sonar_action",
+    "Execute an app command by id via the Sonar plugin (ids come from list_sonar_actions). This closes the loop on Sonar's '?' intent mode: find the matching command, then run it. Actions flagged '⚠ destructive' delete or overwrite data — confirm with Mario before running one unless he explicitly asked for exactly that action.",
+    { id: z.string() },
+    async (args) => {
+      const sonar = getSonar(app);
+      if (!sonar) return err("Sonar plugin isn't enabled — can't run app actions.");
+      const res = await sonar.runAction(args.id);
+      if (!res.ok) return err(`No action with id ${args.id} — check list_sonar_actions for the exact id.`);
+      return ok(`Ran ${args.id}.${res.destructive ? " (was flagged destructive)" : ""}`);
     }
   );
 
@@ -905,9 +965,9 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   return [
     searchVault, readNote, getBacklinks, getNeighborhood, listNotes, listTags, getActiveContext,
-    listAnnotations, askUser, listLoops,
+    listAnnotations, listSonarActions, askUser, listLoops,
     createNote, appendToNote, updateFrontmatter, addLinks, openNote,
-    editNote, insertAtCursor, renameNote, resolveAnnotation,
+    editNote, insertAtCursor, renameNote, resolveAnnotation, runSonarAction,
     ...(memoryRead ? [recall] : []),
     ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
     // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
@@ -967,6 +1027,7 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__list_tags",
   "mcp__obsidian__get_active_context",
   "mcp__obsidian__list_annotations",
+  "mcp__obsidian__list_sonar_actions",
   "mcp__obsidian__recall",
   "mcp__obsidian__list_loops",
 ]);
