@@ -1764,6 +1764,15 @@ export default class ExoPlugin extends Plugin {
     return restored;
   }
 
+  /** Mark a write run as reviewed — it leaves the Cockpit "to review" pool. */
+  async markAutomationRunReviewed(id: string): Promise<void> {
+    const records = await this.loadAutomationRuns();
+    const rec = records.find((r) => r.id === id);
+    if (!rec) return;
+    rec.reviewedAt = Date.now();
+    await this.saveAutomationRuns(records);
+  }
+
   /** Open the Automations manager (settings button, Cockpit tile, command). */
   openAutomationsModal(): void {
     new AutomationsModal(this.app, this).open();

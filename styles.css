@@ -4579,3 +4579,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
+.mva-auto-runlabel.is-openable { cursor: pointer; }
+.mva-auto-runlabel.is-openable:hover { color: var(--text-normal); }
+.mva-auto-runfiles {
+  margin: 0 0 6px 14px;
+  padding-left: 8px;
+  border-left: 1px solid var(--background-modifier-border);
+}
+.mva-auto-runfile {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}

@@ -7,6 +7,7 @@ import {
   cadenceLabel,
   migrateScheduledRuns,
   pruneRuns,
+  unreviewedWriteRuns,
   type AutomationConfig,
   type AutomationRunRecord,
 } from "../src/core/automations";
@@ -109,5 +110,27 @@ describe("pruneRuns", () => {
   it("keeps the newest N, newest first", () => {
     const pruned = pruneRuns([rec("a", 1), rec("b", 3), rec("c", 2)], 2);
     expect(pruned.map((r) => r.id)).toEqual(["b", "c"]);
+  });
+});
+
+describe("unreviewedWriteRuns", () => {
+  const rec = (id: string, over: Partial<AutomationRunRecord>): AutomationRunRecord => ({
+    id,
+    name: "A",
+    startedAt: 1,
+    ok: true,
+    reportPath: "",
+    writes: ["x.md"],
+    checkpoint: [],
+    ...over,
+  });
+  it("excludes read-only, reviewed, and restored runs", () => {
+    const pool = unreviewedWriteRuns([
+      rec("live", {}),
+      rec("readonly", { writes: [] }),
+      rec("reviewed", { reviewedAt: 5 }),
+      rec("restored", { restoredAt: 5 }),
+    ]);
+    expect(pool.map((r) => r.id)).toEqual(["live"]);
   });
 });
