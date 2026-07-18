@@ -25,6 +25,7 @@ import {
   type CockpitRow,
 } from "../core/cockpit";
 import { parseLoopsFile } from "../core/open-loops";
+import { unreviewedWriteRuns } from "../core/automations";
 import { parseTasksFile, TASKS_PATH } from "../core/tasks";
 import {
   autonomyStatuses,
@@ -171,16 +172,21 @@ export class CockpitView extends ItemView {
     this.rendering = true;
     try {
       const now = Date.now();
-      const [loopsRaw, tasksRaw, queuePending, answers, convos, inbox, ctxAge, report] = await Promise.all([
-        this.readOr(OPEN_LOOPS_PATH, ""),
-        this.readOr(TASKS_PATH, ""),
-        this.plugin.countQueuePending().catch(() => null),
-        this.recentAnswers(now),
-        this.plugin.loadConversations().catch(() => []),
-        this.inboxCount(),
-        this.contextAgeDays(now),
-        this.lastReport(),
-      ]);
+      const [loopsRaw, tasksRaw, queuePending, answers, convos, inbox, ctxAge, report, unreviewedRuns] =
+        await Promise.all([
+          this.readOr(OPEN_LOOPS_PATH, ""),
+          this.readOr(TASKS_PATH, ""),
+          this.plugin.countQueuePending().catch(() => null),
+          this.recentAnswers(now),
+          this.plugin.loadConversations().catch(() => []),
+          this.inboxCount(),
+          this.contextAgeDays(now),
+          this.lastReport(),
+          this.plugin
+            .loadAutomationRuns()
+            .then((rs) => unreviewedWriteRuns(rs).length)
+            .catch(() => 0),
+        ]);
 
       const el = this.contentEl;
       // Preserve the command-bar draft/focus across ANY rebuild (manual
@@ -202,7 +208,7 @@ export class CockpitView extends ItemView {
       clickable(rbtn, () => void this.refresh());
 
       // Attention strip (only when non-empty)
-      const attention = buildAttention({ convos: this.plugin.liveAttention(), answers, now });
+      const attention = buildAttention({ convos: this.plugin.liveAttention(), answers, unreviewedRuns, now });
       if (attention.length) this.renderAttention(el, attention);
 
       // Command bar
@@ -254,11 +260,18 @@ export class CockpitView extends ItemView {
       const row = strip.createDiv({ cls: `mva-ck-att is-${it.kind}` });
       setIcon(
         row.createSpan({ cls: "mva-ck-att-icon" }),
-        it.kind === "blocked" ? "shield-alert" : it.kind === "streaming" ? "loader" : "mail-check"
+        it.kind === "blocked"
+          ? "shield-alert"
+          : it.kind === "streaming"
+            ? "loader"
+            : it.kind === "runs"
+              ? "file-diff"
+              : "mail-check"
       );
       row.createSpan({ text: it.label });
       clickable(row, () => {
         if (it.kind === "answer") void this.app.workspace.openLinkText(it.target, "", "tab");
+        else if (it.kind === "runs") this.plugin.openAutomationsModal();
         else void this.plugin.openConvo(it.target);
       });
     }

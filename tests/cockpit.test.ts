@@ -159,3 +159,23 @@ describe("parseAnsweredStamp", () => {
     expect(parseAnsweredStamp("---\ntags: x\n---\nbody")).toBeNull();
   });
 });
+
+describe("buildAttention — unreviewed runs", () => {
+  it("surfaces the runs item after blocked, with singular/plural label", () => {
+    const one = buildAttention({ convos: [], answers: [], unreviewedRuns: 1, now: NOW });
+    expect(one).toEqual([{ kind: "runs", label: "1 automation run da rivedere", target: "" }]);
+    const items = buildAttention({
+      convos: [{ id: "c2", title: "B", blocked: true, streaming: false }],
+      answers: [],
+      unreviewedRuns: 3,
+      now: NOW,
+    });
+    expect(items.map((i) => i.kind)).toEqual(["blocked", "runs"]);
+    expect(items[1].label).toBe("3 automation run da rivedere");
+  });
+
+  it("zero/absent → no item", () => {
+    expect(buildAttention({ convos: [], answers: [], unreviewedRuns: 0, now: NOW })).toEqual([]);
+    expect(buildAttention({ convos: [], answers: [], now: NOW })).toEqual([]);
+  });
+});

@@ -37,6 +37,14 @@ export interface AutomationRunRecord {
   writes: string[];
   checkpoint: [string, string | null][];
   restoredAt?: number;
+  /** Set when Mario marked the run as reviewed (review-queue flow) — reviewed
+   *  and restored runs both leave the "to review" pool. */
+  reviewedAt?: number;
+}
+
+/** Write runs still waiting for review — the Cockpit attention pool. */
+export function unreviewedWriteRuns(records: AutomationRunRecord[]): AutomationRunRecord[] {
+  return records.filter((r) => r.writes.length > 0 && !r.reviewedAt && !r.restoredAt);
 }
 
 /* ------------------------------ due logic ------------------------------ */

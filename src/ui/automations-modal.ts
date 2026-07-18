@@ -8,10 +8,12 @@
  * there is no draft state to lose. The "Recent write runs" section lists
  * restorable run records (plugin sidecar) with a two-step Restore.
  */
-import { App, Modal, Notice, setIcon } from "obsidian";
+import { App, Modal, Notice, TFile, setIcon } from "obsidian";
 import type ExoPlugin from "../main";
 import { clickable } from "./dom";
 import { openablePopover } from "./popover";
+import { NoteDiffModal } from "./note-diff";
+import { basename as noteBasename } from "../obsidian/graph";
 import {
   cadenceLabel,
   nextDueAt,
@@ -295,14 +297,53 @@ export class AutomationsModal extends Modal {
   }
 
   private renderRunRow(host: HTMLElement, r: AutomationRunRecord): void {
-    const row = host.createDiv({ cls: "mva-auto-runrow" });
+    const wrap = host.createDiv();
+    const row = wrap.createDiv({ cls: "mva-auto-runrow" });
     const when = new Date(r.startedAt);
     const stamp = `${String(when.getDate()).padStart(2, "0")}/${String(when.getMonth() + 1).padStart(2, "0")} ${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`;
-    row.createSpan({
+    const state = r.restoredAt ? " · restored" : r.reviewedAt ? " · reviewed" : "";
+    const label = row.createSpan({
       cls: "mva-auto-runlabel",
-      text: `${stamp} · ${r.name} · ${r.writes.length} note${r.writes.length === 1 ? "" : "s"}${r.ok ? "" : " · failed"}${r.restoredAt ? " · restored" : ""}`,
+      text: `${stamp} · ${r.name} · ${r.writes.length} note${r.writes.length === 1 ? "" : "s"}${r.ok ? "" : " · failed"}${state}`,
     });
     row.createDiv({ cls: "mva-auto-spacer" });
+
+    // The label toggles a per-file list (diff + open) for the run's writes.
+    if (r.writes.length) {
+      label.addClass("is-openable");
+      let filesEl: HTMLElement | null = null;
+      clickable(label, () => {
+        if (filesEl) {
+          filesEl.remove();
+          filesEl = null;
+          return;
+        }
+        filesEl = wrap.createDiv({ cls: "mva-auto-runfiles" });
+        for (const path of r.writes) {
+          const f = filesEl.createDiv({ cls: "mva-auto-runfile" });
+          const name = f.createSpan({ cls: "mva-auto-runlabel", text: noteBasename(path) });
+          clickable(name, () => {
+            void this.app.workspace.openLinkText(path, "", "tab");
+            this.close();
+          });
+          f.createDiv({ cls: "mva-auto-spacer" });
+          const entry = r.checkpoint.find(([p]) => p === path);
+          const diff = f.createEl("button", { cls: "mva-btn", text: entry ? "Diff" : "No snapshot" });
+          if (entry) {
+            diff.onclick = () => void this.showDiff(path, entry[1]);
+          } else diff.setAttr("disabled", "true");
+        }
+      });
+    }
+
+    if (!r.reviewedAt && !r.restoredAt && r.writes.length) {
+      const reviewed = row.createEl("button", { cls: "mva-btn", text: "Reviewed" });
+      reviewed.onclick = () => {
+        reviewed.setAttr("disabled", "true");
+        void this.plugin.markAutomationRunReviewed(r.id).finally(() => void this.renderRuns());
+      };
+    }
+
     const report = row.createEl("button", { cls: "mva-btn", text: "Report" });
     report.onclick = () => {
       void this.app.workspace.openLinkText(r.reportPath, "", "tab");
@@ -327,6 +368,23 @@ export class AutomationsModal extends Modal {
         void this.plugin.restoreAutomationRun(r.id).finally(() => void this.renderRuns());
       };
     }
+  }
+
+  /** Pre-run snapshot vs current content, in the shared NoteDiffModal. */
+  private async showDiff(path: string, before: string | null): Promise<void> {
+    let after = "";
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (f instanceof TFile) {
+      try {
+        after = await this.app.vault.read(f);
+      } catch {
+        /* unreadable — show as empty */
+      }
+    }
+    new NoteDiffModal(this.app, noteBasename(path), before, after, () => {
+      void this.app.workspace.openLinkText(path, "", "tab");
+      this.close();
+    }).open();
   }
 
   onClose(): void {

@@ -24,9 +24,10 @@ export interface CockpitRow {
 }
 
 export interface AttentionItem {
-  kind: "blocked" | "streaming" | "answer";
+  kind: "blocked" | "streaming" | "answer" | "runs";
   label: string;
-  /** Convo id (blocked/streaming) or vault path (answer). */
+  /** Convo id (blocked/streaming), vault path (answer), or "" (runs — the
+   *  click opens the Automations panel, no per-item address). */
   target: string;
 }
 
@@ -39,6 +40,8 @@ export function buildAttention(
   input: {
     convos: { id: string; title: string; blocked: boolean; streaming: boolean }[];
     answers: { path: string; name: string; answeredAt: number }[];
+    /** Automation write runs awaiting review (unreviewedWriteRuns count). */
+    unreviewedRuns?: number;
     now: number;
   },
   cap = 6
@@ -46,6 +49,14 @@ export function buildAttention(
   const out: AttentionItem[] = [];
   for (const c of input.convos) {
     if (c.blocked) out.push({ kind: "blocked", label: `"${c.title}" aspetta un tuo OK`, target: c.id });
+  }
+  if (input.unreviewedRuns) {
+    const n = input.unreviewedRuns;
+    out.push({
+      kind: "runs",
+      label: n === 1 ? "1 automation run da rivedere" : `${n} automation run da rivedere`,
+      target: "",
+    });
   }
   for (const c of input.convos) {
     if (!c.blocked && c.streaming) out.push({ kind: "streaming", label: `"${c.title}" sta lavorando`, target: c.id });
