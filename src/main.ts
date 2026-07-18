@@ -33,7 +33,9 @@ import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidi
 import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
 import { DreamModal } from "./ui/dream-modal";
-import { runHeadlessPlaybook, writeReport } from "./headless";
+import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessResult } from "./headless";
+import { migrateScheduledRuns, isDue, pruneRuns, type AutomationRunRecord } from "./core/automations";
+import { AutomationsModal } from "./ui/automations-modal";
 import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle } from "./core/title";
@@ -64,6 +66,10 @@ import {
 } from "./core/git-autocommit";
 
 const execFileAsync = promisify(execFile);
+
+/** Snapshot-size cap per file in a persisted automation-run record (same bloat
+ *  guard as the chat's MAX_CHECKPOINT_FILE — oversized edits aren't restorable). */
+const MAX_AUTOMATION_SNAPSHOT = 64_000;
 
 /** Seeded "Morning Digest" playbook — Dia-style: vault + connected external
  *  tools (MCP, read-only). Sources degrade gracefully; the wording keeps the
@@ -408,6 +414,11 @@ export default class ExoPlugin extends Plugin {
         }
         new PlaybookPicker(this.app, prompts, (p) => void this.runPlaybook(p.name, p.prompt)).open();
       },
+    });
+    this.addCommand({
+      id: "automations",
+      name: "Automations…",
+      callback: () => this.openAutomationsModal(),
     });
     this.registerInterval(window.setInterval(() => void this.checkScheduledRuns(), 30 * 60 * 1000));
 
@@ -1193,6 +1204,13 @@ export default class ExoPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // One-shot migration: legacy "Name | daily" scheduled-run lines become
+    // structured automations (07:00 slot, read-only) and the raw field clears.
+    if (this.settings.scheduledRuns.trim() && this.settings.automations.length === 0) {
+      this.settings.automations = migrateScheduledRuns(this.settings.scheduledRuns);
+      this.settings.scheduledRuns = "";
+      await this.saveSettings();
+    }
     // Migrate the old "Default" model option (empty id — silently let the CLI's
     // own default apply): the picker no longer offers an ambiguous unlabeled
     // state, so an empty saved id resolves to that provider's first real model.
@@ -1527,15 +1545,18 @@ export default class ExoPlugin extends Plugin {
     );
   }
 
-  /** Run one playbook headlessly and write its report. */
-  private async runPlaybook(name: string, prompt: string): Promise<boolean> {
+  /** Run one playbook headlessly and write its report. Write-enabled runs also
+   *  persist a restorable run record (files touched + pre-write snapshots). */
+  async runPlaybook(name: string, prompt: string, opts: { write?: boolean } = {}): Promise<boolean> {
     if (/\{\{\s*[\w-]+\s*\}\}/.test(prompt)) {
       new Notice(`"${name}" has {{variables}} — run it from the composer instead.`);
       return false;
     }
+    const startedAt = Date.now();
     new Notice(`Running playbook "${name}"…`);
-    const result = await runHeadlessPlaybook(this.app, this.settings, prompt);
+    const result = await runHeadlessPlaybook(this.app, this.settings, prompt, opts);
     const path = await writeReport(this.app, name, result);
+    if (opts.write) await this.recordAutomationRun(name, startedAt, result, path);
     new Notice(
       result.ok ? `Playbook "${name}" done → ${path}` : `Playbook "${name}" failed (report: ${path})`
     );
@@ -1652,35 +1673,100 @@ export default class ExoPlugin extends Plugin {
   private scheduledRunsBusy = false;
   private async checkScheduledRuns(): Promise<void> {
     if (this.scheduledRunsBusy) return;
-    const lines = this.settings.scheduledRuns.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (!lines.length) return;
+    const autos = this.settings.automations.filter((a) => a.enabled);
+    if (!autos.length) return;
     this.scheduledRunsBusy = true;
     try {
-      const now = Date.now();
-      for (const line of lines) {
-        const i = line.lastIndexOf("|");
-        if (i < 0) continue;
-        const name = line.slice(0, i).trim();
-        const cadence = line.slice(i + 1).trim().toLowerCase();
-        const period = cadence === "daily" ? 20 * 60 * 60 * 1000 : cadence === "weekly" ? 6.5 * 24 * 60 * 60 * 1000 : 0;
-        if (!period || !name) continue;
-        const p = this.settings.customPrompts.find((x) => x.name.toLowerCase() === name.toLowerCase());
+      for (const a of autos) {
+        const p = this.settings.customPrompts.find((x) => x.name.toLowerCase() === a.name.toLowerCase());
         if (!p) continue;
-        const last = this.settings.scheduledLastRun[p.name] ?? 0;
-        if (now - last < period) continue;
+        if (!isDue(a.cadence, this.settings.scheduledLastRun[p.name] ?? 0, Date.now())) continue;
         try {
-          const succeeded = await this.runPlaybook(p.name, p.prompt); // sequential — one at a time
+          const succeeded = await this.runPlaybook(p.name, p.prompt, { write: a.write }); // sequential — one at a time
           if (succeeded) {
             this.settings.scheduledLastRun[p.name] = Date.now();
             await this.saveSettings();
           }
         } catch (err) {
-          console.warn(`[Exo] scheduled playbook "${p.name}" failed:`, err);
+          console.warn(`[Exo] automation "${p.name}" failed:`, err);
         }
       }
     } finally {
       this.scheduledRunsBusy = false;
     }
+  }
+
+  /* --------------------------- automation runs --------------------------- */
+
+  /** Sidecar (plugin dir) holding restorable write-run records — not vault
+   *  notes: snapshots are machine state, not knowledge. */
+  private automationRunsPath(): string {
+    return `${this.manifest.dir}/automation-runs.json`;
+  }
+
+  async loadAutomationRuns(): Promise<AutomationRunRecord[]> {
+    try {
+      const raw = await this.app.vault.adapter.read(this.automationRunsPath());
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as AutomationRunRecord[]) : [];
+    } catch {
+      return []; // missing/corrupt file → empty history, never a blocked run
+    }
+  }
+
+  private async saveAutomationRuns(records: AutomationRunRecord[]): Promise<void> {
+    await this.app.vault.adapter.write(this.automationRunsPath(), JSON.stringify(records));
+  }
+
+  /** Persist one write-run record. Oversized snapshots are dropped (the report
+   *  already flags what can't be auto-restored); history pruned to the last 20. */
+  private async recordAutomationRun(
+    name: string,
+    startedAt: number,
+    result: HeadlessResult,
+    reportPath: string
+  ): Promise<void> {
+    try {
+      const checkpoint = [...result.checkpoint.entries()].filter(
+        ([, v]) => v === null || v.length <= MAX_AUTOMATION_SNAPSHOT
+      );
+      const rec: AutomationRunRecord = {
+        id: `${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        startedAt,
+        ok: result.ok,
+        reportPath,
+        writes: result.writes,
+        checkpoint,
+      };
+      await this.saveAutomationRuns(pruneRuns([rec, ...(await this.loadAutomationRuns())], 20));
+    } catch (err) {
+      console.warn("[Exo] couldn't persist the automation run record:", err);
+    }
+  }
+
+  /** Revert every file an automation run touched to its pre-run snapshot. */
+  async restoreAutomationRun(id: string): Promise<string[]> {
+    const records = await this.loadAutomationRuns();
+    const rec = records.find((r) => r.id === id);
+    if (!rec) {
+      new Notice("Run record not found — it may have been pruned.");
+      return [];
+    }
+    const restored = await restoreRun(this.app, rec.checkpoint);
+    rec.restoredAt = Date.now();
+    await this.saveAutomationRuns(records);
+    new Notice(
+      restored.length
+        ? `Restored ${restored.length} note${restored.length === 1 ? "" : "s"} from "${rec.name}".`
+        : `Nothing restorable in "${rec.name}".`
+    );
+    return restored;
+  }
+
+  /** Open the Automations manager (settings button, Cockpit tile, command). */
+  openAutomationsModal(): void {
+    new AutomationsModal(this.app, this).open();
   }
 }
 

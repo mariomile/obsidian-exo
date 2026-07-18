@@ -18,6 +18,7 @@
 import { activeLoops, dueLoops, type LoopEntry } from "./open-loops";
 import { type MemoryEntry } from "./memory-store";
 import { resetIfNewDay, type BudgetLedger } from "./background-budget";
+import { nextAutomation, type AutomationConfig } from "./automations";
 
 /** A read-only stat, rendered as a non-clickable chip (`label: value`). */
 export interface HubStat {
@@ -35,6 +36,7 @@ export interface HubAction {
     | "open-review"
     | "queue-drain"
     | "queue-new"
+    | "automations"
     | "run-playbook";
   label: string;
   /** When false the chip renders inert (e.g. undo with no snapshot). */
@@ -166,46 +168,8 @@ export function memoryActions(input: MemoryActionsInput): HubAction[] {
 
 /* ----------------------------- Autonomy card ----------------------------- */
 
-export interface ScheduledPlaybook {
-  name: string;
-  cadence: "daily" | "weekly";
-}
-
-/** Parse the `scheduledRuns` setting ("Name | daily" per line) into playbook
- *  schedules. Unknown cadences and malformed lines are dropped — mirrors the
- *  tolerance of the executor in main.ts. */
-export function parseScheduledRuns(raw: string): ScheduledPlaybook[] {
-  const out: ScheduledPlaybook[] = [];
-  for (const line of raw.split("\n")) {
-    const i = line.lastIndexOf("|");
-    if (i < 0) continue;
-    const name = line.slice(0, i).trim();
-    const cadence = line.slice(i + 1).trim().toLowerCase();
-    if (name && (cadence === "daily" || cadence === "weekly")) out.push({ name, cadence });
-  }
-  return out;
-}
-
-/** Same periods the executor uses (deliberately under 24h/7d so a "daily" run
- *  drifts earlier, never skips a day). */
-const CADENCE_MS: Record<ScheduledPlaybook["cadence"], number> = {
-  daily: 20 * 60 * 60 * 1000,
-  weekly: 6.5 * 24 * 60 * 60 * 1000,
-};
-
-/** The next scheduled playbook to fire: name + ms until due (≤ 0 = due now). */
-export function nextScheduled(
-  scheduled: ScheduledPlaybook[],
-  lastRun: Record<string, number>,
-  now: number
-): { name: string; dueInMs: number } | null {
-  let best: { name: string; dueInMs: number } | null = null;
-  for (const s of scheduled) {
-    const dueInMs = (lastRun[s.name] ?? 0) + CADENCE_MS[s.cadence] - now;
-    if (!best || dueInMs < best.dueInMs) best = { name: s.name, dueInMs };
-  }
-  return best;
-}
+/* Scheduling itself lives in core/automations (slot-based cadences); this card
+ * only formats "what fires next" from the structured configs. */
 
 /** "due now" / "in 3h" / "in 2d" — rough is fine, it's a glance. */
 function formatDueIn(ms: number): string {
@@ -220,7 +184,7 @@ export interface AutonomyInput {
   exoQueueEnabled: boolean;
   /** Pending request notes in the queue folder; null = unknown (still loading). */
   queuePending: number | null;
-  scheduled: ScheduledPlaybook[];
+  automations: AutomationConfig[];
   scheduledLastRun: Record<string, number>;
   /** Any custom prompts exist → "Run playbook…" is meaningful. */
   hasPlaybooks: boolean;
@@ -238,13 +202,16 @@ export function autonomyStatuses(input: AutonomyInput): HubStatus[] {
       : pending > 0
         ? `on · ${pending} pending`
         : "on · idle";
-  const next = nextScheduled(input.scheduled, input.scheduledLastRun, input.now);
-  const schedValue = !input.scheduled.length
-    ? "none"
-    : `${input.scheduled.length} active · ${next!.name} ${formatDueIn(next!.dueInMs)}`;
+  const enabled = input.automations.filter((a) => a.enabled);
+  const next = nextAutomation(enabled, input.scheduledLastRun, input.now);
+  const schedValue = !enabled.length
+    ? input.automations.length
+      ? "all paused"
+      : "none"
+    : `${enabled.length} active · ${next!.name} ${formatDueIn(next!.dueAt - input.now)}`;
   return [
     { id: "queue", label: "Exo Queue", value: queueValue, enabled: input.exoQueueEnabled },
-    { id: "schedules", label: "Schedules", value: schedValue, enabled: input.scheduled.length > 0 },
+    { id: "schedules", label: "Automations", value: schedValue, enabled: enabled.length > 0 },
   ];
 }
 
@@ -266,6 +233,7 @@ export function autonomyActions(input: AutonomyInput): HubAction[] {
       enabled: input.hasPlaybooks,
       ...(input.hasPlaybooks ? {} : { hint: "no playbooks yet" }),
     },
+    { id: "automations", label: "Automations…", enabled: true },
   ];
 }
 

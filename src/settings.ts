@@ -7,6 +7,7 @@ import { cliDiagnostics, updateClaudeCli } from "./cli";
 import { compareSemver } from "./core/semver";
 import { ADAPTERS } from "./providers/registry";
 import { modelOptions } from "./core/model-options";
+import type { AutomationConfig } from "./core/automations";
 import {
   parseMcpJson,
   serializeMcpJson,
@@ -150,8 +151,12 @@ export interface MVASettings {
   exoQueueFolder: string;
   /** Open the Cockpit view automatically when Obsidian's layout is ready. */
   cockpitOnStartup: boolean;
-  /** Scheduled playbook runs — one per line: "<Prompt name> | daily" or "<Prompt name> | weekly". */
+  /** LEGACY scheduled playbook runs ("<Prompt name> | daily" per line) — migrated
+   *  into `automations` on load, then cleared. Kept only for the migration path. */
   scheduledRuns: string;
+  /** Structured automations (playbook + slot cadence + write flag) — the
+   *  scheduler in main.ts and the Cockpit Automations panel read these. */
+  automations: AutomationConfig[];
   /** Load external MCP tools (Gmail/Slack/Calendar…) in headless playbook runs —
    *  Dia-style digest sources. Read-only enforced by the headless resolver
    *  (core/headless-tools.ts): read tools auto-allowed, mutations auto-denied. */
@@ -246,6 +251,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   exoQueueFolder: "_system/exo-queue",
   cockpitOnStartup: false,
   scheduledRuns: "",
+  automations: [],
   playbookExternalTools: false,
   seededDigest: false,
   learningLoop: true,
@@ -860,18 +866,14 @@ export class MVASettingTab extends PluginSettingTab {
       });
 
     new Setting(el)
-      .setName("Scheduled playbook runs")
+      .setName("Automations")
       .setDesc(
-        'Run a custom prompt unattended on a schedule, read-only: the agent may read the vault but every write is denied, and the only output is a report note in _system/reports/. One per line: "Prompt name | daily" or "Prompt name | weekly"; prompts with {{variables}} can\'t be scheduled.'
+        "Run playbooks unattended on a schedule (hourly / daily / weekly at a set time). Read-only runs produce a report in _system/reports/; write-enabled runs may also edit vault notes, with every touched file snapshotted so the whole run can be restored. Prompts with {{variables}} can't be scheduled."
       )
-      .addTextArea((t) => {
-        t.setPlaceholder("Morning brief | daily")
-          .setValue(s.scheduledRuns)
-          .onChange(async (v) => {
-            s.scheduledRuns = v;
-            await this.plugin.saveSettings();
-          });
-        t.inputEl.rows = 3;
+      .addButton((b) => {
+        b.setButtonText(`Manage… (${s.automations.length})`).onClick(() => {
+          this.plugin.openAutomationsModal();
+        });
       });
 
     new Setting(el)
