@@ -15,8 +15,10 @@ const deployDir = existsSync(".obsidian-plugin-dir")
 const deployPlugin = {
   name: "deploy",
   setup(build) {
-    build.onEnd(() => {
+    build.onEnd((result) => {
       if (!deployDir) return;
+      // Never ship a stale main.js into the live vault on a failed build.
+      if (result.errors.length > 0) return;
       try {
         mkdirSync(deployDir, { recursive: true });
         for (const f of ["main.js", "manifest.json", "styles.css"]) {
@@ -26,6 +28,32 @@ const deployPlugin = {
       } catch (e) {
         console.warn(`[deploy] failed: ${e?.message ?? e}`);
       }
+    });
+  },
+};
+
+// The Agent SDK calls bare `setTimeout(...).unref()` / `.refresh()` in its
+// child-process kill-escalation and keepalive paths. In Obsidian's renderer the
+// bare global is the DOM timer (returns a number), so `.unref()` throws an
+// uncaught TypeError and aborts the cleanup continuation (the SIGKILL
+// escalation never arms). Shadow the timer globals with Node-Timeout-like
+// wrappers — module-scoped, SDK files only; the rest of the bundle keeps the
+// untouched DOM globals. `refresh()` is emulated for real (cancel+reschedule)
+// because the SDK uses it; `Symbol.toPrimitive` keeps `clearTimeout(wrapper)`
+// working via WebIDL number coercion.
+const sdkSafeTimers = {
+  name: "sdk-safe-timers",
+  setup(build) {
+    const prelude =
+      "const __exoWrapTimer=(set,clear)=>(fn,ms,...args)=>{let id=set(fn,ms,...args);return{unref(){return this},ref(){return this},hasRef(){return true},refresh(){clear(id);id=set(fn,ms,...args);return this},[Symbol.toPrimitive](){return id}};};" +
+      "const setTimeout=__exoWrapTimer(globalThis.setTimeout.bind(globalThis),globalThis.clearTimeout.bind(globalThis));" +
+      "const setInterval=__exoWrapTimer(globalThis.setInterval.bind(globalThis),globalThis.clearInterval.bind(globalThis));\n";
+    build.onLoad({ filter: /claude-agent-sdk[\\/][^\\/]+\.mjs$/ }, (args) => {
+      // esbuild only strips a shebang when it's the first line — drop it
+      // ourselves since the prelude takes that spot.
+      let src = readFileSync(args.path, "utf8");
+      if (src.startsWith("#!")) src = src.slice(src.indexOf("\n") + 1);
+      return { contents: prelude + src, loader: "js" };
     });
   },
 };
@@ -77,7 +105,7 @@ const ctx = await esbuild.context({
   treeShaking: true,
   outfile: "main.js",
   minify: prod,
-  plugins: [deployPlugin],
+  plugins: [sdkSafeTimers, deployPlugin],
 });
 
 if (prod) {
