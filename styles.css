@@ -4518,3 +4518,64 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-ll-head { display: flex; align-items: center; gap: 8px; }
 .mva-ll-preview { white-space: pre-wrap; color: var(--text-faint); background: var(--background-secondary);
   border-radius: var(--radius-s); padding: 6px 8px; max-height: 140px; overflow-y: auto; }
+
+/* --------------------------- automations modal --------------------------- */
+/* Same form recipe as the prompt-vars/task modals: quiet labels, chip+popover
+   selects, .mva-btn buttons. Only layout deltas live here. */
+.mva-auto-modal .modal-content { min-width: 460px; }
+.mva-auto-sub {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  margin: 2px 0 14px;
+}
+.mva-auto-row {
+  padding: 8px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.mva-auto-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.mva-auto-spacer { flex: 1; }
+.mva-auto-toggle { cursor: pointer; }
+.mva-sel-chip.is-off { opacity: 0.55; }
+.mva-auto-meta,
+.mva-auto-warn,
+.mva-auto-empty {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+.mva-auto-warn { color: var(--color-orange, #e0a341); }
+.mva-auto-x {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.mva-auto-x:hover { color: var(--text-muted); }
+.mva-auto-x svg { width: 14px; height: 14px; }
+.mva-auto-foot { margin: 10px 0 4px; }
+.mva-auto-popfield {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 4px;
+}
+.mva-auto-popfield .mva-pv-label { margin: 0; }
+.mva-auto-hour { width: 64px; }
+.mva-auto-runs { margin-top: 14px; }
+.mva-auto-runrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+.mva-auto-runlabel {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}

@@ -1,68 +1,44 @@
 import { describe, it, expect } from "vitest";
-import { parseScheduledRuns, nextScheduled, autonomyStatuses, autonomyActions } from "../src/core/actions-hub";
+import { autonomyStatuses, autonomyActions } from "../src/core/actions-hub";
+import type { AutomationConfig } from "../src/core/automations";
 
-const HOUR = 3_600_000;
+/** Local-time epoch helper (mirrors automations.test.ts fixtures). */
+const at = (y: number, mo: number, d: number, h = 0, mi = 0) => new Date(y, mo - 1, d, h, mi).getTime();
 
-describe("parseScheduledRuns", () => {
-  it("parses valid lines and drops malformed ones", () => {
-    const raw = "Morning brief | daily\nWeekly review|weekly\nno-cadence\nBad | monthly\n";
-    expect(parseScheduledRuns(raw)).toEqual([
-      { name: "Morning brief", cadence: "daily" },
-      { name: "Weekly review", cadence: "weekly" },
-    ]);
-  });
-
-  it("empty input → empty list", () => {
-    expect(parseScheduledRuns("")).toEqual([]);
-  });
-});
-
-describe("nextScheduled", () => {
-  const now = 100 * HOUR;
-  it("picks the soonest-due playbook", () => {
-    const next = nextScheduled(
-      [
-        { name: "A", cadence: "daily" }, // last 90h ago → overdue
-        { name: "B", cadence: "weekly" },
-      ],
-      { A: now - 90 * HOUR, B: now - HOUR },
-      now
-    );
-    expect(next?.name).toBe("A");
-    expect(next!.dueInMs).toBeLessThanOrEqual(0);
-  });
-
-  it("never-run playbooks are due immediately (last = 0)", () => {
-    const next = nextScheduled([{ name: "A", cadence: "daily" }], {}, now);
-    expect(next!.dueInMs).toBeLessThanOrEqual(0);
-  });
-
-  it("null when nothing is scheduled", () => {
-    expect(nextScheduled([], {}, now)).toBeNull();
-  });
-});
+const brief: AutomationConfig = { name: "Brief", cadence: { kind: "daily", hour: 7 }, enabled: true, write: false };
 
 describe("autonomyStatuses", () => {
   const base = {
     exoQueueEnabled: true,
     queuePending: 2 as number | null,
-    scheduled: [{ name: "Brief", cadence: "daily" as const }],
+    automations: [brief],
     scheduledLastRun: { Brief: 0 },
     hasPlaybooks: true,
-    now: 100 * HOUR,
+    now: at(2026, 7, 15, 10),
   };
 
-  it("reports pending count and next schedule", () => {
+  it("reports pending count and next automation", () => {
     const [queue, sched] = autonomyStatuses(base);
     expect(queue.value).toBe("on · 2 pending");
     expect(queue.enabled).toBe(true);
-    expect(sched.value).toBe("1 active · Brief due now");
+    expect(sched.value).toBe("1 active · Brief due now"); // never ran → due
   });
 
-  it("off queue and empty schedules", () => {
-    const [queue, sched] = autonomyStatuses({ ...base, exoQueueEnabled: false, scheduled: [], queuePending: 0 });
+  it("ran in today's slot → shows time until tomorrow's slot", () => {
+    const [, sched] = autonomyStatuses({ ...base, scheduledLastRun: { Brief: at(2026, 7, 15, 7, 5) } });
+    expect(sched.value).toBe("1 active · Brief in 21h");
+  });
+
+  it("off queue and no automations", () => {
+    const [queue, sched] = autonomyStatuses({ ...base, exoQueueEnabled: false, automations: [], queuePending: 0 });
     expect(queue.value).toBe("off");
     expect(sched.value).toBe("none");
+    expect(sched.enabled).toBe(false);
+  });
+
+  it("all automations paused → 'all paused', disabled", () => {
+    const [, sched] = autonomyStatuses({ ...base, automations: [{ ...brief, enabled: false }] });
+    expect(sched.value).toBe("all paused");
     expect(sched.enabled).toBe(false);
   });
 
@@ -79,7 +55,7 @@ describe("autonomyActions", () => {
   const base = {
     exoQueueEnabled: true,
     queuePending: 3 as number | null,
-    scheduled: [],
+    automations: [] as AutomationConfig[],
     scheduledLastRun: {},
     hasPlaybooks: true,
     now: 0,
@@ -101,5 +77,9 @@ describe("autonomyActions", () => {
     const run = autonomyActions({ ...base, hasPlaybooks: false }).find((a) => a.id === "run-playbook");
     expect(run?.enabled).toBe(false);
     expect(run?.hint).toBe("no playbooks yet");
+  });
+
+  it("automations manager action is always available", () => {
+    expect(autonomyActions(base).find((a) => a.id === "automations")?.enabled).toBe(true);
   });
 });

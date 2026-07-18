@@ -29,7 +29,6 @@ import { parseTasksFile, TASKS_PATH } from "../core/tasks";
 import {
   autonomyStatuses,
   autonomyActions,
-  parseScheduledRuns,
   formatBudget,
   formatAge,
 } from "../core/actions-hub";
@@ -318,7 +317,7 @@ export class CockpitView extends ItemView {
     const input = {
       exoQueueEnabled: s.exoQueueEnabled,
       queuePending,
-      scheduled: parseScheduledRuns(s.scheduledRuns ?? ""),
+      automations: s.automations ?? [],
       scheduledLastRun: s.scheduledLastRun ?? {},
       hasPlaybooks: (s.customPrompts ?? []).length > 0,
       now,
@@ -327,7 +326,13 @@ export class CockpitView extends ItemView {
     for (const a of autonomyActions(input)) {
       if (!a.enabled) continue;
       const arg =
-        a.id === "queue-drain" ? "exo:queue-drain" : a.id === "queue-new" ? "exo:queue-new-request" : "exo:run-playbook";
+        a.id === "queue-drain"
+          ? "exo:queue-drain"
+          : a.id === "queue-new"
+            ? "exo:queue-new-request"
+            : a.id === "automations"
+              ? "exo:automations"
+              : "exo:run-playbook";
       rows.push({ label: a.label, ...(a.badge ? { badge: a.badge } : {}), action: { kind: "command", arg } });
     }
     const card = this.tile(grid, "Autonomy", "bot", rows, "Queue off — enable it in settings.");

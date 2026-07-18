@@ -11,7 +11,6 @@ import {
   systemStatuses,
   autonomyStatuses,
   autonomyActions,
-  parseScheduledRuns,
 } from "../core/actions-hub";
 
 interface NamedItem {
@@ -355,7 +354,7 @@ export async function renderCapabilitiesPanel(
       const input = {
         exoQueueEnabled: s.exoQueueEnabled,
         queuePending,
-        scheduled: parseScheduledRuns(s.scheduledRuns ?? ""),
+        automations: s.automations ?? [],
         scheduledLastRun: s.scheduledLastRun ?? {},
         hasPlaybooks: (s.customPrompts ?? []).length > 0,
         now,
@@ -368,6 +367,7 @@ export async function renderCapabilitiesPanel(
         "queue-drain": run("exo:queue-drain"),
         "queue-new": run("exo:queue-new-request"),
         "run-playbook": run("exo:run-playbook"),
+        automations: run("exo:automations"),
       };
       for (const a of autonomyActions(input)) {
         actionChip(b, a, a.enabled ? handler[a.id] : undefined);
