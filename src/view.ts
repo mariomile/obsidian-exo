@@ -1734,6 +1734,8 @@ export class ChatView extends ItemView {
               .map((seg) =>
                 seg.t === "text"
                   ? seg.md
+                  : seg.t === "error"
+                    ? "⚠ response interrupted"
                   : seg.t === "ask"
                     ? "↳ asked: " + seg.questions.map((q) => q.header).join(", ")
                     : seg.t === "artifact"
@@ -1871,6 +1873,9 @@ export class ChatView extends ItemView {
             flushRun();
             void MarkdownRenderer.render(this.app, s.md, body.createDiv({ cls: "mva-bubble markdown-rendered" }), "", this);
             full += s.md;
+          } else if (s.t === "error") {
+            flushRun();
+            this.renderPersistedError(body, s.message, c, lastUser);
           } else if (s.t === "ask") {
             flushRun();
             const card = body.createDiv({ cls: "mva-ask" });
@@ -4261,7 +4266,7 @@ export class ChatView extends ItemView {
     c: Convo,
     text: string,
     images?: ImageAttachment[],
-    opts?: { sendPrefix?: string; isRecoveryRetry?: boolean }
+    opts?: { sendPrefix?: string; isRecoveryRetry?: boolean; reuseUserTurn?: boolean }
   ): Promise<void> {
     const paths = c === this.active ? this.composer.contextPaths() : [];
     const message = paths.length
@@ -4284,7 +4289,7 @@ export class ChatView extends ItemView {
     // A recovery retry reuses the user bubble the poisoned turn already rendered —
     // don't render (or re-persist) a duplicate. The original message is still the
     // only "user" entry in c.messages for this turn.
-    if (!opts?.isRecoveryRetry) {
+    if (!opts?.isRecoveryRetry && !opts?.reuseUserTurn) {
       const userEl = this.addUserTurn(c, text, imgs);
       // Quiet "N memories recalled" affordance under the bubble — the trust
       // surface, so the injection is never invisible. Only when there were any.
@@ -4641,7 +4646,7 @@ export class ChatView extends ItemView {
             // on-disk transcript survives and a fresh process can resume it, so we
             // recover in two stages. The footer reflects which stage this is.
             poisoned = true;
-            this.renderError(ctx, e.message);
+            this.renderError(ctx, e.message, c, text);
             ctx.bodyEl.createSpan({ cls: "mva-faint", text: this.recoveryFooter(c, !!opts?.isRecoveryRetry) });
             this.notifyOnce(ctx, "error", "Exo — error", e.message.slice(0, 80));
           }
@@ -4746,11 +4751,11 @@ export class ChatView extends ItemView {
           // finally keeps c.sessionId and sets resumeRisky (stage 1); it does NOT
           // auto-retry here — that's stage 2's job on the next poisoned turn.
           poisoned = true;
-          if (!ctx.bodyEl.querySelector(".mva-inline-error, .mva-onboard")) this.renderError(ctx, msg);
+          if (!ctx.bodyEl.querySelector(".mva-inline-error, .mva-onboard")) this.renderError(ctx, msg, c, text);
           ctx.bodyEl.createSpan({ cls: "mva-faint", text: this.recoveryFooter(c, !!opts?.isRecoveryRetry) });
           this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
         } else {
-          if (!ctx.bodyEl.querySelector(".mva-inline-error, .mva-onboard")) this.renderError(ctx, msg);
+          if (!ctx.bodyEl.querySelector(".mva-inline-error, .mva-onboard")) this.renderError(ctx, msg, c, text);
           new Notice(msg);
           this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
           // Don't replay queued messages into a broken session — they'd just re-fail.
@@ -4903,33 +4908,63 @@ export class ChatView extends ItemView {
     );
   }
 
+  /** Persist and render a terminal turn failure. The retry reuses the existing
+   *  user bubble, so an interrupted response never duplicates Mario's prompt. */
+  private renderError(ctx: AssistantCtx, message: string, c: Convo, retryText: string): void {
+    if (!ctx.segments.some((segment) => segment.t === "error")) {
+      ctx.segments.push({ t: "error", message });
+    }
+    this.renderErrorBody(ctx.bodyEl, message, c, retryText);
+  }
+
+  /** Rehydrate a persisted failure with the same retry affordance shown live. */
+  private renderPersistedError(body: HTMLElement, message: string, c: Convo, retryText: string): void {
+    this.renderErrorBody(body, message, c, retryText);
+  }
+
   /** Inline error, upgraded to a setup card when the CLI isn't ready. */
-  private renderError(ctx: AssistantCtx, message: string): void {
+  private renderErrorBody(body: HTMLElement, message: string, c: Convo, retryText: string): void {
+    let actionHost: HTMLElement;
     if (/not found|not logged in|sign in|run it once/i.test(message)) {
-      const card = ctx.bodyEl.createDiv({ cls: "mva-onboard" });
+      const card = body.createDiv({ cls: "mva-onboard" });
       setIcon(card.createDiv({ cls: "mva-onboard-icon" }), "plug-zap");
-      card.createDiv({ cls: "mva-onboard-title", text: `${ADAPTERS[this.provider].displayName} isn't ready` });
+      card.createDiv({ cls: "mva-onboard-title", text: `${ADAPTERS[c.provider].displayName} isn't ready` });
       card.createDiv({ cls: "mva-onboard-msg", text: message });
       const steps = card.createEl("ol", { cls: "mva-onboard-steps" });
-      steps.createEl("li", { text: `Open a terminal and run \`${this.provider}\` once to sign in.` });
+      steps.createEl("li", { text: `Open a terminal and run \`${c.provider}\` once to sign in.` });
       steps.createEl("li", { text: "If it's installed elsewhere, set the binary path in settings." });
       const btn = card.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Open settings" });
       btn.onclick = () => this.openSettings();
-      return;
+      actionHost = card;
+    } else {
+      // Friendly, actionable copy for known engine failures (crash mid-turn, exit,
+      // missing binary, auth). The raw text stays as a muted secondary line + tooltip
+      // so debugging is never lost. Unknown errors fall through to the raw message.
+      const friendly = describeCliFailure(message);
+      const box = body.createDiv({ cls: "mva-inline-error" });
+      box.createDiv({ cls: "mva-error-title", text: "Response interrupted" });
+      if (friendly) {
+        box.createDiv({ text: friendly.message });
+        if (friendly.hint) box.createDiv({ cls: "mva-faint", text: friendly.hint });
+        const rawShort = message.length > 200 ? `${message.slice(0, 200)}…` : message;
+        box.createDiv({ cls: "mva-faint", text: rawShort }).setAttribute("title", message);
+      } else {
+        box.createDiv({ text: message });
+      }
+      actionHost = box;
     }
-    // Friendly, actionable copy for known engine failures (crash mid-turn, exit,
-    // missing binary, auth). The raw text stays as a muted secondary line + tooltip
-    // so debugging is never lost. Unknown errors fall through to the raw message.
-    const friendly = describeCliFailure(message);
-    if (friendly) {
-      const box = ctx.bodyEl.createDiv({ cls: "mva-inline-error" });
-      box.createDiv({ text: `⚠️ ${friendly.message}` });
-      if (friendly.hint) box.createDiv({ cls: "mva-faint", text: friendly.hint });
-      const rawShort = message.length > 200 ? `${message.slice(0, 200)}…` : message;
-      box.createDiv({ cls: "mva-faint", text: rawShort }).setAttribute("title", message);
-      return;
-    }
-    ctx.bodyEl.createDiv({ cls: "mva-inline-error", text: `⚠️ ${message}` });
+
+    if (!retryText) return;
+    const retry = actionHost.createEl("button", { cls: "mva-error-retry", attr: { "aria-label": "Retry response" } });
+    setIcon(retry.createSpan(), "refresh-cw");
+    retry.createSpan({ text: "Retry" });
+    let retrying = false;
+    retry.onclick = () => {
+      if (retrying || c.streaming) return;
+      retrying = true;
+      retry.disabled = true;
+      void this.runTurn(c, retryText, undefined, { reuseUserTurn: true });
+    };
   }
 
   private openSettings(): void {

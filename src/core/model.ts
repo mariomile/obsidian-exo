@@ -14,6 +14,7 @@ export interface AskQuestion {
 
 export type Segment =
   | { t: "text"; md: string }
+  | { t: "error"; message: string }
   | { t: "tool"; name: string; input: unknown; ok: boolean | null; output: string }
   | { t: "ask"; questions: AskQuestion[]; answers: Record<string, string> }
   | { t: "artifact"; path: string }
