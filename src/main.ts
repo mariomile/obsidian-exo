@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DiagLog } from "./core/diag";
+import { handoffPrefix } from "./core/handoff";
 import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { CockpitView, COCKPIT_VIEW_TYPE, COCKPIT_ICON } from "./ui/cockpit-view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
@@ -627,12 +628,14 @@ export default class ExoPlugin extends Plugin {
    * chat seeded with `query` (sent immediately unless `autoSend` is false).
    * Consumed by sibling plugins — e.g. Sonar's "Search with Exo" row — so they
    * don't have to reach into ChatView internals. Safe to call before the view
-   * exists; it's created on demand.
+   * exists; it's created on demand. `opts.source` declares where the query came
+   * from (e.g. "sonar-intent") and maps to a hidden steering directive.
    */
-  async askExo(query: string, autoSend = true): Promise<void> {
+  async askExo(query: string, autoSend = true, opts?: { source?: string }): Promise<void> {
     await this.activateView();
     const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) view.askInNewConversation(query, autoSend);
+    if (view instanceof ChatView)
+      view.askInNewConversation(query, autoSend, { sendPrefix: handoffPrefix(opts?.source) });
   }
 
   private vaultPath(): string {
