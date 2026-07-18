@@ -53,7 +53,7 @@ import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement } from "./core/steps";
-import { Composer } from "./ui/composer";
+import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { buildRelatedChips } from "./ui/related";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
@@ -169,6 +169,9 @@ export interface Convo {
   /** True once the learning-loop "save as playbook?" offer has been shown for
    *  this conversation — one-shot per convo, runtime-only (never persisted). */
   playbookNudged?: boolean;
+  /** Unsent composer draft (text + attachments), stashed when the user switches
+   *  away so every chat keeps its own composer — runtime-only, never persisted. */
+  draft?: ComposerDraft;
   /** Provider-only prefix for the NEXT turn (Codex compact emulation: the
    *  recap that reseeds a fresh session). Consumed once, never UI/persisted. */
   pendingSendPrefix?: string;
@@ -1134,6 +1137,7 @@ export class ChatView extends ItemView {
     if (c === this.active) return;
     if (this.capsEl) this.hideCapabilities();
     this.saveActive();
+    this.active.draft = this.composer.getDraft();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.active = c;
     if (!this.openTabs.includes(c.id)) this.openTabs.push(c.id);
@@ -1151,6 +1155,7 @@ export class ChatView extends ItemView {
     this.refreshProviderUI();
     this.syncSendButton();
     this.composer.updateUsage(c.usage ?? null);
+    this.composer.setDraft(c.draft);
     // Reflect the newly-active convo's session quota (if any) on the badge.
     this.composer.setLastRateLimit((c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null);
     this.composer.updateRateBadge();
@@ -1702,6 +1707,7 @@ export class ChatView extends ItemView {
    *  its transcript is prepared (rendered, hidden behind the gallery) so a later
    *  hideGallery/switchTo reveals it correctly. */
   private setActiveSilently(next: Convo): void {
+    this.active.draft = this.composer.getDraft();
     this.active = next;
     this.provider = next.provider;
     this.model = next.model;
@@ -1713,6 +1719,7 @@ export class ChatView extends ItemView {
     this.refreshProviderUI();
     this.syncSendButton();
     this.composer.updateUsage(next.usage ?? null);
+    this.composer.setDraft(next.draft);
     this.renderTabs();
     this.persistTabs();
   }
@@ -4455,7 +4462,20 @@ export class ChatView extends ItemView {
             if (ctx.runningTasks.delete(e.id)) this.refreshAgentIndicators();
           }
           const wp = ctx.writeById.get(e.id);
-          if (e.ok && wp && this.plugin.settings.revealEditedNotes && !ctx.revealed.has(wp)) {
+          // Reveal only while Mario is actually watching THIS chat: the convo is
+          // active and the Exo view itself is visible. Writes from a background
+          // conversation (or behind a hidden tab) must never hijack the workspace —
+          // same guard the live context panel uses above. Not adding to `revealed`
+          // on the skipped path keeps a later same-turn write eligible if he
+          // switches back.
+          if (
+            e.ok &&
+            wp &&
+            this.plugin.settings.revealEditedNotes &&
+            !ctx.revealed.has(wp) &&
+            c === this.active &&
+            this.containerEl.isShown()
+          ) {
             ctx.revealed.add(wp);
             this.revealNote(wp);
           }

@@ -97,6 +97,21 @@ export interface ComposerHost {
   openArtifact(path: string): void;
 }
 
+/** A conversation's unsent composer state — text, image attachments, manual
+ *  context and the "exclude current note" flag. Stashed on the Convo (runtime
+ *  only) so every chat keeps its own draft across tab switches. */
+export interface ComposerDraft {
+  text: string;
+  images: ImageAttachment[];
+  attached: string[];
+  excludeActiveNote: boolean;
+}
+
+/** Collapsed growth cap for the input (px) — past this the expand affordance appears. */
+const INPUT_CAP = 200;
+/** Hard ceiling for the expanded input (px); the live cap is min(50% window, this). */
+const INPUT_CAP_EXPANDED = 520;
+
 export class Composer {
   private usageEl: HTMLElement | null = null;
   private lastUsage: ContextUsage | null = null;
@@ -105,6 +120,9 @@ export class Composer {
   private composerEl!: HTMLElement;
   private compactNudgeEl: HTMLElement | null = null;
   private inputEl!: HTMLTextAreaElement;
+  private inputWrapEl!: HTMLElement;
+  private expandBtn!: HTMLButtonElement;
+  private inputExpanded = false;
   private sendBtn!: HTMLButtonElement;
   // Three independent toolbar chips — Model, Effort, Permission — each expose a
   // refresh fn so external changes (provider switch, plan-mode toggle, model
@@ -147,9 +165,32 @@ export class Composer {
   }
   setInputValue(v: string): void {
     this.inputEl.value = v;
+    // Programmatic sets (send clears, prompt seeds) must re-run growth so the
+    // box deflates/auto-collapses without waiting for a keystroke.
+    this.autoGrow();
   }
   focusInput(): void {
     window.setTimeout(() => this.inputEl?.focus(), 0);
+  }
+  /** Snapshot the in-progress draft for the outgoing conversation. Arrays are
+   *  handed over by reference — setDraft immediately replaces the composer's
+   *  own, so the snapshot can't be mutated behind the convo's back. */
+  getDraft(): ComposerDraft {
+    return {
+      text: this.inputEl.value,
+      images: this.pendingImages,
+      attached: this.manualAttached,
+      excludeActiveNote: this.excludeActiveNote,
+    };
+  }
+  /** Restore a conversation's draft (undefined → pristine empty composer). */
+  setDraft(d: ComposerDraft | undefined): void {
+    this.pendingImages = d?.images ?? [];
+    this.manualAttached = d?.attached ?? [];
+    this.excludeActiveNote = d?.excludeActiveNote ?? false;
+    this.renderImageStrip();
+    this.refreshContext();
+    this.setInputValue(d?.text ?? ""); // re-runs autoGrow → expand state follows the draft
   }
   getPendingImages(): ImageAttachment[] {
     return this.pendingImages;
@@ -195,10 +236,19 @@ export class Composer {
     const box = bar.createDiv({ cls: "mva-inputbox" });
     this.contextEl = box.createDiv({ cls: "mva-context" });
     this.imagesEl = box.createDiv({ cls: "mva-images is-hidden" });
-    this.inputEl = box.createEl("textarea", {
+    // The wrap exists only to anchor the expand affordance to the textarea's
+    // top-right corner (context/image rows above it move the textarea around).
+    this.inputWrapEl = box.createDiv({ cls: "mva-inputwrap" });
+    this.inputEl = this.inputWrapEl.createEl("textarea", {
       cls: "mva-input",
       attr: { rows: "3", placeholder: "Message the agent…" },
     });
+    this.expandBtn = this.inputWrapEl.createEl("button", {
+      cls: "mva-icon-btn mva-input-expand",
+      attr: { "aria-label": "Expand input", tabindex: "-1" },
+    });
+    setIcon(this.expandBtn, "chevrons-up-down");
+    this.expandBtn.onclick = () => this.toggleInputExpand();
     this.inputEl.addEventListener("input", () => this.autoGrow());
     this.inputEl.addEventListener("paste", (e) => this.onPaste(e));
     bar.addEventListener("dragover", (e) => {
@@ -1243,10 +1293,35 @@ export class Composer {
     }).open();
   }
 
+  /** Grow the textarea with its content, up to a cap: 200px collapsed, ~half the
+   *  window when expanded. The expand affordance only exists while the content
+   *  overflows the collapsed cap; when the text shrinks back (or is cleared on
+   *  send) the box auto-collapses — expansion is a per-draft state, never sticky. */
   autoGrow(): void {
     const el = this.inputEl;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    const overflows = el.scrollHeight > INPUT_CAP + 1;
+    if (!overflows) this.setInputExpanded(false);
+    const cap = this.inputExpanded ? Math.min(Math.round(window.innerHeight * 0.5), INPUT_CAP_EXPANDED) : INPUT_CAP;
+    el.style.height = Math.min(el.scrollHeight, cap) + "px";
+    this.expandBtn.toggleClass("is-visible", overflows);
+  }
+
+  private toggleInputExpand(): void {
+    // Animate only the deliberate toggle — keystroke growth stays instant.
+    this.inputWrapEl.addClass("is-anim");
+    window.setTimeout(() => this.inputWrapEl.removeClass("is-anim"), 220);
+    this.setInputExpanded(!this.inputExpanded);
+    this.autoGrow();
+    this.inputEl.focus();
+  }
+
+  private setInputExpanded(v: boolean): void {
+    if (this.inputExpanded === v) return;
+    this.inputExpanded = v;
+    this.inputWrapEl.toggleClass("is-expanded", v);
+    setIcon(this.expandBtn, v ? "chevrons-down-up" : "chevrons-up-down");
+    this.expandBtn.setAttr("aria-label", v ? "Collapse input" : "Expand input");
   }
 
   /** Use a custom prompt. A single prompt is inserted into the composer; a
