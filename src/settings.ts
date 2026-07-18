@@ -496,7 +496,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Reveal edited notes",
-      "When the agent edits or creates a note, open it in a tab beside the chat so you watch it change live.",
+      "When the agent edits or creates a note, open it in a tab beside the chat so you watch it change live. Only fires for the chat you're looking at — background conversations never move your view.",
       "revealEditedNotes"
     );
     this.toggleSetting(

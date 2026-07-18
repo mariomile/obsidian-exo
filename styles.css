@@ -1496,6 +1496,41 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-input::placeholder {
   color: var(--text-faint);
 }
+/* Wrap around the textarea — anchors the expand affordance to its top-right
+   corner (context/image rows above shift the textarea inside the box). */
+.mva-inputwrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+/* Expand affordance — ghost chevron, present only while the draft overflows
+   the collapsed cap (autoGrow toggles is-visible). */
+.mva-input-expand {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: none;
+  width: 22px;
+  height: 22px;
+  color: var(--text-faint);
+  z-index: 2;
+}
+.mva-input-expand.is-visible {
+  display: inline-flex;
+}
+.mva-input-expand svg {
+  width: 13px;
+  height: 13px;
+}
+/* Expanded: CSS cap mirrors autoGrow's JS cap (min of half window / 520px). */
+.mva-inputwrap.is-expanded .mva-input {
+  max-height: min(50vh, 520px);
+}
+/* Only the deliberate toggle animates; keystroke growth stays instant. */
+.mva-inputwrap.is-anim .mva-input {
+  transition: height var(--mva-t);
+}
 
 .mva-send {
   display: inline-flex;
