@@ -1351,7 +1351,11 @@ export class ChatView extends ItemView {
    * so external behavior is unchanged. The model override falls back to the
    * settings default per provider.
    */
-  askInNewConversation(text: string, autoSend = true, opts?: { model?: string }): string {
+  askInNewConversation(
+    text: string,
+    autoSend = true,
+    opts?: { model?: string; sendPrefix?: string }
+  ): string {
     const q = text.trim();
     if (!q) return "";
     const provider = this.plugin.settings.provider;
@@ -1362,8 +1366,12 @@ export class ChatView extends ItemView {
     const id = this.active.id;
     this.composer.setInputValue(q);
     this.composer.autoGrow();
-    if (autoSend) this.send();
-    else this.composer.focusInput();
+    if (autoSend) {
+      // One-shot handoff directive: send() consumes it into runTurn's
+      // sendPrefix so it rides the outbound message, never the visible bubble.
+      this.handoffPrefix = opts?.sendPrefix ?? null;
+      this.send();
+    } else this.composer.focusInput();
     return id;
   }
 
@@ -4136,9 +4144,15 @@ export class ChatView extends ItemView {
     if (source === "esc") new Notice("Exo — stopped (Esc)");
   }
 
+  /** One-shot hidden prefix for the next send() — set by askInNewConversation
+   *  on cross-plugin handoffs (e.g. Sonar's `?` intent), consumed exactly once. */
+  private handoffPrefix: string | null = null;
+
   private send(): void {
     const text = this.composer.getInputValue().trim();
     const pendingImages = this.composer.getPendingImages();
+    const handoff = this.handoffPrefix ?? undefined;
+    this.handoffPrefix = null;
     if (!text && pendingImages.length === 0) return;
     // `/compact [instructions]` is a local slash command, not a chat turn: route
     // it to compaction (mirrors the CLI, which intercepts /compact client-side)
@@ -4182,11 +4196,13 @@ export class ChatView extends ItemView {
         this.addUserTurn(c, text, images);
         this.persist();
       } else {
-        c.queue.push({ text, images }); // queue while a turn is running
+        // queue while a turn is running (a handoff prefix rides along and is
+        // forwarded by the queue-drain logic like the recovery recap)
+        c.queue.push({ text, images, sendPrefix: handoff });
         this.renderQueue(c);
       }
     } else {
-      void this.runTurn(c, text, images);
+      void this.runTurn(c, text, images, handoff ? { sendPrefix: handoff } : undefined);
     }
   }
 
