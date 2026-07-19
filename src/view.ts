@@ -71,7 +71,16 @@ import { planInputParts, planStateText } from "./core/plan";
 import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
 import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
 import { caretHost, type CaretNode } from "./core/caret-host";
-import { turnQualifies, buildDistillPrompt, parseDistillReply, uniquePlaybookName } from "./core/learning-loop";
+import {
+  turnQualifies,
+  buildDistillPrompt,
+  parseDistillReply,
+  uniquePlaybookName,
+  recordTurnSignal,
+  signalLabel,
+  type PlaybookSignal,
+} from "./core/learning-loop";
+import { loadSignalLedger, saveSignalLedger } from "./core/signals-store";
 
 export type { AskQuestion } from "./core/model";
 
@@ -5002,28 +5011,52 @@ export class ChatView extends ItemView {
   private maybeProposePlaybook(ctx: AssistantCtx, c: Convo, durationMs: number): void {
     if (!this.plugin.settings.learningLoop || c.playbookNudged) return;
     const tools = ctx.segments.filter((s): s is Extract<Segment, { t: "tool" }> => s.t === "tool");
-    const stats = {
+    // Gate: fingerprint only substantial, healthy turns (not one-shot lookups,
+    // not slash-command runs). Whether to actually PROPOSE is decided by topic
+    // recurrence across turns — not by this single turn being "big".
+    const qualifies = turnQualifies({
       ok: true,
       toolCount: tools.length,
       distinctTools: new Set(tools.map((t) => t.name)).size,
       durationMs,
       userText: ctx.userText,
-    };
-    if (!turnQualifies(stats)) return;
+    });
+    if (!qualifies) return;
     c.playbookNudged = true;
+    void this.recordAndMaybePropose(ctx);
+  }
+
+  /** Fold this turn into the topic-recurrence ledger and show the "save as
+   *  playbook?" card only when a topic has recurred to the threshold. Ledger I/O
+   *  is best-effort — a failure never breaks the turn. */
+  private async recordAndMaybePropose(ctx: AssistantCtx): Promise<void> {
+    const threshold = Math.max(2, this.plugin.settings.playbookThreshold ?? 3);
+    try {
+      const ledger = await loadSignalLedger(this.plugin.app);
+      const { ledger: next, proposal } = recordTurnSignal(ledger, ctx.userText, Date.now(), { threshold });
+      await saveSignalLedger(this.plugin.app, next);
+      if (proposal) this.renderPlaybookNudge(ctx, proposal);
+    } catch {
+      /* ledger unavailable — skip the nudge silently, never break the turn */
+    }
+  }
+
+  /** The recurrence nudge: "you've done this N times — save it as a playbook?"
+   *  The free preview shows the recurring topic and the real example requests,
+   *  not a transcript of one run. Save still distills + shows a review card. */
+  private renderPlaybookNudge(ctx: AssistantCtx, proposal: PlaybookSignal): void {
     const card = ctx.el.createDiv({ cls: "mva-ll" });
     const head = card.createDiv({ cls: "mva-ll-head" });
     setIcon(head.createSpan({ cls: "mva-ll-icon" }), "sparkles");
-    const label = head.createSpan({ cls: "mva-ll-label", text: "Flusso riusabile — salvarlo come playbook?" });
+    const label = head.createSpan({
+      cls: "mva-ll-label",
+      text: `L'hai fatto ${proposal.count} volte — salvarlo come playbook?`,
+    });
     const chev = head.createSpan({ cls: "mva-ll-chev", attr: { "aria-label": "Cosa catturerebbe" } });
     setIcon(chev, "chevron-down");
     const save = head.createSpan({ cls: "mva-ll-btn", text: "Salva" });
     const dismiss = head.createSpan({ cls: "mva-ll-x", attr: { "aria-label": "Dismiss" } });
     setIcon(dismiss, "x");
-    // "Devo poter vedere che playbook vuole creare" (2026-07-19): label/chevron
-    // expand a free preview of the captured flow — the request plus the tool
-    // steps that would seed the distillation. The distilled name + prompt still
-    // get their own review card before anything is saved.
     let previewEl: HTMLElement | null = null;
     const togglePreview = () => {
       if (previewEl) {
@@ -5034,17 +5067,12 @@ export class ChatView extends ItemView {
       }
       setIcon(chev, "chevron-up");
       previewEl = card.createDiv({ cls: "mva-ll-preview" });
-      const req = ctx.userText.trim().replace(/\s+/g, " ");
-      const steps = ctx.segments
-        .filter((s): s is Extract<Segment, { t: "tool" }> => s.t === "tool")
-        .slice(0, 12)
-        .map((t) => {
-          const m = toolMeta(t.name, t.input);
-          return `• ${m.label}${m.target ? `: ${m.target}` : ""}`;
-        });
+      const examples = proposal.examples
+        .map((e) => `• «${e.slice(0, 160)}${e.length > 160 ? "…" : ""}»`)
+        .join("\n");
       previewEl.setText(
-        `Catturerebbe questo flusso:\n«${req.slice(0, 220)}${req.length > 220 ? "…" : ""}»\n\n${steps.join("\n")}` +
-          `\n\nSalva → il playbook viene distillato e ti mostro nome e testo per conferma prima di salvarlo.`
+        `Tema ricorrente: ${signalLabel(proposal)}\n\nHai chiesto cose simili:\n${examples}` +
+          `\n\nSalva → distillo un playbook riusabile e ti mostro nome e testo per conferma prima di salvarlo.`
       );
     };
     this.clickable(label, togglePreview);

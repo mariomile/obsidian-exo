@@ -170,9 +170,12 @@ export interface MVASettings {
   playbookExternalTools: boolean;
   /** Set once after seeding the Morning Digest playbook, so it's never re-seeded. */
   seededDigest: boolean;
-  /** Learning loop: after a substantial successful turn, offer to save the flow
-   *  as a reusable playbook (free proposal; LLM distillation only on accept). */
+  /** Learning loop: propose saving a flow as a reusable playbook when the same
+   *  KIND of task (by topic) recurs (free proposal; LLM distillation only on
+   *  accept). Recurrence is tracked in `_system/memory/playbook-signals.json`. */
   learningLoop: boolean;
+  /** How many times a topic must recur before the playbook nudge fires. Default 3. */
+  playbookThreshold: number;
   /** Per-playbook last-run timestamps (scheduler bookkeeping). */
   scheduledLastRun: Record<string, number>;
   /** Epoch ms of the last daily Claude-CLI update check (0 = never). */
@@ -262,6 +265,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   playbookExternalTools: false,
   seededDigest: false,
   learningLoop: true,
+  playbookThreshold: 3,
   scheduledLastRun: {},
   cliUpdateCheckAt: 0,
   cliLatestKnown: "",
@@ -925,13 +929,29 @@ export class MVASettingTab extends PluginSettingTab {
     new Setting(el)
       .setName("Learning loop")
       .setDesc(
-        "After a substantial successful turn, Exo offers to save the flow as a reusable playbook. The offer is free; the distillation runs only if you accept."
+        "Offer to save a flow as a reusable playbook when the same kind of task recurs — not after a single turn. Exo fingerprints your requests by topic and nudges only once a topic comes back (see threshold below). The offer is free; the distillation runs only if you accept."
       )
       .addToggle((t) =>
         t.setValue(s.learningLoop).onChange(async (v) => {
           s.learningLoop = v;
           await this.plugin.saveSettings();
         })
+      );
+
+    new Setting(el)
+      .setName("Playbook after N repetitions")
+      .setDesc(
+        "How many times the same kind of task must recur before Exo proposes saving it as a playbook. 3 = rule of three. Lower = proposes sooner; higher = only well-worn habits."
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("3")
+          .setValue(String(s.playbookThreshold))
+          .onChange(async (v) => {
+            const n = parseInt(v, 10);
+            s.playbookThreshold = Number.isFinite(n) && n >= 2 ? n : 3;
+            await this.plugin.saveSettings();
+          })
       );
 
     new Setting(el)

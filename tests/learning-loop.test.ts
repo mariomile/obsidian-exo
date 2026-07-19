@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { turnQualifies, buildDistillPrompt, parseDistillReply, uniquePlaybookName } from "../src/core/learning-loop";
+import {
+  turnQualifies,
+  buildDistillPrompt,
+  parseDistillReply,
+  uniquePlaybookName,
+  topicKeywords,
+  anchors,
+  recordTurnSignal,
+  signalLabel,
+  EMPTY_LEDGER,
+  type SignalLedger,
+} from "../src/core/learning-loop";
 
 const base = { ok: true, toolCount: 8, distinctTools: 3, durationMs: 120_000, userText: "prepara il digest" };
 
@@ -66,5 +77,66 @@ describe("uniquePlaybookName", () => {
     expect(uniquePlaybookName("Digest", ["Other"])).toBe("Digest");
     expect(uniquePlaybookName("Digest", ["digest"])).toBe("Digest 2");
     expect(uniquePlaybookName("Digest", ["digest", "Digest 2"])).toBe("Digest 3");
+  });
+});
+
+describe("topicKeywords / anchors", () => {
+  it("folds, drops stopwords, stems, and keeps salient words", () => {
+    const kw = topicKeywords("Scrivi un post LinkedIn su Captoo");
+    expect(kw).toContain("linkedin");
+    expect(kw).toContain("captoo");
+    expect(kw).not.toContain("un");
+    expect(kw).not.toContain("su");
+  });
+
+  it("anchors are the entity-length (≥5) keywords", () => {
+    expect(anchors(["post", "linkedin", "captoo"])).toEqual(["linkedin", "captoo"]);
+  });
+});
+
+describe("recordTurnSignal — recurrence (rule of three)", () => {
+  const now = 1_000_000;
+
+  it("proposes only on the 3rd recurrence of a topic", () => {
+    let ledger: SignalLedger = EMPTY_LEDGER;
+    let r = recordTurnSignal(ledger, "Scrivi un post LinkedIn su Captoo", now);
+    expect(r.proposal).toBeNull();
+    ledger = r.ledger;
+    r = recordTurnSignal(ledger, "Draft di un post LinkedIn su DeepAgent", now + 1);
+    expect(r.proposal).toBeNull();
+    ledger = r.ledger;
+    r = recordTurnSignal(ledger, "Prepara un post LinkedIn sul pricing", now + 2);
+    expect(r.proposal).not.toBeNull();
+    expect(r.proposal!.count).toBe(3);
+    expect(r.proposal!.examples.length).toBe(3);
+    expect(signalLabel(r.proposal!)).toContain("linkedin");
+  });
+
+  it("never proposes the same topic twice", () => {
+    let ledger: SignalLedger = EMPTY_LEDGER;
+    for (let i = 0; i < 3; i++) {
+      ledger = recordTurnSignal(ledger, "post LinkedIn nuovo", now + i).ledger;
+    }
+    const again = recordTurnSignal(ledger, "post LinkedIn ancora", now + 9);
+    expect(again.proposal).toBeNull();
+  });
+
+  it("keeps distinct topics in separate clusters", () => {
+    let ledger: SignalLedger = EMPTY_LEDGER;
+    ledger = recordTurnSignal(ledger, "post LinkedIn su Captoo", now).ledger;
+    ledger = recordTurnSignal(ledger, "analizza il pricing di Coverzen", now + 1).ledger;
+    expect(ledger.signals.length).toBe(2);
+  });
+
+  it("ignores anchor-less (too thin) requests", () => {
+    const r = recordTurnSignal(EMPTY_LEDGER, "fai la cosa", now);
+    expect(r.proposal).toBeNull();
+    expect(r.ledger.signals.length).toBe(0);
+  });
+
+  it("does not mutate the input ledger", () => {
+    const before: SignalLedger = { signals: [] };
+    recordTurnSignal(before, "post LinkedIn su Captoo", now);
+    expect(before.signals.length).toBe(0);
   });
 });
