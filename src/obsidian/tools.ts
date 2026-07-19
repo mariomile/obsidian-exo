@@ -3,6 +3,9 @@ import { z } from "zod";
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import type { SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { resolveLink, neighborhood, basename } from "./graph";
+import { gatherConnections, linkMentionsIn } from "../mentions/connections";
+import { loadIgnoreStore, ignoreMention } from "../mentions/ignore-store";
+import { fold } from "../mentions/tokenizer";
 import {
   formatEntry,
   parseStoreFile,
@@ -372,6 +375,30 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     }
   );
 
+  const getConnections = tool(
+    "get_connections",
+    "Get a note's full connection picture: backlinks (Linked), up/related frontmatter (Related), and PLAIN-TEXT unlinked mentions elsewhere in the vault that aren't wikilinked yet (Unlinked, with a context snippet each). Use it to review a note's place in the graph and to judge which unlinked mentions are real references worth linking — then act with link_mentions or dismiss with ignore_mention. Accepts a wikilink/path; omit target for the active note.",
+    { target: z.string().optional() },
+    async (args) => {
+      const file = args.target ? need(args.target) : app.workspace.getActiveFile();
+      if (!file) return ok("No active note.");
+      const ignore = await loadIgnoreStore(app);
+      const c = await gatherConnections(app, file, ignore);
+      const fmt = (xs: string[]) => (xs.length ? xs.map((p) => `  - [[${p}]]`).join("\n") : "  (none)");
+      const unlinked = c.unlinked.length
+        ? c.unlinked
+            .map((u) => `  - [[${u.sourcePath}]] · ${u.ranges.length}× — "${u.snippet}"`)
+            .join("\n")
+        : "  (none)";
+      return ok(
+        `Connections for [[${file.path}]]:\n` +
+          `Linked (backlinks):\n${fmt(c.linked)}\n` +
+          `Related (up/related):\n${fmt(c.related)}\n` +
+          `Unlinked mentions:\n${unlinked}`
+      );
+    }
+  );
+
   const listNotes = tool(
     "list_notes",
     "List notes filtered by tag (e.g. '#domain/product') and/or folder prefix. Returns paths.",
@@ -584,6 +611,32 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       const content = await app.vault.read(file);
       await app.vault.modify(file, patchFrontmatter(content, { related: [...cur] }));
       return ok(`Linked ${args.targets.length} note(s) from [[${file.path}]]`);
+    }
+  );
+
+  const linkMentions = tool(
+    "link_mentions",
+    "Turn plain-text mentions of `target` inside `source` into wikilinks — one link/undo-safe edit, every occurrence in that note. Use after get_connections when you've judged an unlinked mention a real reference. Surfaces that differ from the target name are piped (`[[Target|surface]]`) so the reading view is unchanged.",
+    { source: z.string(), target: z.string() },
+    async (args) => {
+      const source = need(args.source);
+      const target = need(args.target);
+      const n = await linkMentionsIn(app, source, target);
+      return n > 0
+        ? ok(`Linked ${n} mention(s) of [[${target.basename}]] in [[${source.path}]].`)
+        : ok(`No unlinked mentions of [[${target.basename}]] found in [[${source.path}]].`);
+    }
+  );
+
+  const ignoreMentionTool = tool(
+    "ignore_mention",
+    "Dismiss an unlinked mention: stop offering to link `target` inside `source`, permanently (persisted). Use when a plain-text match is a coincidence or a reference you deliberately won't wikilink. Scoped to that one note — the mention still surfaces elsewhere.",
+    { source: z.string(), target: z.string() },
+    async (args) => {
+      const source = need(args.source);
+      const target = need(args.target);
+      await ignoreMention(app, fold(target.basename), source.path, Date.now());
+      return ok(`Ignoring mentions of [[${target.basename}]] in [[${source.path}]].`);
     }
   );
 
@@ -1149,9 +1202,9 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
   );
 
   return [
-    searchVault, readNote, getBacklinks, getNeighborhood, listNotes, listTags, getActiveContext,
+    searchVault, readNote, getBacklinks, getNeighborhood, getConnections, listNotes, listTags, getActiveContext,
     listAnnotations, listSonarActions, askUser, listLoops,
-    createNote, appendToNote, updateFrontmatter, addLinks, openNote,
+    createNote, appendToNote, updateFrontmatter, addLinks, linkMentions, ignoreMentionTool, openNote,
     editNote, insertAtCursor, renameNote, resolveAnnotation, runSonarAction,
     listAutomations, savePlaybook, manageAutomation, reviewAutomationRun,
     ...(memoryRead ? [recall] : []),
@@ -1209,6 +1262,7 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__read_note",
   "mcp__obsidian__get_backlinks",
   "mcp__obsidian__get_neighborhood",
+  "mcp__obsidian__get_connections",
   "mcp__obsidian__list_notes",
   "mcp__obsidian__list_tags",
   "mcp__obsidian__get_active_context",
