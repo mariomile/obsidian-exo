@@ -23,6 +23,14 @@ import {
 import { WriteQueue } from "../core/write-queue";
 import { patchFrontmatter } from "../core/frontmatter-patch";
 import { createBacklogTask, adaptAppToTaskVault } from "./task-store";
+import {
+  cadenceLabel,
+  nextDueAt,
+  parseCadenceInput,
+  unreviewedWriteRuns,
+  type AutomationConfig,
+  type AutomationRunRecord,
+} from "../core/automations";
 
 /** Folder holding the append-only Memory Union Store (monthly markdown files). */
 const MEMORY_STORE_DIR = "_system/memory/store";
@@ -30,6 +38,39 @@ const MEMORY_STORE_DIR = "_system/memory/store";
 const OPEN_LOOPS_PATH = "_system/memory/open-loops.md";
 
 type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
+
+/** The slice of the exo plugin the automation tools use — resolved live from
+ *  app.plugins (same cross-plugin convention as getSonar; here it's our own
+ *  plugin, reached this way to avoid a tools→main import cycle). */
+interface ExoAutomationsHost {
+  settings: {
+    automations: AutomationConfig[];
+    customPrompts: { name: string; prompt: string }[];
+    scheduledLastRun: Record<string, number>;
+  };
+  saveSettings(): Promise<void>;
+  loadAutomationRuns(): Promise<AutomationRunRecord[]>;
+  restoreAutomationRun(id: string): Promise<string[]>;
+  markAutomationRunReviewed(id: string): Promise<void>;
+  runPlaybook(name: string, prompt: string, opts?: { write?: boolean }): Promise<boolean>;
+}
+
+function getExo(app: App): ExoAutomationsHost | null {
+  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
+  const p = plugins?.plugins?.["exo"] as Partial<ExoAutomationsHost> | undefined;
+  return p && typeof p.loadAutomationRuns === "function" && typeof p.runPlaybook === "function"
+    ? (p as ExoAutomationsHost)
+    : null;
+}
+
+/** "due now" / "in 3h" / "in 2d" — tool-output twin of the Cockpit's formatter. */
+function fmtDueIn(ms: number): string {
+  if (ms <= 60_000) return "due now";
+  const HOUR = 3_600_000;
+  if (ms < HOUR) return `in ${Math.floor(ms / 60_000)}m`;
+  if (ms < 24 * HOUR) return `in ${Math.floor(ms / HOUR)}h`;
+  return `in ${Math.floor(ms / (24 * HOUR))}d`;
+}
 const ok = (text: string): Result => ({ content: [{ type: "text", text }] });
 const err = (text: string): Result => ({ content: [{ type: "text", text }], isError: true });
 
@@ -963,11 +1004,156 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     }
   );
 
+  /* ------------------------- automations (exo) ------------------------- */
+  // Chat-side management of scheduled playbook runs — the same operations as
+  // the Automations panel, so "metti in pausa il digest" works as a sentence.
+  // All four resolve the live exo plugin instance at call time (never cached).
+
+  const listAutomations = tool(
+    "list_automations",
+    "List Exo's automations (scheduled playbook runs): cadence, on/paused, read-only vs write mode, last/next run — plus available playbooks and recent write runs with their review state and run ids. Use it before managing automations or when Mario asks what runs automatically.",
+    {},
+    async () => {
+      const exo = getExo(app);
+      if (!exo) return ok("Exo plugin not reachable.");
+      const s = exo.settings;
+      const now = Date.now();
+      const lines: string[] = [];
+      if (!s.automations.length) lines.push("No automations configured.");
+      for (const a of s.automations) {
+        const last = s.scheduledLastRun[a.name] ?? 0;
+        const next = a.enabled ? ` · next ${fmtDueIn(nextDueAt(a.cadence, last, now) - now)}` : "";
+        lines.push(
+          `- ${a.name} — ${cadenceLabel(a.cadence)} · ${a.enabled ? "on" : "paused"} · ${a.write ? "writes (checkpointed, restorable)" : "read-only"}${next}`
+        );
+      }
+      lines.push("", `Playbooks: ${s.customPrompts.map((p) => p.name).join(", ") || "(none)"}`);
+      const runs = await exo.loadAutomationRuns();
+      if (runs.length) {
+        lines.push("", "Recent write runs:");
+        for (const r of runs.slice(0, 6)) {
+          const state = r.restoredAt ? "restored" : r.reviewedAt ? "reviewed" : "TO REVIEW";
+          lines.push(`- [${r.id}] ${r.name} · ${new Date(r.startedAt).toLocaleString()} · ${r.writes.length} notes · ${state}`);
+        }
+      }
+      return ok(lines.join("\n"));
+    }
+  );
+
+  const savePlaybook = tool(
+    "save_playbook",
+    "Create or update a reusable playbook (a named prompt in Exo's settings — what automations and the / menu run). Show Mario the exact name and prompt you're saving BEFORE calling this. Set overwrite to update an existing playbook.",
+    { name: z.string(), prompt: z.string(), overwrite: z.boolean().optional() },
+    async (args) => {
+      const exo = getExo(app);
+      if (!exo) return ok("Exo plugin not reachable.");
+      const s = exo.settings;
+      const existing = s.customPrompts.find((p) => p.name.toLowerCase() === args.name.toLowerCase());
+      if (existing && !args.overwrite) {
+        return ok(`Playbook "${existing.name}" already exists — pass overwrite: true to replace it.`);
+      }
+      if (existing) existing.prompt = args.prompt;
+      else s.customPrompts.push({ name: args.name, prompt: args.prompt });
+      await exo.saveSettings();
+      return ok(`${existing ? "Updated" : "Saved"} playbook "${args.name}".`);
+    }
+  );
+
+  const manageAutomation = tool(
+    "manage_automation",
+    "Create, update, pause, resume, delete, or run an Exo automation. `name` is the playbook name (must exist for create — see list_automations). Cadence: kind hourly|daily|weekly, hour 0–23, day 0–6 or a day name. `write: true` lets scheduled runs edit vault notes (checkpointed + restorable) — confirm with Mario before enabling it. run_now executes the playbook immediately (may take minutes) and reports to _system/reports/.",
+    {
+      action: z.enum(["create", "update", "pause", "resume", "delete", "run_now"]),
+      name: z.string(),
+      cadence_kind: z.enum(["hourly", "daily", "weekly"]).optional(),
+      hour: z.number().optional(),
+      day: z.union([z.number(), z.string()]).optional(),
+      write: z.boolean().optional(),
+    },
+    async (args) => {
+      const exo = getExo(app);
+      if (!exo) return ok("Exo plugin not reachable.");
+      const s = exo.settings;
+      const auto = s.automations.find((a) => a.name.toLowerCase() === args.name.toLowerCase());
+      const playbook = s.customPrompts.find((p) => p.name.toLowerCase() === args.name.toLowerCase());
+
+      if (args.action === "run_now") {
+        if (!playbook) return ok(`No playbook named "${args.name}" — see list_automations.`);
+        const write = args.write ?? auto?.write ?? false;
+        const okRun = await exo.runPlaybook(playbook.name, playbook.prompt, { write });
+        if (okRun) {
+          s.scheduledLastRun[playbook.name] = Date.now();
+          await exo.saveSettings();
+        }
+        return ok(okRun ? "Run completed — report in _system/reports/." : "Run failed — see the report in _system/reports/.");
+      }
+      if (args.action === "create") {
+        if (!playbook) return ok(`No playbook named "${args.name}" — create it first with save_playbook.`);
+        if (auto) return ok(`Automation "${auto.name}" already exists — use update.`);
+        const cadence = parseCadenceInput(args.cadence_kind ?? "daily", args.hour, args.day);
+        if (!cadence) return ok("Invalid cadence — hour must be 0–23, day 0–6 or a day name.");
+        s.automations.push({ name: playbook.name, cadence, enabled: true, write: args.write ?? false });
+        // First fire at the next slot, not this instant.
+        s.scheduledLastRun[playbook.name] = Date.now();
+        await exo.saveSettings();
+        return ok(`Automation created: ${playbook.name} — ${cadenceLabel(cadence)}, ${args.write ? "writes" : "read-only"}.`);
+      }
+      if (!auto) return ok(`No automation named "${args.name}" — see list_automations.`);
+      if (args.action === "delete") {
+        s.automations.splice(s.automations.indexOf(auto), 1);
+        await exo.saveSettings();
+        return ok(`Automation "${auto.name}" deleted (the playbook itself is untouched).`);
+      }
+      if (args.action === "pause" || args.action === "resume") {
+        auto.enabled = args.action === "resume";
+        await exo.saveSettings();
+        return ok(`Automation "${auto.name}" ${auto.enabled ? "resumed" : "paused"}.`);
+      }
+      // update
+      if (args.cadence_kind || args.hour !== undefined || args.day !== undefined) {
+        const cadence = parseCadenceInput(
+          args.cadence_kind ?? auto.cadence.kind,
+          args.hour ?? (auto.cadence.kind !== "hourly" ? auto.cadence.hour : undefined),
+          args.day ?? (auto.cadence.kind === "weekly" ? auto.cadence.day : undefined)
+        );
+        if (!cadence) return ok("Invalid cadence — hour must be 0–23, day 0–6 or a day name.");
+        auto.cadence = cadence;
+      }
+      if (args.write !== undefined) auto.write = args.write;
+      await exo.saveSettings();
+      return ok(`Automation updated: ${auto.name} — ${cadenceLabel(auto.cadence)}, ${auto.enabled ? "on" : "paused"}, ${auto.write ? "writes" : "read-only"}.`);
+    }
+  );
+
+  const reviewAutomationRun = tool(
+    "review_automation_run",
+    "Close out an automation write run: action 'reviewed' marks it OK; action 'restore' reverts EVERY note the run touched to its pre-run snapshot — destructive to the run's edits, confirm with Mario first. `id` comes from list_automations; omit it to target the most recent unreviewed run.",
+    { action: z.enum(["reviewed", "restore"]), id: z.string().optional() },
+    async (args) => {
+      const exo = getExo(app);
+      if (!exo) return ok("Exo plugin not reachable.");
+      const runs = await exo.loadAutomationRuns();
+      const target = args.id ? runs.find((r) => r.id === args.id) : unreviewedWriteRuns(runs)[0];
+      if (!target) return ok(args.id ? `No run with id "${args.id}".` : "No unreviewed write runs.");
+      if (args.action === "reviewed") {
+        await exo.markAutomationRunReviewed(target.id);
+        return ok(`Run "${target.name}" (${target.id}) marked as reviewed.`);
+      }
+      const restored = await exo.restoreAutomationRun(target.id);
+      return ok(
+        restored.length
+          ? `Restored ${restored.length} note(s) from "${target.name}": ${restored.join(", ")}`
+          : `Nothing restorable in "${target.name}" (missing snapshots).`
+      );
+    }
+  );
+
   return [
     searchVault, readNote, getBacklinks, getNeighborhood, listNotes, listTags, getActiveContext,
     listAnnotations, listSonarActions, askUser, listLoops,
     createNote, appendToNote, updateFrontmatter, addLinks, openNote,
     editNote, insertAtCursor, renameNote, resolveAnnotation, runSonarAction,
+    listAutomations, savePlaybook, manageAutomation, reviewAutomationRun,
     ...(memoryRead ? [recall] : []),
     ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
     // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
@@ -1030,6 +1216,7 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__list_sonar_actions",
   "mcp__obsidian__recall",
   "mcp__obsidian__list_loops",
+  "mcp__obsidian__list_automations",
 ]);
 
 /** Memory-write tool names (gated separately by the memoryWrite setting). */

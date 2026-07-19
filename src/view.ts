@@ -4937,21 +4937,25 @@ export class ChatView extends ItemView {
       btn.onclick = () => this.openSettings();
       actionHost = card;
     } else {
-      // Friendly, actionable copy for known engine failures (crash mid-turn, exit,
-      // missing binary, auth). The raw text stays as a muted secondary line + tooltip
-      // so debugging is never lost. Unknown errors fall through to the raw message.
+      // Keep failures visible without turning them into a dominant red card. The
+      // compact row carries the human-readable state + retry; raw diagnostics stay
+      // available behind a disclosure for the rare case they are needed.
       const friendly = describeCliFailure(message);
       const box = body.createDiv({ cls: "mva-inline-error" });
-      box.createDiv({ cls: "mva-error-title", text: "Response interrupted" });
-      if (friendly) {
-        box.createDiv({ text: friendly.message });
-        if (friendly.hint) box.createDiv({ cls: "mva-faint", text: friendly.hint });
-        const rawShort = message.length > 200 ? `${message.slice(0, 200)}…` : message;
-        box.createDiv({ cls: "mva-faint", text: rawShort }).setAttribute("title", message);
-      } else {
-        box.createDiv({ text: message });
-      }
-      actionHost = box;
+      const row = box.createDiv({ cls: "mva-error-row" });
+      setIcon(row.createSpan({ cls: "mva-error-icon" }), "triangle-alert");
+      const copy = row.createDiv({ cls: "mva-error-copy" });
+      copy.createDiv({ cls: "mva-error-title", text: "Response interrupted" });
+      copy.createDiv({
+        cls: "mva-error-summary",
+        text: friendly?.message ?? (message.length > 120 ? `${message.slice(0, 120)}…` : message),
+      });
+      actionHost = row;
+
+      const detailText = [friendly?.hint, message].filter(Boolean).join("\n\n");
+      const details = box.createEl("details", { cls: "mva-error-details" });
+      details.createEl("summary", { text: "Details" });
+      details.createDiv({ text: detailText });
     }
 
     if (!retryText) return;
@@ -4990,11 +4994,43 @@ export class ChatView extends ItemView {
     if (!turnQualifies(stats)) return;
     c.playbookNudged = true;
     const card = ctx.el.createDiv({ cls: "mva-ll" });
-    setIcon(card.createSpan({ cls: "mva-ll-icon" }), "sparkles");
-    card.createSpan({ cls: "mva-ll-label", text: "Flusso riusabile — salvarlo come playbook?" });
-    const save = card.createSpan({ cls: "mva-ll-btn", text: "Salva" });
-    const dismiss = card.createSpan({ cls: "mva-ll-x", attr: { "aria-label": "Dismiss" } });
+    const head = card.createDiv({ cls: "mva-ll-head" });
+    setIcon(head.createSpan({ cls: "mva-ll-icon" }), "sparkles");
+    const label = head.createSpan({ cls: "mva-ll-label", text: "Flusso riusabile — salvarlo come playbook?" });
+    const chev = head.createSpan({ cls: "mva-ll-chev", attr: { "aria-label": "Cosa catturerebbe" } });
+    setIcon(chev, "chevron-down");
+    const save = head.createSpan({ cls: "mva-ll-btn", text: "Salva" });
+    const dismiss = head.createSpan({ cls: "mva-ll-x", attr: { "aria-label": "Dismiss" } });
     setIcon(dismiss, "x");
+    // "Devo poter vedere che playbook vuole creare" (2026-07-19): label/chevron
+    // expand a free preview of the captured flow — the request plus the tool
+    // steps that would seed the distillation. The distilled name + prompt still
+    // get their own review card before anything is saved.
+    let previewEl: HTMLElement | null = null;
+    const togglePreview = () => {
+      if (previewEl) {
+        previewEl.remove();
+        previewEl = null;
+        setIcon(chev, "chevron-down");
+        return;
+      }
+      setIcon(chev, "chevron-up");
+      previewEl = card.createDiv({ cls: "mva-ll-preview" });
+      const req = ctx.userText.trim().replace(/\s+/g, " ");
+      const steps = ctx.segments
+        .filter((s): s is Extract<Segment, { t: "tool" }> => s.t === "tool")
+        .slice(0, 12)
+        .map((t) => {
+          const m = toolMeta(t.name, t.input);
+          return `• ${m.label}${m.target ? `: ${m.target}` : ""}`;
+        });
+      previewEl.setText(
+        `Catturerebbe questo flusso:\n«${req.slice(0, 220)}${req.length > 220 ? "…" : ""}»\n\n${steps.join("\n")}` +
+          `\n\nSalva → il playbook viene distillato e ti mostro nome e testo per conferma prima di salvarlo.`
+      );
+    };
+    this.clickable(label, togglePreview);
+    this.clickable(chev, togglePreview);
     this.clickable(save, () => void this.distillPlaybook(ctx, card));
     this.clickable(dismiss, () => card.remove());
   }
