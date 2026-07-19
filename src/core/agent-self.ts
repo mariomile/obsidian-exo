@@ -193,7 +193,7 @@ const SEED_CLOSE = (name: BlockName): string => `<<<end-${name}>>>`;
 
 /** The raw source material the seeder distills the three blocks FROM. */
 export interface SeedSources {
-  /** `_system/memory/mario-mental-model.md`. */
+  /** `_system/memory/mental-model.md`. */
   mentalModel: string;
   /** `_system/memory/preferences/preferences.md`. */
   preferences: string;

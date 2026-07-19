@@ -1074,7 +1074,7 @@ export default class ExoPlugin extends Plugin {
     };
 
     const sources = {
-      mentalModel: await readSource("_system/memory/mario-mental-model.md"),
+      mentalModel: await readSource("_system/memory/mental-model.md"),
       preferences: await readSource("_system/memory/preferences/preferences.md"),
       vaultContext: await readSource("_system/vault-context.md"),
     };
