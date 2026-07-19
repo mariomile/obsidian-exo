@@ -55,6 +55,7 @@ import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement } from "./core/steps";
 import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
+import { isVaultSetUp } from "./core/vault-setup";
 import { buildRelatedChips } from "./ui/related";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
@@ -1783,6 +1784,10 @@ export class ChatView extends ItemView {
       featureSurfacing: this.plugin.settings.featureSurfacing,
       usePrompt: (t) => this.composer.usePrompt(t),
       attachRelated: (p) => this.attachRelated(p),
+      vaultSetupNeeded:
+        this.plugin.settings.memoryWriteEnabled &&
+        !isVaultSetUp((p) => !!this.app.vault.getAbstractFileByPath(p)),
+      runVaultSetup: () => void this.plugin.runVaultSetup(),
     });
   }
 
