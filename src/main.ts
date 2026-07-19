@@ -42,6 +42,7 @@ import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle } from "./core/title";
 import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
 import { inlineAiExtension } from "./editor/inline-ai";
+import { mentionsExtension } from "./mentions/editor";
 import { selectionObserverExtension } from "./editor/selection-observer";
 import { WriteQueue } from "./core/write-queue";
 import { startCodexBridge, type CodexBridge } from "./obsidian/codex-bridge";
@@ -260,7 +261,30 @@ export default class ExoPlugin extends Plugin {
     // behind `showSelectionChip`, so toggling it off makes it inert.
     this.registerEditorExtension(selectionObserverExtension(this));
 
+    // In-document Connections: underline outgoing unlinked mentions + a
+    // bottom suggested-links block. Registered once; both surfaces are gated
+    // live behind settings (default off) so the extension is inert until
+    // enabled — no reload needed to toggle.
+    this.registerEditorExtension(mentionsExtension(this));
+
     this.addRibbonIcon(EXO_ICON, "Open Exo", () => this.activateView());
+
+    this.addCommand({
+      id: "review-connections",
+      name: "Review connections of the active note",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        if (!checking) {
+          void this.askExo(
+            `Review the connections of [[${file.path}]]: call get_connections, judge which unlinked mentions are real references (vs coincidental strings), and propose which to link with link_mentions or dismiss with ignore_mention. Show me your reasoning before acting.`,
+            true,
+            { source: "review-connections" },
+          );
+        }
+        return true;
+      },
+    });
 
     this.addCommand({
       id: "open-chat",

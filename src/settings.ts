@@ -103,6 +103,13 @@ export interface MVASettings {
   inlineAi: boolean;
   /** Show the current editor selection as a click-to-attach chip in the composer. */
   showSelectionChip: boolean;
+  /** In-document Connections: underline OUTGOING unlinked mentions (other notes'
+   *  titles this note cites in plain text) so they can be linked with one click. */
+  connectionsInlineUnderline: boolean;
+  /** In-document Connections: a suggested-links block at the bottom of the note. */
+  connectionsBlockEnabled: boolean;
+  /** Broaden mention matching with light IT/EN stemming (plurals/inflections). */
+  connectionsStemming: boolean;
   // Tab bar runtime state (not user-facing settings).
   openTabIds: string[];
   /** Last session capability snapshot (runtime state, not user-facing) — persisted
@@ -262,6 +269,9 @@ export const DEFAULT_SETTINGS: MVASettings = {
   vaultAutoCommitIntervalMinutes: 15,
   orchestrationEnabled: false,
   orchestrationMaxConcurrent: 2,
+  connectionsInlineUnderline: false,
+  connectionsBlockEnabled: false,
+  connectionsStemming: false,
 };
 
 /** Options for the "Background AI model" dropdown — Sonnet-class only.
@@ -486,6 +496,24 @@ export class MVASettingTab extends PluginSettingTab {
       "Show selection in composer",
       "When you select text in a note, show it as a chip in the chat composer — click it to add the excerpt as context.",
       "showSelectionChip"
+    );
+    this.toggleSetting(
+      el,
+      "Underline unlinked mentions",
+      "In a note's body, underline plain-text mentions of other notes' titles that aren't wikilinked yet — click one to link it (or ignore it for good). Ships off.",
+      "connectionsInlineUnderline"
+    );
+    this.toggleSetting(
+      el,
+      "Connections block",
+      "Show a block at the bottom of each note listing its suggested outgoing links, with one-click Link / Link all. Ships off.",
+      "connectionsBlockEnabled"
+    );
+    this.toggleSetting(
+      el,
+      "Broaden mention matching",
+      "Also match singular/plural and simple inflections (Italian/English) when detecting mentions. More matches, slightly less precise.",
+      "connectionsStemming"
     );
     this.toggleSetting(
       el,
