@@ -123,6 +123,9 @@ export default class ExoPlugin extends Plugin {
 
   /** One-time guard for the codex-bridge node preflight Notice. */
   private nodeWarned = false;
+  /** Deferred boot maintenance must never outlive a hot unload/reload. */
+  private startupMaintenanceTimer: number | null = null;
+  private unloaded = false;
 
   /** Latest Claude-plan quota snapshot (pushed by the chat view) — the Cockpit
    *  renders it in the System tile. Null for API-key sessions. */
@@ -145,6 +148,9 @@ export default class ExoPlugin extends Plugin {
    *  rapid UI updates may call saveConversations concurrently; sharing the same
    *  .tmp path without a queue can regress or temporarily remove the main file. */
   private readonly conversationWriteQueue = new WriteQueue();
+  /** Settings share one JSON file; serialize snapshots so background update
+   *  checks and interactive settings changes cannot race saveData(). */
+  private readonly settingsWriteQueue = new WriteQueue();
   private readonly dreamSnapshotWriteQueue = new WriteQueue();
   /**
    * THE ONE shared write path for every append to the Orchestration Board
@@ -205,6 +211,7 @@ export default class ExoPlugin extends Plugin {
   private static readonly AUTO_COMMIT_CHECK_INTERVAL_MS = 20 * 1000;
 
   async onload(): Promise<void> {
+    this.unloaded = false;
     // Electron-renderer interop, BEFORE anything can spawn a session: the Agent
     // SDK hands its (DOM-realm) AbortSignals to Node's events.setMaxListeners,
     // which throws ERR_INVALID_ARG_TYPE in Obsidian's renderer and kills every
@@ -284,11 +291,6 @@ export default class ExoPlugin extends Plugin {
       callback: () => void this.runCliUpdate(),
     });
 
-    // CLI drift gate: Exo depends on per-version CLI behaviors (interrupt
-    // classification, init caps, result.usage). Outside the verified range,
-    // say so ONCE per version — drift becomes a signal, not a mystery bug.
-    void this.checkCliVerified();
-
     const withView = (fn: (v: ChatView) => void) => () => {
       const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
       if (view instanceof ChatView) fn(view);
@@ -354,9 +356,11 @@ export default class ExoPlugin extends Plugin {
     });
     this.addRibbonIcon(COCKPIT_ICON, "Open Exo Cockpit", () => void this.openCockpit());
     this.app.workspace.onLayoutReady(() => {
+      if (this.unloaded) return;
       if (this.settings.cockpitOnStartup && this.app.workspace.getLeavesOfType(COCKPIT_VIEW_TYPE).length === 0) {
         void this.openCockpit();
       }
+      this.scheduleStartupMaintenance();
     });
 
     this.addCommand({
@@ -455,9 +459,19 @@ export default class ExoPlugin extends Plugin {
 
     this.addSettingTab(new MVASettingTab(this.app, this));
 
-    // Daily, non-blocking Claude-CLI update check (failures silent) — then, if a
-    // newer CLI was published, offer a one-click update right from a notice.
-    void this.maybeCheckCliUpdate().then(() => this.maybeOfferCliUpdate());
+  }
+
+  /** Keep process spawning and the registry request off Obsidian's critical
+   *  startup path. The work remains best-effort and runs once after layout is
+   *  ready; the timer is cancelled on hot unload. */
+  private scheduleStartupMaintenance(): void {
+    if (this.startupMaintenanceTimer !== null || this.unloaded) return;
+    this.startupMaintenanceTimer = window.setTimeout(() => {
+      this.startupMaintenanceTimer = null;
+      if (this.unloaded) return;
+      void this.checkCliVerified();
+      void this.maybeCheckCliUpdate().then(() => this.maybeOfferCliUpdate());
+    }, 2_000);
   }
 
   /** One-click Claude-CLI update, shared by the command and the boot notice.
@@ -1239,7 +1253,8 @@ export default class ExoPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
+    const snapshot = JSON.parse(JSON.stringify(this.settings)) as MVASettings;
+    await this.settingsWriteQueue.enqueue(() => this.saveData(snapshot));
     // React to an orchestration-flag toggle: add/remove the ribbon and tear the
     // board down on hot-disable (safe — no markdown touched, chats survive).
     this.applyOrchestrationToggle();
@@ -1647,6 +1662,11 @@ export default class ExoPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.unloaded = true;
+    if (this.startupMaintenanceTimer !== null) {
+      window.clearTimeout(this.startupMaintenanceTimer);
+      this.startupMaintenanceTimer = null;
+    }
     this.codexBridge?.stop();
   }
 
