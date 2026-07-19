@@ -29,7 +29,7 @@ import {
   parseSeedBlocks,
   manifestContent,
 } from "./core/agent-self";
-import { SCAFFOLD_ITEMS } from "./core/vault-setup";
+import { SCAFFOLD_ITEMS, parentFolder } from "./core/vault-setup";
 import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidian/claudemem";
 import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
@@ -1142,6 +1142,7 @@ export default class ExoPlugin extends Plugin {
   async runVaultSetup(): Promise<void> {
     let written = 0;
     let skipped = 0;
+    let failed = 0;
     const writtenPaths: string[] = [];
     for (const item of SCAFFOLD_ITEMS) {
       const existed = !!this.app.vault.getAbstractFileByPath(item.path);
@@ -1149,17 +1150,24 @@ export default class ExoPlugin extends Plugin {
         skipped++;
         continue;
       }
-      if (item.kind === "folder") {
-        await this.ensureFolder(item.path);
-      } else {
-        await this.app.vault.create(item.path, item.content ?? "");
+      try {
+        if (item.kind === "folder") {
+          await this.ensureFolder(item.path);
+        } else {
+          const parent = parentFolder(item.path);
+          if (parent) await this.ensureFolder(parent);
+          await this.app.vault.create(item.path, item.content ?? "");
+        }
+        written++;
+        writtenPaths.push(item.path);
+      } catch (err) {
+        failed++;
+        console.error(`[Exo] vault setup failed to create ${item.path}:`, err);
       }
-      written++;
-      writtenPaths.push(item.path);
     }
     if (writtenPaths.length > 0) this.noteVaultWrite(writtenPaths);
     new Notice(
-      `Exo vault memory set up — created ${written} item(s)${skipped ? `, kept ${skipped} existing` : ""}.`
+      `Exo vault memory set up — created ${written} item(s)${skipped ? `, kept ${skipped} existing` : ""}${failed ? `, ${failed} failed (see console)` : ""}.`
     );
   }
 

@@ -73,6 +73,17 @@ export const SCAFFOLD_ITEMS: readonly ScaffoldItem[] = [
   },
 ] as const;
 
+/** The parent directory of a scaffold path, or null if the path has no
+ *  slash (top-level). Every `kind: "file"` item in `SCAFFOLD_ITEMS` is
+ *  nested, so this always resolves for them — `runVaultSetup` uses it to
+ *  ensure the parent folder exists before creating the file, since
+ *  `vault.create()` (unlike `vault.createFolder()`) does not create
+ *  intermediate directories. */
+export function parentFolder(path: string): string | null {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? null : path.slice(0, i);
+}
+
 /** True when the vault already has Exo's memory layer set up. `exists` is
  *  injected so this stays pure and testable without an Obsidian App. */
 export function isVaultSetUp(exists: (path: string) => boolean): boolean {
