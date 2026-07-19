@@ -1729,33 +1729,63 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   gap: 8px;
 }
 .mva-inline-error {
-  padding: 10px 12px;
-  color: var(--text-normal);
-  font-size: 13px;
-  border: 1px solid color-mix(in srgb, var(--text-error) 35%, var(--background-modifier-border));
-  border-radius: var(--mva-card-radius);
-  background: color-mix(in srgb, var(--text-error) 6%, var(--background-primary));
+  padding: 6px 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r1);
+  background: var(--background-secondary-alt);
+}
+.mva-error-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.mva-error-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text-error) 65%, var(--text-muted));
+}
+.mva-error-icon .svg-icon {
+  width: 13px;
+  height: 13px;
+}
+.mva-error-copy {
+  min-width: 0;
+  flex: 1;
 }
 .mva-error-title {
-  margin-bottom: 4px;
-  color: var(--text-error);
-  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: var(--font-medium);
+  line-height: 1.35;
+}
+.mva-error-summary {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mva-error-retry {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 5px;
-  margin-top: 10px;
-  padding: 5px 9px;
-  color: var(--text-normal);
-  font-size: 12px;
-  background: var(--interactive-normal);
-  border: 1px solid var(--background-modifier-border);
+  gap: 4px;
+  margin: 0;
+  padding: 3px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  background: transparent;
+  border: none;
   border-radius: var(--mva-r1);
   box-shadow: none;
   cursor: pointer;
 }
 .mva-error-retry:hover {
+  color: var(--text-normal);
   background: var(--interactive-hover);
 }
 .mva-error-retry:disabled {
@@ -1763,8 +1793,24 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   cursor: default;
 }
 .mva-error-retry .svg-icon {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
+}
+.mva-error-details {
+  margin: 4px 0 0 20px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.mva-error-details summary {
+  width: max-content;
+  cursor: pointer;
+}
+.mva-error-details > div {
+  max-height: 96px;
+  margin-top: 4px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ------------------------------ tool card ----------------------------- */
@@ -4514,7 +4560,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-ll-x { cursor: pointer; display: inline-flex; color: var(--text-faint); }
 .mva-ll-x:hover { color: var(--text-muted); }
 .mva-ll-x svg { width: 12px; height: 12px; }
-.mva-ll.is-review { flex-direction: column; align-items: stretch; gap: 6px; }
+.mva-ll.is-review,
+.mva-ll:has(.mva-ll-head) { flex-direction: column; align-items: stretch; gap: 6px; }
+.mva-ll-chev { cursor: pointer; display: inline-flex; color: var(--text-faint); }
+.mva-ll-chev:hover { color: var(--text-muted); }
+.mva-ll-chev svg { width: 13px; height: 13px; }
+.mva-ll-head .mva-ll-label { cursor: pointer; }
 .mva-ll-head { display: flex; align-items: center; gap: 8px; }
 .mva-ll-preview { white-space: pre-wrap; color: var(--text-faint); background: var(--background-secondary);
   border-radius: var(--radius-s); padding: 6px 8px; max-height: 140px; overflow-y: auto; }

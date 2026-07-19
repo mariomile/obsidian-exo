@@ -8,6 +8,7 @@ import {
   migrateScheduledRuns,
   pruneRuns,
   unreviewedWriteRuns,
+  parseCadenceInput,
   type AutomationConfig,
   type AutomationRunRecord,
 } from "../src/core/automations";
@@ -132,5 +133,24 @@ describe("unreviewedWriteRuns", () => {
       rec("restored", { restoredAt: 5 }),
     ]);
     expect(pool.map((r) => r.id)).toEqual(["live"]);
+  });
+});
+
+describe("parseCadenceInput", () => {
+  it("parses the three kinds with defaults", () => {
+    expect(parseCadenceInput("hourly")).toEqual({ kind: "hourly" });
+    expect(parseCadenceInput("daily")).toEqual({ kind: "daily", hour: 7 });
+    expect(parseCadenceInput("weekly")).toEqual({ kind: "weekly", day: 1, hour: 7 });
+  });
+  it("accepts day names in English and Italian, case-insensitive", () => {
+    expect(parseCadenceInput("weekly", 18, "Friday")).toEqual({ kind: "weekly", day: 5, hour: 18 });
+    expect(parseCadenceInput("weekly", 9, "lunedì")).toEqual({ kind: "weekly", day: 1, hour: 9 });
+    expect(parseCadenceInput("weekly", 9, "mer")).toEqual({ kind: "weekly", day: 3, hour: 9 });
+  });
+  it("rejects invalid kind, hour, day", () => {
+    expect(parseCadenceInput("monthly")).toBeNull();
+    expect(parseCadenceInput("daily", 24)).toBeNull();
+    expect(parseCadenceInput("weekly", 9, 7)).toBeNull();
+    expect(parseCadenceInput("weekly", 9, "boh")).toBeNull();
   });
 });

@@ -47,6 +47,35 @@ export function unreviewedWriteRuns(records: AutomationRunRecord[]): AutomationR
   return records.filter((r) => r.writes.length > 0 && !r.reviewedAt && !r.restoredAt);
 }
 
+/** Validate loose cadence input (agent tools) into a Cadence. Day accepts 0–6
+ *  or an English/Italian day name; hour defaults to 07. Null = invalid. */
+export function parseCadenceInput(kind: string, hour?: number, day?: number | string): Cadence | null {
+  const h = hour === undefined ? 7 : Math.trunc(hour);
+  if (h < 0 || h > 23) return null;
+  if (kind === "hourly") return { kind: "hourly" };
+  if (kind === "daily") return { kind: "daily", hour: h };
+  if (kind !== "weekly") return null;
+  let d: number;
+  if (typeof day === "string") {
+    const names: Record<string, number> = {
+      sun: 0, sunday: 0, dom: 0, domenica: 0,
+      mon: 1, monday: 1, lun: 1, lunedi: 1, lunedì: 1,
+      tue: 2, tuesday: 2, mar: 2, martedi: 2, martedì: 2,
+      wed: 3, wednesday: 3, mer: 3, mercoledi: 3, mercoledì: 3,
+      thu: 4, thursday: 4, gio: 4, giovedi: 4, giovedì: 4,
+      fri: 5, friday: 5, ven: 5, venerdi: 5, venerdì: 5,
+      sat: 6, saturday: 6, sab: 6, sabato: 6,
+    };
+    const hit = names[day.trim().toLowerCase()];
+    if (hit === undefined) return null;
+    d = hit;
+  } else {
+    d = day === undefined ? 1 : Math.trunc(day);
+  }
+  if (d < 0 || d > 6) return null;
+  return { kind: "weekly", day: d, hour: h };
+}
+
 /* ------------------------------ due logic ------------------------------ */
 
 /** Start (epoch ms, local time) of the cadence slot containing `now`. */
