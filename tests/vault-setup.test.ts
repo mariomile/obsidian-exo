@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SCAFFOLD_ITEMS, isVaultSetUp, VAULT_CONTEXT_PATH } from "../src/core/vault-setup";
+import { SCAFFOLD_ITEMS, isVaultSetUp, VAULT_CONTEXT_PATH, parentFolder } from "../src/core/vault-setup";
 
 describe("SCAFFOLD_ITEMS", () => {
   it("every path lives under _system/", () => {
@@ -45,5 +45,25 @@ describe("isVaultSetUp", () => {
 
   it("only checks the sentinel path, ignoring others", () => {
     expect(isVaultSetUp((path) => path === "_system/some-other-file.md")).toBe(false);
+  });
+});
+
+describe("parentFolder", () => {
+  it("returns the parent directory for a nested path", () => {
+    expect(parentFolder("_system/memory/preferences/preferences.md")).toBe("_system/memory/preferences");
+  });
+
+  it("returns null for a top-level path with no slash", () => {
+    expect(parentFolder("vault-context.md")).toBeNull();
+  });
+});
+
+describe("SCAFFOLD_ITEMS parent coverage", () => {
+  it("every file item resolves to a non-null parent folder (guards the ENOENT-on-fresh-vault regression)", () => {
+    for (const item of SCAFFOLD_ITEMS) {
+      if (item.kind === "file") {
+        expect(parentFolder(item.path)).not.toBeNull();
+      }
+    }
   });
 });
