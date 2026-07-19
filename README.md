@@ -81,6 +81,15 @@ In short: Exo is a thin, local UI over CLIs you already trust and are already si
 
 **Manual:** download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/mariomile/obsidian-exo/releases/latest) into `<vault>/.obsidian/plugins/exo/`, then enable it.
 
+## Vault memory setup
+
+Exo's Obsidian-native features (vault memory, the cockpit, open loops, the task board) read and write a fixed set of files under `_system/` in your vault. On a fresh vault none of that exists yet — Exo sets it up for you:
+
+- **Automatic** — the first time you open a new chat in a vault without `_system/vault-context.md`, a card offers to set it up. One click creates every file Exo needs; it never touches anything that already exists.
+- **Manual** — run **Exo: Set up vault memory** from the command palette any time (idempotent — safe to re-run, fills in only what's missing).
+
+This only creates Exo's own `_system/` files — it doesn't require or impose any particular note-organization scheme (folders like `Active/`, `Atlas/`, etc. are entirely up to you).
+
 ## Develop
 
 ```bash
