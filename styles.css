@@ -2632,7 +2632,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 14px;
   height: 14px;
 }
-.mva-gallery-search {
+/* Scope the input rule under the wrap so its left padding beats Obsidian's own
+   `input[type="text"]` rule (0,1,1) — otherwise the padding collapses and the
+   search icon overlaps the placeholder text. */
+.mva-gallery-search-wrap .mva-gallery-search {
   display: block;
   width: 100%;
   height: 34px;
@@ -2686,6 +2689,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-modifier-hover);
   transform: translateY(-2px);
 }
+/* Open-in-a-tab conversations get a muted accent border; the focused one gets
+   the full brand border on top of it. */
+.mva-card.is-open {
+  border-color: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 40%, var(--background-modifier-border));
+}
 .mva-card.is-active {
   border-color: var(--mva-brand, var(--interactive-accent));
 }
@@ -2697,12 +2705,32 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-bottom: 1px solid var(--background-modifier-border);
 }
 .mva-card-title {
+  flex: 1;
+  min-width: 0;
   font-weight: 650;
   font-size: 13.5px;
   color: var(--text-normal);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* "Open" / "Active" state pill in the card head, mirroring the tab strip. */
+.mva-card-open-badge {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 35%, transparent);
+  border-radius: var(--mva-r1, 6px);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--text-muted);
+}
+.mva-card-open-badge.is-active {
+  border-color: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 55%, transparent);
+  color: var(--mva-brand, var(--interactive-accent));
 }
 .mva-card-preview {
   flex: 1;
