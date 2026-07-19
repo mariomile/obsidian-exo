@@ -128,16 +128,24 @@ function loginShellExec(cmd: string, timeoutMs = 6000): Promise<string> {
       const shell = process.env.SHELL || "/bin/zsh";
       const c = spawn(shell, ["-ilc", cmd], { env: process.env });
       let out = "";
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (value: string): void => {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) clearTimeout(timer);
+        resolve(value);
+      };
       c.stdout.on("data", (d: Buffer | string) => (out += d.toString()));
-      c.on("error", () => resolve(""));
-      c.on("close", () => resolve(out));
-      setTimeout(() => {
+      c.on("error", () => finish(""));
+      c.on("close", () => finish(out));
+      timer = setTimeout(() => {
         try {
           c.kill("SIGKILL");
         } catch {
           /* ignore */
         }
-        resolve("");
+        finish("");
       }, timeoutMs);
     } catch {
       resolve("");
@@ -239,19 +247,27 @@ function probeVersion(bin: string, pathEnv: string): Promise<string | null> {
     try {
       const c = spawn(bin, ["--version"], { env: { ...process.env, PATH: pathEnv } });
       let out = "";
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (value: string | null): void => {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) clearTimeout(timer);
+        resolve(value);
+      };
       c.stdout.on("data", (d: Buffer | string) => (out += d.toString()));
-      c.on("error", () => resolve(null));
+      c.on("error", () => finish(null));
       c.on("close", () => {
         const m = out.match(/\d+\.\d+\.\d+[\w.-]*/);
-        resolve(m ? `v${m[0]}` : null);
+        finish(m ? `v${m[0]}` : null);
       });
-      setTimeout(() => {
+      timer = setTimeout(() => {
         try {
           c.kill("SIGKILL");
         } catch {
           /* ignore */
         }
-        resolve(null);
+        finish(null);
       }, 5000);
     } catch {
       resolve(null);
@@ -269,6 +285,14 @@ function probeVersion(bin: string, pathEnv: string): Promise<string | null> {
 export function updateClaudeCli(): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
     let out = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (result: { ok: boolean; output: string }): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      resolve(result);
+    };
     const append = (d: Buffer | string) => {
       out += d.toString();
       if (out.length > 8000) out = out.slice(-8000); // bounded ring
@@ -280,26 +304,27 @@ export function updateClaudeCli(): Promise<{ ok: boolean; output: string }> {
       });
       c.stdout.on("data", append);
       c.stderr.on("data", append);
-      c.on("error", (e: Error) => resolve({ ok: false, output: e.message }));
+      c.on("error", (e: Error) => finish({ ok: false, output: e.message }));
       c.on("close", (code: number | null) => {
         const ok = code === 0;
         if (ok) {
           cliCache.clear();
           diagCache.clear();
+          npmPrefixQuery = null;
         }
-        resolve({ ok, output: out.trim() });
+        finish({ ok, output: out.trim() });
       });
       // npm installs can be slow; give it up to 3 minutes before giving up.
-      setTimeout(() => {
+      timer = setTimeout(() => {
         try {
           c.kill("SIGKILL");
         } catch {
           /* ignore */
         }
-        resolve({ ok: false, output: out.trim() || "Update timed out." });
+        finish({ ok: false, output: out.trim() || "Update timed out." });
       }, 180_000);
     } catch (e) {
-      resolve({ ok: false, output: e instanceof Error ? e.message : String(e) });
+      finish({ ok: false, output: e instanceof Error ? e.message : String(e) });
     }
   });
 }
