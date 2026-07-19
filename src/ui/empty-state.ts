@@ -19,6 +19,11 @@ export interface EmptyStateHost {
   usePrompt(promptText: string): void;
   /** Attach a surfaced related note as context + focus the composer. */
   attachRelated(path: string): void;
+  /** True when `_system/vault-context.md` is absent AND memory writes are
+   *  enabled — shows the setup banner. */
+  vaultSetupNeeded: boolean;
+  /** Runs the scaffold (`ExoPlugin.runVaultSetup`). */
+  runVaultSetup(): void;
 }
 
 const STARTERS: [string, string, string][] = [
@@ -35,6 +40,8 @@ export function renderEmptyState(host: EmptyStateHost): void {
   // The Exo star is the still centre; the prompt clusters settle in around it.
   // Each block gets a --i so it eases up in a gentle stagger (reduced-motion off).
   const staggered: HTMLElement[] = [];
+  const setup = renderSetupBanner(host, empty);
+  if (setup) staggered.push(setup);
   const hero = empty.createDiv({ cls: "mva-empty-hero" });
   setIcon(hero.createDiv({ cls: "mva-empty-star", attr: { "aria-hidden": "true" } }), host.exoIcon);
   hero.createDiv({ cls: "mva-empty-title", text: "What are we working on?" });
@@ -56,6 +63,24 @@ export function renderEmptyState(host: EmptyStateHost): void {
   const related = renderSurfacing(host, empty);
   if (related) staggered.push(related);
   staggered.forEach((el, i) => el.style.setProperty("--i", String(i)));
+}
+
+/** "Exo's memory isn't set up in this vault yet" card — reuses the existing
+ *  `.mva-onboard` pattern (styles.css) already used for the CLI-not-ready
+ *  card in view.ts, for visual consistency. Returns null (renders nothing)
+ *  when setup isn't needed, so the empty state's stagger list stays correct. */
+function renderSetupBanner(host: EmptyStateHost, parent: HTMLElement): HTMLElement | null {
+  if (!host.vaultSetupNeeded) return null;
+  const card = parent.createDiv({ cls: "mva-onboard" });
+  setIcon(card.createDiv({ cls: "mva-onboard-icon" }), "folder-plus");
+  card.createDiv({ cls: "mva-onboard-title", text: "Exo's memory isn't active in this vault yet" });
+  card.createDiv({
+    cls: "mva-onboard-msg",
+    text: "Creates the _system/ files Exo reads and writes to. Nothing that already exists is ever touched.",
+  });
+  const btn = card.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Set up now" });
+  btn.onclick = () => host.runVaultSetup();
+  return card;
 }
 
 /** A labelled, tappable prompt list (Suggestions / Your prompts) with "Show N
