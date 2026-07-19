@@ -269,9 +269,9 @@ export const DEFAULT_SETTINGS: MVASettings = {
   vaultAutoCommitIntervalMinutes: 15,
   orchestrationEnabled: false,
   orchestrationMaxConcurrent: 2,
-  connectionsInlineUnderline: false,
-  connectionsBlockEnabled: false,
-  connectionsStemming: false,
+  connectionsInlineUnderline: true,
+  connectionsBlockEnabled: true,
+  connectionsStemming: true,
 };
 
 /** Options for the "Background AI model" dropdown — Sonnet-class only.
@@ -497,22 +497,28 @@ export class MVASettingTab extends PluginSettingTab {
       "When you select text in a note, show it as a chip in the chat composer — click it to add the excerpt as context.",
       "showSelectionChip"
     );
+    new Setting(el)
+      .setName("Connections")
+      .setDesc(
+        "Surfaces the other notes you mention in a note's text but haven't linked yet — the graph work Obsidian's native pane leaves to you — and lets you wire them with one click, right where you're reading."
+      )
+      .setHeading();
     this.toggleSetting(
       el,
       "Underline unlinked mentions",
-      "In a note's body, underline plain-text mentions of other notes' titles that aren't wikilinked yet — click one to link it (or ignore it for good). Ships off.",
+      "As you read a note, dot-underline the names of your other notes that appear in its text but aren't linked yet. Click an underlined name to turn it into a [[wikilink]] — or dismiss it for good if it's just a coincidence (dismissals are remembered).",
       "connectionsInlineUnderline"
     );
     this.toggleSetting(
       el,
-      "Connections block",
-      "Show a block at the bottom of each note listing its suggested outgoing links, with one-click Link / Link all. Ships off.",
+      "Connections block at the bottom of notes",
+      "Add a block at the end of each note listing every other note it mentions but doesn't link to, each with a one-click Link (or Link all). A running to-do of connections you could make.",
       "connectionsBlockEnabled"
     );
     this.toggleSetting(
       el,
       "Broaden mention matching",
-      "Also match singular/plural and simple inflections (Italian/English) when detecting mentions. More matches, slightly less precise.",
+      "Also match plurals and simple word inflections in Italian and English — e.g. 'prodotti' matches a note titled 'Prodotto'. Finds more mentions, with a small risk of the odd false match; turn off if you see noise.",
       "connectionsStemming"
     );
     this.toggleSetting(
