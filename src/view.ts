@@ -1602,7 +1602,13 @@ export class ChatView extends ItemView {
 
   private renderCard(grid: HTMLElement, c: Convo): void {
     const card = grid.createDiv({ cls: "mva-card" });
-    if (c === this.active) card.addClass("is-active");
+    // A conversation is "active" when it's the focused tab, and "open" when it's
+    // any of the tabs currently in the tab strip. Both get a visible marker so the
+    // gallery mirrors what's open above it.
+    const isActive = c === this.active;
+    const isOpen = this.openTabs.includes(c.id);
+    if (isActive) card.addClass("is-active");
+    if (isOpen) card.addClass("is-open");
     this.addCardDelete(card, grid, c);
     const head = card.createDiv({ cls: "mva-card-head" });
     const dot = head.createSpan({ cls: "mva-dot" });
@@ -1618,6 +1624,13 @@ export class ChatView extends ItemView {
       titleEl.append("New chat");
     } else {
       titleEl.setText(c.title || "New chat");
+    }
+
+    if (isOpen) {
+      head.createSpan({
+        cls: "mva-card-open-badge" + (isActive ? " is-active" : ""),
+        text: isActive ? "Active" : "Open",
+      });
     }
 
     const preview = this.convoPreview(c);
