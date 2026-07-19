@@ -29,6 +29,7 @@ import {
   parseSeedBlocks,
   manifestContent,
 } from "./core/agent-self";
+import { SCAFFOLD_ITEMS } from "./core/vault-setup";
 import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidian/claudemem";
 import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
@@ -399,6 +400,18 @@ export default class ExoPlugin extends Plugin {
       checkCallback: (checking: boolean) => {
         if (!this.settings.memoryWriteEnabled) return false;
         if (!checking) void this.seedAgentFolder();
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "setup-vault-memory",
+      name: "Set up vault memory",
+      // Same gate as seed-agent-folder: pointless (and confusing) to offer
+      // scaffolding when the user has turned vault-memory writes off.
+      checkCallback: (checking: boolean) => {
+        if (!this.settings.memoryWriteEnabled) return false;
+        if (!checking) void this.runVaultSetup();
         return true;
       },
     });
@@ -1120,6 +1133,34 @@ export default class ExoPlugin extends Plugin {
     if (this.app.vault.getAbstractFileByPath(humanPath) instanceof TFile) {
       await this.app.workspace.openLinkText(humanPath, "", true);
     }
+  }
+
+  /** Vault setup — create every `_system/` path Exo reads/writes that's
+   *  currently missing (Global Constraints: never touches what already
+   *  exists). Shared by the `setup-vault-memory` command and the empty-state
+   *  banner (ChatView calls this directly, hence no `private`). */
+  async runVaultSetup(): Promise<void> {
+    let written = 0;
+    let skipped = 0;
+    const writtenPaths: string[] = [];
+    for (const item of SCAFFOLD_ITEMS) {
+      const existed = !!this.app.vault.getAbstractFileByPath(item.path);
+      if (existed) {
+        skipped++;
+        continue;
+      }
+      if (item.kind === "folder") {
+        await this.ensureFolder(item.path);
+      } else {
+        await this.app.vault.create(item.path, item.content ?? "");
+      }
+      written++;
+      writtenPaths.push(item.path);
+    }
+    if (writtenPaths.length > 0) this.noteVaultWrite(writtenPaths);
+    new Notice(
+      `Exo vault memory set up — created ${written} item(s)${skipped ? `, kept ${skipped} existing` : ""}.`
+    );
   }
 
   /** Create a folder if it doesn't exist (idempotent, race-safe). */
