@@ -23,6 +23,11 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 </p>
 <p align="center"><em>The tune dialog — model, effort, and permission in one place.</em></p>
 
+<p align="center">
+  <img src="assets/screenshot-setup-banner.png" width="380" alt="Exo — the vault memory setup banner" />
+</p>
+<p align="center"><em>On a fresh vault, a one-click banner sets up everything Exo's memory features need.</em></p>
+
 ## Features
 
 - **Custom chat UI** — streaming markdown, message bubbles, theme-agnostic (built on Obsidian's native CSS variables; transparent panel that adapts to any theme).
