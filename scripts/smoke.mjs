@@ -46,6 +46,20 @@ const fail = (m) => {
   process.exit(1);
 };
 
+function resultErrorDetail(result) {
+  const candidates = [
+    result?.result,
+    ...(Array.isArray(result?.errors) ? result.errors : []),
+    ...(Array.isArray(result?.permission_denials) ? result.permission_denials : []),
+  ];
+  const detail = candidates
+    .map((value) => (typeof value === "string" ? value : JSON.stringify(value)))
+    .filter(Boolean)
+    .join(" | ")
+    .slice(0, 800);
+  return detail || "no error detail supplied by Claude CLI";
+}
+
 /** Minimal inline binary resolution (can't import src/cli.ts — it pulls obsidian). */
 function resolveClaudeBin() {
   if (process.env.CLAUDE_BIN && existsSync(process.env.CLAUDE_BIN)) return process.env.CLAUDE_BIN;
@@ -159,7 +173,9 @@ async function main() {
 
   if (!result) fail("no result message received");
   if (result.subtype !== "success" || result.is_error) {
-    fail(`turn ended with an error result: subtype=${result.subtype} is_error=${result.is_error}`);
+    fail(
+      `turn ended with an error result: subtype=${result.subtype} is_error=${result.is_error}; ${resultErrorDetail(result)}`
+    );
   }
   ok(`turn completed: ${String(result.result).slice(0, 60)}`);
 
