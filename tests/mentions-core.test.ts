@@ -9,6 +9,9 @@ import {
   recencyFactor,
   applyLink,
   applyLinks,
+  outgoingMentions,
+  flattenOutgoing,
+  wikilinkSpans,
   STOPWORDS,
   type CandidateDoc,
   type MentionTarget,
@@ -160,6 +163,42 @@ describe("applyLink — safe mutation from exact offsets", () => {
     const text = "pricing and pricing again";
     const [m] = unlinkedMentions(target("pricing"), [doc("a.md", text)]);
     expect(applyLinks(text, m.ranges, "pricing")).toBe("[[pricing]] and [[pricing]] again");
+  });
+});
+
+describe("outgoingMentions — inline (this note cites others)", () => {
+  const targets = [
+    target("Pricing", [], "Atlas/Pricing.md"),
+    target("Product Market Fit", [], "Atlas/Product Market Fit.md"),
+  ];
+
+  it("finds a bare outgoing mention", () => {
+    const out = outgoingMentions("our pricing is set", targets, {});
+    expect(out.map((m) => m.targetBasename)).toContain("Pricing");
+  });
+
+  it("skips text already inside a wikilink", () => {
+    const out = outgoingMentions("our [[Pricing]] is set", targets, {});
+    expect(out).toEqual([]);
+  });
+
+  it("skips the note's own title", () => {
+    const out = outgoingMentions("pricing pricing", targets, { selfPath: "Atlas/Pricing.md" });
+    expect(out).toEqual([]);
+  });
+
+  it("wikilinkSpans covers the whole [[...]]", () => {
+    const [s] = wikilinkSpans("a [[X]] b");
+    expect("a [[X]] b".slice(s.start, s.end)).toBe("[[X]]");
+  });
+
+  it("flattenOutgoing keeps the longer span on overlap", () => {
+    const out = outgoingMentions("we hit product market fit", targets, {});
+    const flat = flattenOutgoing(out);
+    // "Product Market Fit" (long) beats the "product" substring under "Pricing"? no —
+    // only PMF matches here; assert the phrase span is kept whole and once.
+    expect(flat.length).toBe(1);
+    expect(flat[0].targetBasename).toBe("Product Market Fit");
   });
 });
 

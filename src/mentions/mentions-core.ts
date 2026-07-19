@@ -221,6 +221,106 @@ export function applyLinks(text: string, ranges: MentionRange[], targetBasename:
   return out;
 }
 
+/** The wikilink text for a surface occurrence: piped only when the surface
+ *  differs from the target basename (alias/case/inflection). */
+export function linkText(surface: string, targetBasename: string): string {
+  return surface === targetBasename ? `[[${targetBasename}]]` : `[[${targetBasename}|${surface}]]`;
+}
+
+/* -------------------- outgoing (inline) mentions -------------------- */
+// The inverse query behind the in-document inline underline: given ONE note's
+// body, find every plain-text occurrence of ANOTHER note's title that isn't
+// already wikilinked — so the reader can link OUT with one click. Native
+// Obsidian only surfaces the incoming direction (mentions of THIS note
+// elsewhere); this is what the current note cites.
+
+export interface OutgoingMatch {
+  targetPath: string;
+  targetBasename: string;
+  ranges: MentionRange[];
+}
+
+/** Char spans of existing `[[wikilinks]]` (brackets included) — matches inside
+ *  these are already links and must not be underlined or re-linked. */
+export function wikilinkSpans(text: string): MentionRange[] {
+  const spans: MentionRange[] = [];
+  const re = /\[\[[^\]]*\]\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) spans.push({ start: m.index, end: m.index + m[0].length });
+  return spans;
+}
+
+function overlaps(a: MentionRange, b: MentionRange): boolean {
+  return a.start < b.end && a.end > b.start;
+}
+
+/**
+ * Find every outgoing unlinked mention of any `target` in `text`. Skips ranges
+ * that fall inside an existing wikilink and the note's own title. One tokenize
+ * pass over the body; each target matched by its folded alias sequence.
+ */
+export function outgoingMentions(
+  text: string,
+  targets: MentionTarget[],
+  opts: MentionOptions & { selfPath?: string } = {},
+): OutgoingMatch[] {
+  const tokens = wordTokens(text);
+  const spans = wikilinkSpans(text);
+  const doStem = opts.stem ?? false;
+  const out: OutgoingMatch[] = [];
+  for (const t of targets) {
+    if (t.path === opts.selfPath) continue;
+    const aliasSet = buildAliasSet(t, opts);
+    if (aliasSet.length === 0) continue;
+    const ranges: MentionRange[] = [];
+    for (const seq of aliasSet) {
+      for (const r of findSequence(tokens, seq, doStem)) {
+        if (!spans.some((s) => overlaps(r, s))) ranges.push(r);
+      }
+    }
+    if (ranges.length > 0) {
+      ranges.sort((a, b) => a.start - b.start);
+      out.push({ targetPath: t.path, targetBasename: t.basename, ranges });
+    }
+  }
+  return out;
+}
+
+export interface FlatOutgoing {
+  targetPath: string;
+  targetBasename: string;
+  range: MentionRange;
+}
+
+/**
+ * Flatten per-target matches into a single non-overlapping list for rendering.
+ * When two targets claim overlapping spans (e.g. `Product` vs `Product Market
+ * Fit` over "product market fit"), the LONGER span wins — the more specific
+ * link is almost always the intended one.
+ */
+export function flattenOutgoing(matches: OutgoingMatch[]): FlatOutgoing[] {
+  const all: FlatOutgoing[] = [];
+  for (const m of matches) for (const range of m.ranges) {
+    all.push({ targetPath: m.targetPath, targetBasename: m.targetBasename, range });
+  }
+  all.sort((a, b) => b.range.end - b.range.start - (a.range.end - a.range.start) || a.range.start - b.range.start);
+  const kept: FlatOutgoing[] = [];
+  for (const cand of all) {
+    if (!kept.some((k) => overlaps(k.range, cand.range))) kept.push(cand);
+  }
+  kept.sort((a, b) => a.range.start - b.range.start);
+  return kept;
+}
+
+/** Apply every flattened outgoing link in one pass, right-to-left so offsets
+ *  stay valid. Each range links to its own target. Pure. */
+export function applyFlatLinks(text: string, flats: FlatOutgoing[]): string {
+  const ordered = [...flats].sort((a, b) => b.range.start - a.range.start);
+  let out = text;
+  for (const f of ordered) out = applyLink(out, f.range, f.targetBasename);
+  return out;
+}
+
 /* ----------------------- connection ranking ----------------------- */
 
 export type ConnectionKind = "linked" | "related" | "unlinked" | "suggested";

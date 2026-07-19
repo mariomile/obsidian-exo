@@ -10,6 +10,8 @@ import { App, TFile } from "obsidian";
 import { backlinks, relatedFromFrontmatter } from "../obsidian/graph";
 import {
   unlinkedMentions,
+  outgoingMentions,
+  flattenOutgoing,
   rankConnections,
   applyLinks,
   type MentionTarget,
@@ -17,9 +19,10 @@ import {
   type UnlinkedMatch,
   type ConnectionItem,
   type RankInput,
+  type FlatOutgoing,
 } from "./mentions-core";
 import { fold } from "./tokenizer";
-import { filterIgnored, type IgnoreStore, EMPTY_IGNORE_STORE } from "./store-core";
+import { isIgnored, filterIgnored, type IgnoreStore, EMPTY_IGNORE_STORE } from "./store-core";
 
 /** Path prefixes never scanned for mentions (mirrors `rule-auto-link` exclusions). */
 export const DEFAULT_EXCLUDE_PREFIXES = [
@@ -133,6 +136,48 @@ export async function gatherConnections(
 function mtimeOf(app: App, path: string): number {
   const f = app.vault.getAbstractFileByPath(path);
   return f instanceof TFile ? f.stat.mtime : 0;
+}
+
+/* ---------------------- outgoing (inline) ---------------------- */
+
+/** Build a mention target for every markdown note, pulling `aliases` from the
+ *  cached frontmatter (no body reads — cheap enough to run per keystroke-debounce). */
+function allTargets(app: App, excludePrefixes: string[]): MentionTarget[] {
+  const out: MentionTarget[] = [];
+  for (const f of app.vault.getMarkdownFiles()) {
+    if (excludePrefixes.some((p) => f.path.startsWith(p))) continue;
+    const rawAliases = app.metadataCache.getFileCache(f)?.frontmatter?.aliases;
+    const aliases = Array.isArray(rawAliases)
+      ? rawAliases.map(String)
+      : rawAliases
+        ? [String(rawAliases)]
+        : [];
+    out.push({ path: f.path, basename: f.basename, aliases });
+  }
+  return out;
+}
+
+/**
+ * Find the outgoing unlinked mentions in `file`'s body — other notes' titles it
+ * cites in plain text — flattened (overlaps resolved) and with ignored pairs
+ * dropped. This drives the inline underline. `text` may be passed in to match
+ * the live editor buffer; omit to read from disk.
+ */
+export async function gatherOutgoing(
+  app: App,
+  file: TFile,
+  ignore: IgnoreStore = EMPTY_IGNORE_STORE,
+  opts: { stem?: boolean; excludePrefixes?: string[]; text?: string } = {},
+): Promise<FlatOutgoing[]> {
+  const excludePrefixes = opts.excludePrefixes ?? DEFAULT_EXCLUDE_PREFIXES;
+  const raw = opts.text ?? (await app.vault.cachedRead(file));
+  const targets = allTargets(app, excludePrefixes);
+  const matches = outgoingMentions(blankFrontmatter(raw), targets, {
+    stem: opts.stem ?? false,
+    selfPath: file.path,
+  });
+  const flat = flattenOutgoing(matches);
+  return flat.filter((f) => !isIgnored(ignore, fold(f.targetBasename), file.path));
 }
 
 /**
