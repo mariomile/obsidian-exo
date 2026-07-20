@@ -100,6 +100,26 @@ describe("runDailyPulseSlot", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("waits for today's configured slot on the first enabled day", async () => {
+    const execute = vi.fn(async () => ({ warningCount: 0 }));
+    await expect(runDailyPulseSlot({
+      config: enabled,
+      lastRun: 0,
+      now: at(2026, 7, 20, 7, 59),
+      execute,
+    })).resolves.toEqual({ status: "current" });
+    expect(execute).not.toHaveBeenCalled();
+
+    const now = at(2026, 7, 20, 8);
+    await expect(runDailyPulseSlot({
+      config: enabled,
+      lastRun: 0,
+      now,
+      execute,
+    })).resolves.toEqual({ status: "succeeded", completedAt: now, warningCount: 0 });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("runs once after 08:00 and is idempotent for the same local slot", async () => {
     const execute = vi.fn(async () => ({ warningCount: 0 }));
     const now = at(2026, 7, 20, 8, 1);

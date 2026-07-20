@@ -199,6 +199,8 @@ export default class ExoPlugin extends Plugin {
   private readonly proposalPlaybookWriteQueue = new WriteQueue();
   /** One serialized read-modify-write boundary for `_system/review.md`. */
   private readonly dailyPulseWriteQueue = new WriteQueue();
+  /** Serialize collection, review-note write and settings persistence as one operation. */
+  private readonly dailyPulseOperationQueue = new WriteQueue();
   private readonly dailyPulseSlotRunner = new DailyPulseSlotRunner();
   /**
    * THE ONE shared `TaskStore` instance — the typed load/create/update/move/
@@ -2056,31 +2058,33 @@ export default class ExoPlugin extends Plugin {
   }
 
   private async generateAndPersistDailyPulse(now: number, reviewed = false): Promise<boolean> {
-    try {
-      const generated = await this.generateDailyPulse(now);
-      await this.persistDailyPulseSuccess({
-        completedAt: now,
-        attemptedAt: now,
-        warnings: generated.warnings,
-        itemCount: generated.itemCount,
-        config: this.settings.automations.find(isDailyPulseAutomation),
-        reviewed,
-      });
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.settings.dailyPulseReviewState = dailyPulseReviewAfterRun(
-        this.settings.dailyPulseReviewState,
-        { status: "failed", error: message, retryable: true },
-        now
-      );
+    return this.dailyPulseOperationQueue.enqueue(async () => {
       try {
-        await this.saveSettings();
-      } catch (saveError) {
-        console.warn("[Exo] Daily Pulse error state could not be saved:", saveError);
+        const generated = await this.generateDailyPulse(now);
+        await this.persistDailyPulseSuccess({
+          completedAt: now,
+          attemptedAt: now,
+          warnings: generated.warnings,
+          itemCount: generated.itemCount,
+          config: this.settings.automations.find(isDailyPulseAutomation),
+          reviewed,
+        });
+        return true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.settings.dailyPulseReviewState = dailyPulseReviewAfterRun(
+          this.settings.dailyPulseReviewState,
+          { status: "failed", error: message, retryable: true },
+          now
+        );
+        try {
+          await this.saveSettings();
+        } catch (saveError) {
+          console.warn("[Exo] Daily Pulse error state could not be saved:", saveError);
+        }
+        return false;
       }
-      return false;
-    }
+    });
   }
 
   /** Explicit user-triggered refresh. It is allowed while the schedule is paused. */
@@ -2108,11 +2112,13 @@ export default class ExoPlugin extends Plugin {
       return;
     }
     await this.app.workspace.openLinkText(DAILY_PULSE_TARGET_PATH, "", "tab");
-    const state = this.settings.dailyPulseReviewState;
-    if (state.lastSuccessAt > state.lastReviewedAt) {
-      state.lastReviewedAt = Date.now();
-      await this.saveSettings();
-    }
+    await this.dailyPulseOperationQueue.enqueue(async () => {
+      const state = this.settings.dailyPulseReviewState;
+      if (state.lastSuccessAt > state.lastReviewedAt) {
+        state.lastReviewedAt = Date.now();
+        await this.saveSettings();
+      }
+    });
     await this.refreshCockpit();
   }
 
@@ -2141,38 +2147,40 @@ export default class ExoPlugin extends Plugin {
     config: AutomationConfig,
     now: number
   ): Promise<void> {
-    const lastRunKey = automationLastRunKey(config);
-    let warnings: DailyPulseCollectionWarning[] = [];
-    let itemCount = 0;
-    const result = await this.dailyPulseSlotRunner.run({
-      config,
-      lastRun: this.settings.scheduledLastRun[lastRunKey] ?? 0,
-      now,
-      execute: async () => {
-        const generated = await this.generateDailyPulse(now);
-        warnings = generated.warnings;
-        itemCount = generated.itemCount;
-        return { warningCount: warnings.length };
-      },
-    });
+    await this.dailyPulseOperationQueue.enqueue(async () => {
+      const lastRunKey = automationLastRunKey(config);
+      let warnings: DailyPulseCollectionWarning[] = [];
+      let itemCount = 0;
+      const result = await this.dailyPulseSlotRunner.run({
+        config,
+        lastRun: this.settings.scheduledLastRun[lastRunKey] ?? 0,
+        now,
+        execute: async () => {
+          const generated = await this.generateDailyPulse(now);
+          warnings = generated.warnings;
+          itemCount = generated.itemCount;
+          return { warningCount: warnings.length };
+        },
+      });
 
-    if (result.status === "disabled" || result.status === "current") return;
-    if (result.status === "failed") {
-      this.settings.dailyPulseReviewState = dailyPulseReviewAfterRun(
-        this.settings.dailyPulseReviewState,
-        result,
-        now
-      );
-      await this.saveSettings();
-      return;
-    }
+      if (result.status === "disabled" || result.status === "current") return;
+      if (result.status === "failed") {
+        this.settings.dailyPulseReviewState = dailyPulseReviewAfterRun(
+          this.settings.dailyPulseReviewState,
+          result,
+          now
+        );
+        await this.saveSettings();
+        return;
+      }
 
-    await this.persistDailyPulseSuccess({
-      completedAt: result.completedAt,
-      attemptedAt: now,
-      warnings,
-      itemCount,
-      config,
+      await this.persistDailyPulseSuccess({
+        completedAt: result.completedAt,
+        attemptedAt: now,
+        warnings,
+        itemCount,
+        config,
+      });
     });
   }
 

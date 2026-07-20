@@ -201,4 +201,15 @@ describe("buildDailyPulse", () => {
     expect(section(result.sections, "Recent work")?.items[0].title).toBe("README");
     expect(section(result.sections, "System")?.items[0].detail).toBe("Budget exhausted");
   });
+
+  it("distinguishes paused background AI from an exhausted budget", () => {
+    const result = buildDailyPulse(input({
+      budget: { remaining: null, enabled: false },
+    }));
+
+    expect(section(result.sections, "System")?.items[0]).toMatchObject({
+      title: "Background AI",
+      detail: "Background AI paused",
+    });
+  });
 });

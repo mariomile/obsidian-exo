@@ -27,6 +27,7 @@ import { WriteQueue } from "../core/write-queue";
 import { patchFrontmatter } from "../core/frontmatter-patch";
 import { createBacklogTask, adaptAppToTaskVault } from "./task-store";
 import {
+  automationLastRunKey,
   cadenceLabel,
   nextDueAt,
   parseCadenceInput,
@@ -1074,10 +1075,13 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       const lines: string[] = [];
       if (!s.automations.length) lines.push("No automations configured.");
       for (const a of s.automations) {
-        const last = s.scheduledLastRun[a.name] ?? 0;
+        const last = s.scheduledLastRun[automationLastRunKey(a)] ?? 0;
         const next = a.enabled ? ` · next ${fmtDueIn(nextDueAt(a.cadence, last, now) - now)}` : "";
+        const mode = a.system === "daily-pulse"
+          ? "writes _system/review.md (marker-safe)"
+          : a.write ? "writes (checkpointed, restorable)" : "read-only";
         lines.push(
-          `- ${a.name} — ${cadenceLabel(a.cadence)} · ${a.enabled ? "on" : "paused"} · ${a.write ? "writes (checkpointed, restorable)" : "read-only"}${next}`
+          `- ${a.name} — ${cadenceLabel(a.cadence)} · ${a.enabled ? "on" : "paused"} · ${mode}${next}`
         );
       }
       lines.push("", `Playbooks: ${s.customPrompts.map((p) => p.name).join(", ") || "(none)"}`);
@@ -1127,7 +1131,9 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       const exo = getExo(app);
       if (!exo) return ok("Exo plugin not reachable.");
       const s = exo.settings;
-      const auto = s.automations.find((a) => a.name.toLowerCase() === args.name.toLowerCase());
+      const auto = s.automations.find(
+        (a) => !a.system && a.name.toLowerCase() === args.name.toLowerCase()
+      );
       const playbook = s.customPrompts.find((p) => p.name.toLowerCase() === args.name.toLowerCase());
 
       if (args.action === "run_now") {

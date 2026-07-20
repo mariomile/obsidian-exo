@@ -224,7 +224,7 @@ function collectRecentNotes(
 }
 
 function remainingBudget(snapshot: DailyPulseBudgetSnapshot, now: number): number | null {
-  if (!snapshot.enabled) return 0;
+  if (!snapshot.enabled) return null;
   if (!(snapshot.dailyBudget > 0) || !Number.isFinite(snapshot.dailyBudget)) return null;
   const ledger = resetIfNewDay(snapshot.ledger, now);
   const used = Number.isFinite(ledger.tokensUsed) && ledger.tokensUsed > 0
@@ -302,6 +302,7 @@ export async function collectDailyPulseInput(
       recentNotes: collectRecentNotes(notes.value, modifiedAfter, now),
       budget: {
         remaining: budget.value === null ? null : remainingBudget(budget.value, now),
+        ...(budget.value === null ? {} : { enabled: budget.value.enabled }),
       },
     },
     warnings,

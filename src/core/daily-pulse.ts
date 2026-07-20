@@ -132,6 +132,11 @@ export async function runDailyPulseSlot(options: {
   execute: () => Promise<{ warningCount: number }>;
 }): Promise<DailyPulseSlotResult> {
   if (!options.config.enabled) return { status: "disabled" };
+  if (options.lastRun === 0 && options.config.cadence.kind === "daily") {
+    const firstSlot = new Date(options.now);
+    firstSlot.setHours(options.config.cadence.hour, 0, 0, 0);
+    if (options.now < firstSlot.getTime()) return { status: "current" };
+  }
   if (!isDue(options.config.cadence, options.lastRun, options.now)) {
     return { status: "current" };
   }
@@ -172,7 +177,7 @@ export interface DailyPulseInput {
   pendingProposals: { id: string; kind: ProposalKind; title: string }[];
   automationRuns: { id: string; name: string; startedAt: number; writes: string[] }[];
   recentNotes: { path: string; mtime: number }[];
-  budget: { remaining: number | null };
+  budget: { remaining: number | null; enabled?: boolean };
 }
 
 export type DailyPulseSectionTitle =
@@ -355,6 +360,15 @@ function recentWorkItems(input: DailyPulseInput): DailyPulseItem[] {
 
 function systemItems(input: DailyPulseInput): DailyPulseItem[] {
   const remaining = input.budget.remaining;
+  if (input.budget.enabled === false) {
+    return [{
+      id: "system:budget",
+      kind: "system",
+      title: "Background AI",
+      detail: "Background AI paused",
+      target: { kind: "system", id: "budget" },
+    }];
+  }
   if (remaining === null || !Number.isFinite(remaining)) return [];
   return [{
     id: "system:budget",

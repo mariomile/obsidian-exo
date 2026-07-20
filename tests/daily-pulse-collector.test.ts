@@ -149,7 +149,7 @@ describe("collectDailyPulseInput", () => {
         writes: ["Journal/pending.md"],
       }],
       recentNotes: [{ path: "Active/Newer.md", mtime: NOW - 1_000 }],
-      budget: { remaining: 6_750 },
+      budget: { remaining: 6_750, enabled: true },
     });
     expect(result.warnings).toEqual([]);
   });
@@ -268,7 +268,7 @@ describe("collectDailyPulseInput", () => {
 
     expect({ tasks, loops, proposals, runs, notes, budget }).toEqual(snapshot);
     expect(result.input.automationRuns[0].writes).not.toBe(runs[0].writes);
-    expect(result.input.budget).toEqual({ remaining: 1_000 });
+    expect(result.input.budget).toEqual({ remaining: 1_000, enabled: true });
   });
 
   it("reports disabled, unlimited and exhausted background budget consistently", async () => {
@@ -282,17 +282,17 @@ describe("collectDailyPulseInput", () => {
       }), { now: NOW, lastPulseAt: LAST_PULSE_AT });
 
     await expect(collectBudget(false, 10_000, 100)).resolves.toMatchObject({
-      input: { budget: { remaining: 0 } },
+      input: { budget: { remaining: null, enabled: false } },
     });
     await expect(collectBudget(true, 0, 100)).resolves.toMatchObject({
-      input: { budget: { remaining: null } },
+      input: { budget: { remaining: null, enabled: true } },
     });
     await expect(collectBudget(true, 100, 150)).resolves.toMatchObject({
-      input: { budget: { remaining: 0 } },
+      input: { budget: { remaining: 0, enabled: true } },
     });
   });
 
-  it("still writes the deterministic pulse with exhausted budget and an independent-source warning", async () => {
+  it("still writes the deterministic pulse with paused background AI and an independent-source warning", async () => {
     let content: string | null = null;
     const result = await generateAndWriteDailyPulse(sources({
       taskStore: {
@@ -315,7 +315,7 @@ describe("collectDailyPulseInput", () => {
     expect(result.pulse.sections.flatMap(({ items }) => items).map(({ id }) => id))
       .toEqual(["task:review", "system:budget"]);
     expect(content).toContain("Task review");
-    expect(content).toContain("Budget exhausted");
+    expect(content).toContain("Background AI paused");
     expect(content).toContain("Loops: loop ledger unavailable");
   });
 });
