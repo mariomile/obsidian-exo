@@ -15,12 +15,20 @@ import {
   resetIfNewDay,
   type BudgetLedger,
 } from "../core/background-budget";
-import type { DailyPulseInput } from "../core/daily-pulse";
+import type {
+  DailyPulse,
+  DailyPulseAction,
+  DailyPulseInput,
+  DailyPulseItem,
+} from "../core/daily-pulse";
 import { dueLoops, type LoopEntry } from "../core/open-loops";
 import type { ProposalKind } from "../core/proposals";
 import type { TaskEntry } from "../core/tasks";
+import type { WriteQueue } from "../core/write-queue";
 
 export const DAILY_PULSE_TARGET_PATH = "_system/review.md";
+export const DAILY_PULSE_START_MARKER = "<!-- exo:daily-pulse:start -->";
+export const DAILY_PULSE_END_MARKER = "<!-- exo:daily-pulse:end -->";
 export const DAILY_PULSE_FIRST_RUN_LOOKBACK_MS = 24 * 60 * 60 * 1_000;
 export const DAILY_PULSE_RECENT_NOTE_LIMIT = 20;
 /**
@@ -97,6 +105,41 @@ export interface DailyPulseCollectionOptions {
 export interface DailyPulseCollectionResult {
   input: DailyPulseInput;
   warnings: DailyPulseCollectionWarning[];
+}
+
+/** Minimal file surface used by the serialized Daily Pulse read-modify-write. */
+export interface DailyPulseFileAdapter {
+  /** Return null only when the target file does not exist. */
+  read(path: string): Promise<string | null>;
+  /** Create or replace the target. Parent-folder handling belongs to the adapter. */
+  write(path: string, content: string): Promise<void>;
+}
+
+export type DailyPulseWriteErrorCode =
+  | "partial-markers"
+  | "reversed-markers"
+  | "duplicate-markers";
+
+/**
+ * A marker-layout error is recoverable by repairing the review note manually
+ * and retrying. The writer never changes the file in this state.
+ */
+export class DailyPulseWriteError extends Error {
+  readonly recoverable = true;
+
+  constructor(
+    readonly code: DailyPulseWriteErrorCode,
+    readonly warning: string
+  ) {
+    super(warning);
+    this.name = "DailyPulseWriteError";
+  }
+}
+
+export interface DailyPulseWriteResult {
+  path: typeof DAILY_PULSE_TARGET_PATH;
+  created: boolean;
+  changed: boolean;
 }
 
 interface Captured<T> {
@@ -256,4 +299,206 @@ export async function collectDailyPulseInput(
     },
     warnings,
   };
+}
+
+function markerCount(content: string, marker: string): number {
+  let count = 0;
+  let from = 0;
+  while (true) {
+    const index = content.indexOf(marker, from);
+    if (index === -1) return count;
+    count += 1;
+    from = index + marker.length;
+  }
+}
+
+function validateMarkerLayout(content: string): "absent" | "valid" {
+  const starts = markerCount(content, DAILY_PULSE_START_MARKER);
+  const ends = markerCount(content, DAILY_PULSE_END_MARKER);
+  if (starts > 1 || ends > 1) {
+    throw new DailyPulseWriteError(
+      "duplicate-markers",
+      "Daily Pulse found duplicate review markers. Keep exactly one start/end pair, then retry."
+    );
+  }
+  if (starts !== ends) {
+    throw new DailyPulseWriteError(
+      "partial-markers",
+      "Daily Pulse found only one review marker. Restore the missing marker, then retry."
+    );
+  }
+  if (starts === 0) return "absent";
+  if (content.indexOf(DAILY_PULSE_START_MARKER) > content.indexOf(DAILY_PULSE_END_MARKER)) {
+    throw new DailyPulseWriteError(
+      "reversed-markers",
+      "Daily Pulse review markers are reversed. Put the start marker first, then retry."
+    );
+  }
+  return "valid";
+}
+
+function oneLine(value: string): string {
+  return value
+    .replaceAll(DAILY_PULSE_START_MARKER, "&lt;!-- exo:daily-pulse:start --&gt;")
+    .replaceAll(DAILY_PULSE_END_MARKER, "&lt;!-- exo:daily-pulse:end --&gt;")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function wikiAlias(value: string): string {
+  return oneLine(value).replace(/\|/g, "\\|").replace(/\]/g, "\\]");
+}
+
+function wikiPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\.md$/i, "").replace(/\]/g, "\\]");
+}
+
+function itemLabel(item: DailyPulseItem): string {
+  const alias = wikiAlias(item.title);
+  switch (item.target.kind) {
+    case "task":
+      return `[[_system/orchestration/tasks|${alias}]]`;
+    case "loop":
+      return `[[_system/memory/open-loops|${alias}]]`;
+    case "note":
+      return `[[${wikiPath(item.target.path)}|${alias}]]`;
+    case "proposal":
+    case "automation":
+    case "system":
+      return `**${alias}**`;
+  }
+}
+
+function actionText(action: DailyPulseAction): string {
+  if (action.kind === "open") return "Open note";
+  switch (action.target) {
+    case "task": return "Review task";
+    case "loop": return "Review loop";
+    case "proposal": return "Review suggestion";
+    case "automation": return "Review automation";
+  }
+}
+
+function actionMetadata(action: DailyPulseAction): string {
+  // Keep metadata parseable JSON while making a comment terminator impossible.
+  return JSON.stringify(action)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/--/g, "\\u002d\\u002d");
+}
+
+function warningLabel(source: DailyPulseCollectionSource): string {
+  switch (source) {
+    case "tasks": return "Tasks";
+    case "loops": return "Loops";
+    case "proposals": return "Suggestions";
+    case "automations": return "Automations";
+    case "recent-notes": return "Recent notes";
+    case "budget": return "Budget";
+  }
+}
+
+/** Render marker contents only; callers own marker placement and file IO. */
+export function renderDailyPulseBlock(
+  pulse: DailyPulse,
+  warnings: readonly DailyPulseCollectionWarning[]
+): string {
+  const lines = [
+    "# Daily Pulse",
+    "",
+    `_Generated ${new Date(pulse.generatedAt).toISOString()}_`,
+  ];
+
+  if (warnings.length > 0) {
+    lines.push(
+      "",
+      "> [!warning]- Partial review",
+      "> Some sources could not be refreshed; available items are still shown.",
+      ...warnings.map(({ source, message }) =>
+        `> - ${warningLabel(source)}: ${oneLine(message) || "Unavailable"}`
+      )
+    );
+  }
+
+  for (const section of pulse.sections) {
+    lines.push("", `## ${section.title}`, "");
+    for (const item of section.items) {
+      lines.push(`- ${itemLabel(item)}${item.detail ? ` — ${oneLine(item.detail)}` : ""}`);
+      if (item.action) {
+        lines.push(
+          `  - Action: ${actionText(item.action)}`,
+          `  - <!-- exo:daily-pulse:cta ${actionMetadata(item.action)} -->`
+        );
+      }
+    }
+  }
+
+  if (pulse.sections.length === 0) {
+    lines.push("", "Nothing needs review right now.");
+  }
+  return lines.join("\n");
+}
+
+function markedBlock(rendered: string): string {
+  return `${DAILY_PULSE_START_MARKER}\n${rendered}\n${DAILY_PULSE_END_MARKER}\n`;
+}
+
+function initialReviewFile(pulse: DailyPulse, rendered: string): string {
+  const date = new Date(pulse.generatedAt).toISOString().slice(0, 10);
+  return [
+    "---",
+    "type: reference",
+    "tags:",
+    "  - type/reference",
+    "created_by: exo",
+    `last_updated: ${date}`,
+    "last_edited_by: exo",
+    "---",
+    "",
+    markedBlock(rendered),
+  ].join("\n");
+}
+
+function appendBlock(content: string, block: string): string {
+  if (content.length === 0 || content.endsWith("\n\n")) return `${content}${block}`;
+  return `${content}${content.endsWith("\n") ? "\n" : "\n\n"}${block}`;
+}
+
+function replaceMarkerContents(content: string, rendered: string): string {
+  const start = content.indexOf(DAILY_PULSE_START_MARKER) + DAILY_PULSE_START_MARKER.length;
+  const end = content.indexOf(DAILY_PULSE_END_MARKER);
+  return `${content.slice(0, start)}\n${rendered}\n${content.slice(end)}`;
+}
+
+/**
+ * Serialize the complete review-note read/validate/render/write transaction.
+ * No write occurs for invalid markers or byte-identical output.
+ */
+export function writeDailyPulse(
+  adapter: DailyPulseFileAdapter,
+  queue: WriteQueue,
+  pulse: DailyPulse,
+  warnings: readonly DailyPulseCollectionWarning[]
+): Promise<DailyPulseWriteResult> {
+  return queue.enqueue(async () => {
+    const current = await adapter.read(DAILY_PULSE_TARGET_PATH);
+    const rendered = renderDailyPulseBlock(pulse, warnings);
+    const created = current === null;
+    let next: string;
+
+    if (created) {
+      next = initialReviewFile(pulse, rendered);
+    } else {
+      const layout = validateMarkerLayout(current);
+      next = layout === "valid"
+        ? replaceMarkerContents(current, rendered)
+        : appendBlock(current, markedBlock(rendered));
+    }
+
+    if (next === current) {
+      return { path: DAILY_PULSE_TARGET_PATH, created: false, changed: false };
+    }
+    await adapter.write(DAILY_PULSE_TARGET_PATH, next);
+    return { path: DAILY_PULSE_TARGET_PATH, created, changed: true };
+  });
 }
