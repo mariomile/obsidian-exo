@@ -88,6 +88,13 @@ import {
   type PlaybookSignal,
 } from "./core/learning-loop";
 import { loadSignalLedger, saveSignalLedger } from "./core/signals-store";
+import {
+  buildResearchOutbound,
+  initialResearchModeState,
+  normalizeResearchModeState,
+  parseResearchCommand,
+  type ResearchModeState,
+} from "./core/research";
 
 export type { AskQuestion } from "./core/model";
 
@@ -147,6 +154,7 @@ interface ConvoData {
   sessionId?: string;
   updatedAt?: number;
   usage?: ContextUsage;
+  researchMode?: ResearchModeState;
   messages: PersistedMessage[];
 }
 
@@ -171,7 +179,13 @@ export interface Convo {
   stopped: boolean; // set by stop() so the turn renders as "Stopped", not an error
   pendingPerm: (() => void) | null; // cancels an open permission card on stop
   pendingAsk: (() => void) | null; // cancels an open ask card on stop
-  queue: { text: string; images?: ImageAttachment[]; sendPrefix?: string; isRecoveryRetry?: boolean }[];
+  queue: {
+    text: string;
+    images?: ImageAttachment[];
+    sendPrefix?: string;
+    isRecoveryRetry?: boolean;
+    researchMode?: ResearchModeState;
+  }[];
   pendingEl: HTMLElement | null; // container for queued-message chips
   /** The in-flight assistant turn of THIS conversation (null when idle) — the
    *  target for its session's ask_user cards, so parallel conversations can't
@@ -192,6 +206,8 @@ export interface Convo {
   /** Provider-only prefix for the NEXT turn (Codex compact emulation: the
    *  recap that reseeds a fresh session). Consumed once, never UI/persisted. */
   pendingSendPrefix?: string;
+  /** Persisted per-conversation Research Mode; never shared across tabs. */
+  researchMode: ResearchModeState;
   /** True once an AI-title generation has been fired for this conversation —
    *  one-shot guard so the Haiku title call runs at most once (after the first
    *  assistant turn). Runtime-only (never persisted). */
@@ -987,6 +1003,7 @@ export class ChatView extends ItemView {
         allow: new Set(),
         updatedAt: d.updatedAt,
         usage: d.usage,
+        researchMode: normalizeResearchModeState(d.researchMode),
         messages: d.messages.map((m) => this.reviveMessage(m)),
         session: null,
         sessionSig: "",
@@ -1054,6 +1071,7 @@ export class ChatView extends ItemView {
       sessionId: c.sessionId,
       updatedAt: c.updatedAt,
       usage: c.usage,
+      researchMode: c.researchMode,
       messages: c.messages.map((m) =>
         m.role === "assistant"
           ? {
@@ -1116,6 +1134,7 @@ export class ChatView extends ItemView {
       pendingPerm: null,
       pendingAsk: null,
       queue: [],
+      researchMode: initialResearchModeState(),
       pendingEl: null,
       currentCtx: null,
       tailSurfaceEl: null,
@@ -1298,6 +1317,7 @@ export class ChatView extends ItemView {
     c.sessionId = undefined;
     c.allow.clear();
     c.queue = [];
+    c.researchMode = initialResearchModeState();
     c.title = "New chat";
     c.updatedAt = Date.now();
     c.listEl.empty();
@@ -4195,10 +4215,11 @@ export class ChatView extends ItemView {
   private handoffPrefix: string | null = null;
 
   private send(): void {
-    const text = this.composer.getInputValue().trim();
+    let text = this.composer.getInputValue().trim();
     const pendingImages = this.composer.getPendingImages();
     const handoff = this.handoffPrefix ?? undefined;
     this.handoffPrefix = null;
+    const c = this.active;
     if (!text && pendingImages.length === 0) return;
     // `/compact [instructions]` is a local slash command, not a chat turn: route
     // it to compaction (mirrors the CLI, which intercepts /compact client-side)
@@ -4212,12 +4233,30 @@ export class ChatView extends ItemView {
       this.compactActive(instructions || undefined);
       return;
     }
+    const researchCommand = parseResearchCommand(text, c.researchMode, Date.now());
+    let researchModeForTurn: ResearchModeState | undefined;
+    if (researchCommand?.kind === "invalid") {
+      new Notice(researchCommand.message);
+      this.composer.focusInput();
+      return;
+    }
+    if (researchCommand?.kind === "exit") {
+      c.researchMode = researchCommand.state;
+      this.composer.setInputValue("");
+      this.persist();
+      new Notice("Research Mode off");
+      return;
+    }
+    if (researchCommand?.kind === "start") {
+      c.researchMode = researchCommand.state;
+      researchModeForTurn = researchCommand.state;
+      text = researchCommand.question;
+    }
     this.composer.setInputValue("");
     this.composer.autoGrow();
     const images = pendingImages.length ? pendingImages : undefined;
     this.composer.clearPendingImages();
     this.composer.renderImageStrip();
-    const c = this.active;
     // You always want to watch your own message land.
     this.pinnedToBottom = true;
     this.updateJumpPill();
@@ -4229,7 +4268,7 @@ export class ChatView extends ItemView {
       // returns false when images are attached — so the shared path stays
       // provider-agnostic. A false return or a throw falls back to queue.
       let steered = false;
-      if (this.plugin.settings.steerMode === "steer") {
+      if (!c.researchMode.enabled && this.plugin.settings.steerMode === "steer") {
         try {
           steered = c.session?.steer?.(text, images) ?? false;
         } catch {
@@ -4244,11 +4283,21 @@ export class ChatView extends ItemView {
       } else {
         // queue while a turn is running (a handoff prefix rides along and is
         // forwarded by the queue-drain logic like the recovery recap)
-        c.queue.push({ text, images, sendPrefix: handoff });
+        c.queue.push({
+          text,
+          images,
+          sendPrefix: handoff,
+          researchMode: researchModeForTurn ?? (
+            c.researchMode.enabled ? { ...c.researchMode } : undefined
+          ),
+        });
         this.renderQueue(c);
       }
     } else {
-      void this.runTurn(c, text, images, handoff ? { sendPrefix: handoff } : undefined);
+      const turnOpts = handoff || researchModeForTurn
+        ? { sendPrefix: handoff, researchMode: researchModeForTurn }
+        : undefined;
+      void this.runTurn(c, text, images, turnOpts);
     }
   }
 
@@ -4300,8 +4349,14 @@ export class ChatView extends ItemView {
     c: Convo,
     text: string,
     images?: ImageAttachment[],
-    opts?: { sendPrefix?: string; isRecoveryRetry?: boolean; reuseUserTurn?: boolean }
+    opts?: {
+      sendPrefix?: string;
+      isRecoveryRetry?: boolean;
+      reuseUserTurn?: boolean;
+      researchMode?: ResearchModeState;
+    }
   ): Promise<void> {
+    const researchMode = opts?.researchMode ?? c.researchMode;
     const paths = c === this.active ? this.composer.contextPaths() : [];
     const message = paths.length
       ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${text}`
@@ -4694,7 +4749,8 @@ export class ChatView extends ItemView {
       // sendPrefix (recovery recap) and the proactive-recall block are prepended to
       // the OUTBOUND provider message only — never to the rendered/persisted user
       // text, so they can't leak into the transcript, c.messages, or serialize().
-      // Order: recap (if any) → recalled memory → the user's message.
+      // Order: recap (if any) -> recalled memory -> research contract -> the
+      // user's message.
       const recallBlock = recalled.length ? this.formatRecallBlock(recalled) : "";
       // Cold-spawn rehydration: a session spawned with no id starts on an EMPTY CLI
       // transcript, so a "continua/riprendi" has nothing to continue — the model
@@ -4718,7 +4774,8 @@ export class ChatView extends ItemView {
       // turn once (the recap itself comes from coldRecap above).
       const compactPrefix = c.pendingSendPrefix;
       if (compactPrefix) c.pendingSendPrefix = undefined;
-      const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, recallBlock, message].filter(Boolean).join("\n\n");
+      const researchMessage = buildResearchOutbound(researchMode, message);
+      const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, recallBlock, researchMessage].filter(Boolean).join("\n\n");
       await session.send(outbound, onEvent, imgs);
       // `session.send` can resolve cleanly even after a user Stop/Esc — the
       // adapter swallows the abort rather than throwing or emitting an
@@ -4905,7 +4962,13 @@ export class ChatView extends ItemView {
         // threaded to the provider only (never rendered, queued as a chip, or
         // persisted). Route via the queue FIRST so it can't race queued messages.
         const recap = buildRecap(c.messages);
-        c.queue.unshift({ text, images, sendPrefix: recap, isRecoveryRetry: true });
+        c.queue.unshift({
+          text,
+          images,
+          sendPrefix: recap,
+          isRecoveryRetry: true,
+          researchMode,
+        });
       }
       this.emitTurnTerminal(c, poisoned); // fire-and-forget board hook (no-op when off; can't throw)
       this.setStreaming(c, false);
@@ -4946,8 +5009,12 @@ export class ChatView extends ItemView {
         const next = c.queue.shift()!;
         this.renderQueue(c);
         const retryOpts =
-          next.isRecoveryRetry || next.sendPrefix
-            ? { sendPrefix: next.sendPrefix, isRecoveryRetry: next.isRecoveryRetry }
+          next.isRecoveryRetry || next.sendPrefix || next.researchMode
+            ? {
+                sendPrefix: next.sendPrefix,
+                isRecoveryRetry: next.isRecoveryRetry,
+                researchMode: next.researchMode,
+              }
             : undefined;
         void this.runTurn(c, next.text, next.images, retryOpts);
       } else {
