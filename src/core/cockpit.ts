@@ -23,13 +23,9 @@ export interface CockpitRow {
   action: CockpitAction;
 }
 
-export interface AttentionItem {
-  kind: "blocked" | "streaming" | "answer" | "runs";
-  label: string;
-  /** Convo id (blocked/streaming), vault path (answer), or "" (runs — the
-   *  click opens the Automations panel, no per-item address). */
-  target: string;
-}
+export type AttentionItem =
+  | { kind: "blocked" | "streaming" | "answer"; label: string; target: string }
+  | { kind: "runs" | "pulse"; label: string };
 
 const DAY = 86_400_000;
 
@@ -42,6 +38,8 @@ export function buildAttention(
     answers: { path: string; name: string; answeredAt: number }[];
     /** Automation write runs awaiting review (unreviewedWriteRuns count). */
     unreviewedRuns?: number;
+    /** Daily Pulse items generated since the review note was last opened. */
+    dailyPulseItems?: number;
     now: number;
   },
   cap = 6
@@ -50,12 +48,18 @@ export function buildAttention(
   for (const c of input.convos) {
     if (c.blocked) out.push({ kind: "blocked", label: `"${c.title}" aspetta un tuo OK`, target: c.id });
   }
+  if (input.dailyPulseItems) {
+    const n = input.dailyPulseItems;
+    out.push({
+      kind: "pulse",
+      label: `Daily Pulse · ${n} item${n === 1 ? "" : "s"}`,
+    });
+  }
   if (input.unreviewedRuns) {
     const n = input.unreviewedRuns;
     out.push({
       kind: "runs",
       label: n === 1 ? "1 automation run da rivedere" : `${n} automation run da rivedere`,
-      target: "",
     });
   }
   for (const c of input.convos) {

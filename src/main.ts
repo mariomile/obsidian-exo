@@ -47,7 +47,7 @@ import { selectionObserverExtension } from "./editor/selection-observer";
 import { WriteQueue } from "./core/write-queue";
 import { startCodexBridge, type CodexBridge } from "./obsidian/codex-bridge";
 import { CODEX_BRIDGE_SCRIPT } from "./obsidian/codex-bridge-script";
-import { promoteToTaskCommandVisible } from "./core/tasks";
+import { promoteToTaskCommandVisible, TASKS_PATH } from "./core/tasks";
 import {
   ConvoStateChannel,
   type ConvoState,
@@ -77,6 +77,7 @@ import {
 } from "./core/daily-pulse";
 import {
   generateAndWriteDailyPulse,
+  DAILY_PULSE_TARGET_PATH,
   type DailyPulseCollectionWarning,
 } from "./obsidian/daily-pulse";
 import {
@@ -545,6 +546,14 @@ export default class ExoPlugin extends Plugin {
       id: "automations",
       name: "Automations…",
       callback: () => this.openAutomationsModal(),
+    });
+    this.addCommand({
+      id: "open-daily-pulse",
+      name: "Open Daily Pulse",
+      callback: () => void this.openDailyPulse(),
+    });
+    this.registerObsidianProtocolHandler("exo-daily-pulse", (params) => {
+      void this.openDailyPulseTarget(params);
     });
     this.registerInterval(window.setInterval(() => void this.checkScheduledRuns(), 30 * 60 * 1000));
     void this.checkScheduledRuns();
@@ -2009,6 +2018,125 @@ export default class ExoPlugin extends Plugin {
     };
   }
 
+  private async persistDailyPulseSuccess(options: {
+    completedAt: number;
+    attemptedAt: number;
+    warnings: DailyPulseCollectionWarning[];
+    itemCount: number;
+    config?: AutomationConfig;
+    reviewed?: boolean;
+  }): Promise<void> {
+    const lastRunKey = options.config ? automationLastRunKey(options.config) : null;
+    const priorLastRun = lastRunKey ? this.settings.scheduledLastRun[lastRunKey] : undefined;
+    const priorReviewState = this.settings.dailyPulseReviewState;
+    const nextReviewState = dailyPulseReviewAfterRun(
+      priorReviewState,
+      {
+        status: "succeeded",
+        completedAt: options.completedAt,
+        warningCount: options.warnings.length,
+      },
+      options.attemptedAt,
+      options.warnings,
+      options.itemCount
+    );
+    if (options.reviewed) nextReviewState.lastReviewedAt = options.completedAt;
+    if (lastRunKey) this.settings.scheduledLastRun[lastRunKey] = options.completedAt;
+    this.settings.dailyPulseReviewState = nextReviewState;
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      if (lastRunKey) {
+        if (priorLastRun === undefined) delete this.settings.scheduledLastRun[lastRunKey];
+        else this.settings.scheduledLastRun[lastRunKey] = priorLastRun;
+      }
+      this.settings.dailyPulseReviewState = priorReviewState;
+      throw error;
+    }
+  }
+
+  private async generateAndPersistDailyPulse(now: number, reviewed = false): Promise<boolean> {
+    try {
+      const generated = await this.generateDailyPulse(now);
+      await this.persistDailyPulseSuccess({
+        completedAt: now,
+        attemptedAt: now,
+        warnings: generated.warnings,
+        itemCount: generated.itemCount,
+        config: this.settings.automations.find(isDailyPulseAutomation),
+        reviewed,
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.settings.dailyPulseReviewState = dailyPulseReviewAfterRun(
+        this.settings.dailyPulseReviewState,
+        { status: "failed", error: message, retryable: true },
+        now
+      );
+      try {
+        await this.saveSettings();
+      } catch (saveError) {
+        console.warn("[Exo] Daily Pulse error state could not be saved:", saveError);
+      }
+      return false;
+    }
+  }
+
+  /** Explicit user-triggered refresh. It is allowed while the schedule is paused. */
+  async runDailyPulseNow(now: number = Date.now()): Promise<boolean> {
+    const ok = await this.generateAndPersistDailyPulse(now);
+    await this.refreshCockpit();
+    return ok;
+  }
+
+  /** Pull surface: generate on first explicit open, then mark current items reviewed. */
+  async openDailyPulse(): Promise<void> {
+    let file = this.app.vault.getAbstractFileByPath(DAILY_PULSE_TARGET_PATH);
+    if (!(file instanceof TFile)) {
+      const ok = await this.generateAndPersistDailyPulse(Date.now(), true);
+      if (!ok) {
+        await this.refreshCockpit();
+        new Notice("Daily Pulse could not be refreshed. Retry from Automations.");
+        return;
+      }
+      file = this.app.vault.getAbstractFileByPath(DAILY_PULSE_TARGET_PATH);
+    }
+    if (!(file instanceof TFile)) {
+      await this.refreshCockpit();
+      new Notice("Daily Pulse review note is unavailable.");
+      return;
+    }
+    await this.app.workspace.openLinkText(DAILY_PULSE_TARGET_PATH, "", "tab");
+    const state = this.settings.dailyPulseReviewState;
+    if (state.lastSuccessAt > state.lastReviewedAt) {
+      state.lastReviewedAt = Date.now();
+      await this.saveSettings();
+    }
+    await this.refreshCockpit();
+  }
+
+  private async openDailyPulseTarget(params: Record<string, string>): Promise<void> {
+    switch (params.target) {
+      case "task":
+        if (this.settings.orchestrationEnabled) await this.activateBoard();
+        else await this.app.workspace.openLinkText(TASKS_PATH, "", "tab");
+        return;
+      case "loop":
+        await this.app.workspace.openLinkText(OPEN_LOOPS_PATH, "", "tab");
+        return;
+      case "proposal":
+        await this.openProposalsModal();
+        return;
+      case "automation":
+        this.openAutomationsModal();
+        return;
+      case "note":
+        if (params.path) await this.app.workspace.openLinkText(params.path, "", "tab");
+        return;
+    }
+  }
+
   private async runScheduledDailyPulse(
     config: AutomationConfig,
     now: number
@@ -2039,24 +2167,13 @@ export default class ExoPlugin extends Plugin {
       return;
     }
 
-    const priorLastRun = this.settings.scheduledLastRun[lastRunKey];
-    const priorReviewState = this.settings.dailyPulseReviewState;
-    this.settings.scheduledLastRun[lastRunKey] = result.completedAt;
-    this.settings.dailyPulseReviewState = dailyPulseReviewAfterRun(
-      priorReviewState,
-      result,
-      now,
+    await this.persistDailyPulseSuccess({
+      completedAt: result.completedAt,
+      attemptedAt: now,
       warnings,
-      itemCount
-    );
-    try {
-      await this.saveSettings();
-    } catch (error) {
-      if (priorLastRun === undefined) delete this.settings.scheduledLastRun[lastRunKey];
-      else this.settings.scheduledLastRun[lastRunKey] = priorLastRun;
-      this.settings.dailyPulseReviewState = priorReviewState;
-      throw error;
-    }
+      itemCount,
+      config,
+    });
   }
 
   private scheduledRunsBusy = false;

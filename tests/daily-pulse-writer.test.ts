@@ -149,9 +149,10 @@ describe("Daily Pulse non-destructive writer", () => {
     expect(content).toContain("[[_system/orchestration/tasks|Approve launch]]");
     expect(content).toContain("[[_system/memory/open-loops|Follow up]]");
     expect(content).toContain("[[Active/Projects/Exo|Exo]]");
-    expect(content).toContain("Action: Review task");
+    expect(content).toContain("Action: [Review task](obsidian://exo-daily-pulse?target=task)");
     expect(content).toContain('<!-- exo:daily-pulse:cta {"kind":"review","target":"task","id":"task-1"} -->');
-    expect(content).toContain("Action: Review suggestion");
+    expect(content).toContain("Action: [Review suggestion](obsidian://exo-daily-pulse?target=proposal)");
+    expect(content).toContain("Action: [Open note](obsidian://exo-daily-pulse?target=note&path=Active%2FProjects%2FExo.md)");
     expect(content).toContain('<!-- exo:daily-pulse:cta {"kind":"review","target":"proposal","id":"proposal-1"} -->');
     expect(content).toBe(renderDailyPulseBlock(pulse(), []));
   });

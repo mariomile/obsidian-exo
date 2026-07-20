@@ -26,6 +26,7 @@ import {
 } from "../core/cockpit";
 import { parseLoopsFile } from "../core/open-loops";
 import { unreviewedWriteRuns } from "../core/automations";
+import { dailyPulseNeedsReview } from "../core/daily-pulse";
 import { parseTasksFile, TASKS_PATH } from "../core/tasks";
 import {
   autonomyStatuses,
@@ -41,6 +42,13 @@ const OPEN_LOOPS_PATH = "_system/memory/open-loops.md";
 const VAULT_CONTEXT_PATH = "_system/vault-context.md";
 const REPORTS_DIR = "_system/reports";
 const INBOX_DIR = "_inbox";
+const ATTENTION_ICONS: Record<AttentionItem["kind"], string> = {
+  blocked: "shield-alert",
+  pulse: "sunrise",
+  streaming: "loader",
+  runs: "file-diff",
+  answer: "mail-check",
+};
 
 export class CockpitView extends ItemView {
   private refreshedAt = 0;
@@ -215,7 +223,14 @@ export class CockpitView extends ItemView {
       clickable(rbtn, () => void this.refresh());
 
       // Attention strip (only when non-empty)
-      const attention = buildAttention({ convos: this.plugin.liveAttention(), answers, unreviewedRuns, now });
+      const pulseState = this.plugin.settings.dailyPulseReviewState;
+      const attention = buildAttention({
+        convos: this.plugin.liveAttention(),
+        answers,
+        unreviewedRuns,
+        dailyPulseItems: dailyPulseNeedsReview(pulseState) ? pulseState.itemCount : 0,
+        now,
+      });
       if (attention.length || proposalPending > 0) this.renderAttention(el, attention, proposalPending);
 
       // Command bar
@@ -269,21 +284,15 @@ export class CockpitView extends ItemView {
     const strip = parent.createDiv({ cls: "mva-ck-attention" });
     for (const it of items) {
       const row = strip.createDiv({ cls: `mva-ck-att is-${it.kind}` });
-      setIcon(
-        row.createSpan({ cls: "mva-ck-att-icon" }),
-        it.kind === "blocked"
-          ? "shield-alert"
-          : it.kind === "streaming"
-            ? "loader"
-            : it.kind === "runs"
-              ? "file-diff"
-              : "mail-check"
-      );
+      setIcon(row.createSpan({ cls: "mva-ck-att-icon" }), ATTENTION_ICONS[it.kind]);
       row.createSpan({ text: it.label });
       clickable(row, () => {
-        if (it.kind === "answer") void this.app.workspace.openLinkText(it.target, "", "tab");
+        if (it.kind === "pulse") void this.plugin.openDailyPulse();
+        else if (it.kind === "answer") void this.app.workspace.openLinkText(it.target, "", "tab");
         else if (it.kind === "runs") this.plugin.openAutomationsModal();
-        else void this.plugin.openConvo(it.target);
+        else if (it.kind === "blocked" || it.kind === "streaming") {
+          void this.plugin.openConvo(it.target);
+        }
       });
     }
     if (proposalPending > 0) {

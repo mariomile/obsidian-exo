@@ -4543,6 +4543,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-ck-att:hover { border-color: var(--background-modifier-border-hover); }
 .mva-ck-att-icon svg { width: 14px; height: 14px; }
 .mva-ck-att.is-blocked .mva-ck-att-icon { color: var(--color-orange); }
+.mva-ck-att.is-pulse .mva-ck-att-icon { color: var(--text-accent); }
 .mva-ck-att.is-streaming .mva-ck-att-icon { color: var(--interactive-accent); }
 .mva-ck-att.is-answer .mva-ck-att-icon { color: var(--color-green); }
 
@@ -4627,7 +4628,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-faint);
   margin-top: 4px;
 }
-.mva-auto-warn { color: var(--color-orange, #e0a341); }
+.mva-auto-warn {
+  color: var(--color-orange, #e0a341);
+  display: -webkit-box;
+  max-width: 52ch;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .mva-auto-x {
   display: inline-flex;
   align-items: center;

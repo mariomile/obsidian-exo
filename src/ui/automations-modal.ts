@@ -15,12 +15,18 @@ import { openablePopover } from "./popover";
 import { NoteDiffModal } from "./note-diff";
 import { basename as noteBasename } from "../obsidian/graph";
 import {
+  automationLastRunKey,
   cadenceLabel,
   nextDueAt,
   type AutomationConfig,
   type AutomationRunRecord,
   type Cadence,
 } from "../core/automations";
+import {
+  dailyPulseNeedsReview,
+  isDailyPulseAutomation,
+  type DailyPulseReviewState,
+} from "../core/daily-pulse";
 import { formatAge } from "../core/actions-hub";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -31,6 +37,14 @@ function fmtIn(ms: number): string {
   if (ms < HOUR) return `in ${Math.floor(ms / 60_000)}m`;
   if (ms < 24 * HOUR) return `in ${Math.floor(ms / HOUR)}h`;
   return `in ${Math.floor(ms / (24 * HOUR))}d`;
+}
+
+function dailyPulseMetaLabel(state: DailyPulseReviewState): string {
+  if (state.status === "error") return "retry available";
+  if (dailyPulseNeedsReview(state)) {
+    return `${state.itemCount} item${state.itemCount === 1 ? "" : "s"} to review`;
+  }
+  return state.lastSuccessAt > 0 ? "reviewed" : "not generated";
 }
 
 export class AutomationsModal extends Modal {
@@ -86,6 +100,10 @@ export class AutomationsModal extends Modal {
   /* ------------------------------ one row ------------------------------ */
 
   private renderRow(list: HTMLElement, a: AutomationConfig, idx: number): void {
+    if (isDailyPulseAutomation(a)) {
+      this.renderDailyPulseRow(list, a, idx);
+      return;
+    }
     const row = list.createDiv({ cls: "mva-auto-row" });
     const head = row.createDiv({ cls: "mva-auto-head" });
 
@@ -106,7 +124,58 @@ export class AutomationsModal extends Modal {
       )
     );
 
-    // Cadence chip: kind rows + hour / weekday editors in one popover.
+    this.renderCadenceChip(head, a);
+
+    // Write-mode chip (is-caution when writes are on — it's the potent state).
+    const writeChip = head.createDiv({ cls: "mva-sel-chip mva-auto-toggle", attr: { "aria-label": "Write mode" } });
+    const syncWrite = () => {
+      writeChip.setText(a.write ? "writes" : "read-only");
+      writeChip.toggleClass("is-caution", a.write);
+    };
+    syncWrite();
+    clickable(writeChip, () => {
+      a.write = !a.write;
+      this.save();
+      syncWrite();
+      this.refreshMeta(row, a);
+    });
+
+    // Enabled chip.
+    this.renderEnabledChip(head, row, a);
+
+    head.createDiv({ cls: "mva-auto-spacer" });
+
+    const run = head.createEl("button", { cls: "mva-btn", text: "Run now" });
+    run.onclick = () => {
+      const p = prompts.find((x) => x.name.toLowerCase() === a.name.toLowerCase());
+      if (!p) {
+        new Notice(`No playbook named "${a.name}".`);
+        return;
+      }
+      run.setAttr("disabled", "true");
+      void this.plugin
+        .runPlaybook(p.name, p.prompt, { write: a.write })
+        .then((ok) => {
+          if (ok) {
+            this.plugin.settings.scheduledLastRun[p.name] = Date.now();
+            this.save();
+          }
+        })
+        .finally(() => {
+          run.removeAttribute("disabled");
+          this.refreshMeta(row, a);
+          void this.renderRuns();
+        });
+    };
+
+    this.renderRemoveControl(head, idx);
+
+    row.createDiv({ cls: "mva-auto-meta" });
+    this.refreshMeta(row, a);
+    if (!known) row.createDiv({ cls: "mva-auto-warn", text: "Playbook not found — pick an existing prompt." });
+  }
+
+  private renderCadenceChip(head: HTMLElement, a: AutomationConfig): void {
     this.chipSelect(head, cadenceLabel(a.cadence), "Cadence", (pop, close) => {
       this.optionRows(
         pop,
@@ -159,85 +228,101 @@ export class AutomationsModal extends Modal {
         );
       }
     });
+  }
 
-    // Write-mode chip (is-caution when writes are on — it's the potent state).
-    const writeChip = head.createDiv({ cls: "mva-sel-chip mva-auto-toggle", attr: { "aria-label": "Write mode" } });
-    const syncWrite = () => {
-      writeChip.setText(a.write ? "writes" : "read-only");
-      writeChip.toggleClass("is-caution", a.write);
-    };
-    syncWrite();
-    clickable(writeChip, () => {
-      a.write = !a.write;
-      this.save();
-      syncWrite();
-      this.refreshMeta(row, a);
-    });
+  private renderDailyPulseRow(list: HTMLElement, a: AutomationConfig, idx: number): void {
+    const row = list.createDiv({ cls: "mva-auto-row mva-auto-pulse" });
+    const head = row.createDiv({ cls: "mva-auto-head" });
+    head.createDiv({ cls: "mva-sel-chip", text: "Daily Pulse" });
+    this.renderCadenceChip(head, a);
 
-    // Enabled chip.
-    const onChip = head.createDiv({ cls: "mva-sel-chip mva-auto-toggle", attr: { "aria-label": "Enabled" } });
-    const syncOn = () => {
-      onChip.setText(a.enabled ? "on" : "paused");
-      onChip.toggleClass("is-off", !a.enabled);
-    };
-    syncOn();
-    clickable(onChip, () => {
-      a.enabled = !a.enabled;
-      this.save();
-      syncOn();
-      this.refreshMeta(row, a);
-    });
+    this.renderEnabledChip(head, row, a);
 
     head.createDiv({ cls: "mva-auto-spacer" });
+    const open = head.createEl("button", { cls: "mva-btn", text: "Open" });
+    open.onclick = () => void this.plugin.openDailyPulse().then(() => this.render());
 
-    const run = head.createEl("button", { cls: "mva-btn", text: "Run now" });
-    run.onclick = () => {
-      const p = prompts.find((x) => x.name.toLowerCase() === a.name.toLowerCase());
-      if (!p) {
-        new Notice(`No playbook named "${a.name}".`);
-        return;
-      }
-      run.setAttr("disabled", "true");
-      void this.plugin
-        .runPlaybook(p.name, p.prompt, { write: a.write })
-        .then((ok) => {
-          if (ok) {
-            this.plugin.settings.scheduledLastRun[p.name] = Date.now();
-            this.save();
-          }
-        })
-        .finally(() => {
-          run.removeAttribute("disabled");
-          this.refreshMeta(row, a);
-          void this.renderRuns();
-        });
+    const state = this.plugin.settings.dailyPulseReviewState;
+    const retry = head.createEl("button", {
+      cls: "mva-btn",
+      text: state.retryable ? "Retry" : "Refresh now",
+    });
+    retry.onclick = () => {
+      retry.setAttr("disabled", "true");
+      void this.plugin.runDailyPulseNow().then((ok) => {
+        if (!ok) new Notice("Daily Pulse could not be refreshed. You can retry.");
+        this.render();
+      });
     };
 
-    const del = head.createSpan({ cls: "mva-auto-x", attr: { "aria-label": "Remove automation" } });
-    setIcon(del, "x");
-    clickable(del, () => {
-      this.plugin.settings.automations.splice(idx, 1);
-      this.save();
-      this.render();
-    });
+    this.renderRemoveControl(head, idx);
 
     row.createDiv({ cls: "mva-auto-meta" });
     this.refreshMeta(row, a);
-    if (!known) row.createDiv({ cls: "mva-auto-warn", text: "Playbook not found — pick an existing prompt." });
+    if (state.status === "error") {
+      row.createDiv({
+        cls: "mva-auto-warn",
+        text: state.lastError || "Daily Pulse could not be refreshed. You can retry.",
+      });
+    } else if (state.warnings.length > 0) {
+      row.createDiv({
+        cls: "mva-auto-warn",
+        text: `${state.warnings.length} source${state.warnings.length === 1 ? "" : "s"} unavailable; the rest of the pulse is ready.`,
+      });
+    }
   }
 
   private refreshMeta(row: HTMLElement, a: AutomationConfig): void {
     const meta = row.querySelector<HTMLElement>(".mva-auto-meta");
     if (!meta) return;
     const now = Date.now();
-    const last = this.plugin.settings.scheduledLastRun[a.name] ?? 0;
+    const last = this.plugin.settings.scheduledLastRun[automationLastRunKey(a)] ?? 0;
     const parts = [`last ${formatAge(last || null, now, "never")}`];
     if (a.enabled) parts.push(`next ${fmtIn(nextDueAt(a.cadence, last, now) - now)}`);
+    if (isDailyPulseAutomation(a)) {
+      const state = this.plugin.settings.dailyPulseReviewState;
+      parts.push(dailyPulseMetaLabel(state));
+    }
     meta.setText(parts.join(" · "));
   }
 
   private hourOf(c: Cadence): number {
     return c.kind === "hourly" ? 7 : c.hour;
+  }
+
+  private renderEnabledChip(
+    head: HTMLElement,
+    row: HTMLElement,
+    automation: AutomationConfig
+  ): void {
+    const chip = head.createDiv({
+      cls: "mva-sel-chip mva-auto-toggle",
+      attr: { "aria-label": "Enabled" },
+    });
+    const sync = () => {
+      chip.setText(automation.enabled ? "on" : "paused");
+      chip.toggleClass("is-off", !automation.enabled);
+    };
+    sync();
+    clickable(chip, () => {
+      automation.enabled = !automation.enabled;
+      this.save();
+      sync();
+      this.refreshMeta(row, automation);
+    });
+  }
+
+  private renderRemoveControl(head: HTMLElement, index: number): void {
+    const control = head.createSpan({
+      cls: "mva-auto-x",
+      attr: { "aria-label": "Remove automation" },
+    });
+    setIcon(control, "x");
+    clickable(control, () => {
+      this.plugin.settings.automations.splice(index, 1);
+      this.save();
+      this.render();
+    });
   }
 
   /* --------------------------- chip + popover --------------------------- */

@@ -163,7 +163,7 @@ describe("parseAnsweredStamp", () => {
 describe("buildAttention — unreviewed runs", () => {
   it("surfaces the runs item after blocked, with singular/plural label", () => {
     const one = buildAttention({ convos: [], answers: [], unreviewedRuns: 1, now: NOW });
-    expect(one).toEqual([{ kind: "runs", label: "1 automation run da rivedere", target: "" }]);
+    expect(one).toEqual([{ kind: "runs", label: "1 automation run da rivedere" }]);
     const items = buildAttention({
       convos: [{ id: "c2", title: "B", blocked: true, streaming: false }],
       answers: [],
@@ -177,5 +177,28 @@ describe("buildAttention — unreviewed runs", () => {
   it("zero/absent → no item", () => {
     expect(buildAttention({ convos: [], answers: [], unreviewedRuns: 0, now: NOW })).toEqual([]);
     expect(buildAttention({ convos: [], answers: [], now: NOW })).toEqual([]);
+  });
+});
+
+describe("buildAttention — Daily Pulse", () => {
+  it("shows one compact badge only when review items are pending", () => {
+    expect(buildAttention({
+      convos: [],
+      answers: [],
+      dailyPulseItems: 1,
+      now: NOW,
+    })).toEqual([{ kind: "pulse", label: "Daily Pulse · 1 item" }]);
+    expect(buildAttention({
+      convos: [],
+      answers: [],
+      dailyPulseItems: 3,
+      now: NOW,
+    })[0].label).toBe("Daily Pulse · 3 items");
+    expect(buildAttention({
+      convos: [],
+      answers: [],
+      dailyPulseItems: 0,
+      now: NOW,
+    })).toEqual([]);
   });
 });

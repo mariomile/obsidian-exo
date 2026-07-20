@@ -5,6 +5,7 @@ import {
   DailyPulseSlotRunner,
   createDailyPulseAutomation,
   dailyPulseReviewAfterRun,
+  dailyPulseNeedsReview,
   initialDailyPulseReviewState,
   runDailyPulseSlot,
   seedDailyPulseAutomation,
@@ -206,11 +207,23 @@ describe("runDailyPulseSlot", () => {
       status: "warning",
       lastAttemptAt: completedAt,
       lastSuccessAt: completedAt,
+      lastReviewedAt: 0,
       warnings: [{ source: "loops", message: "temporarily unavailable" }],
       itemCount: 4,
       lastError: "",
       retryable: false,
     });
+  });
+
+  it("surfaces items only until the generated pulse is reviewed", () => {
+    const state = {
+      ...initialDailyPulseReviewState(),
+      lastSuccessAt: 20,
+      itemCount: 2,
+    };
+    expect(dailyPulseNeedsReview(state)).toBe(true);
+    expect(dailyPulseNeedsReview({ ...state, lastReviewedAt: 20 })).toBe(false);
+    expect(dailyPulseNeedsReview({ ...state, itemCount: 0 })).toBe(false);
   });
 
   it("uses local calendar slots across the spring DST boundary", async () => {

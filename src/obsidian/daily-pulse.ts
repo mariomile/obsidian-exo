@@ -376,7 +376,18 @@ function itemLabel(item: DailyPulseItem): string {
   }
 }
 
-function actionText(action: DailyPulseAction): string {
+export function dailyPulseActionHref(action: DailyPulseAction): string {
+  const params = new URLSearchParams();
+  if (action.kind === "open") {
+    params.set("target", "note");
+    params.set("path", action.path);
+  } else {
+    params.set("target", action.target);
+  }
+  return `obsidian://exo-daily-pulse?${params.toString()}`;
+}
+
+function actionLabel(action: DailyPulseAction): string {
   if (action.kind === "open") return "Open note";
   switch (action.target) {
     case "task": return "Review task";
@@ -384,6 +395,10 @@ function actionText(action: DailyPulseAction): string {
     case "proposal": return "Review suggestion";
     case "automation": return "Review automation";
   }
+}
+
+function actionText(action: DailyPulseAction): string {
+  return `[${actionLabel(action)}](${dailyPulseActionHref(action)})`;
 }
 
 function actionMetadata(action: DailyPulseAction): string {

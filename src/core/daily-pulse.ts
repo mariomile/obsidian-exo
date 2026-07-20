@@ -70,6 +70,7 @@ export interface DailyPulseReviewState {
   status: "idle" | "ready" | "warning" | "error";
   lastAttemptAt: number;
   lastSuccessAt: number;
+  lastReviewedAt: number;
   warnings: { source: string; message: string }[];
   itemCount: number;
   lastError: string;
@@ -81,11 +82,16 @@ export function initialDailyPulseReviewState(): DailyPulseReviewState {
     status: "idle",
     lastAttemptAt: 0,
     lastSuccessAt: 0,
+    lastReviewedAt: 0,
     warnings: [],
     itemCount: 0,
     lastError: "",
     retryable: false,
   };
+}
+
+export function dailyPulseNeedsReview(state: DailyPulseReviewState): boolean {
+  return state.itemCount > 0 && state.lastSuccessAt > state.lastReviewedAt;
 }
 
 /** Persistable review/error state for the future quiet Retry UI. */
@@ -110,6 +116,7 @@ export function dailyPulseReviewAfterRun(
     status: warnings.length > 0 ? "warning" : "ready",
     lastAttemptAt: now,
     lastSuccessAt: result.completedAt,
+    lastReviewedAt: previous.lastReviewedAt,
     warnings: warnings.map(({ source, message }) => ({ source, message })),
     itemCount,
     lastError: "",
