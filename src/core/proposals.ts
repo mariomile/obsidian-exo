@@ -13,7 +13,17 @@ export type ProposalPayload =
   | { kind: "task"; title: string; prompt: string; model?: string }
   | { kind: "loop"; title: string; note: string; resurface?: string; tags?: string[] }
   | { kind: "decision"; title: string; context: string; decision: string; rationale?: string }
-  | { kind: "playbook"; name: string; prompt: string };
+  | {
+      kind: "playbook";
+      name: string;
+      prompt: string;
+      /** Optional Workflow Foundry metadata; ignored by dedup and the router. */
+      outcome?: string;
+      inputs?: string[];
+      capabilities?: string[];
+      why?: string;
+      workflowSignature?: string;
+    };
 
 export interface ProposalRecord {
   id: string;
@@ -150,6 +160,35 @@ function parseTags(object: Record<string, unknown>, path: string): ValidationRes
   return { status: "ok", value: tags };
 }
 
+/** Validate an optional array of trimmed, non-empty, length-capped strings. */
+function parseStringArray(
+  object: Record<string, unknown>,
+  key: string,
+  path: string,
+  max: number
+): ValidationResult<string[] | undefined> {
+  const value = object[key];
+  if (value === undefined) return { status: "ok", value: undefined };
+  if (!Array.isArray(value)) return validationError("invalid_type", path, `${key} must be an array of strings`);
+  const items: string[] = [];
+  for (let index = 0; index < value.length; index++) {
+    const item = value[index];
+    if (typeof item !== "string") {
+      return validationError("invalid_type", `${path}[${index}]`, `${key} entries must be strings`);
+    }
+    const trimmed = item.trim();
+    if (!trimmed) return validationError("required", `${path}[${index}]`, `${key} entries cannot be empty`);
+    if (trimmed.length > max) {
+      return validationError("too_long", `${path}[${index}]`, `${key} entries must be at most ${max} characters`);
+    }
+    items.push(trimmed);
+  }
+  return { status: "ok", value: items };
+}
+
+/** Foundry signatures are opaque machine strings; length-cap them and trust no further. */
+const WORKFLOW_SIGNATURE_MAX = 200;
+
 function validateCandidate(value: unknown, index: number): ValidationResult<ProposalCandidate> {
   const path = `$[${index}]`;
   const object = asObject(value);
@@ -240,12 +279,31 @@ function validateCandidate(value: unknown, index: number): ValidationResult<Prop
       if (name.status !== "ok") return name;
       const prompt = requiredString(object, "prompt", `${path}.prompt`, PROPOSAL_LIMITS.content);
       if (prompt.status !== "ok") return prompt;
+      const outcome = optionalString(object, "outcome", `${path}.outcome`, PROPOSAL_LIMITS.rationale);
+      if (outcome.status !== "ok") return outcome;
+      const why = optionalString(object, "why", `${path}.why`, PROPOSAL_LIMITS.rationale);
+      if (why.status !== "ok") return why;
+      const workflowSignature = optionalString(object, "workflowSignature", `${path}.workflowSignature`, WORKFLOW_SIGNATURE_MAX);
+      if (workflowSignature.status !== "ok") return workflowSignature;
+      const inputs = parseStringArray(object, "inputs", `${path}.inputs`, PROPOSAL_LIMITS.title);
+      if (inputs.status !== "ok") return inputs;
+      const capabilities = parseStringArray(object, "capabilities", `${path}.capabilities`, PROPOSAL_LIMITS.title);
+      if (capabilities.status !== "ok") return capabilities;
       return {
         status: "ok",
         value: {
           kind: "playbook",
           title: name.value,
-          payload: { kind: "playbook", name: name.value, prompt: prompt.value },
+          payload: {
+            kind: "playbook",
+            name: name.value,
+            prompt: prompt.value,
+            ...(outcome.value ? { outcome: outcome.value } : {}),
+            ...(inputs.value ? { inputs: inputs.value } : {}),
+            ...(capabilities.value ? { capabilities: capabilities.value } : {}),
+            ...(why.value ? { why: why.value } : {}),
+            ...(workflowSignature.value ? { workflowSignature: workflowSignature.value } : {}),
+          },
           rationale: rationale.value,
         },
       };

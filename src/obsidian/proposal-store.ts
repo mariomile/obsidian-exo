@@ -337,6 +337,53 @@ export class ProposalStore {
     }, now);
   }
 
+  /**
+   * Apply a user's name/prompt edit to a still-pending playbook proposal.
+   * The patch is re-validated through the kernel and the title/fingerprint are
+   * recomputed so a later Accept routes the edited, persisted values. Foundry
+   * metadata carried on the payload is preserved. Never accepts the record.
+   */
+  updatePendingPlaybook(id: string, patch: { name: string; prompt: string }): Promise<ProposalRecord> {
+    return this.mutate(({ data }) => {
+      const record = data.records.find((candidate) => candidate.id === id);
+      if (!record) throw new Error(`Proposal not found: ${id}`);
+      if (record.kind !== "playbook" || record.payload.kind !== "playbook") {
+        throw new Error(`Proposal is not a playbook: ${id}`);
+      }
+      if (record.status !== "pending") throw new Error(`Proposal is not pending: ${id}`);
+
+      const merged = { ...record.payload, name: patch.name, prompt: patch.prompt };
+      const validated = parseProposalCandidates(JSON.stringify([{ ...merged, rationale: record.rationale }]));
+      if (validated.status !== "ok" || validated.value.length !== 1) {
+        const detail = validated.status === "invalid"
+          ? validated.errors.map((error) => `${error.path}: ${error.message}`).join("; ")
+          : "invalid playbook edit";
+        throw new Error(`Invalid playbook edit: ${detail}`);
+      }
+      const clean = validated.value[0];
+      record.title = clean.title;
+      record.payload = clean.payload;
+      record.fingerprint = fingerprintProposal(clean.payload);
+      return record;
+    });
+  }
+
+  /**
+   * Workflow signatures already represented by a pending or accepted playbook.
+   * The Foundry passes these as blocked signatures so a recurring workflow never
+   * distills a second proposal while one is still waiting or already saved.
+   */
+  async blockedWorkflowSignatures(): Promise<Set<string>> {
+    const snapshot = await this.load();
+    const signatures = new Set<string>();
+    for (const record of snapshot.data.records) {
+      if (record.payload.kind !== "playbook") continue;
+      if (record.status !== "pending" && record.status !== "accepted") continue;
+      if (record.payload.workflowSignature) signatures.add(record.payload.workflowSignature);
+    }
+    return signatures;
+  }
+
   recordMetric(metric: ProposalMetric, amount = 1): Promise<ProposalMetrics> {
     if (!Number.isInteger(amount) || amount < 0) {
       return Promise.reject(new Error("Metric amount must be a non-negative integer"));

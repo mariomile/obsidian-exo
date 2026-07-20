@@ -86,6 +86,68 @@ describe("parseProposalCandidates", () => {
     });
   });
 
+  it("preserves optional Foundry metadata on a playbook and drops unknown fields", () => {
+    const result = parseProposalCandidates(JSON.stringify([{
+      kind: "playbook",
+      name: "GTM brief",
+      prompt: "Draft a GTM brief for {{topic}}",
+      outcome: "A shareable one-pager",
+      inputs: ["topic", "audience"],
+      capabilities: ["vault.search", "web.search"],
+      why: "Detected three equivalent runs in 30 days",
+      workflowSignature: "research|vault.search>web.search|markdown",
+      rationale: "Reusable workflow",
+      ignored: true,
+    }]));
+    expect(result).toEqual({
+      status: "ok",
+      value: [{
+        kind: "playbook",
+        title: "GTM brief",
+        payload: {
+          kind: "playbook",
+          name: "GTM brief",
+          prompt: "Draft a GTM brief for {{topic}}",
+          outcome: "A shareable one-pager",
+          inputs: ["topic", "audience"],
+          capabilities: ["vault.search", "web.search"],
+          why: "Detected three equivalent runs in 30 days",
+          workflowSignature: "research|vault.search>web.search|markdown",
+        },
+        rationale: "Reusable workflow",
+      }],
+    });
+  });
+
+  it("validates Foundry metadata types and limits without breaking the base playbook", () => {
+    const cases = [
+      { raw: [{ kind: "playbook", name: "N", prompt: "P", outcome: "x".repeat(501), rationale: "R" }], code: "too_long", path: "$[0].outcome" },
+      { raw: [{ kind: "playbook", name: "N", prompt: "P", why: "x".repeat(501), rationale: "R" }], code: "too_long", path: "$[0].why" },
+      { raw: [{ kind: "playbook", name: "N", prompt: "P", inputs: "topic", rationale: "R" }], code: "invalid_type", path: "$[0].inputs" },
+      { raw: [{ kind: "playbook", name: "N", prompt: "P", inputs: [4], rationale: "R" }], code: "invalid_type", path: "$[0].inputs[0]" },
+      { raw: [{ kind: "playbook", name: "N", prompt: "P", capabilities: ["x".repeat(121)], rationale: "R" }], code: "too_long", path: "$[0].capabilities[0]" },
+    ];
+    for (const testCase of cases) {
+      const result = parseProposalCandidates(JSON.stringify(testCase.raw));
+      expect(result.status).toBe("invalid");
+      if (result.status === "invalid") expect(result.errors[0]).toMatchObject({ code: testCase.code, path: testCase.path });
+    }
+  });
+
+  it("fingerprints a playbook on name and prompt only, ignoring Foundry metadata", () => {
+    const bare = { kind: "playbook" as const, name: "GTM brief", prompt: "Draft it" };
+    const enriched = {
+      ...bare,
+      outcome: "A one-pager",
+      inputs: ["topic"],
+      capabilities: ["web.search"],
+      why: "Recurred three times",
+      workflowSignature: "research|web.search|markdown",
+    };
+    expect(fingerprintProposal(enriched)).toBe(fingerprintProposal(bare));
+    expect(fingerprintProposal({ ...bare, prompt: "Draft something else" })).not.toBe(fingerprintProposal(bare));
+  });
+
   it("accepts one optional markdown fence, but rejects prose or trailing text", () => {
     const json = JSON.stringify([{ kind: "task", title: "T", prompt: "P", rationale: "R" }]);
     expect(parseProposalCandidates(`\n\`\`\`json\n${json}\n\`\`\`\n`).status).toBe("ok");

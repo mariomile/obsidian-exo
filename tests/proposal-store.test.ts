@@ -17,6 +17,18 @@ function task(title: string, prompt = "Do it"): ProposalCandidate {
   };
 }
 
+function playbook(
+  name: string,
+  overrides: Partial<Extract<ProposalCandidate["payload"], { kind: "playbook" }>> = {}
+): ProposalCandidate {
+  return {
+    kind: "playbook",
+    title: name,
+    payload: { kind: "playbook", name, prompt: "Reusable prompt", ...overrides },
+    rationale: "Recurring workflow",
+  };
+}
+
 function source(createdAt = 1_720_000_000_000) {
   return { convoId: "convo-1", turnId: "turn-1", createdAt };
 }
@@ -210,6 +222,84 @@ describe("ProposalStore", () => {
     expect(snapshot.data.records.find((record) => record.id === first.record.id)?.status).toBe("accepted");
     expect(snapshot.data.records.find((record) => record.title === "Second")?.status).toBe("pending");
     expect(enqueue).toHaveBeenCalledTimes(3);
+  });
+
+  it("edits a pending playbook, recomputes title and fingerprint, and keeps Foundry metadata", async () => {
+    const { adapter } = fakeFiles();
+    const store = new ProposalStore(adapter, new WriteQueue());
+    const appended = await store.append(
+      playbook("Draft brief", { outcome: "A one-pager", inputs: ["topic"], workflowSignature: "research|web.search|markdown" }),
+      source()
+    );
+    if (appended.status !== "appended") throw new Error("expected append");
+    const before = appended.record.fingerprint;
+
+    const updated = await store.updatePendingPlaybook(appended.record.id, { name: "GTM brief", prompt: "Draft a GTM brief for {{topic}}" });
+    expect(updated.status).toBe("pending");
+    expect(updated.title).toBe("GTM brief");
+    expect(updated.payload).toMatchObject({
+      kind: "playbook",
+      name: "GTM brief",
+      prompt: "Draft a GTM brief for {{topic}}",
+      outcome: "A one-pager",
+      inputs: ["topic"],
+      workflowSignature: "research|web.search|markdown",
+    });
+    expect(updated.fingerprint).not.toBe(before);
+
+    // Accept must route the persisted, edited values — never a stale copy.
+    const routed = vi.fn(async (record: ProposalRecord) => ({ ok: true as const, target: record.title }));
+    const accepted = await store.accept(appended.record.id, routed);
+    expect(accepted).toMatchObject({ ok: true, target: "GTM brief" });
+    expect(routed.mock.calls[0][0].payload).toMatchObject({ name: "GTM brief", prompt: "Draft a GTM brief for {{topic}}" });
+  });
+
+  it("refuses to edit a missing, non-pending, or non-playbook proposal and re-validates fields", async () => {
+    const { adapter } = fakeFiles();
+    const store = new ProposalStore(adapter, new WriteQueue());
+    const pbook = await store.append(playbook("Editable"), source());
+    const chore = await store.append(task("Not a playbook"), { ...source(), turnId: "turn-2" });
+    if (pbook.status !== "appended" || chore.status !== "appended") throw new Error("expected append");
+
+    await expect(store.updatePendingPlaybook("missing", { name: "X", prompt: "Y" })).rejects.toThrow(/not found/i);
+    await expect(store.updatePendingPlaybook(chore.record.id, { name: "X", prompt: "Y" })).rejects.toThrow(/playbook/i);
+    await expect(store.updatePendingPlaybook(pbook.record.id, { name: "", prompt: "Y" })).rejects.toThrow();
+    await expect(store.updatePendingPlaybook(pbook.record.id, { name: "X", prompt: "y".repeat(4001) })).rejects.toThrow();
+
+    await store.dismiss(pbook.record.id);
+    await expect(store.updatePendingPlaybook(pbook.record.id, { name: "X", prompt: "Y" })).rejects.toThrow(/pending/i);
+  });
+
+  it("collects blocked workflow signatures from pending and accepted playbooks only", async () => {
+    const { adapter } = fakeFiles();
+    const store = new ProposalStore(adapter, new WriteQueue());
+    const pending = await store.append(playbook("Pending", { workflowSignature: "research|web.search|markdown" }), source());
+    const toAccept = await store.append(playbook("Accepted", { workflowSignature: "write|vault.write|vault-write" }), { ...source(), turnId: "turn-2" });
+    const toDismiss = await store.append(playbook("Dismissed", { workflowSignature: "plan|no-tools|message" }), { ...source(), turnId: "turn-3" });
+    await store.append(playbook("No signature"), { ...source(), turnId: "turn-4" });
+    await store.append(task("Chore"), { ...source(), turnId: "turn-5" });
+    if (pending.status !== "appended" || toAccept.status !== "appended" || toDismiss.status !== "appended") throw new Error("expected append");
+
+    await store.accept(toAccept.record.id, async () => ({ ok: true, target: "Accepted" }));
+    await store.dismiss(toDismiss.record.id);
+
+    const blocked = await store.blockedWorkflowSignatures();
+    expect([...blocked].sort()).toEqual(["research|web.search|markdown", "write|vault.write|vault-write"]);
+  });
+
+  it("loads and accepts a legacy playbook record persisted without Foundry metadata", async () => {
+    const { adapter } = fakeFiles();
+    const seed = new ProposalStore(adapter, new WriteQueue());
+    // A record shaped exactly like one saved before P4-T03 (no metadata fields).
+    const appended = await seed.append(playbook("Legacy playbook"), source());
+    if (appended.status !== "appended") throw new Error("expected append");
+    expect(appended.record.payload).toEqual({ kind: "playbook", name: "Legacy playbook", prompt: "Reusable prompt" });
+
+    const store = new ProposalStore(adapter, new WriteQueue());
+    expect((await store.listPending()).records).toHaveLength(1);
+    const accepted = await store.accept(appended.record.id, async () => ({ ok: true, target: "Legacy playbook" }));
+    expect(accepted).toMatchObject({ ok: true, target: "Legacy playbook" });
+    expect(await store.blockedWorkflowSignatures()).toEqual(new Set());
   });
 
   it("dismisses idempotently and reload reconstructs pending records plus metrics", async () => {
