@@ -34,6 +34,12 @@ export interface ResearchReceipt {
   sources: ResearchReceiptSource[];
 }
 
+export interface ResearchReceiptSummary {
+  label: "Sources checked" | "Partial coverage" | "No sources consulted";
+  consulted: number;
+  issues: number;
+}
+
 export interface ResearchSourceAvailability {
   vault: boolean;
   web: boolean;
@@ -286,5 +292,22 @@ export function buildResearchReceipt(input: {
     completedAt: input.completedAt,
     status,
     sources,
+  };
+}
+
+/** Quiet copy contract for the UI: absence of evidence is never completion. */
+export function summarizeResearchReceipt(receipt: ResearchReceipt): ResearchReceiptSummary {
+  const consulted = receipt.sources.filter((source) => source.status === "consulted").length;
+  const issues = receipt.sources.filter((source) =>
+    source.status === "failed" || source.status === "unavailable"
+  ).length;
+  return {
+    label: receipt.status === "complete"
+      ? "Sources checked"
+      : receipt.status === "partial"
+        ? "Partial coverage"
+        : "No sources consulted",
+    consulted,
+    issues,
   };
 }

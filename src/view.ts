@@ -95,6 +95,8 @@ import {
   initialResearchModeState,
   normalizeResearchModeState,
   parseResearchCommand,
+  toggleResearchMode as nextResearchMode,
+  type ResearchReceipt,
   type ResearchModeState,
 } from "./core/research";
 
@@ -481,6 +483,7 @@ export class ChatView extends ItemView {
       true
     );
     await this.restore();
+    this.composer.refreshResearch();
     this.composer.refreshContext();
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
@@ -529,7 +532,25 @@ export class ChatView extends ItemView {
    *  happens in the sidebar. Called at turn end, on switch, and on restore/rewind. */
   private updateRecap(): void {
     if (!this.recapHost || !this.recapPanel || !this.isWideMain()) return;
-    this.recapPanel.render(this.recapHost, buildConvoRecap(this.active.messages, (p) => this.relPath(p)));
+    this.recapPanel.render(
+      this.recapHost,
+      buildConvoRecap(this.active.messages, (p) => this.relPath(p)),
+      null,
+      {
+        enabled: this.active.researchMode.enabled,
+        receipt: this.latestResearchReceipt(this.active),
+      }
+    );
+  }
+
+  private latestResearchReceipt(c: Convo): ResearchReceipt | undefined {
+    for (let index = c.messages.length - 1; index >= 0; index--) {
+      const message = c.messages[index];
+      // The rail describes the latest assistant result. Do not let an older
+      // research receipt mask newer ordinary-chat knowledge in the recap.
+      if (message.role === "assistant") return message.researchReceipt;
+    }
+    return undefined;
   }
 
   /** Live Context refresh during a streaming turn. Same panel, but two things
@@ -547,7 +568,11 @@ export class ChatView extends ItemView {
     this.recapPanel.render(
       this.recapHost,
       buildConvoRecap(live, (p) => this.relPath(p)),
-      this.currentActivity
+      this.currentActivity,
+      {
+        enabled: this.active.researchMode.enabled,
+        receipt: this.latestResearchReceipt(this.active),
+      }
     );
   }
 
@@ -604,6 +629,7 @@ export class ChatView extends ItemView {
       submitWorkflow: (c, steps) => this.submitWorkflow(c, steps),
       compactActive: (instructions) => this.compactActive(instructions),
       togglePlanMode: () => this.togglePlanMode(),
+      toggleResearchMode: () => this.toggleResearchMode(),
       onProviderChange: (next, explicitModel) => this.onProviderChange(next, explicitModel),
       allModelChoices: () => this.allModelChoices(),
       persistModel: () => this.persistModel(),
@@ -1196,6 +1222,7 @@ export class ChatView extends ItemView {
     this.syncSendButton();
     this.composer.updateUsage(c.usage ?? null);
     this.composer.setDraft(c.draft);
+    this.composer.refreshResearch();
     // Reflect the newly-active convo's session quota (if any) on the badge.
     this.composer.setLastRateLimit((c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null);
     this.composer.updateRateBadge();
@@ -1487,6 +1514,16 @@ export class ChatView extends ItemView {
     this.composer.refreshPerm();
     this.active.session?.setPermissionMode?.(next);
     new Notice(next === "plan" ? "Plan mode on — the agent will propose before acting." : "Plan mode off.");
+  }
+
+  /** Research Mode is isolated to the active conversation and persists with it. */
+  private toggleResearchMode(): void {
+    const c = this.active;
+    c.researchMode = nextResearchMode(c.researchMode, Date.now());
+    this.composer.refreshResearch();
+    this.updateRecap();
+    this.persist();
+    if (c.researchMode.enabled) this.composer.focusInput();
   }
   cmdTogglePlan(): void {
     this.togglePlanMode();
@@ -4246,6 +4283,7 @@ export class ChatView extends ItemView {
     }
     if (researchCommand?.kind === "exit") {
       c.researchMode = researchCommand.state;
+      this.composer.refreshResearch();
       this.composer.setInputValue("");
       this.persist();
       new Notice("Research Mode off");
@@ -4253,6 +4291,8 @@ export class ChatView extends ItemView {
     }
     if (researchCommand?.kind === "start") {
       c.researchMode = researchCommand.state;
+      this.composer.refreshResearch();
+      this.updateRecap();
       researchModeForTurn = researchCommand.state;
       text = researchCommand.question;
     }

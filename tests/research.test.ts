@@ -5,6 +5,7 @@ import {
   initialResearchModeState,
   normalizeResearchModeState,
   parseResearchCommand,
+  summarizeResearchReceipt,
   toggleResearchMode,
 } from "../src/core/research";
 
@@ -257,5 +258,52 @@ describe("Research source receipt", () => {
 
     expect(receipt.status).toBe("no-sources");
     expect(receipt.sources.map((source) => source.status)).toEqual(["skipped", "skipped"]);
+  });
+
+  it("never presents a source-less run as completed", () => {
+    const receipt = buildResearchReceipt({
+      state: state("both"),
+      completedAt: NOW,
+      availability: available,
+      tools: [],
+    });
+
+    expect(summarizeResearchReceipt(receipt)).toEqual({
+      label: "No sources consulted",
+      consulted: 0,
+      issues: 0,
+    });
+  });
+
+  it("uses quiet, factual labels for complete and partial coverage", () => {
+    const complete = buildResearchReceipt({
+      state: state("both"),
+      completedAt: NOW,
+      availability: available,
+      tools: [
+        { name: "Read", input: { file_path: "Notes/Local.md" }, ok: true },
+        { name: "WebSearch", input: { query: "current evidence" }, ok: true },
+      ],
+    });
+    const partial = buildResearchReceipt({
+      state: state("both"),
+      completedAt: NOW,
+      availability: available,
+      tools: [
+        { name: "Read", input: { file_path: "Notes/Local.md" }, ok: true },
+        { name: "WebFetch", input: { url: "https://example.com" }, ok: false },
+      ],
+    });
+
+    expect(summarizeResearchReceipt(complete)).toEqual({
+      label: "Sources checked",
+      consulted: 2,
+      issues: 0,
+    });
+    expect(summarizeResearchReceipt(partial)).toEqual({
+      label: "Partial coverage",
+      consulted: 1,
+      issues: 1,
+    });
   });
 });

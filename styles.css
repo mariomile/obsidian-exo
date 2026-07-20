@@ -325,6 +325,20 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-weight: 600;
   color: var(--text-muted);
 }
+.mva-research-summary {
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.mva-research-summary.is-complete {
+  color: color-mix(in srgb, var(--color-green, #3fb950) 70%, var(--text-muted));
+}
+.mva-research-summary.is-partial {
+  color: color-mix(in srgb, var(--color-orange, #e0a341) 72%, var(--text-muted));
+}
 /* Sub-label inside Knowledge separating the Web cluster from the Notes cluster. */
 .mva-recap-sublabel {
   font-size: 10px;
@@ -405,6 +419,28 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   flex: 0 0 auto;
   font-size: 10.5px;
   color: var(--text-faint);
+}
+.mva-research-source-status {
+  flex: 0 0 auto;
+  max-width: 78px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  text-transform: capitalize;
+  color: var(--text-faint);
+}
+.mva-research-source.is-consulted .mva-recap-ico,
+.mva-research-source.is-consulted .mva-research-source-status {
+  color: color-mix(in srgb, var(--color-green, #3fb950) 65%, var(--text-muted));
+}
+.mva-research-source.is-failed .mva-recap-ico,
+.mva-research-source.is-failed .mva-research-source-status {
+  color: color-mix(in srgb, var(--color-orange, #e0a341) 75%, var(--text-muted));
+}
+.mva-research-source.is-unavailable,
+.mva-research-source.is-skipped {
+  opacity: 0.72;
 }
 .mva-recap-more {
   padding: 3px 6px;
@@ -1124,6 +1160,45 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-sel-chip.is-caution.is-open { color: var(--color-orange, #e0a341); }
 .mva-sel-chip.is-danger:hover,
 .mva-sel-chip.is-danger.is-open  { color: var(--color-red, #e05b5b); }
+
+/* Research is a per-chat mode, not a global warning. Its active state is a
+   compact dismissible chip with a restrained brand tint. */
+.mva-research-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: var(--mva-r1);
+  color: var(--text-faint);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--mva-t), background var(--mva-t);
+}
+.mva-research-chip:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-research-chip.is-active {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 9%, transparent);
+}
+.mva-research-chip-icon,
+.mva-research-chip-x {
+  display: inline-flex;
+}
+.mva-research-chip-icon .svg-icon,
+.mva-research-chip-x .svg-icon {
+  width: 12px;
+  height: 12px;
+}
+.mva-research-chip.is-active .mva-research-chip-icon {
+  color: var(--mva-brand, var(--interactive-accent));
+}
+.mva-research-chip-x {
+  margin-left: 2px;
+  opacity: 0.55;
+}
 
 .mva-sel-pop {
   position: absolute;

@@ -90,6 +90,7 @@ export interface ComposerHost {
   submitWorkflow(c: Convo, steps: string[]): void;
   compactActive(instructions?: string): void;
   togglePlanMode(): void;
+  toggleResearchMode(): void;
   onProviderChange(next: ProviderId, explicitModel?: string): void;
   allModelChoices(): { id: string; label: string; provider: ProviderId }[];
   persistModel(): void;
@@ -133,6 +134,7 @@ export class Composer {
   private refreshModelChip: () => void = () => {};
   private refreshEffortChip: () => void = () => {};
   private refreshPermChipFn: () => void = () => {};
+  private refreshResearchChip: () => void = () => {};
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
   private manualAttached: string[] = [];
@@ -212,6 +214,9 @@ export class Composer {
   }
   refreshPerm(): void {
     this.refreshPermChipFn();
+  }
+  refreshResearch(): void {
+    this.refreshResearchChip();
   }
 
   /* ---------------------------- context ----------------------------- */
@@ -574,6 +579,7 @@ export class Composer {
     this.buildModelSelect(tb);
     this.buildEffortSelect(tb);
     this.buildPermissionSelect(tb);
+    this.buildResearchToggle(tb);
 
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
     // Context usage as a compact circular counter (donut ring). Hover for the
@@ -593,6 +599,30 @@ export class Composer {
     setIcon(this.sendBtn, "arrow-up");
     setTooltip(this.sendBtn, "Send");
     this.sendBtn.onclick = () => (this.host.streaming ? this.host.stop() : void this.host.send());
+  }
+
+  /** Per-conversation Research Mode. The active chip is its own dismiss control;
+   *  the inactive state stays compact so discovery does not dominate the bar. */
+  private buildResearchToggle(tb: HTMLElement): void {
+    const chip = tb.createDiv({
+      cls: "mva-research-chip",
+      attr: { role: "button", tabindex: "0", "aria-label": "Toggle Research Mode" },
+    });
+    const refresh = () => {
+      // mount() runs before ChatView.restore(), so the first paint has no active
+      // conversation yet. Start safely off; restore() refreshes to the real state.
+      const active = this.host.active?.researchMode.enabled ?? false;
+      chip.empty();
+      chip.toggleClass("is-active", active);
+      chip.setAttribute("aria-pressed", String(active));
+      setIcon(chip.createSpan({ cls: "mva-research-chip-icon" }), "search");
+      chip.createSpan({ text: "Research" });
+      if (active) setIcon(chip.createSpan({ cls: "mva-research-chip-x" }), "x");
+      setTooltip(chip, active ? "Exit Research Mode" : "Start Research Mode");
+    };
+    clickable(chip, () => this.host.toggleResearchMode());
+    this.refreshResearchChip = refresh;
+    refresh();
   }
 
   /** Model selector — unified picker across BOTH providers (no separate
