@@ -60,7 +60,14 @@ import { buildRelatedChips } from "./ui/related";
 import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { planPersistedConvos } from "./core/persistence";
-import { buildRecap, isRecoverableSessionError, resolveRecovery, shouldColdReseed, stopAction } from "./core/recovery";
+import {
+  buildRecap,
+  isRecoverableSessionError,
+  recordTurnError,
+  resolveRecovery,
+  shouldColdReseed,
+  stopAction,
+} from "./core/recovery";
 import { workingAffordance } from "./core/working-visibility";
 import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
@@ -4673,8 +4680,9 @@ export class ChatView extends ItemView {
             // on-disk transcript survives and a fresh process can resume it, so we
             // recover in two stages. The footer reflects which stage this is.
             poisoned = true;
-            this.renderError(ctx, e.message, c, text);
-            ctx.bodyEl.createSpan({ cls: "mva-faint", text: this.recoveryFooter(c, !!opts?.isRecoveryRetry) });
+            if (this.renderError(ctx, e.message, c, text).showRecoveryFooter) {
+              ctx.bodyEl.createSpan({ cls: "mva-faint", text: this.recoveryFooter(c, !!opts?.isRecoveryRetry) });
+            }
             this.notifyOnce(ctx, "error", "Exo — error", e.message.slice(0, 80));
           }
           break;
@@ -4778,11 +4786,12 @@ export class ChatView extends ItemView {
           // finally keeps c.sessionId and sets resumeRisky (stage 1); it does NOT
           // auto-retry here — that's stage 2's job on the next poisoned turn.
           poisoned = true;
-          if (!ctx.bodyEl.querySelector(".mva-inline-error, .mva-onboard")) this.renderError(ctx, msg, c, text);
-          ctx.bodyEl.createSpan({ cls: "mva-faint", text: this.recoveryFooter(c, !!opts?.isRecoveryRetry) });
+          if (this.renderError(ctx, msg, c, text).showRecoveryFooter) {
+            ctx.bodyEl.createSpan({ cls: "mva-faint", text: this.recoveryFooter(c, !!opts?.isRecoveryRetry) });
+          }
           this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
         } else {
-          if (!ctx.bodyEl.querySelector(".mva-inline-error, .mva-onboard")) this.renderError(ctx, msg, c, text);
+          this.renderError(ctx, msg, c, text);
           new Notice(msg);
           this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
           // Don't replay queued messages into a broken session — they'd just re-fail.
@@ -4937,11 +4946,13 @@ export class ChatView extends ItemView {
 
   /** Persist and render a terminal turn failure. The retry reuses the existing
    *  user bubble, so an interrupted response never duplicates Mario's prompt. */
-  private renderError(ctx: AssistantCtx, message: string, c: Convo, retryText: string): void {
-    if (!ctx.segments.some((segment) => segment.t === "error")) {
-      ctx.segments.push({ t: "error", message });
-    }
-    this.renderErrorBody(ctx.bodyEl, message, c, retryText);
+  private renderError(ctx: AssistantCtx, message: string, c: Convo, retryText: string) {
+    // Some providers report one failure through multiple events (structured
+    // error + process close). Persist and render the first one only: otherwise a
+    // single interruption grows into repeated warning rows and retry buttons.
+    const decision = recordTurnError(ctx.segments, message);
+    if (decision.showErrorCard) this.renderErrorBody(ctx.bodyEl, message, c, retryText);
+    return decision;
   }
 
   /** Rehydrate a persisted failure with the same retry affordance shown live. */

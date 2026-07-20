@@ -20,6 +20,19 @@ describe("describeCliFailure", () => {
     expect(r?.hint).toMatch(/update the CLI/i);
   });
 
+  it("maps a vanished Claude stream to a recoverable interruption", () => {
+    for (const raw of [
+      "Claude session ended unexpectedly.",
+      "Claude session ended — sending again starts a fresh session.",
+      "Session stream ended unexpectedly.",
+    ]) {
+      const r = describeCliFailure(raw);
+      expect(r?.message).toMatch(/session ended unexpectedly/i);
+      expect(r?.message).toMatch(/retry/i);
+      expect(r?.hint).toMatch(/conversation is safe/i);
+    }
+  });
+
   it("maps ENOENT / not-found to a binary-path message", () => {
     for (const raw of ["spawn claude ENOENT", "claude: command not found", "claude not found"]) {
       const r = describeCliFailure(raw);

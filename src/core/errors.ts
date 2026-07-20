@@ -36,6 +36,16 @@ export function describeCliFailure(raw: string): { message: string; hint?: strin
     return { message: "Claude CLI not found — set the binary path in Settings." };
   }
 
+  // The SDK stream disappeared without a final result. Exo has already kept the
+  // local transcript and will rebuild the provider process through the recovery
+  // ladder, so the useful action is a retry — not a wall of transport detail.
+  if (isEndedSessionFailure(m)) {
+    return {
+      message: "The Claude CLI session ended unexpectedly — retry to resume.",
+      hint: "Your conversation is safe; Exo will reconnect with its saved context.",
+    };
+  }
+
   // Mid-turn engine crash — recoverable, the session resumes on the next message.
   if (/error_during_execution|\[ede_diagnostic\]/.test(m)) {
     return {
@@ -53,4 +63,9 @@ export function describeCliFailure(raw: string): { message: string; hint?: strin
   }
 
   return null;
+}
+
+/** Exact provider-stream failures that the session recovery ladder can heal. */
+export function isEndedSessionFailure(raw: string): boolean {
+  return /claude session ended|session stream ended/.test((raw || "").toLowerCase());
 }
