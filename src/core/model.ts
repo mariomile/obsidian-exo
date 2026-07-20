@@ -5,7 +5,7 @@
  * unit-tested without importing `obsidian`.
  */
 
-import type { ResearchReceipt } from "./research";
+import { normalizeResearchReceipt, type ResearchReceipt } from "./research";
 
 export interface AskQuestion {
   question: string;
@@ -44,3 +44,44 @@ export type PersistedMessage =
       checkpoint?: [string, string | null][];
       researchReceipt?: ResearchReceipt;
     };
+
+export interface MessagePersistenceLimits {
+  maxToolOutput: number;
+  maxCheckpointFile: number;
+}
+
+/** Canonical runtime → disk codec shared by the view and persistence tests. */
+export function persistMessage(
+  message: Message,
+  limits: MessagePersistenceLimits
+): PersistedMessage {
+  if (message.role === "user") return message;
+  return {
+    role: "assistant",
+    segments: message.segments.map((segment) =>
+      segment.t === "tool"
+        ? { ...segment, output: segment.output.slice(0, limits.maxToolOutput) }
+        : segment
+    ),
+    ...(message.checkpoint && message.checkpoint.size
+      ? {
+          checkpoint: [...message.checkpoint.entries()].filter(
+            ([, content]) => content === null || content.length <= limits.maxCheckpointFile
+          ),
+        }
+      : {}),
+    ...(message.researchReceipt ? { researchReceipt: message.researchReceipt } : {}),
+  };
+}
+
+/** Canonical disk → runtime codec; old messages naturally omit new fields. */
+export function revivePersistedMessage(message: PersistedMessage): Message {
+  if (message.role === "user") return message;
+  const researchReceipt = normalizeResearchReceipt(message.researchReceipt);
+  return {
+    role: "assistant",
+    segments: message.segments,
+    ...(Array.isArray(message.checkpoint) ? { checkpoint: new Map(message.checkpoint) } : {}),
+    ...(researchReceipt ? { researchReceipt } : {}),
+  };
+}

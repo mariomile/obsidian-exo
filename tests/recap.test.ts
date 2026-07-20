@@ -94,6 +94,31 @@ describe("buildRecap — artifacts & skills", () => {
 });
 
 describe("buildRecap — aggregation & empty", () => {
+  it("does not duplicate tool-derived sources when a research receipt is attached", () => {
+    const message: Message = {
+      role: "assistant",
+      segments: [
+        tool("Read", { file_path: "Notes/A.md" }),
+        tool("WebSearch", { query: "primary evidence" }),
+      ],
+      researchReceipt: {
+        scope: "both",
+        depth: "standard",
+        startedAt: 1,
+        completedAt: 2,
+        status: "complete",
+        sources: [
+          { kind: "vault", label: "Notes/A.md", status: "consulted" },
+          { kind: "web", label: "primary evidence", status: "consulted" },
+        ],
+      },
+    };
+
+    const recap = buildRecap([message]);
+    expect(recap.read).toEqual(["Notes/A.md"]);
+    expect(recap.web).toEqual([{ label: "primary evidence" }]);
+  });
+
   it("rolls up across multiple assistant turns and ignores user turns", () => {
     const r = buildRecap([
       user("do research"),

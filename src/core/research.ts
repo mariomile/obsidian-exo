@@ -93,6 +93,55 @@ export function normalizeResearchModeState(value: unknown): ResearchModeState {
   };
 }
 
+/** Validate persisted receipts before UI code reads nested source fields. */
+export function normalizeResearchReceipt(value: unknown): ResearchReceipt | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<ResearchReceipt>;
+  const validScope = candidate.scope === "vault" || candidate.scope === "web" || candidate.scope === "both";
+  const validDepth = candidate.depth === "quick" || candidate.depth === "standard" || candidate.depth === "deep";
+  const validStatus = candidate.status === "complete" || candidate.status === "partial" || candidate.status === "no-sources";
+  if (
+    !validScope
+    || !validDepth
+    || !validStatus
+    || typeof candidate.startedAt !== "number"
+    || !Number.isFinite(candidate.startedAt)
+    || typeof candidate.completedAt !== "number"
+    || !Number.isFinite(candidate.completedAt)
+    || !Array.isArray(candidate.sources)
+  ) return undefined;
+  const sources: ResearchReceiptSource[] = [];
+  for (const raw of candidate.sources) {
+    if (!raw || typeof raw !== "object") return undefined;
+    const source = raw as Partial<ResearchReceiptSource>;
+    const validKind = source.kind === "vault" || source.kind === "web" || source.kind === "mcp";
+    const validSourceStatus = source.status === "consulted"
+      || source.status === "failed"
+      || source.status === "unavailable"
+      || source.status === "skipped";
+    if (
+      !validKind
+      || !validSourceStatus
+      || typeof source.label !== "string"
+      || (source.detail !== undefined && typeof source.detail !== "string")
+    ) return undefined;
+    sources.push({
+      kind: source.kind as ResearchSourceKind,
+      label: source.label,
+      status: source.status as ResearchSourceStatus,
+      ...(source.detail !== undefined ? { detail: source.detail } : {}),
+    });
+  }
+  return {
+    scope: candidate.scope as ResearchScope,
+    depth: candidate.depth as ResearchDepth,
+    startedAt: candidate.startedAt,
+    completedAt: candidate.completedAt,
+    status: candidate.status as ResearchReceipt["status"],
+    sources,
+  };
+}
+
 export function toggleResearchMode(
   current: ResearchModeState,
   now: number

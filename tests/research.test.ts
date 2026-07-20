@@ -100,6 +100,17 @@ describe("Research Mode contract", () => {
     });
   });
 
+  it("keeps two conversation states isolated", () => {
+    const first = initialResearchModeState();
+    const second = initialResearchModeState();
+
+    const enabledFirst = toggleResearchMode(first, NOW);
+
+    expect(enabledFirst.enabled).toBe(true);
+    expect(second).toEqual(initialResearchModeState());
+    expect(second).not.toBe(first);
+  });
+
   it("repairs invalid persisted state to a safe disabled default", () => {
     expect(normalizeResearchModeState({
       enabled: true,

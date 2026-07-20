@@ -57,7 +57,15 @@ import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { isVaultSetUp } from "./core/vault-setup";
 import { buildRelatedChips } from "./ui/related";
-import type { AskQuestion, Segment, Checkpoint, Message, PersistedMessage } from "./core/model";
+import {
+  persistMessage,
+  revivePersistedMessage,
+  type AskQuestion,
+  type Segment,
+  type Checkpoint,
+  type Message,
+  type PersistedMessage,
+} from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { planPersistedConvos } from "./core/persistence";
 import {
@@ -1033,7 +1041,7 @@ export class ChatView extends ItemView {
         updatedAt: d.updatedAt,
         usage: d.usage,
         researchMode: normalizeResearchModeState(d.researchMode),
-        messages: d.messages.map((m) => this.reviveMessage(m)),
+        messages: d.messages.map((m) => revivePersistedMessage(m)),
         session: null,
         sessionSig: "",
         streaming: false,
@@ -1101,38 +1109,11 @@ export class ChatView extends ItemView {
       updatedAt: c.updatedAt,
       usage: c.usage,
       researchMode: c.researchMode,
-      messages: c.messages.map((m) =>
-        m.role === "assistant"
-          ? {
-              role: "assistant" as const,
-              segments: m.segments.map((s) =>
-                s.t === "tool"
-                  ? { ...s, output: s.output.slice(0, MAX_PERSIST_OUTPUT) }
-                  : s
-              ),
-              ...(m.checkpoint && m.checkpoint.size
-                ? {
-                    checkpoint: [...m.checkpoint.entries()].filter(
-                      ([, v]) => v === null || v.length <= MAX_CHECKPOINT_FILE
-                    ),
-                  }
-                : {}),
-              ...(m.researchReceipt ? { researchReceipt: m.researchReceipt } : {}),
-            }
-          : m
-      ),
+      messages: c.messages.map((message) => persistMessage(message, {
+        maxToolOutput: MAX_PERSIST_OUTPUT,
+        maxCheckpointFile: MAX_CHECKPOINT_FILE,
+      })),
     }));
-  }
-
-  /** Convert a persisted message to its runtime form (checkpoint entries → Map). */
-  private reviveMessage(m: PersistedMessage): Message {
-    if (m.role === "user") return m;
-    return {
-      role: "assistant",
-      segments: m.segments,
-      ...(Array.isArray(m.checkpoint) ? { checkpoint: new Map(m.checkpoint) } : {}),
-      ...(m.researchReceipt ? { researchReceipt: m.researchReceipt } : {}),
-    };
   }
 
   private persist(): void {
