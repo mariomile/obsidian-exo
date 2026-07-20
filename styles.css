@@ -1517,6 +1517,39 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   box-shadow: none;
   transition: color var(--mva-t), background var(--mva-t);
 }
+.mva-research-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  margin-top: 5px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--mva-r1);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t);
+}
+.mva-research-save:hover:not(:disabled) {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-research-save:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.mva-research-save.is-warning {
+  color: color-mix(in srgb, var(--color-orange, #e0a341) 72%, var(--text-muted));
+}
+.mva-research-save-icon {
+  display: inline-flex;
+}
+.mva-research-save-icon .svg-icon {
+  width: 12px;
+  height: 12px;
+}
 .mva-act:hover {
   color: var(--text-normal);
   background: var(--background-modifier-hover);

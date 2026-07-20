@@ -199,6 +199,8 @@ export default class ExoPlugin extends Plugin {
   private readonly proposalPlaybookWriteQueue = new WriteQueue();
   /** One serialized read-modify-write boundary for `_system/review.md`. */
   private readonly dailyPulseWriteQueue = new WriteQueue();
+  /** One approval-gated serialized path for user-saved Research Mode dossiers. */
+  readonly researchDossierWriteQueue = new WriteQueue();
   /** Serialize collection, review-note write and settings persistence as one operation. */
   private readonly dailyPulseOperationQueue = new WriteQueue();
   private readonly dailyPulseSlotRunner = new DailyPulseSlotRunner();
