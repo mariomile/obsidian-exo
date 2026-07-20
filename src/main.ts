@@ -58,6 +58,19 @@ import {
 import { TaskStore, adaptAppToTaskVault } from "./obsidian/task-store";
 import { makeTolerantSetMaxListeners, isTolerantShim } from "./core/node-interop";
 import {
+  ProposalStore,
+  type PendingProposals,
+  type ProposalAcceptResult,
+} from "./obsidian/proposal-store";
+import { routeAcceptedProposal, type ProposalAcceptanceDeps } from "./obsidian/proposal-router";
+import { createProposalAcceptanceDeps, type ProposalTargetVaultAdapter } from "./obsidian/proposal-targets";
+import {
+  produceTurnProposals,
+  type ProposalProducerResult,
+  type ProposalTurnInput,
+} from "./obsidian/proposal-producer";
+import { ProposalsModal } from "./ui/proposals-modal";
+import {
   initialAutoCommitState,
   recordVaultWrite,
   isCommitDue,
@@ -164,6 +177,10 @@ export default class ExoPlugin extends Plugin {
    * by `ChatView.cmdPromoteToTask`.
    */
   readonly tasksWriteQueue = new WriteQueue();
+  /** Single mutation boundary for the plugin-dir proposal inbox. */
+  private readonly proposalWriteQueue = new WriteQueue();
+  /** Settings mutation + persistence boundary for accepted playbooks. */
+  private readonly proposalPlaybookWriteQueue = new WriteQueue();
   /**
    * THE ONE shared `TaskStore` instance — the typed load/create/update/move/
    * archive API over the same ledger (`_system/orchestration/tasks.md`),
@@ -173,6 +190,11 @@ export default class ExoPlugin extends Plugin {
    * and mutate tasks ONLY through this instance.
    */
   taskStore!: TaskStore;
+  proposalStore!: ProposalStore;
+  private proposalAcceptanceDeps!: ProposalAcceptanceDeps;
+  private readonly proposalRouteErrors = new Map<string, string>();
+  private readonly proposalAbort = new AbortController();
+  private static readonly PROPOSAL_TOKEN_ESTIMATE = 2500;
 
   /**
    * THE ONE plugin-level convo-state notification channel — how ChatView tells
@@ -235,6 +257,42 @@ export default class ExoPlugin extends Plugin {
     // it can never race the lower-level `createBacklogTask` call in
     // `src/view.ts`/`src/obsidian/tools.ts`, which enqueues on the same queue.
     this.taskStore = new TaskStore(adaptAppToTaskVault(this.app), this.tasksWriteQueue);
+
+    const proposalRoot = this.manifest.dir;
+    const adapter = this.app.vault.adapter;
+    this.proposalStore = new ProposalStore({
+      read: async (relativePath) => {
+        const path = `${proposalRoot}/${relativePath}`;
+        return await adapter.exists(path) ? adapter.read(path) : null;
+      },
+      write: (relativePath, content) => adapter.write(`${proposalRoot}/${relativePath}`, content),
+    }, this.proposalWriteQueue);
+    const targetVault: ProposalTargetVaultAdapter = {
+      getFile: (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof TFile ? file : null;
+      },
+      read: (path) => adapter.read(path),
+      create: async (path, content) => {
+        await this.app.vault.create(path, content);
+      },
+      modify: async (path, content) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) throw new Error(`File not found: ${path}`);
+        await this.app.vault.modify(file, content);
+      },
+      ensureFolder: (path) => this.ensureParentFolders(path),
+    };
+    this.proposalAcceptanceDeps = createProposalAcceptanceDeps({
+      tasks: this.taskStore,
+      vault: targetVault,
+      loopsWriteQueue: this.loopsWriteQueue,
+      playbooksWriteQueue: this.proposalPlaybookWriteQueue,
+      playbooks: {
+        settings: () => this.settings,
+        saveSettings: () => this.saveSettings(),
+      },
+    });
 
     // Exo brand mark — a concave 4-point star (matches the product logo).
     // addIcon wraps this in an svg with viewBox "0 0 100 100".
@@ -378,6 +436,15 @@ export default class ExoPlugin extends Plugin {
       id: "open-cockpit",
       name: "Open Cockpit",
       callback: () => void this.openCockpit(),
+    });
+    this.addCommand({
+      id: "open-proposals",
+      name: "Review suggestions",
+      checkCallback: (checking) => {
+        if (!this.settings.proposalKernelEnabled) return false;
+        if (!checking) void this.openProposalsModal();
+        return true;
+      },
     });
     this.addRibbonIcon(COCKPIT_ICON, "Open Exo Cockpit", () => void this.openCockpit());
     this.app.workspace.onLayoutReady(() => {
@@ -1219,6 +1286,16 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
+  /** Create each missing parent component for a target file, shallow to deep. */
+  private async ensureParentFolders(filePath: string): Promise<void> {
+    const parts = filePath.split("/").slice(0, -1);
+    let current = "";
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      await this.ensureFolder(current);
+    }
+  }
+
   /** Write a file only when it's absent; `manifest` forces an overwrite so the
    *  contract doc stays current on every re-seed (it's Exo-owned, not hand-edited). */
   private async writeIfMissing(
@@ -1734,8 +1811,89 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
+  async listPendingProposals(): Promise<PendingProposals> {
+    return this.proposalStore.listPending();
+  }
+
+  lastProposalRouteError(id: string): string | undefined {
+    return this.proposalRouteErrors.get(id);
+  }
+
+  async acceptProposal(id: string): Promise<ProposalAcceptResult> {
+    if (!this.settings.proposalKernelEnabled) throw new Error("Suggestion inbox is disabled.");
+    const result = await this.proposalStore.accept(id, (record) =>
+      routeAcceptedProposal(record, this.proposalAcceptanceDeps)
+    );
+    if (result.ok) this.proposalRouteErrors.delete(id);
+    else this.proposalRouteErrors.set(id, result.error);
+    void this.refreshCockpit();
+    return result;
+  }
+
+  async dismissProposal(id: string) {
+    if (!this.settings.proposalKernelEnabled) throw new Error("Suggestion inbox is disabled.");
+    const record = await this.proposalStore.dismiss(id);
+    this.proposalRouteErrors.delete(id);
+    void this.refreshCockpit();
+    return record;
+  }
+
+  async openProposalsModal(): Promise<void> {
+    if (!this.settings.proposalKernelEnabled) return;
+    const conversations = await this.loadConversations().catch(() => []);
+    const titles = new Map<string, string>();
+    for (const value of conversations) {
+      if (typeof value !== "object" || value === null) continue;
+      const convo = value as { id?: unknown; title?: unknown };
+      if (typeof convo.id === "string" && typeof convo.title === "string") titles.set(convo.id, convo.title);
+    }
+    new ProposalsModal(this.app, {
+      loadPending: () => this.listPendingProposals(),
+      accept: (id) => this.acceptProposal(id),
+      dismiss: (id) => this.dismissProposal(id),
+      sourceTitle: (convoId) => titles.get(convoId) ?? "Conversation",
+      lastRouteError: (id) => this.lastProposalRouteError(id),
+    }).open();
+  }
+
+  async produceProposalsAfterTurn(
+    input: Omit<ProposalTurnInput, "backgroundEnabled" | "suggestionsEnabled" | "budgetAllowed">
+  ): Promise<ProposalProducerResult> {
+    const estimate = ExoPlugin.PROPOSAL_TOKEN_ESTIMATE;
+    const result = await produceTurnProposals({
+      ...input,
+      backgroundEnabled: this.settings.backgroundPassesEnabled,
+      suggestionsEnabled: this.settings.proposalKernelEnabled && this.settings.proposalTurnSuggestions,
+      budgetAllowed: this.checkBackgroundBudget(estimate),
+    }, {
+      signal: this.proposalAbort.signal,
+      model: this.settings.backgroundModel,
+      store: this.proposalStore,
+      runUtilityPass: async (prompt, options) => {
+        let actualTokens: number | null = null;
+        const output = await this.runUtilityPass(prompt, {
+          ...options,
+          timeoutMs: 90_000,
+          onUsage: (tokens) => {
+            actualTokens = tokens;
+          },
+        });
+        this.recordBackgroundSpend(actualTokens ?? estimate);
+        return output;
+      },
+    });
+    if (result.status === "generated" && result.appended > 0) void this.refreshCockpit();
+    return result;
+  }
+
+  private async refreshCockpit(): Promise<void> {
+    const view = this.app.workspace.getLeavesOfType(COCKPIT_VIEW_TYPE)[0]?.view;
+    if (view instanceof CockpitView) await view.refresh();
+  }
+
   onunload(): void {
     this.unloaded = true;
+    this.proposalAbort.abort();
     if (this.startupMaintenanceTimer !== null) {
       window.clearTimeout(this.startupMaintenanceTimer);
       this.startupMaintenanceTimer = null;

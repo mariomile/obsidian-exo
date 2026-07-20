@@ -4828,6 +4828,7 @@ export class ChatView extends ItemView {
       // permission/ask was pending), CANCEL it — otherwise the card stays live in
       // the transcript and the in-process ask promise hangs forever. No-op on clean
       // turns (both are null once answered) and idempotent (done-guarded).
+      const endedWithPendingInteraction = !!c.pendingPerm || !!c.pendingAsk || ctx.openCards > 0;
       c.pendingPerm?.();
       c.pendingPerm = null;
       c.pendingAsk?.();
@@ -4908,6 +4909,36 @@ export class ChatView extends ItemView {
       this.emitTurnTerminal(c, poisoned); // fire-and-forget board hook (no-op when off; can't throw)
       this.setStreaming(c, false);
       this.persist();
+      // Proposal producer: the main response is already rendered and persisted.
+      // Fire-and-forget so extraction can never delay the turn result or queue.
+      void this.plugin.produceProposalsAfterTurn({
+        successful: !poisoned && !c.stopped && !plan.enqueueRecapRetry,
+        responseIsSubstantial: ctx.fullText.trim().length >= 80,
+        responseHasError: ctx.segments.some((segment) => segment.t === "error"),
+        hasPendingAsk: endedWithPendingInteraction,
+        hasPendingPermission: endedWithPendingInteraction,
+        hasPendingPlan: endedWithPendingInteraction,
+        stopped: c.stopped,
+        poisoned,
+        recoveryIncomplete: plan.nextResumeRisky || plan.enqueueRecapRetry,
+        administrativeSlashCommand: /^\/(?!btw(?:\s|$))/i.test(ctx.userText.trim()),
+        userText: ctx.userText,
+        responseText: ctx.fullText,
+        source: { convoId: c.id, turnId: String(turnStart), createdAt: turnStart },
+      }).then((result) => {
+        if (result.status !== "generated" || result.appended < 1 || !ctx.el.isConnected) return;
+        const summary = ctx.el.createEl("button", {
+          cls: "mva-proposal-summary",
+          attr: { type: "button", "aria-label": "Review suggestions" },
+        });
+        setIcon(summary.createSpan({ cls: "mva-proposal-summary-icon" }), "lightbulb");
+        summary.createSpan({
+          text: `${result.appended} suggestion${result.appended === 1 ? "" : "s"}`,
+        });
+        summary.onclick = () => void this.plugin.openProposalsModal();
+      }).catch((error) => {
+        console.warn("[Exo] proposal producer failed after turn (no-op):", error);
+      });
       this.scrollConvo(c);
       // Drain the queue: run the next message in this conversation. A recovery
       // retry item carries sendPrefix/isRecoveryRetry — forward them so the recap

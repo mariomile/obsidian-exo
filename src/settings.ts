@@ -149,6 +149,10 @@ export interface MVASettings {
   backgroundModel: string;
   /** W0 persisted daily budget ledger. */
   backgroundBudgetLedger: { dateUTC: string; tokensUsed: number };
+  /** Typed inert proposal inbox and explicit acceptance router. */
+  proposalKernelEnabled: boolean;
+  /** Run the post-turn extractor after healthy turns. Off by default. */
+  proposalTurnSuggestions: boolean;
   /** Exo Queue ("Exo in tasca"): il desktop evade note-richiesta scritte dal
    *  telefono in exoQueueFolder (via Obsidian Sync), headless e read-only. */
   exoQueueEnabled: boolean;
@@ -255,6 +259,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   backgroundDailyTokenBudget: 200000,
   backgroundModel: "claude-sonnet-5",
   backgroundBudgetLedger: { dateUTC: "", tokensUsed: 0 },
+  proposalKernelEnabled: true,
+  proposalTurnSuggestions: false,
   exoQueueEnabled: true,
   exoQueueFolder: "_system/exo-queue",
   cockpitOnStartup: false,
@@ -851,6 +857,22 @@ export class MVASettingTab extends PluginSettingTab {
       );
 
     new Setting(el).setName("Background AI").setHeading();
+
+    this.toggleSetting(
+      el,
+      "Suggestion inbox",
+      "Keep typed suggestions inert until you explicitly accept or dismiss them. Turning this off hides the inbox and stops all proposal routing without deleting retained suggestions.",
+      "proposalKernelEnabled"
+    );
+
+    if (s.proposalKernelEnabled) {
+      this.toggleSetting(
+        el,
+        "Suggestions after healthy turns",
+        "After a completed turn, run a quiet background pass that can add up to three concrete suggestions. Off by default; suggestions never change the vault or settings before Accept.",
+        "proposalTurnSuggestions"
+      );
+    }
 
     this.toggleSetting(
       el,
