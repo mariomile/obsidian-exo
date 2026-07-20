@@ -1,8 +1,18 @@
 /**
- * Learning loop (pure): after a successful, substantial turn, Exo offers to
- * save the flow as a reusable playbook (Hermes pattern — from "remembering"
- * to "learning how to do"). The proposal card is free (no tokens); the LLM
- * distillation runs only when the user accepts.
+ * Learning loop (pure).
+ *
+ * LEGACY (retired 2026-07-20, P4-T03): the recurrence-ledger + inline-nudge path
+ * (`turnQualifies`, `buildDistillPrompt`, `parseDistillReply`, `recordTurnSignal`,
+ * `signalLabel`, `topicKeywords`, `anchors`) is no longer wired into the turn
+ * loop — the Workflow Foundry now distills playbooks through the Proposal Kernel
+ * (`foundry-distill.ts`). These exports are kept only for their tests and a
+ * possible migration. `uniquePlaybookName` is the exception: it is STILL live,
+ * imported by `obsidian/proposal-targets.ts` for collision-safe playbook saves.
+ *
+ * After a successful, substantial turn, Exo offered to save the flow as a
+ * reusable playbook (Hermes pattern — from "remembering" to "learning how to
+ * do"). The proposal card was free (no tokens); the LLM distillation ran only
+ * when the user accepted.
  *
  * This module owns the three testable decisions: does a turn qualify, what
  * does the distillation pass get asked, and how is its reply parsed.

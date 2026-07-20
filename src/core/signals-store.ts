@@ -1,4 +1,11 @@
 /**
+ * LEGACY (retired 2026-07-20, P4-T03): the topic-recurrence playbook loop was
+ * superseded by the Workflow Foundry, which distills playbooks through the
+ * Proposal Kernel (`foundry-distill.ts` + `proposal-store.ts`). This module is
+ * no longer wired into the active turn path. It is retained — not deleted — so
+ * `_system/memory/playbook-signals.json` remains readable for a future
+ * migration; the data file itself is never auto-deleted.
+ *
  * Sidecar persistence for the playbook-recurrence ledger. The ledger logic is
  * pure (`learning-loop.ts`); this is the thin Obsidian I/O layer that reads and
  * writes `_system/memory/playbook-signals.json`. It lives in `_system/` (not

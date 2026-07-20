@@ -94,16 +94,6 @@ import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, typ
 import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
 import { caretHost, type CaretNode } from "./core/caret-host";
 import {
-  turnQualifies,
-  buildDistillPrompt,
-  parseDistillReply,
-  uniquePlaybookName,
-  recordTurnSignal,
-  signalLabel,
-  type PlaybookSignal,
-} from "./core/learning-loop";
-import { loadSignalLedger, saveSignalLedger } from "./core/signals-store";
-import {
   buildResearchReceipt,
   buildResearchOutbound,
   initialResearchModeState,
@@ -215,9 +205,6 @@ export interface Convo {
   /** True once the proactive ≥75% compaction nudge has been shown for this
    *  conversation — one-shot, so it never re-appears after dismiss or compaction. */
   compactNudged?: boolean;
-  /** True once the learning-loop "save as playbook?" offer has been shown for
-   *  this conversation — one-shot per convo, runtime-only (never persisted). */
-  playbookNudged?: boolean;
   /** Unsent composer draft (text + attachments), stashed when the user switches
    *  away so every chat keeps its own composer — runtime-only, never persisted. */
   draft?: ComposerDraft;
@@ -4934,12 +4921,10 @@ export class ChatView extends ItemView {
             .createSpan({ cls: "mva-turn-duration", text: `✻ ${this.fmtDuration(elapsed)}` });
         }
         if (!c.stopped && !poisoned) {
-          // Workflow Foundry records only privacy-safe deterministic metadata.
-          // Proposal/distillation remains a later stage and never delays this turn.
+          // Workflow Foundry records privacy-safe deterministic metadata and,
+          // once a workflow recurs to threshold, distills an editable playbook
+          // proposal through the Proposal Kernel. It never delays this turn.
           this.maybeRecordWorkflowSignal(ctx, c, !!opts?.isRecoveryRetry);
-          // Legacy recurrence nudge remains until P4-T03 routes Foundry candidates
-          // through the Proposal Kernel.
-          this.maybeProposePlaybook(ctx, c, elapsed);
         }
       }
       // Turn finished normally (Feature 3): notify if it ran long and the window
@@ -5262,7 +5247,7 @@ export class ChatView extends ItemView {
     setting?.openTabById("exo");
   }
 
-  /* ------------------------- learning loop ------------------------- */
+  /* ----------------------- workflow foundry ----------------------- */
 
   private maybeRecordWorkflowSignal(ctx: AssistantCtx, c: Convo, recoveryRetry: boolean): void {
     if (!this.plugin.settings.learningLoop) return;
@@ -5321,144 +5306,38 @@ export class ChatView extends ItemView {
       succeeded: true,
     });
     const threshold = Math.max(2, this.plugin.settings.playbookThreshold ?? 3);
-    void this.plugin.workflowSignalStore.record(signal, now, { threshold }).then((result) => {
-      this.diag.push(
-        "foundry",
-        result.candidate ? `threshold reached: ${result.candidate.occurrences}` : "signal recorded"
-      );
-    }).catch((error) => {
-      console.warn("[Exo] workflow signal persistence failed (no-op):", error);
-    });
-  }
-
-  /** After a substantial healthy turn, offer to save the flow as a reusable
-   *  playbook (Hermes pattern). One-shot per conversation; free until accepted. */
-  private maybeProposePlaybook(ctx: AssistantCtx, c: Convo, durationMs: number): void {
-    if (!this.plugin.settings.learningLoop || c.playbookNudged) return;
-    const tools = ctx.segments.filter((s): s is Extract<Segment, { t: "tool" }> => s.t === "tool");
-    // Gate: fingerprint only substantial, healthy turns (not one-shot lookups,
-    // not slash-command runs). Whether to actually PROPOSE is decided by topic
-    // recurrence across turns — not by this single turn being "big".
-    const qualifies = turnQualifies({
-      ok: true,
-      toolCount: tools.length,
-      distinctTools: new Set(tools.map((t) => t.name)).size,
-      durationMs,
-      userText: ctx.userText,
-    });
-    if (!qualifies) return;
-    c.playbookNudged = true;
-    void this.recordAndMaybePropose(ctx);
-  }
-
-  /** Fold this turn into the topic-recurrence ledger and show the "save as
-   *  playbook?" card only when a topic has recurred to the threshold. Ledger I/O
-   *  is best-effort — a failure never breaks the turn. */
-  private async recordAndMaybePropose(ctx: AssistantCtx): Promise<void> {
-    const threshold = Math.max(2, this.plugin.settings.playbookThreshold ?? 3);
-    try {
-      const ledger = await loadSignalLedger(this.plugin.app);
-      const { ledger: next, proposal } = recordTurnSignal(ledger, ctx.userText, Date.now(), { threshold });
-      await saveSignalLedger(this.plugin.app, next);
-      if (proposal) this.renderPlaybookNudge(ctx, proposal);
-    } catch {
-      /* ledger unavailable — skip the nudge silently, never break the turn */
-    }
-  }
-
-  /** The recurrence nudge: "you've done this N times — save it as a playbook?"
-   *  The free preview shows the recurring topic and the real example requests,
-   *  not a transcript of one run. Save still distills + shows a review card. */
-  private renderPlaybookNudge(ctx: AssistantCtx, proposal: PlaybookSignal): void {
-    const card = ctx.el.createDiv({ cls: "mva-ll" });
-    const head = card.createDiv({ cls: "mva-ll-head" });
-    setIcon(head.createSpan({ cls: "mva-ll-icon" }), "sparkles");
-    const label = head.createSpan({
-      cls: "mva-ll-label",
-      text: `L'hai fatto ${proposal.count} volte — salvarlo come playbook?`,
-    });
-    const chev = head.createSpan({ cls: "mva-ll-chev", attr: { "aria-label": "Cosa catturerebbe" } });
-    setIcon(chev, "chevron-down");
-    const save = head.createSpan({ cls: "mva-ll-btn", text: "Salva" });
-    const dismiss = head.createSpan({ cls: "mva-ll-x", attr: { "aria-label": "Dismiss" } });
-    setIcon(dismiss, "x");
-    let previewEl: HTMLElement | null = null;
-    const togglePreview = () => {
-      if (previewEl) {
-        previewEl.remove();
-        previewEl = null;
-        setIcon(chev, "chevron-down");
+    void (async () => {
+      // Dedup at the source: a signature already carried by a pending or accepted
+      // playbook proposal never reaches threshold again (Task C).
+      const blockedSignatures = await this.plugin.proposalStore
+        .blockedWorkflowSignatures()
+        .catch(() => new Set<string>());
+      const result = await this.plugin.workflowSignalStore.record(signal, now, { threshold, blockedSignatures });
+      if (!result.candidate) {
+        this.diag.push("foundry", "signal recorded");
         return;
       }
-      setIcon(chev, "chevron-up");
-      previewEl = card.createDiv({ cls: "mva-ll-preview" });
-      const examples = proposal.examples
-        .map((e) => `• «${e.slice(0, 160)}${e.length > 160 ? "…" : ""}»`)
-        .join("\n");
-      previewEl.setText(
-        `Tema ricorrente: ${signalLabel(proposal)}\n\nHai chiesto cose simili:\n${examples}` +
-          `\n\nSalva → distillo un playbook riusabile e ti mostro nome e testo per conferma prima di salvarlo.`
-      );
-    };
-    this.clickable(label, togglePreview);
-    this.clickable(chev, togglePreview);
-    this.clickable(save, () => void this.distillPlaybook(ctx, card));
-    this.clickable(dismiss, () => card.remove());
-  }
-
-  /** Accepted: run the distillation on a transient utility session and show
-   *  the extracted playbook for review — it is saved only on confirm. Soft
-   *  failure — the card says so, nothing else changes. */
-  private async distillPlaybook(ctx: AssistantCtx, card: HTMLElement): Promise<void> {
-    card.empty();
-    setIcon(card.createSpan({ cls: "mva-ll-icon is-working" }), "sparkles");
-    card.createSpan({ cls: "mva-ll-label", text: "Distillo il playbook…" });
-    const toolLines = ctx.segments
-      .filter((s): s is Extract<Segment, { t: "tool" }> => s.t === "tool")
-      .slice(0, 30)
-      .map((t) => {
-        const m = toolMeta(t.name, t.input);
-        return `${m.label}${m.target ? `: ${m.target}` : ""}`;
+      this.diag.push("foundry", `threshold reached: ${result.candidate.occurrences}`);
+      // On-demand distillation through the Proposal Kernel (Task D). The current
+      // turn text is passed as transient evidence only — never persisted in the
+      // signal ledger. A quiet, typed outcome; failures never touch the turn.
+      const outcome = await this.plugin.distillWorkflowPlaybook({
+        intent: signal.intent,
+        tools: signal.tools,
+        outputType,
+        occurrences: result.candidate.occurrences,
+        workflowSignature: result.candidate.signature,
+        userText: ctx.userText,
+        responseText: ctx.fullText,
+        source: { convoId: c.id, turnId: ctx.turnId, createdAt: now },
       });
-    const prompt = buildDistillPrompt({ userText: ctx.userText, toolLines, finalText: ctx.fullText });
-    const ctrl = new AbortController();
-    const raw = await this.plugin.runUtilityPass(prompt, { signal: ctrl.signal, timeoutMs: 90_000 });
-    const parsed = parseDistillReply(raw);
-    card.empty();
-    if (!parsed) {
-      setIcon(card.createSpan({ cls: "mva-ll-icon" }), "circle-alert");
-      card.createSpan({ cls: "mva-ll-label", text: "Distillazione non riuscita — riprova più tardi." });
-      window.setTimeout(() => card.remove(), 6000);
-      return;
-    }
-    this.renderPlaybookReview(card, parsed);
-  }
-
-  /** Review step: the card shows exactly what got distilled (name + prompt)
-   *  so the user knows what they are saving. Salva commits, X discards. */
-  private renderPlaybookReview(card: HTMLElement, parsed: { name: string; prompt: string }): void {
-    card.addClass("is-review");
-    const head = card.createDiv({ cls: "mva-ll-head" });
-    setIcon(head.createSpan({ cls: "mva-ll-icon" }), "sparkles");
-    head.createSpan({ cls: "mva-ll-label", text: `Playbook estratto — "${parsed.name}"` });
-    const save = head.createSpan({ cls: "mva-ll-btn", text: "Salva" });
-    const dismiss = head.createSpan({ cls: "mva-ll-x", attr: { "aria-label": "Dismiss" } });
-    setIcon(dismiss, "x");
-    card.createDiv({ cls: "mva-ll-preview", text: parsed.prompt });
-    this.clickable(save, () => void this.savePlaybook(card, parsed));
-    this.clickable(dismiss, () => card.remove());
-  }
-
-  /** Confirmed: dedup the name against existing playbooks and persist. */
-  private async savePlaybook(card: HTMLElement, parsed: { name: string; prompt: string }): Promise<void> {
-    const s = this.plugin.settings;
-    const name = uniquePlaybookName(parsed.name, (s.customPrompts ?? []).map((p) => p.name));
-    s.customPrompts.push({ name, prompt: parsed.prompt });
-    await this.plugin.saveSettings();
-    card.empty();
-    card.removeClass("is-review");
-    setIcon(card.createSpan({ cls: "mva-ll-icon is-ok" }), "check");
-    card.createSpan({ cls: "mva-ll-label", text: `Salvato: "${name}" — lo trovi nel menu / (modificabile in settings).` });
+      this.diag.push(
+        "foundry",
+        `distillation: ${outcome.status}${outcome.status === "appended" ? ` (${outcome.proposalId})` : ""}`
+      );
+    })().catch((error) => {
+      console.warn("[Exo] workflow foundry failed (no-op):", error);
+    });
   }
 
   /** Live attention snapshot for the Cockpit: conversations blocked on a
