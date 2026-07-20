@@ -143,7 +143,7 @@ Stato fonti: (una riga: quali fonti hai letto e quali erano non disponibili)`;
 
 /** Typed, quiet outcome of a Workflow Foundry playbook distillation attempt. */
 export type WorkflowDistillOutcome =
-  | { status: "skipped"; reason: "kernel_disabled" | "background_disabled" | "budget_denied" }
+  | { status: "skipped"; reason: "kernel_disabled" | "background_disabled" | "budget_denied" | "in_flight" }
   | { status: "appended"; proposalId: string }
   | { status: "duplicate" }
   | { status: "failed"; reason: "empty_output" | "invalid_output" | "utility_error" | "store_error" };
@@ -232,6 +232,8 @@ export default class ExoPlugin extends Plugin {
   private proposalAcceptanceDeps!: ProposalAcceptanceDeps;
   private readonly proposalRouteErrors = new Map<string, string>();
   private readonly proposalAbort = new AbortController();
+  /** Signatures whose distillation is in flight; guards the record→append window. */
+  private readonly distillingSignatures = new Set<string>();
   private static readonly PROPOSAL_TOKEN_ESTIMATE = 2500;
 
   /**
@@ -1990,45 +1992,53 @@ export default class ExoPlugin extends Plugin {
     if (!this.settings.backgroundPassesEnabled) return { status: "skipped", reason: "background_disabled" };
     const estimate = ExoPlugin.PROPOSAL_TOKEN_ESTIMATE;
     if (!this.checkBackgroundBudget(estimate)) return { status: "skipped", reason: "budget_denied" };
-
-    let raw: string;
+    // Close the record→append window: two eligible turns of the same signature
+    // in parallel conversations must not both spend a pass and append twins.
+    if (this.distillingSignatures.has(input.workflowSignature)) return { status: "skipped", reason: "in_flight" };
+    this.distillingSignatures.add(input.workflowSignature);
     try {
-      let actualTokens: number | null = null;
-      raw = await this.runUtilityPass(buildFoundryDistillPrompt(input), {
-        signal: this.proposalAbort.signal,
-        model: this.settings.backgroundModel,
-        timeoutMs: 90_000,
-        onUsage: (tokens) => {
-          actualTokens = tokens;
-        },
-      });
-      this.recordBackgroundSpend(actualTokens ?? estimate);
-    } catch (error) {
-      console.warn("[Exo] foundry distillation utility pass failed (no-op):", error);
-      return { status: "failed", reason: "utility_error" };
-    }
-    if (!raw.trim()) return { status: "failed", reason: "empty_output" };
-
-    const parsed = parseFoundryDistillation(raw, {
-      workflowSignature: input.workflowSignature,
-      occurrences: input.occurrences,
-    });
-    if (parsed.status !== "ok") {
-      console.warn(`[Exo] foundry distillation rejected: ${parsed.error}`);
-      return { status: "failed", reason: "invalid_output" };
-    }
-
-    try {
-      const appended = await this.proposalStore.append(parsed.candidate, input.source);
-      if (appended.status === "appended") {
-        void this.refreshCockpit();
-        return { status: "appended", proposalId: appended.record.id };
+      let raw: string;
+      try {
+        let actualTokens: number | null = null;
+        raw = await this.runUtilityPass(buildFoundryDistillPrompt(input), {
+          signal: this.proposalAbort.signal,
+          model: this.settings.backgroundModel,
+          timeoutMs: 90_000,
+          onUsage: (tokens) => {
+            actualTokens = tokens;
+          },
+        });
+        this.recordBackgroundSpend(actualTokens ?? estimate);
+      } catch (error) {
+        console.warn("[Exo] foundry distillation utility pass failed (no-op):", error);
+        return { status: "failed", reason: "utility_error" };
       }
-      if (appended.status === "duplicate") return { status: "duplicate" };
-      return { status: "failed", reason: "invalid_output" };
-    } catch (error) {
-      console.warn("[Exo] foundry distillation could not persist the proposal (no-op):", error);
-      return { status: "failed", reason: "store_error" };
+      if (!raw.trim()) return { status: "failed", reason: "empty_output" };
+
+      const parsed = parseFoundryDistillation(raw, {
+        workflowSignature: input.workflowSignature,
+        occurrences: input.occurrences,
+      });
+      if (parsed.status !== "ok") {
+        console.warn(`[Exo] foundry distillation rejected: ${parsed.error}`);
+        void this.proposalStore.recordMetric("parseErrors").catch(() => {});
+        return { status: "failed", reason: "invalid_output" };
+      }
+
+      try {
+        const appended = await this.proposalStore.append(parsed.candidate, input.source);
+        if (appended.status === "appended") {
+          void this.refreshCockpit();
+          return { status: "appended", proposalId: appended.record.id };
+        }
+        if (appended.status === "duplicate") return { status: "duplicate" };
+        return { status: "failed", reason: "invalid_output" };
+      } catch (error) {
+        console.warn("[Exo] foundry distillation could not persist the proposal (no-op):", error);
+        return { status: "failed", reason: "store_error" };
+      }
+    } finally {
+      this.distillingSignatures.delete(input.workflowSignature);
     }
   }
 

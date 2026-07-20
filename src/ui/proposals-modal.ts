@@ -193,7 +193,7 @@ export class ProposalsModal extends Modal {
     nameField.createDiv({ cls: "mva-proposals-field-label", text: "Name" });
     const nameInput = nameField.createEl("input", {
       cls: "mva-pv-input mva-proposals-edit-name",
-      attr: { type: "text", value: name },
+      attr: { type: "text", value: name, "aria-label": "Playbook name" },
     });
     nameInput.disabled = busy;
     nameInput.oninput = () => {
@@ -202,7 +202,10 @@ export class ProposalsModal extends Modal {
 
     const promptField = parent.createDiv({ cls: "mva-proposals-field" });
     promptField.createDiv({ cls: "mva-proposals-field-label", text: "Prompt" });
-    const promptInput = promptField.createEl("textarea", { cls: "mva-pv-input mva-proposals-edit-prompt" });
+    const promptInput = promptField.createEl("textarea", {
+      cls: "mva-pv-input mva-proposals-edit-prompt",
+      attr: { "aria-label": "Playbook prompt" },
+    });
     promptInput.value = prompt;
     promptInput.rows = 6;
     promptInput.disabled = busy;
