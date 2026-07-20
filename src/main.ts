@@ -35,7 +35,7 @@ import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
 import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessResult } from "./headless";
-import { migrateScheduledRuns, isDue, pruneRuns, type AutomationRunRecord } from "./core/automations";
+import { automationLastRunKey, migrateScheduledRuns, isDue, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
 import { AutomationsModal } from "./ui/automations-modal";
 import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
@@ -63,7 +63,22 @@ import {
   type ProposalAcceptResult,
 } from "./obsidian/proposal-store";
 import { routeAcceptedProposal, type ProposalAcceptanceDeps } from "./obsidian/proposal-router";
-import { createProposalAcceptanceDeps, type ProposalTargetVaultAdapter } from "./obsidian/proposal-targets";
+import {
+  createProposalAcceptanceDeps,
+  OPEN_LOOPS_PATH,
+  type ProposalTargetVaultAdapter,
+} from "./obsidian/proposal-targets";
+import { parseLoopsFile } from "./core/open-loops";
+import {
+  DailyPulseSlotRunner,
+  dailyPulseReviewAfterRun,
+  isDailyPulseAutomation,
+  seedDailyPulseAutomation,
+} from "./core/daily-pulse";
+import {
+  generateAndWriteDailyPulse,
+  type DailyPulseCollectionWarning,
+} from "./obsidian/daily-pulse";
 import {
   produceTurnProposals,
   type ProposalProducerResult,
@@ -181,6 +196,9 @@ export default class ExoPlugin extends Plugin {
   private readonly proposalWriteQueue = new WriteQueue();
   /** Settings mutation + persistence boundary for accepted playbooks. */
   private readonly proposalPlaybookWriteQueue = new WriteQueue();
+  /** One serialized read-modify-write boundary for `_system/review.md`. */
+  private readonly dailyPulseWriteQueue = new WriteQueue();
+  private readonly dailyPulseSlotRunner = new DailyPulseSlotRunner();
   /**
    * THE ONE shared `TaskStore` instance — the typed load/create/update/move/
    * archive API over the same ledger (`_system/orchestration/tasks.md`),
@@ -529,6 +547,7 @@ export default class ExoPlugin extends Plugin {
       callback: () => this.openAutomationsModal(),
     });
     this.registerInterval(window.setInterval(() => void this.checkScheduledRuns(), 30 * 60 * 1000));
+    void this.checkScheduledRuns();
 
     this.addCommand({
       id: "queue-drain",
@@ -1368,11 +1387,26 @@ export default class ExoPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const savedPulseState = this.settings.dailyPulseReviewState;
+    this.settings.dailyPulseReviewState = {
+      ...DEFAULT_SETTINGS.dailyPulseReviewState,
+      ...(savedPulseState && typeof savedPulseState === "object" ? savedPulseState : {}),
+      warnings: Array.isArray(savedPulseState?.warnings) ? savedPulseState.warnings : [],
+    };
     // One-shot migration: legacy "Name | daily" scheduled-run lines become
     // structured automations (07:00 slot, read-only) and the raw field clears.
     if (this.settings.scheduledRuns.trim() && this.settings.automations.length === 0) {
       this.settings.automations = migrateScheduledRuns(this.settings.scheduledRuns);
       this.settings.scheduledRuns = "";
+      await this.saveSettings();
+    }
+    const pulseSeed = seedDailyPulseAutomation(
+      this.settings.automations,
+      this.settings.seededDailyPulse
+    );
+    if (pulseSeed.changed) {
+      this.settings.automations = pulseSeed.automations;
+      this.settings.seededDailyPulse = pulseSeed.seeded;
       await this.saveSettings();
     }
     // Migrate the old "Default" model option (empty id — silently let the CLI's
@@ -1921,6 +1955,110 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
+  /** Deterministic production pipeline. Background-AI settings never gate it. */
+  async generateDailyPulse(now: number = Date.now()): Promise<{
+    warnings: DailyPulseCollectionWarning[];
+    itemCount: number;
+  }> {
+    const pulseState = this.settings.dailyPulseReviewState;
+    const generated = await generateAndWriteDailyPulse({
+      taskStore: this.taskStore,
+      loadLoops: async () => {
+        const file = this.app.vault.getAbstractFileByPath(OPEN_LOOPS_PATH);
+        if (!(file instanceof TFile)) return [];
+        return parseLoopsFile(await this.app.vault.read(file));
+      },
+      proposalStore: this.proposalStore,
+      loadAutomationRuns: () => this.loadAutomationRuns(),
+      listRecentNotes: async ({ modifiedAfter, limit }) =>
+        this.app.vault.getMarkdownFiles()
+          .filter((file) => file.stat.mtime > modifiedAfter && file.stat.mtime <= now)
+          .sort((a, b) => b.stat.mtime - a.stat.mtime || a.path.localeCompare(b.path))
+          .slice(0, limit)
+          .map((file) => ({ path: file.path, mtime: file.stat.mtime })),
+      loadBackgroundBudget: async () => ({
+        enabled: this.settings.backgroundPassesEnabled,
+        dailyBudget: this.settings.backgroundDailyTokenBudget,
+        ledger: { ...this.settings.backgroundBudgetLedger },
+      }),
+    }, {
+      read: async (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof TFile ? this.app.vault.read(file) : null;
+      },
+      write: async (path, content) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          await this.app.vault.modify(file, content);
+          return;
+        }
+        await this.ensureParentFolders(path);
+        await this.app.vault.create(path, content);
+      },
+    }, this.dailyPulseWriteQueue, {
+      now,
+      lastPulseAt: pulseState.lastSuccessAt || null,
+    });
+
+    return {
+      warnings: generated.warnings,
+      itemCount: generated.pulse.sections.reduce(
+        (total, section) => total + section.items.length,
+        0
+      ),
+    };
+  }
+
+  private async runScheduledDailyPulse(
+    config: AutomationConfig,
+    now: number
+  ): Promise<void> {
+    const lastRunKey = automationLastRunKey(config);
+    let warnings: DailyPulseCollectionWarning[] = [];
+    let itemCount = 0;
+    const result = await this.dailyPulseSlotRunner.run({
+      config,
+      lastRun: this.settings.scheduledLastRun[lastRunKey] ?? 0,
+      now,
+      execute: async () => {
+        const generated = await this.generateDailyPulse(now);
+        warnings = generated.warnings;
+        itemCount = generated.itemCount;
+        return { warningCount: warnings.length };
+      },
+    });
+
+    if (result.status === "disabled" || result.status === "current") return;
+    if (result.status === "failed") {
+      this.settings.dailyPulseReviewState = dailyPulseReviewAfterRun(
+        this.settings.dailyPulseReviewState,
+        result,
+        now
+      );
+      await this.saveSettings();
+      return;
+    }
+
+    const priorLastRun = this.settings.scheduledLastRun[lastRunKey];
+    const priorReviewState = this.settings.dailyPulseReviewState;
+    this.settings.scheduledLastRun[lastRunKey] = result.completedAt;
+    this.settings.dailyPulseReviewState = dailyPulseReviewAfterRun(
+      priorReviewState,
+      result,
+      now,
+      warnings,
+      itemCount
+    );
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      if (priorLastRun === undefined) delete this.settings.scheduledLastRun[lastRunKey];
+      else this.settings.scheduledLastRun[lastRunKey] = priorLastRun;
+      this.settings.dailyPulseReviewState = priorReviewState;
+      throw error;
+    }
+  }
+
   private scheduledRunsBusy = false;
   private async checkScheduledRuns(): Promise<void> {
     if (this.scheduledRunsBusy) return;
@@ -1929,9 +2067,18 @@ export default class ExoPlugin extends Plugin {
     this.scheduledRunsBusy = true;
     try {
       for (const a of autos) {
+        const now = Date.now();
+        if (isDailyPulseAutomation(a)) {
+          try {
+            await this.runScheduledDailyPulse(a, now);
+          } catch (err) {
+            console.warn("[Exo] Daily Pulse failed:", err);
+          }
+          continue;
+        }
         const p = this.settings.customPrompts.find((x) => x.name.toLowerCase() === a.name.toLowerCase());
         if (!p) continue;
-        if (!isDue(a.cadence, this.settings.scheduledLastRun[p.name] ?? 0, Date.now())) continue;
+        if (!isDue(a.cadence, this.settings.scheduledLastRun[p.name] ?? 0, now)) continue;
         try {
           const succeeded = await this.runPlaybook(p.name, p.prompt, { write: a.write }); // sequential — one at a time
           if (succeeded) {

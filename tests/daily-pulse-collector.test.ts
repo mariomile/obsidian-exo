@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { AutomationRunRecord } from "../src/core/automations";
 import type { LoopEntry } from "../src/core/open-loops";
 import type { TaskEntry } from "../src/core/tasks";
+import { WriteQueue } from "../src/core/write-queue";
 import {
   collectDailyPulseInput,
   DAILY_PULSE_FIRST_RUN_LOOKBACK_MS,
   DAILY_PULSE_RECENT_NOTE_LIMIT,
   DAILY_PULSE_RECENT_NOTE_SCAN_LIMIT,
+  generateAndWriteDailyPulse,
   type DailyPulseCollectionSources,
 } from "../src/obsidian/daily-pulse";
 
@@ -288,5 +290,32 @@ describe("collectDailyPulseInput", () => {
     await expect(collectBudget(true, 100, 150)).resolves.toMatchObject({
       input: { budget: { remaining: 0 } },
     });
+  });
+
+  it("still writes the deterministic pulse with exhausted budget and an independent-source warning", async () => {
+    let content: string | null = null;
+    const result = await generateAndWriteDailyPulse(sources({
+      taskStore: {
+        load: async () => ({ tasks: [task("review", "review")], warnings: [] }),
+      },
+      loadLoops: async () => { throw new Error("loop ledger unavailable"); },
+      loadBackgroundBudget: async () => ({
+        enabled: false,
+        dailyBudget: 10_000,
+        ledger: { dateUTC: "2026-07-20", tokensUsed: 0 },
+      }),
+    }), {
+      read: async () => content,
+      write: async (_path, next) => { content = next; },
+    }, new WriteQueue(), { now: NOW, lastPulseAt: LAST_PULSE_AT });
+
+    expect(result.warnings).toEqual([
+      { source: "loops", message: "loop ledger unavailable" },
+    ]);
+    expect(result.pulse.sections.flatMap(({ items }) => items).map(({ id }) => id))
+      .toEqual(["task:review", "system:budget"]);
+    expect(content).toContain("Task review");
+    expect(content).toContain("Budget exhausted");
+    expect(content).toContain("Loops: loop ledger unavailable");
   });
 });

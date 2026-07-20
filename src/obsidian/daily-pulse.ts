@@ -15,11 +15,12 @@ import {
   resetIfNewDay,
   type BudgetLedger,
 } from "../core/background-budget";
-import type {
-  DailyPulse,
-  DailyPulseAction,
-  DailyPulseInput,
-  DailyPulseItem,
+import {
+  buildDailyPulse,
+  type DailyPulse,
+  type DailyPulseAction,
+  type DailyPulseInput,
+  type DailyPulseItem,
 } from "../core/daily-pulse";
 import { dueLoops, type LoopEntry } from "../core/open-loops";
 import type { ProposalKind } from "../core/proposals";
@@ -140,6 +141,12 @@ export interface DailyPulseWriteResult {
   path: typeof DAILY_PULSE_TARGET_PATH;
   created: boolean;
   changed: boolean;
+}
+
+export interface GeneratedDailyPulse {
+  pulse: DailyPulse;
+  warnings: DailyPulseCollectionWarning[];
+  write: DailyPulseWriteResult;
 }
 
 interface Captured<T> {
@@ -501,4 +508,17 @@ export function writeDailyPulse(
     await adapter.write(DAILY_PULSE_TARGET_PATH, next);
     return { path: DAILY_PULSE_TARGET_PATH, created, changed: true };
   });
+}
+
+/** Complete deterministic collection/build/write pipeline; it never invokes an LLM. */
+export async function generateAndWriteDailyPulse(
+  sources: DailyPulseCollectionSources,
+  adapter: DailyPulseFileAdapter,
+  queue: WriteQueue,
+  options: DailyPulseCollectionOptions
+): Promise<GeneratedDailyPulse> {
+  const collected = await collectDailyPulseInput(sources, options);
+  const pulse = buildDailyPulse(collected.input);
+  const write = await writeDailyPulse(adapter, queue, pulse, collected.warnings);
+  return { pulse, warnings: collected.warnings, write };
 }

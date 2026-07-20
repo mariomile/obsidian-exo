@@ -6,6 +6,157 @@
  */
 
 import type { ProposalKind } from "./proposals";
+import { isDue, type AutomationConfig } from "./automations";
+
+export const DAILY_PULSE_AUTOMATION_NAME = "Daily Pulse";
+
+/** Default system automation. It is intentionally inert until explicitly enabled. */
+export function createDailyPulseAutomation(): AutomationConfig {
+  return {
+    name: DAILY_PULSE_AUTOMATION_NAME,
+    system: "daily-pulse",
+    cadence: { kind: "daily", hour: 8 },
+    enabled: false,
+    write: true,
+  };
+}
+
+export function isDailyPulseAutomation(
+  automation: AutomationConfig
+): automation is AutomationConfig & { system: "daily-pulse" } {
+  return automation.system === "daily-pulse";
+}
+
+export interface DailyPulseSeedResult {
+  automations: AutomationConfig[];
+  seeded: boolean;
+  changed: boolean;
+}
+
+/**
+ * One-shot settings migration for the system Daily Pulse automation.
+ * Once `seeded` is persisted, user edits and deletion are authoritative.
+ */
+export function seedDailyPulseAutomation(
+  automations: readonly AutomationConfig[],
+  seeded: boolean
+): DailyPulseSeedResult {
+  if (seeded) {
+    return { automations: [...automations], seeded: true, changed: false };
+  }
+
+  let keptPulse = false;
+  const migrated = automations.filter((automation) => {
+    if (!isDailyPulseAutomation(automation)) return true;
+    if (keptPulse) return false;
+    keptPulse = true;
+    return true;
+  });
+  if (!keptPulse) migrated.push(createDailyPulseAutomation());
+  return {
+    automations: migrated,
+    seeded: true,
+    changed: true,
+  };
+}
+
+export type DailyPulseSlotResult =
+  | { status: "disabled" }
+  | { status: "current" }
+  | { status: "succeeded"; completedAt: number; warningCount: number }
+  | { status: "failed"; error: string; retryable: true };
+
+export interface DailyPulseReviewState {
+  status: "idle" | "ready" | "warning" | "error";
+  lastAttemptAt: number;
+  lastSuccessAt: number;
+  warnings: { source: string; message: string }[];
+  itemCount: number;
+  lastError: string;
+  retryable: boolean;
+}
+
+export function initialDailyPulseReviewState(): DailyPulseReviewState {
+  return {
+    status: "idle",
+    lastAttemptAt: 0,
+    lastSuccessAt: 0,
+    warnings: [],
+    itemCount: 0,
+    lastError: "",
+    retryable: false,
+  };
+}
+
+/** Persistable review/error state for the future quiet Retry UI. */
+export function dailyPulseReviewAfterRun(
+  previous: DailyPulseReviewState,
+  result: Extract<DailyPulseSlotResult, { status: "succeeded" | "failed" }>,
+  now: number,
+  warnings: readonly { source: string; message: string }[] = [],
+  itemCount = 0
+): DailyPulseReviewState {
+  if (result.status === "failed") {
+    return {
+      ...previous,
+      status: "error",
+      lastAttemptAt: now,
+      warnings: [],
+      lastError: result.error,
+      retryable: result.retryable,
+    };
+  }
+  return {
+    status: warnings.length > 0 ? "warning" : "ready",
+    lastAttemptAt: now,
+    lastSuccessAt: result.completedAt,
+    warnings: warnings.map(({ source, message }) => ({ source, message })),
+    itemCount,
+    lastError: "",
+    retryable: false,
+  };
+}
+
+/** Execute one due slot. The caller persists `completedAt` only on success. */
+export async function runDailyPulseSlot(options: {
+  config: AutomationConfig;
+  lastRun: number;
+  now: number;
+  execute: () => Promise<{ warningCount: number }>;
+}): Promise<DailyPulseSlotResult> {
+  if (!options.config.enabled) return { status: "disabled" };
+  if (!isDue(options.config.cadence, options.lastRun, options.now)) {
+    return { status: "current" };
+  }
+  try {
+    const result = await options.execute();
+    return {
+      status: "succeeded",
+      completedAt: options.now,
+      warningCount: result.warningCount,
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      retryable: true,
+    };
+  }
+}
+
+/** One in-process flight for the system pulse; timer ownership stays in main.ts. */
+export class DailyPulseSlotRunner {
+  private inFlight: Promise<DailyPulseSlotResult> | null = null;
+
+  run(options: Parameters<typeof runDailyPulseSlot>[0]): Promise<DailyPulseSlotResult> {
+    if (this.inFlight) return this.inFlight;
+    const flight = runDailyPulseSlot(options).finally(() => {
+      if (this.inFlight === flight) this.inFlight = null;
+    });
+    this.inFlight = flight;
+    return flight;
+  }
+}
 
 export interface DailyPulseInput {
   now: number;

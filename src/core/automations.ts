@@ -18,11 +18,18 @@ export type Cadence =
 export interface AutomationConfig {
   /** Custom prompt (playbook) name this automation runs — matched case-insensitively. */
   name: string;
+  /** Optional built-in executor. Absent configs continue to run custom playbooks. */
+  system?: "daily-pulse";
   cadence: Cadence;
   enabled: boolean;
   /** true → the run may write inside the vault (checkpointed, restorable);
    *  false → legacy read-only report run. */
   write: boolean;
+}
+
+/** Stable persistence key; system automations must not collide with playbook names. */
+export function automationLastRunKey(automation: AutomationConfig): string {
+  return automation.system ? `system:${automation.system}` : automation.name;
 }
 
 /** One executed automation run — persisted (pruned) so a bad write run can be
@@ -123,7 +130,7 @@ export function nextAutomation(
   let best: { name: string; dueAt: number } | null = null;
   for (const a of automations) {
     if (!a.enabled) continue;
-    const dueAt = nextDueAt(a.cadence, lastRun[a.name] ?? 0, now);
+    const dueAt = nextDueAt(a.cadence, lastRun[automationLastRunKey(a)] ?? 0, now);
     if (!best || dueAt < best.dueAt) best = { name: a.name, dueAt };
   }
   return best;

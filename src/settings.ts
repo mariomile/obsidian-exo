@@ -8,6 +8,7 @@ import { compareSemver } from "./core/semver";
 import { ADAPTERS } from "./providers/registry";
 import { modelOptions } from "./core/model-options";
 import type { AutomationConfig } from "./core/automations";
+import { initialDailyPulseReviewState, type DailyPulseReviewState } from "./core/daily-pulse";
 import {
   parseMcpJson,
   serializeMcpJson,
@@ -174,6 +175,10 @@ export interface MVASettings {
   playbookExternalTools: boolean;
   /** Set once after seeding the Morning Digest playbook, so it's never re-seeded. */
   seededDigest: boolean;
+  /** One-shot migration guard for the editable/deletable Daily Pulse system config. */
+  seededDailyPulse: boolean;
+  /** Quiet persisted state consumed by the Phase 2 review UI and Retry action. */
+  dailyPulseReviewState: DailyPulseReviewState;
   /** Learning loop: propose saving a flow as a reusable playbook when the same
    *  KIND of task (by topic) recurs (free proposal; LLM distillation only on
    *  accept). Recurrence is tracked in `_system/memory/playbook-signals.json`. */
@@ -271,6 +276,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   automations: [],
   playbookExternalTools: false,
   seededDigest: false,
+  seededDailyPulse: false,
+  dailyPulseReviewState: initialDailyPulseReviewState(),
   learningLoop: true,
   playbookThreshold: 3,
   scheduledLastRun: {},
