@@ -172,7 +172,7 @@ export class CockpitView extends ItemView {
     this.rendering = true;
     try {
       const now = Date.now();
-      const [loopsRaw, tasksRaw, queuePending, answers, convos, inbox, ctxAge, report, unreviewedRuns] =
+      const [loopsRaw, tasksRaw, queuePending, answers, convos, inbox, ctxAge, report, unreviewedRuns, proposalPending] =
         await Promise.all([
           this.readOr(OPEN_LOOPS_PATH, ""),
           this.readOr(TASKS_PATH, ""),
@@ -186,6 +186,9 @@ export class CockpitView extends ItemView {
             .loadAutomationRuns()
             .then((rs) => unreviewedWriteRuns(rs).length)
             .catch(() => 0),
+          this.plugin.settings.proposalKernelEnabled
+            ? this.plugin.listPendingProposals().then(({ records }) => records.length).catch(() => 0)
+            : Promise.resolve(0),
         ]);
 
       const el = this.contentEl;
@@ -209,7 +212,7 @@ export class CockpitView extends ItemView {
 
       // Attention strip (only when non-empty)
       const attention = buildAttention({ convos: this.plugin.liveAttention(), answers, unreviewedRuns, now });
-      if (attention.length) this.renderAttention(el, attention);
+      if (attention.length || proposalPending > 0) this.renderAttention(el, attention, proposalPending);
 
       // Command bar
       this.renderCommandBar(el);
@@ -254,7 +257,7 @@ export class CockpitView extends ItemView {
     }
   }
 
-  private renderAttention(parent: HTMLElement, items: AttentionItem[]): void {
+  private renderAttention(parent: HTMLElement, items: AttentionItem[], proposalPending: number): void {
     const strip = parent.createDiv({ cls: "mva-ck-attention" });
     for (const it of items) {
       const row = strip.createDiv({ cls: `mva-ck-att is-${it.kind}` });
@@ -274,6 +277,12 @@ export class CockpitView extends ItemView {
         else if (it.kind === "runs") this.plugin.openAutomationsModal();
         else void this.plugin.openConvo(it.target);
       });
+    }
+    if (proposalPending > 0) {
+      const row = strip.createDiv({ cls: "mva-ck-att is-proposal" });
+      setIcon(row.createSpan({ cls: "mva-ck-att-icon" }), "lightbulb");
+      row.createSpan({ text: `${proposalPending} suggestion${proposalPending === 1 ? "" : "s"}` });
+      clickable(row, () => void this.plugin.openProposalsModal());
     }
   }
 

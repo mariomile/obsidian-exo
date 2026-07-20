@@ -4715,3 +4715,99 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .exo-mention-btn:hover {
   background: var(--background-modifier-hover, rgba(0, 0, 0, 0.06));
 }
+
+/* Proposal Kernel — quiet turn affordance + explicit review inbox. */
+.mva-proposal-summary {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 0 28px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+.mva-proposal-summary:hover { color: var(--text-normal); }
+.mva-proposal-summary:focus-visible {
+  outline: 2px solid var(--background-modifier-border-focus);
+  outline-offset: 3px;
+  border-radius: var(--radius-s);
+}
+.mva-proposal-summary-icon svg { width: 13px; height: 13px; }
+
+.mva-proposals-window { width: min(760px, 92vw); }
+.mva-proposals-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(260px, 1.4fr);
+  min-height: 320px;
+  max-height: min(620px, 70vh);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+}
+.mva-proposals-list {
+  overflow-y: auto;
+  padding: 6px;
+  border-right: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+.mva-proposals-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-normal);
+  text-align: left;
+}
+.mva-proposals-row:hover,
+.mva-proposals-row.is-active { background: var(--background-modifier-hover); }
+.mva-proposals-kind {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.mva-proposals-row-title { font-weight: var(--font-semibold); }
+.mva-proposals-row-target,
+.mva-proposals-meta,
+.mva-proposals-rationale { color: var(--text-muted); font-size: var(--font-ui-small); }
+.mva-proposals-detail { overflow-y: auto; padding: 18px; }
+.mva-proposals-detail h3 { margin: 5px 0 6px; }
+.mva-proposals-meta { margin: 14px 0; }
+.mva-proposals-field { margin-top: 14px; }
+.mva-proposals-field-label { margin-bottom: 4px; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.mva-proposals-field-value { white-space: pre-wrap; overflow-wrap: anywhere; }
+.mva-proposals-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 7px 9px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-warning);
+  font-size: var(--font-ui-smaller);
+}
+.mva-proposals-warning svg { width: 13px; height: 13px; }
+.mva-proposals-actions { display: flex; gap: 8px; margin-top: 18px; }
+.mva-proposals-empty,
+.mva-proposals-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 220px;
+  color: var(--text-muted);
+}
+.mva-proposals-empty-icon svg { width: 16px; height: 16px; }
+.mva-ck-att.is-proposal .mva-ck-att-icon { color: var(--text-accent); }
+
+@media (max-width: 600px) {
+  .mva-proposals-layout { grid-template-columns: 1fr; max-height: 76vh; }
+  .mva-proposals-list { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--background-modifier-border); }
+}
