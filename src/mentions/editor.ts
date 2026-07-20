@@ -1,22 +1,25 @@
 /**
- * In-document Connections surface (CM6). Two decorations, both gated live behind
- * settings so the extension is inert when off (no reload needed):
- *   • inline underline on every OUTGOING unlinked mention (a title this note
- *     cites in plain text) — click → {@link openMentionPopover};
- *   • a bottom-of-note block listing those suggested links with one-click
- *     "Link"/"Link all".
+ * In-document Connections surface (CM6). An inline underline on every OUTGOING
+ * unlinked mention (a title this note cites in plain text) — click →
+ * {@link openMentionPopover}. Gated live behind a setting so the extension is
+ * inert when off (no reload needed).
  *
  * The mention set is recomputed async (debounced) off the live editor buffer and
  * pushed into a StateField; between recomputes, offsets are remapped through
  * edits so underlines never drift. DOM/CM6 shell — the matching, flattening and
  * mutation logic it renders is pure and unit-tested in `mentions-core`.
+ *
+ * NOTE: a bottom-of-note "Connections block" once lived here as a CM6 block
+ * widget. Block decorations at doc end fight Obsidian's editor — CM6 rejects them
+ * from view plugins AND from the decorations facet with `Block decorations may
+ * not be specified via plugins`, breaking every note open. Removed 2026-07-20.
+ * If reintroduced, render it as a MarkdownRenderChild footer, not a CM6 widget.
  */
 
 import {
   Decoration,
   EditorView,
   ViewPlugin,
-  WidgetType,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
@@ -25,8 +28,8 @@ import { MarkdownView, TFile } from "obsidian";
 import type ExoPlugin from "../main";
 import { gatherOutgoing } from "./connections";
 import { loadIgnoreStore } from "./ignore-store";
-import { applyRangesToView, openMentionPopover } from "./popover";
-import type { FlatOutgoing, MentionRange } from "./mentions-core";
+import { openMentionPopover } from "./popover";
+import type { FlatOutgoing } from "./mentions-core";
 
 interface OutgoingState {
   path: string;
@@ -65,57 +68,6 @@ function fileForView(plugin: ExoPlugin, view: EditorView): TFile | null {
   return null;
 }
 
-/** Distinct targets in the flat set, each with all its ranges — for the block. */
-function groupByTarget(flats: FlatOutgoing[]): { basename: string; ranges: MentionRange[] }[] {
-  const map = new Map<string, { basename: string; ranges: MentionRange[] }>();
-  for (const f of flats) {
-    const g = map.get(f.targetBasename) ?? { basename: f.targetBasename, ranges: [] };
-    g.ranges.push(f.range);
-    map.set(f.targetBasename, g);
-  }
-  return [...map.values()];
-}
-
-class ConnectionsBlock extends WidgetType {
-  constructor(
-    private readonly view: EditorView,
-    private readonly flats: FlatOutgoing[],
-  ) {
-    super();
-  }
-
-  eq(other: ConnectionsBlock): boolean {
-    return this.flats.length === other.flats.length &&
-      this.flats.every((f, i) => f.targetPath === other.flats[i]?.targetPath && f.range.start === other.flats[i]?.range.start);
-  }
-
-  toDOM(): HTMLElement {
-    const root = document.createElement("div");
-    root.className = "exo-connections-block";
-    const groups = groupByTarget(this.flats);
-    root.createDiv({ cls: "exo-connections-head", text: `Connections · ${groups.length} suggested link${groups.length === 1 ? "" : "s"}` });
-    if (groups.length === 0) {
-      root.createDiv({ cls: "exo-connections-empty", text: "No unlinked mentions in this note." });
-      return root;
-    }
-    for (const g of groups) {
-      const row = root.createDiv({ cls: "exo-connections-row" });
-      row.createSpan({ cls: "exo-connections-name", text: g.basename });
-      row.createSpan({ cls: "exo-connections-count", text: `${g.ranges.length}×` });
-      const link = row.createEl("button", { cls: "exo-mention-btn", text: g.ranges.length > 1 ? "Link all" : "Link" });
-      link.addEventListener("click", (e) => {
-        e.preventDefault();
-        applyRangesToView(this.view, g.basename, g.ranges);
-      });
-    }
-    return root;
-  }
-
-  ignoreEvent(): boolean {
-    return false;
-  }
-}
-
 export function mentionsExtension(plugin: ExoPlugin) {
   const plug = ViewPlugin.fromClass(
     class {
@@ -135,8 +87,7 @@ export function mentionsExtension(plugin: ExoPlugin) {
       }
 
       private enabled(): boolean {
-        const s = plugin.settings;
-        return !!s.connectionsInlineUnderline || !!s.connectionsBlockEnabled;
+        return !!plugin.settings.connectionsInlineUnderline;
       }
 
       private build(view: EditorView): DecorationSet {
@@ -155,10 +106,6 @@ export function mentionsExtension(plugin: ExoPlugin) {
               }),
             );
           }
-        }
-        if (s.connectionsBlockEnabled) {
-          const end = view.state.doc.length;
-          builder.add(end, end, Decoration.widget({ widget: new ConnectionsBlock(view, data.flats), side: 1, block: true }));
         }
         return builder.finish();
       }

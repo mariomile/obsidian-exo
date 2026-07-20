@@ -4715,33 +4715,3 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .exo-mention-btn:hover {
   background: var(--background-modifier-hover, rgba(0, 0, 0, 0.06));
 }
-
-.exo-connections-block {
-  margin: 1.5em 0 0.5em;
-  padding: 12px 14px;
-  border-top: 1px solid var(--background-modifier-border, rgba(0, 0, 0, 0.08));
-  font-size: var(--font-ui-small, 13px);
-}
-.exo-connections-head {
-  margin-bottom: 8px;
-  color: var(--text-muted, #888);
-  font-size: var(--font-ui-smaller, 12px);
-  letter-spacing: 0.02em;
-}
-.exo-connections-empty {
-  color: var(--text-faint, #aaa);
-}
-.exo-connections-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-}
-.exo-connections-name {
-  flex: 1;
-  color: var(--text-normal, #222);
-}
-.exo-connections-count {
-  color: var(--text-faint, #aaa);
-  font-variant-numeric: tabular-nums;
-}

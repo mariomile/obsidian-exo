@@ -106,8 +106,6 @@ export interface MVASettings {
   /** In-document Connections: underline OUTGOING unlinked mentions (other notes'
    *  titles this note cites in plain text) so they can be linked with one click. */
   connectionsInlineUnderline: boolean;
-  /** In-document Connections: a suggested-links block at the bottom of the note. */
-  connectionsBlockEnabled: boolean;
   /** Broaden mention matching with light IT/EN stemming (plurals/inflections). */
   connectionsStemming: boolean;
   // Tab bar runtime state (not user-facing settings).
@@ -274,7 +272,6 @@ export const DEFAULT_SETTINGS: MVASettings = {
   orchestrationEnabled: false,
   orchestrationMaxConcurrent: 2,
   connectionsInlineUnderline: true,
-  connectionsBlockEnabled: true,
   connectionsStemming: true,
 };
 
@@ -512,12 +509,6 @@ export class MVASettingTab extends PluginSettingTab {
       "Underline unlinked mentions",
       "As you read a note, dot-underline the names of your other notes that appear in its text but aren't linked yet. Click an underlined name to turn it into a [[wikilink]] — or dismiss it for good if it's just a coincidence (dismissals are remembered).",
       "connectionsInlineUnderline"
-    );
-    this.toggleSetting(
-      el,
-      "Connections block at the bottom of notes",
-      "Add a block at the end of each note listing every other note it mentions but doesn't link to, each with a one-click Link (or Link all). A running to-do of connections you could make.",
-      "connectionsBlockEnabled"
     );
     this.toggleSetting(
       el,
