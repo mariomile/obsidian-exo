@@ -45,6 +45,7 @@ import { inlineAiExtension } from "./editor/inline-ai";
 import { mentionsExtension } from "./mentions/editor";
 import { selectionObserverExtension } from "./editor/selection-observer";
 import { WriteQueue } from "./core/write-queue";
+import { WorkflowSignalStore } from "./obsidian/workflow-signal-store";
 import { startCodexBridge, type CodexBridge } from "./obsidian/codex-bridge";
 import { CODEX_BRIDGE_SCRIPT } from "./obsidian/codex-bridge-script";
 import { promoteToTaskCommandVisible, TASKS_PATH } from "./core/tasks";
@@ -201,6 +202,8 @@ export default class ExoPlugin extends Plugin {
   private readonly dailyPulseWriteQueue = new WriteQueue();
   /** One approval-gated serialized path for user-saved Research Mode dossiers. */
   readonly researchDossierWriteQueue = new WriteQueue();
+  /** Serialized privacy-safe Workflow Foundry signal ledger. */
+  private readonly workflowSignalWriteQueue = new WriteQueue();
   /** Serialize collection, review-note write and settings persistence as one operation. */
   private readonly dailyPulseOperationQueue = new WriteQueue();
   private readonly dailyPulseSlotRunner = new DailyPulseSlotRunner();
@@ -214,6 +217,7 @@ export default class ExoPlugin extends Plugin {
    */
   taskStore!: TaskStore;
   proposalStore!: ProposalStore;
+  workflowSignalStore!: WorkflowSignalStore;
   private proposalAcceptanceDeps!: ProposalAcceptanceDeps;
   private readonly proposalRouteErrors = new Map<string, string>();
   private readonly proposalAbort = new AbortController();
@@ -290,6 +294,22 @@ export default class ExoPlugin extends Plugin {
       },
       write: (relativePath, content) => adapter.write(`${proposalRoot}/${relativePath}`, content),
     }, this.proposalWriteQueue);
+    const workflowSignalsPath = "_system/memory/workflow-signals.json";
+    this.workflowSignalStore = new WorkflowSignalStore({
+      read: async () => await adapter.exists(workflowSignalsPath)
+        ? adapter.read(workflowSignalsPath)
+        : null,
+      write: async (content) => {
+        if (!(await adapter.exists("_system/memory"))) {
+          try {
+            await adapter.mkdir("_system/memory");
+          } catch (error) {
+            if (!(await adapter.exists("_system/memory"))) throw error;
+          }
+        }
+        await adapter.write(workflowSignalsPath, content);
+      },
+    }, this.workflowSignalWriteQueue);
     const targetVault: ProposalTargetVaultAdapter = {
       getFile: (path) => {
         const file = this.app.vault.getAbstractFileByPath(path);

@@ -53,6 +53,57 @@ export interface WorkflowSignalInput {
   succeeded: boolean;
 }
 
+export interface WorkflowEligibilityInput {
+  succeeded: boolean;
+  stopped: boolean;
+  errored: boolean;
+  recoveryRetry: boolean;
+  sideThread: boolean;
+  playbookRun: boolean;
+  sensitive: boolean;
+  assistantChars: number;
+  toolNames: string[];
+  structuredOutput: boolean;
+}
+
+export type WorkflowIneligibleReason =
+  | "stopped"
+  | "error"
+  | "recovery-retry"
+  | "side-thread"
+  | "playbook-run"
+  | "sensitive"
+  | "insubstantial"
+  | "insufficient-structure";
+
+export type WorkflowEligibility =
+  | { eligible: true }
+  | { eligible: false; reason: WorkflowIneligibleReason };
+
+export interface WorkflowSignalLedger {
+  version: 1;
+  signals: WorkflowSignal[];
+}
+
+export const EMPTY_WORKFLOW_SIGNAL_LEDGER: WorkflowSignalLedger = { version: 1, signals: [] };
+
+export interface WorkflowCandidate {
+  signature: string;
+  occurrences: number;
+}
+
+export interface RecordWorkflowOptions {
+  threshold?: number;
+  windowMs?: number;
+  maxSignals?: number;
+  blockedSignatures?: ReadonlySet<string>;
+}
+
+export interface RecordWorkflowResult {
+  ledger: WorkflowSignalLedger;
+  candidate: WorkflowCandidate | null;
+}
+
 const INTENT_RULES: readonly [WorkflowIntent, RegExp][] = [
   ["research", /\b(?:research|ricerc|cerca|confronta|compare|investigat|verify|verifica)\w*/i],
   ["summarize", /\b(?:summari[sz]|riassum|sintetizz|digest)\w*/i],
@@ -109,6 +160,23 @@ export function significantToolSequence(names: readonly string[]): string[] {
   return tools;
 }
 
+export function evaluateWorkflowEligibility(input: WorkflowEligibilityInput): WorkflowEligibility {
+  if (input.stopped) return { eligible: false, reason: "stopped" };
+  if (!input.succeeded || input.errored) return { eligible: false, reason: "error" };
+  if (input.recoveryRetry) return { eligible: false, reason: "recovery-retry" };
+  if (input.sideThread) return { eligible: false, reason: "side-thread" };
+  if (input.playbookRun) return { eligible: false, reason: "playbook-run" };
+  if (input.sensitive) return { eligible: false, reason: "sensitive" };
+  const tools = significantToolSequence(input.toolNames);
+  if (input.assistantChars < 120 && !input.structuredOutput) {
+    return { eligible: false, reason: "insubstantial" };
+  }
+  if (tools.length < 2 && !input.structuredOutput) {
+    return { eligible: false, reason: "insufficient-structure" };
+  }
+  return { eligible: true };
+}
+
 export function workflowSignature(input: {
   intent: WorkflowIntent;
   tools: readonly string[];
@@ -139,5 +207,42 @@ export function createWorkflowSignal(input: WorkflowSignalInput): WorkflowSignal
     convoId: input.convoId,
     turnId: input.turnId,
     succeeded: input.succeeded,
+  };
+}
+
+const DEFAULT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Pure rolling-window recorder. Duplicate turn ids are retry-safe no-ops. */
+export function recordWorkflowOccurrence(
+  ledger: WorkflowSignalLedger,
+  signal: WorkflowSignal,
+  now: number,
+  options: RecordWorkflowOptions = {}
+): RecordWorkflowResult {
+  const windowMs = options.windowMs ?? DEFAULT_WINDOW_MS;
+  const threshold = options.threshold ?? 3;
+  const maxSignals = options.maxSignals ?? 1000;
+  const cutoff = now - windowMs;
+  const withinWindow = ledger.signals.filter((item) =>
+    item.createdAt >= cutoff && item.createdAt <= now
+  );
+  if (withinWindow.some((item) => item.id === signal.id || (
+    item.convoId === signal.convoId && item.turnId === signal.turnId
+  ))) {
+    return { ledger: { version: 1, signals: withinWindow }, candidate: null };
+  }
+
+  const appended = [...withinWindow, signal]
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(-maxSignals);
+  const occurrences = appended.filter((item) =>
+    item.signature === signal.signature && item.succeeded
+  ).length;
+  const blocked = options.blockedSignatures?.has(signal.signature) ?? false;
+  return {
+    ledger: { version: 1, signals: appended },
+    candidate: occurrences >= threshold && !blocked
+      ? { signature: signal.signature, occurrences }
+      : null,
   };
 }

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  EMPTY_WORKFLOW_SIGNAL_LEDGER,
   classifyWorkflowIntent,
   createWorkflowSignal,
+  evaluateWorkflowEligibility,
+  recordWorkflowOccurrence,
   significantToolSequence,
   workflowSignature,
 } from "../src/core/workflow-signals";
@@ -100,5 +103,107 @@ describe("workflow signals — privacy-safe signature", () => {
       succeeded: false,
     });
     expect(JSON.stringify(first)).not.toContain("Private/Launch.md");
+  });
+});
+
+describe("workflow signals — eligibility", () => {
+  const base = {
+    succeeded: true,
+    stopped: false,
+    errored: false,
+    recoveryRetry: false,
+    sideThread: false,
+    playbookRun: false,
+    sensitive: false,
+    assistantChars: 500,
+    toolNames: ["Read", "WebSearch"],
+    structuredOutput: false,
+  };
+
+  it("accepts a substantial successful multi-step workflow", () => {
+    expect(evaluateWorkflowEligibility(base)).toEqual({ eligible: true });
+  });
+
+  it.each([
+    ["stopped", { stopped: true }, "stopped"],
+    ["errored", { errored: true }, "error"],
+    ["retry", { recoveryRetry: true }, "recovery-retry"],
+    ["btw", { sideThread: true }, "side-thread"],
+    ["playbook", { playbookRun: true }, "playbook-run"],
+    ["sensitive", { sensitive: true }, "sensitive"],
+  ] as const)("rejects %s turns", (_label, patch, reason) => {
+    expect(evaluateWorkflowEligibility({ ...base, ...patch })).toEqual({ eligible: false, reason });
+  });
+
+  it("requires either two significant steps or a recognized structured output", () => {
+    expect(evaluateWorkflowEligibility({ ...base, toolNames: ["Read"] })).toEqual({
+      eligible: false,
+      reason: "insufficient-structure",
+    });
+    expect(evaluateWorkflowEligibility({
+      ...base,
+      toolNames: [],
+      structuredOutput: true,
+    })).toEqual({ eligible: true });
+  });
+});
+
+describe("workflow signals — 30-day threshold", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = Date.parse("2026-07-20T10:00:00Z");
+  const signal = (turnId: string, createdAt: number, signature = "research|vault.read>web.search|markdown") => ({
+    id: `wf-${turnId}`,
+    signature,
+    intent: "research" as const,
+    tools: ["vault.read", "web.search"],
+    createdAt,
+    convoId: "c1",
+    turnId,
+    succeeded: true,
+  });
+
+  it("emits one candidate only when the third occurrence enters the window", () => {
+    let ledger = EMPTY_WORKFLOW_SIGNAL_LEDGER;
+    let result = recordWorkflowOccurrence(ledger, signal("t1", NOW - DAY), NOW);
+    expect(result.candidate).toBeNull();
+    ledger = result.ledger;
+    result = recordWorkflowOccurrence(ledger, signal("t2", NOW - 1), NOW);
+    expect(result.candidate).toBeNull();
+    ledger = result.ledger;
+    result = recordWorkflowOccurrence(ledger, signal("t3", NOW), NOW);
+    expect(result.candidate).toEqual({
+      signature: "research|vault.read>web.search|markdown",
+      occurrences: 3,
+    });
+  });
+
+  it("drops occurrences older than 30 days before counting", () => {
+    let ledger = EMPTY_WORKFLOW_SIGNAL_LEDGER;
+    ledger = recordWorkflowOccurrence(ledger, signal("old", NOW - 31 * DAY), NOW).ledger;
+    ledger = recordWorkflowOccurrence(ledger, signal("t2", NOW - DAY), NOW).ledger;
+    const result = recordWorkflowOccurrence(ledger, signal("t3", NOW), NOW);
+
+    expect(result.candidate).toBeNull();
+    expect(result.ledger.signals.map((item) => item.turnId)).toEqual(["t2", "t3"]);
+  });
+
+  it("does not count the same turn twice after retry or reload", () => {
+    const first = recordWorkflowOccurrence(EMPTY_WORKFLOW_SIGNAL_LEDGER, signal("t1", NOW), NOW);
+    const retry = recordWorkflowOccurrence(first.ledger, signal("t1", NOW), NOW);
+
+    expect(retry.ledger.signals).toHaveLength(1);
+    expect(retry.candidate).toBeNull();
+  });
+
+  it("suppresses candidates with pending or accepted proposal signatures", () => {
+    let ledger = EMPTY_WORKFLOW_SIGNAL_LEDGER;
+    ledger = recordWorkflowOccurrence(ledger, signal("t1", NOW - 2), NOW).ledger;
+    ledger = recordWorkflowOccurrence(ledger, signal("t2", NOW - 1), NOW).ledger;
+    const result = recordWorkflowOccurrence(ledger, signal("t3", NOW), NOW, {
+      blockedSignatures: new Set(["research|vault.read>web.search|markdown"]),
+    });
+
+    expect(result.candidate).toBeNull();
+    expect(result.ledger.signals).toHaveLength(3);
   });
 });

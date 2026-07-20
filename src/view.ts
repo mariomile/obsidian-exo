@@ -84,6 +84,11 @@ import { allowKey, permArgText, permRuleLine, decidePermission } from "./core/pe
 import { describeCliFailure } from "./core/errors";
 import { isReadOnlyExternalTool } from "./core/headless-tools";
 import { writeResearchDossier } from "./obsidian/research-dossier";
+import {
+  createWorkflowSignal,
+  evaluateWorkflowEligibility,
+  type WorkflowOutputType,
+} from "./core/workflow-signals";
 import { planInputParts, planStateText } from "./core/plan";
 import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
 import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
@@ -255,6 +260,8 @@ interface AssistantCtx {
   cards: Map<string, ToolCard>;
   segById: Map<string, Segment>;
   segments: Segment[];
+  /** Stable across recovery retry because it derives from the persisted user turn. */
+  turnId: string;
   curTextEl: HTMLElement | null;
   /** Chars of curRaw already rendered into stable (final) blocks. */
   stableLen: number;
@@ -2529,12 +2536,15 @@ export class ChatView extends ItemView {
     thinking.createSpan({ cls: "mva-thinking-dot" });
     thinking.createSpan({ cls: "mva-thinking-dot" });
     thinking.createSpan({ cls: "mva-thinking-dot" });
+    const latestUser = [...c.messages].reverse().find((message) => message.role === "user");
+    const turnId = `${c.id}:${latestUser?.at ?? Date.now()}`;
     const ctx: AssistantCtx = {
       el,
       bodyEl,
       cards: new Map(),
       segById: new Map(),
       segments: [],
+      turnId,
       curTextEl: null,
       stableLen: 0,
       tailEl: null,
@@ -4923,9 +4933,14 @@ export class ChatView extends ItemView {
             .createDiv({ cls: "mva-turn-meta" })
             .createSpan({ cls: "mva-turn-duration", text: `✻ ${this.fmtDuration(elapsed)}` });
         }
-        // Learning loop: a substantial healthy turn earns a quiet "save as
-        // playbook?" offer. Free until accepted — distillation runs on click.
-        if (!c.stopped && !poisoned) this.maybeProposePlaybook(ctx, c, elapsed);
+        if (!c.stopped && !poisoned) {
+          // Workflow Foundry records only privacy-safe deterministic metadata.
+          // Proposal/distillation remains a later stage and never delays this turn.
+          this.maybeRecordWorkflowSignal(ctx, c, !!opts?.isRecoveryRetry);
+          // Legacy recurrence nudge remains until P4-T03 routes Foundry candidates
+          // through the Proposal Kernel.
+          this.maybeProposePlaybook(ctx, c, elapsed);
+        }
       }
       // Turn finished normally (Feature 3): notify if it ran long and the window
       // is backgrounded. `poisoned` covers an in-band error already handled above.
@@ -5248,6 +5263,73 @@ export class ChatView extends ItemView {
   }
 
   /* ------------------------- learning loop ------------------------- */
+
+  private maybeRecordWorkflowSignal(ctx: AssistantCtx, c: Convo, recoveryRetry: boolean): void {
+    if (!this.plugin.settings.learningLoop) return;
+    const tools = ctx.segments.filter((segment): segment is Extract<Segment, { t: "tool" }> =>
+      segment.t === "tool"
+    );
+    const toolNames = tools.map((tool) => tool.name);
+    const hasArtifact = ctx.segments.some((segment) => segment.t === "artifact");
+    const hasVaultWrite = tools.some((tool) => WRITE_TOOLS.test(tool.name));
+    const structuredOutput = hasArtifact
+      || hasVaultWrite
+      || /(?:^|\n)(?:#{1,3}\s|\|.+\||```(?:json|csv)|[-*]\s+\[[ xX]\])/m.test(ctx.fullText);
+    const outputType: WorkflowOutputType = hasArtifact
+      ? "artifact"
+      : hasVaultWrite
+        ? "vault-write"
+        : structuredOutput
+          ? "structured"
+          : /(?:^|\n)(?:#{1,3}\s|[-*]\s|\d+\.\s)/m.test(ctx.fullText)
+            ? "markdown"
+            : "message";
+    const sensitive = tools.some((tool) =>
+      tool.name === "Bash"
+      || tool.name === "Shell"
+      || WRITE_TOOLS.test(tool.name)
+      || (
+        tool.name.startsWith("mcp__")
+        && !tool.name.startsWith("mcp__obsidian__")
+        && !isReadOnlyExternalTool(tool.name)
+      )
+    );
+    const eligibility = evaluateWorkflowEligibility({
+      succeeded: true,
+      stopped: c.stopped,
+      errored: false,
+      recoveryRetry,
+      sideThread: /^\/btw(?:\s|$)/i.test(ctx.userText.trim()),
+      playbookRun: ctx.userText.trim().startsWith("/"),
+      sensitive,
+      assistantChars: ctx.fullText.trim().length,
+      toolNames,
+      structuredOutput,
+    });
+    if (!eligibility.eligible) {
+      this.diag.push("foundry", `signal skipped: ${eligibility.reason}`);
+      return;
+    }
+    const now = Date.now();
+    const signal = createWorkflowSignal({
+      userText: ctx.userText,
+      tools,
+      outputType,
+      createdAt: now,
+      convoId: c.id,
+      turnId: ctx.turnId,
+      succeeded: true,
+    });
+    const threshold = Math.max(2, this.plugin.settings.playbookThreshold ?? 3);
+    void this.plugin.workflowSignalStore.record(signal, now, { threshold }).then((result) => {
+      this.diag.push(
+        "foundry",
+        result.candidate ? `threshold reached: ${result.candidate.occurrences}` : "signal recorded"
+      );
+    }).catch((error) => {
+      console.warn("[Exo] workflow signal persistence failed (no-op):", error);
+    });
+  }
 
   /** After a substantial healthy turn, offer to save the flow as a reusable
    *  playbook (Hermes pattern). One-shot per conversation; free until accepted. */
