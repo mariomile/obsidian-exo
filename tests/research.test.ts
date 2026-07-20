@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildResearchReceipt,
   buildResearchOutbound,
   initialResearchModeState,
   normalizeResearchModeState,
@@ -133,5 +134,128 @@ describe("Research Mode contract", () => {
     expect(outbound).toContain(visibleText);
     expect(visibleText).not.toContain("research-mode");
     expect(buildResearchOutbound(initialResearchModeState(), visibleText)).toBe(visibleText);
+  });
+});
+
+describe("Research source receipt", () => {
+  const state = (scope: "vault" | "web" | "both") => ({
+    enabled: true,
+    startedAt: NOW - 1_000,
+    scope,
+    depth: "standard" as const,
+  });
+  const available = {
+    vault: true,
+    web: true,
+    mcpServers: [] as { name: string; status: string }[],
+  };
+
+  it("records a vault-only run and marks web as skipped by scope", () => {
+    const receipt = buildResearchReceipt({
+      state: state("vault"),
+      completedAt: NOW,
+      availability: available,
+      tools: [{
+        name: "mcp__obsidian__read_note",
+        input: { target: "[[Active/Project Alpha]]" },
+        ok: true,
+      }],
+    });
+
+    expect(receipt.status).toBe("complete");
+    expect(receipt.sources).toEqual([
+      { kind: "vault", label: "Active/Project Alpha", status: "consulted" },
+      { kind: "web", label: "Web sources", status: "skipped", detail: "Outside selected scope" },
+    ]);
+  });
+
+  it("records a web-only run and marks vault as skipped by scope", () => {
+    const receipt = buildResearchReceipt({
+      state: state("web"),
+      completedAt: NOW,
+      availability: available,
+      tools: [{ name: "WebSearch", input: { query: "current standard" }, ok: true }],
+    });
+
+    expect(receipt.status).toBe("complete");
+    expect(receipt.sources).toEqual([
+      { kind: "vault", label: "Vault sources", status: "skipped", detail: "Outside selected scope" },
+      { kind: "web", label: "current standard", status: "consulted" },
+    ]);
+  });
+
+  it("requires both source classes and preserves a partial web failure", () => {
+    const receipt = buildResearchReceipt({
+      state: state("both"),
+      completedAt: NOW,
+      availability: available,
+      tools: [
+        { name: "Read", input: { file_path: "Notes/Local.md" }, ok: true },
+        { name: "WebFetch", input: { url: "https://example.com/source" }, ok: false },
+      ],
+    });
+
+    expect(receipt.status).toBe("partial");
+    expect(receipt.sources).toEqual([
+      { kind: "vault", label: "Notes/Local.md", status: "consulted" },
+      { kind: "web", label: "https://example.com/source", status: "failed" },
+    ]);
+  });
+
+  it("marks a required source unavailable instead of claiming completion", () => {
+    const receipt = buildResearchReceipt({
+      state: state("both"),
+      completedAt: NOW,
+      availability: { ...available, web: false },
+      tools: [{ name: "Grep", input: { pattern: "evidence" }, ok: true }],
+    });
+
+    expect(receipt.status).toBe("partial");
+    expect(receipt.sources.at(-1)).toEqual({
+      kind: "web",
+      label: "Web sources",
+      status: "unavailable",
+      detail: "No observable web capability",
+    });
+  });
+
+  it("records read-only external MCP sources without persisting their arguments", () => {
+    const receipt = buildResearchReceipt({
+      state: state("both"),
+      completedAt: NOW,
+      availability: {
+        ...available,
+        mcpServers: [{ name: "Readwise", status: "connected" }],
+      },
+      tools: [
+        { name: "mcp__obsidian__search_vault", input: { query: "private query" }, ok: true },
+        { name: "WebSearch", input: { query: "public query" }, ok: true },
+        {
+          name: "mcp__claude_ai_Readwise__search",
+          input: { query: "sensitive connector query" },
+          ok: true,
+        },
+      ],
+    });
+
+    expect(receipt.status).toBe("complete");
+    expect(receipt.sources).toContainEqual({
+      kind: "mcp",
+      label: "claude_ai_Readwise: search",
+      status: "consulted",
+    });
+    expect(JSON.stringify(receipt)).not.toContain("sensitive connector query");
+  });
+
+  it("reports no-sources when no requested class was actually consulted", () => {
+    const receipt = buildResearchReceipt({
+      state: state("both"),
+      completedAt: NOW,
+      availability: available,
+      tools: [],
+    });
+
+    expect(receipt.status).toBe("no-sources");
+    expect(receipt.sources.map((source) => source.status)).toEqual(["skipped", "skipped"]);
   });
 });

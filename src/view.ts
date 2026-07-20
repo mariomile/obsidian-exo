@@ -74,6 +74,7 @@ import { mergeTouched, WRITE_TOOLS } from "./core/touched";
 import { terminalConvoState } from "./core/convo-state";
 import { allowKey, permArgText, permRuleLine, decidePermission } from "./core/permissions";
 import { describeCliFailure } from "./core/errors";
+import { isReadOnlyExternalTool } from "./core/headless-tools";
 import { planInputParts, planStateText } from "./core/plan";
 import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
 import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
@@ -89,6 +90,7 @@ import {
 } from "./core/learning-loop";
 import { loadSignalLedger, saveSignalLedger } from "./core/signals-store";
 import {
+  buildResearchReceipt,
   buildResearchOutbound,
   initialResearchModeState,
   normalizeResearchModeState,
@@ -1088,6 +1090,7 @@ export class ChatView extends ItemView {
                     ),
                   }
                 : {}),
+              ...(m.researchReceipt ? { researchReceipt: m.researchReceipt } : {}),
             }
           : m
       ),
@@ -1101,6 +1104,7 @@ export class ChatView extends ItemView {
       role: "assistant",
       segments: m.segments,
       ...(Array.isArray(m.checkpoint) ? { checkpoint: new Map(m.checkpoint) } : {}),
+      ...(m.researchReceipt ? { researchReceipt: m.researchReceipt } : {}),
     };
   }
 
@@ -4357,6 +4361,7 @@ export class ChatView extends ItemView {
     }
   ): Promise<void> {
     const researchMode = opts?.researchMode ?? c.researchMode;
+    let turnCaps: SessionCaps | null = c.session?.caps ?? null;
     const paths = c === this.active ? this.composer.contextPaths() : [];
     const message = paths.length
       ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${text}`
@@ -4605,6 +4610,19 @@ export class ChatView extends ItemView {
             e.resolve({ behavior: "allow" });
             break;
           }
+          if (
+            researchMode.enabled
+            && e.tool.startsWith("mcp__")
+            && !e.tool.startsWith("mcp__obsidian__")
+            && !isReadOnlyExternalTool(e.tool)
+          ) {
+            this.diag.push("research", `${e.tool} → external-write-deny`);
+            e.resolve({
+              behavior: "deny",
+              message: "Research Mode allows read-only external MCP tools only.",
+            });
+            break;
+          }
           // ExitPlanMode → the dedicated plan-approval card (the thing to review),
           // not the generic permission card. openCard makes the card the feedback;
           // closeCard on any exit brings the working row back.
@@ -4746,6 +4764,7 @@ export class ChatView extends ItemView {
 
     try {
       const session = await this.ensureSession(c);
+      turnCaps = session.caps ?? turnCaps;
       // sendPrefix (recovery recap) and the proactive-recall block are prepended to
       // the OUTBOUND provider message only — never to the rendered/persisted user
       // text, so they can't leak into the transcript, c.messages, or serialize().
@@ -4901,10 +4920,29 @@ export class ChatView extends ItemView {
         ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
       }
       if (ctx.segments.length) {
+        const researchReceipt = researchMode.enabled
+          ? buildResearchReceipt({
+              state: researchMode,
+              completedAt: Date.now(),
+              availability: {
+                vault: s.toolsEnabled,
+                web: c.provider === "claude" && s.toolsEnabled,
+                mcpServers: (turnCaps?.mcpServers ?? []).filter((server) =>
+                  server.name.toLowerCase() !== "obsidian"
+                ),
+              },
+              tools: ctx.segments.flatMap((segment) =>
+                segment.t === "tool"
+                  ? [{ name: segment.name, input: segment.input, ok: segment.ok }]
+                  : []
+              ),
+            })
+          : undefined;
         c.messages.push({
           role: "assistant",
           segments: ctx.segments,
           ...(checkpoint.size ? { checkpoint } : {}),
+          ...(researchReceipt ? { researchReceipt } : {}),
         });
       }
       // Turn finalized — the live activity row is gone; refresh the conversation

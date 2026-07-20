@@ -5,6 +5,8 @@
  * unit-tested without importing `obsidian`.
  */
 
+import type { ResearchReceipt } from "./research";
+
 export interface AskQuestion {
   question: string;
   header: string;
@@ -25,10 +27,20 @@ export type Checkpoint = Map<string, string | null>;
 
 export type Message =
   | { role: "user"; text: string; at?: number }
-  | { role: "assistant"; segments: Segment[]; checkpoint?: Checkpoint };
+  | {
+      role: "assistant";
+      segments: Segment[];
+      checkpoint?: Checkpoint;
+      researchReceipt?: ResearchReceipt;
+    };
 
 /** On-disk form of a message: the checkpoint Map is stored as [path, content] entries.
  *  `at` (epoch ms) is optional — messages persisted before 0.14.0 don't carry it. */
 export type PersistedMessage =
   | { role: "user"; text: string; at?: number }
-  | { role: "assistant"; segments: Segment[]; checkpoint?: [string, string | null][] };
+  | {
+      role: "assistant";
+      segments: Segment[];
+      checkpoint?: [string, string | null][];
+      researchReceipt?: ResearchReceipt;
+    };
