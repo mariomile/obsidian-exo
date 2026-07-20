@@ -45,6 +45,7 @@ const INBOX_DIR = "_inbox";
 export class CockpitView extends ItemView {
   private refreshedAt = 0;
   private rendering = false;
+  private refreshRequested = false;
   private inputEl: HTMLInputElement | null = null;
 
   constructor(
@@ -168,7 +169,10 @@ export class CockpitView extends ItemView {
   /* ------------------------------ rendering ---------------------------- */
 
   async refresh(): Promise<void> {
-    if (this.rendering) return;
+    if (this.rendering) {
+      this.refreshRequested = true;
+      return;
+    }
     this.rendering = true;
     try {
       const now = Date.now();
@@ -254,6 +258,10 @@ export class CockpitView extends ItemView {
       this.tile(grid, "Health", "heart-pulse", health, "Vault is healthy.");
     } finally {
       this.rendering = false;
+      if (this.refreshRequested) {
+        this.refreshRequested = false;
+        void this.refresh();
+      }
     }
   }
 

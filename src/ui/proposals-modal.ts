@@ -146,7 +146,7 @@ export class ProposalsModal extends Modal {
       text: "Dismiss",
       attr: { type: "button" },
     });
-    const busy = this.busyId === record.id;
+    const busy = this.busyId !== null;
     accept.disabled = busy;
     dismiss.disabled = busy;
     accept.onclick = () => void this.accept(record.id);

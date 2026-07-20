@@ -152,6 +152,29 @@ export class TaskStore {
     return createBacklogTask(this.vault, this.queue, task);
   }
 
+  /**
+   * Create a backlog task once for a durable caller marker. The lookup and
+   * append share the normal task queue, so concurrent retries cannot both
+   * create the same marked task.
+   */
+  createOnce(task: NewBacklogTask, marker: string): Promise<TaskEntry> {
+    return this.queue.enqueue(async () => {
+      const existing = this.vault.getFile(TASKS_PATH);
+      const current = existing ? await this.vault.read(TASKS_PATH) : "";
+      const prior = parseTasksFile(current).find(({ prompt }) => prompt.includes(marker));
+      if (prior) return prior;
+
+      const { content, entry } = addBacklogTask(current, task);
+      if (existing) {
+        await this.vault.modify(TASKS_PATH, content);
+      } else {
+        await this.vault.ensureFolder(TASKS_PATH);
+        await this.vault.create(TASKS_PATH, content);
+      }
+      return entry;
+    });
+  }
+
   /** Patch arbitrary fields on an existing task (title/prompt/model/convo/status/order). */
   update(id: string, patch: TaskPatch): Promise<TaskEntry> {
     return this.mutate(id, (tasks, now) => applyTaskPatch(tasks, id, patch, now));

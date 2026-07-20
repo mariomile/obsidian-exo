@@ -239,7 +239,7 @@ describe("resolveRecovery", () => {
 });
 
 describe("shouldColdReseed", () => {
-  const base = { hasSessionId: false, hasRecapPrefix: false, hasAssistantHistory: true };
+  const base = { hasSessionId: false, hasRecapPrefix: false, hasPriorHistory: true };
 
   it("reseeds a cold spawn that is continuing a conversation with history", () => {
     expect(shouldColdReseed(base)).toBe(true);
@@ -253,8 +253,12 @@ describe("shouldColdReseed", () => {
     expect(shouldColdReseed({ ...base, hasRecapPrefix: true })).toBe(false);
   });
 
-  it("does NOT reseed on a convo's first turn (no assistant history yet)", () => {
-    expect(shouldColdReseed({ ...base, hasAssistantHistory: false })).toBe(false);
+  it("reseeds after restart when only the interrupted user turn was persisted", () => {
+    expect(shouldColdReseed({ ...base, hasPriorHistory: true })).toBe(true);
+  });
+
+  it("does NOT reseed on a convo's first turn (no prior message yet)", () => {
+    expect(shouldColdReseed({ ...base, hasPriorHistory: false })).toBe(false);
   });
 });
 

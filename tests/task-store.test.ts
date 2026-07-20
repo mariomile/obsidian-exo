@@ -176,6 +176,21 @@ describe("TaskStore", () => {
       expect(files.has(TASKS_PATH)).toBe(true);
       expect(folders.has("_system/orchestration")).toBe(true);
     });
+
+    it("creates a marked task once across concurrent retries", async () => {
+      const { adapter } = fakeVault();
+      const store = new TaskStore(adapter, new WriteQueue());
+      const marker = "<!-- exo-proposal:proposal-task -->";
+      const task = { title: "Once", prompt: `Do it\n\n${marker}` };
+
+      const [first, second] = await Promise.all([
+        store.createOnce(task, marker),
+        store.createOnce(task, marker),
+      ]);
+
+      expect(second.id).toBe(first.id);
+      expect((await store.load()).tasks).toHaveLength(1);
+    });
   });
 
   describe("update()", () => {

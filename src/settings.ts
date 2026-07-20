@@ -33,6 +33,8 @@ export interface MVASettings {
   systemPrompt: string;
   /** User-defined prompt templates surfaced in the "/" menu. */
   customPrompts: { name: string; prompt: string }[];
+  /** Internal idempotency receipts for accepted playbook proposals. */
+  proposalPlaybookReceipts: Record<string, string>;
   /** What sending a message during a running turn does: "queue" waits and starts
    *  it as the next turn; "steer" injects it into the live turn (Claude only). */
   steerMode: "queue" | "steer";
@@ -214,6 +216,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   effort: "default",
   systemPrompt: "",
   customPrompts: [],
+  proposalPlaybookReceipts: {},
   steerMode: "queue",
   toolsEnabled: false,
   permissionMode: "default",

@@ -44,13 +44,19 @@ describe("routeAcceptedProposal", () => {
   it("routes tasks through the TaskStore.create-shaped dependency", async () => {
     const d = deps();
     await expect(routeAcceptedProposal(record("task"), d)).resolves.toEqual({ ok: true, target: "task-1" });
-    expect(d.tasks.create).toHaveBeenCalledWith({ title: "Ship Phase 1", prompt: "Finish the proposal inbox", model: "sonnet" });
+    expect(d.tasks.create).toHaveBeenCalledWith({
+      proposalId: "proposal-task",
+      title: "Ship Phase 1",
+      prompt: "Finish the proposal inbox",
+      model: "sonnet",
+    });
   });
 
   it("routes loops through the shared queued Open Loops create dependency", async () => {
     const d = deps();
     await expect(routeAcceptedProposal(record("loop"), d)).resolves.toEqual({ ok: true, target: "loop-1" });
     expect(d.loops.create).toHaveBeenCalledWith({
+      proposalId: "proposal-loop",
       title: "Check adoption",
       note: "Review proposal acceptance",
       resurface: "2026-08-01",
@@ -65,6 +71,7 @@ describe("routeAcceptedProposal", () => {
       target: "_system/memory/decisions/decision.md",
     });
     expect(d.decisions.captureRawPreserving).toHaveBeenCalledWith({
+      proposalId: "proposal-decision",
       title: "Use explicit accept",
       context: "Suggestions are inert",
       decision: "Require Accept",
@@ -75,7 +82,11 @@ describe("routeAcceptedProposal", () => {
   it("routes the requested playbook name through the serialized settings target", async () => {
     const d = deps();
     await expect(routeAcceptedProposal(record("playbook"), d)).resolves.toEqual({ ok: true, target: "Weekly Review" });
-    expect(d.playbooks.save).toHaveBeenCalledWith({ name: "Weekly Review", prompt: "Review this week" });
+    expect(d.playbooks.save).toHaveBeenCalledWith({
+      proposalId: "proposal-playbook",
+      name: "Weekly Review",
+      prompt: "Review this week",
+    });
   });
 
   it.each(["task", "loop", "decision", "playbook"] as const)(

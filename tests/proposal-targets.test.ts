@@ -9,6 +9,7 @@ import {
   DecisionProposalTarget,
   OpenLoopProposalTarget,
   PlaybookProposalTarget,
+  proposalMarker,
   createProposalAcceptanceDeps,
   type ProposalTargetVaultAdapter,
 } from "../src/obsidian/proposal-targets";
@@ -45,9 +46,9 @@ describe("OpenLoopProposalTarget", () => {
     const target = new OpenLoopProposalTarget(adapter, new WriteQueue(), () => 1_720_000_000_000);
 
     const created = await Promise.all([
-      target.create({ title: "One", note: "First" }),
-      target.create({ title: "Two", note: "Second", tags: ["exo"] }),
-      target.create({ title: "Three", note: "Third", resurface: "2026-08-01" }),
+      target.create({ proposalId: "proposal-one", title: "One", note: "First" }),
+      target.create({ proposalId: "proposal-two", title: "Two", note: "Second", tags: ["exo"] }),
+      target.create({ proposalId: "proposal-three", title: "Three", note: "Third", resurface: "2026-08-01" }),
     ]);
 
     expect(new Set(created.map(({ id }) => id)).size).toBe(3);
@@ -63,6 +64,18 @@ describe("OpenLoopProposalTarget", () => {
     ]);
     expect(folders).toContain("_system/memory");
   });
+
+  it("returns the existing loop when the same proposal is retried", async () => {
+    const { adapter, files } = fakeVault();
+    const target = new OpenLoopProposalTarget(adapter, new WriteQueue(), () => 1_720_000_000_000);
+    const input = { proposalId: "proposal-loop", title: "One", note: "First" };
+
+    const first = await target.create(input);
+    const second = await target.create(input);
+
+    expect(second).toEqual(first);
+    expect(parseLoopsFile(files.get(OPEN_LOOPS_PATH)!)).toHaveLength(1);
+  });
 });
 
 describe("DecisionProposalTarget", () => {
@@ -71,6 +84,7 @@ describe("DecisionProposalTarget", () => {
     const target = new DecisionProposalTarget(adapter, () => new Date(2026, 6, 20, 23, 30));
 
     const result = await target.captureRawPreserving({
+      proposalId: "proposal-decision",
       title: "Require Explicit Accept!",
       context: "Suggestions remain inert.",
       decision: "Require a user click.",
@@ -85,6 +99,7 @@ describe("DecisionProposalTarget", () => {
       `## Contesto\nSuggestions remain inert.\n\n` +
       `## Decisione\nRequire a user click.\n\n` +
       `## Razionale\nPrevents surprise writes.\n`
+      + `\n${proposalMarker("proposal-decision")}\n`
     );
     expect(folders).toContain(DECISIONS_DIR);
   });
@@ -95,6 +110,7 @@ describe("DecisionProposalTarget", () => {
     const target = new DecisionProposalTarget(adapter, () => new Date(2026, 6, 20));
 
     await expect(target.captureRawPreserving({
+      proposalId: "another-proposal",
       title: "Same",
       context: "Context",
       decision: "Decision",
@@ -102,19 +118,41 @@ describe("DecisionProposalTarget", () => {
     })).rejects.toThrow(`Already exists: ${path}`);
     expect(files.get(path)).toBe("keep me");
   });
+
+  it("returns the existing decision when the same proposal is retried", async () => {
+    const { adapter, files } = fakeVault();
+    const target = new DecisionProposalTarget(adapter, () => new Date(2026, 6, 20));
+    const input = {
+      proposalId: "proposal-decision",
+      title: "Same",
+      context: "Context",
+      decision: "Decision",
+      rationale: "Rationale",
+    };
+
+    const first = await target.captureRawPreserving(input);
+    const second = await target.captureRawPreserving(input);
+
+    expect(second).toEqual(first);
+    expect([...files.keys()].filter((path) => path.startsWith(DECISIONS_DIR))).toHaveLength(1);
+  });
 });
 
 describe("PlaybookProposalTarget", () => {
   it("resolves names case-insensitively inside the serialized save boundary", async () => {
-    const settings = { customPrompts: [{ name: "digest", prompt: "old" }] };
+    const settings = {
+      customPrompts: [{ name: "digest", prompt: "old" }],
+      proposalPlaybookReceipts: {} as Record<string, string>,
+    };
     const saveSettings = vi.fn(async () => undefined);
     const target = new PlaybookProposalTarget(
       new WriteQueue(),
       { settings: () => settings, saveSettings }
     );
 
-    await expect(target.save({ name: "Digest", prompt: "new" })).resolves.toEqual({ name: "Digest 2" });
+    await expect(target.save({ proposalId: "proposal-digest", name: "Digest", prompt: "new" })).resolves.toEqual({ name: "Digest 2" });
     expect(settings.customPrompts.at(-1)).toEqual({ name: "Digest 2", prompt: "new" });
+    expect(settings.proposalPlaybookReceipts).toEqual({ "proposal-digest": "Digest 2" });
     expect(saveSettings).toHaveBeenCalledTimes(1);
   });
 
@@ -133,9 +171,9 @@ describe("PlaybookProposalTarget", () => {
     );
 
     const saved = await Promise.all([
-      target.save({ name: "Review", prompt: "one" }),
-      target.save({ name: "review", prompt: "two" }),
-      target.save({ name: "Review", prompt: "three" }),
+      target.save({ proposalId: "proposal-one", name: "Review", prompt: "one" }),
+      target.save({ proposalId: "proposal-two", name: "review", prompt: "two" }),
+      target.save({ proposalId: "proposal-three", name: "Review", prompt: "three" }),
     ]);
 
     expect(saved.map(({ name }) => name)).toEqual(["Review", "review 2", "Review 3"]);
@@ -145,12 +183,39 @@ describe("PlaybookProposalTarget", () => {
       ["Review", "review 2", "Review 3"],
     ]);
   });
+
+  it("returns the existing playbook when the same proposal is retried", async () => {
+    const settings = { customPrompts: [] as { name: string; prompt: string }[], proposalPlaybookReceipts: {} as Record<string, string> };
+    const saveSettings = vi.fn(async () => undefined);
+    const target = new PlaybookProposalTarget(new WriteQueue(), { settings: () => settings, saveSettings });
+    const input = { proposalId: "proposal-review", name: "Review", prompt: "one" };
+
+    const first = await target.save(input);
+    const second = await target.save(input);
+
+    expect(second).toEqual(first);
+    expect(settings.customPrompts).toHaveLength(1);
+    expect(saveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls back both the playbook and receipt when settings persistence fails", async () => {
+    const settings = { customPrompts: [] as { name: string; prompt: string }[], proposalPlaybookReceipts: {} as Record<string, string> };
+    const target = new PlaybookProposalTarget(new WriteQueue(), {
+      settings: () => settings,
+      saveSettings: async () => { throw new Error("save failed"); },
+    });
+
+    await expect(target.save({ proposalId: "proposal-review", name: "Review", prompt: "one" }))
+      .rejects.toThrow("save failed");
+    expect(settings.customPrompts).toEqual([]);
+    expect(settings.proposalPlaybookReceipts).toEqual({});
+  });
 });
 
 describe("createProposalAcceptanceDeps", () => {
-  it("passes the shared TaskStore-shaped dependency through unchanged", () => {
+  it("wraps the shared TaskStore create-once boundary with the proposal marker", async () => {
     const { adapter } = fakeVault();
-    const tasks = { create: vi.fn(async () => ({ id: "task-1" })) };
+    const tasks = { createOnce: vi.fn(async () => ({ id: "task-1" })) };
     const deps = createProposalAcceptanceDeps({
       tasks,
       vault: adapter,
@@ -161,7 +226,15 @@ describe("createProposalAcceptanceDeps", () => {
         saveSettings: async () => undefined,
       },
     });
-    expect(deps.tasks).toBe(tasks);
+    await expect(deps.tasks.create({
+      proposalId: "proposal-task",
+      title: "Ship",
+      prompt: "Do it",
+    })).resolves.toEqual({ id: "task-1" });
+    expect(tasks.createOnce).toHaveBeenCalledWith(
+      { title: "Ship", prompt: `Do it\n\n${proposalMarker("proposal-task")}` },
+      proposalMarker("proposal-task")
+    );
   });
 
   it("lets the router convert a production adapter failure to a retryable route error", async () => {
@@ -170,7 +243,7 @@ describe("createProposalAcceptanceDeps", () => {
       throw new Error("vault is read-only");
     };
     const deps = createProposalAcceptanceDeps({
-      tasks: { create: async () => ({ id: "task-1" }) },
+      tasks: { createOnce: async () => ({ id: "task-1" }) },
       vault: adapter,
       loopsWriteQueue: new WriteQueue(),
       playbooksWriteQueue: new WriteQueue(),

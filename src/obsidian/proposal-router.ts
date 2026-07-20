@@ -13,6 +13,7 @@ import type { ProposalRouteResult } from "./proposal-store";
 export type ProposalAcceptanceResult = ProposalRouteResult;
 
 export interface OpenLoopCreateInput {
+  proposalId: string;
   title: string;
   note: string;
   resurface?: string;
@@ -20,6 +21,7 @@ export interface OpenLoopCreateInput {
 }
 
 export interface DecisionCaptureInput {
+  proposalId: string;
   title: string;
   context: string;
   decision: string;
@@ -29,7 +31,7 @@ export interface DecisionCaptureInput {
 export interface ProposalAcceptanceDeps {
   /** The shared TaskStore.create surface; never write tasks.md in this router. */
   tasks: {
-    create(task: NewBacklogTask): Promise<{ id: string }>;
+    create(task: NewBacklogTask & { proposalId: string }): Promise<{ id: string }>;
   };
   /** Production implementation must use the shared Open Loops WriteQueue. */
   loops: {
@@ -45,7 +47,7 @@ export interface ProposalAcceptanceDeps {
    * return a further-disambiguated name if another save won a race.
    */
   playbooks: {
-    save(playbook: { name: string; prompt: string }): Promise<{ name: string }>;
+    save(playbook: { proposalId: string; name: string; prompt: string }): Promise<{ name: string }>;
   };
 }
 
@@ -93,6 +95,7 @@ export async function routeAcceptedProposal(
     switch (payload.kind) {
       case "task": {
         const created = await deps.tasks.create({
+          proposalId: record.id,
           title: payload.title,
           prompt: payload.prompt,
           ...(payload.model ? { model: payload.model } : {}),
@@ -101,6 +104,7 @@ export async function routeAcceptedProposal(
       }
       case "loop": {
         const created = await deps.loops.create({
+          proposalId: record.id,
           title: payload.title,
           note: payload.note,
           ...(payload.resurface ? { resurface: payload.resurface } : {}),
@@ -110,6 +114,7 @@ export async function routeAcceptedProposal(
       }
       case "decision": {
         const created = await deps.decisions.captureRawPreserving({
+          proposalId: record.id,
           title: payload.title,
           context: payload.context,
           decision: payload.decision,
@@ -118,7 +123,7 @@ export async function routeAcceptedProposal(
         return { ok: true, target: created.path };
       }
       case "playbook": {
-        const created = await deps.playbooks.save({ name: payload.name, prompt: payload.prompt });
+        const created = await deps.playbooks.save({ proposalId: record.id, name: payload.name, prompt: payload.prompt });
         return { ok: true, target: created.name };
       }
       default:

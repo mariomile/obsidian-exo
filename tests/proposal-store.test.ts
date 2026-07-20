@@ -161,6 +161,39 @@ describe("ProposalStore", () => {
     expect((await store.load()).data.metrics.accepted).toBe(1);
   });
 
+  it("recovers after the accepted-state write fails without duplicating an idempotent target", async () => {
+    const { adapter } = fakeFiles();
+    const store = new ProposalStore(adapter, new WriteQueue());
+    const appended = await store.append(task("Durable retry"), source());
+    if (appended.status !== "appended") throw new Error("expected append");
+
+    const targets = new Map<string, string>();
+    const route = vi.fn(async (record: ProposalRecord) => {
+      const target = targets.get(record.id) ?? `task-${targets.size + 1}`;
+      targets.set(record.id, target);
+      return { ok: true as const, target };
+    });
+    const write = adapter.write.bind(adapter);
+    let failNextWrite = true;
+    adapter.write = async (path, content) => {
+      if (failNextWrite) {
+        failNextWrite = false;
+        throw new Error("disk full");
+      }
+      await write(path, content);
+    };
+
+    await expect(store.accept(appended.record.id, route)).rejects.toThrow("disk full");
+    const reloaded = new ProposalStore(adapter, new WriteQueue());
+    await expect(reloaded.accept(appended.record.id, route)).resolves.toMatchObject({
+      ok: true,
+      target: "task-1",
+    });
+    expect(targets.size).toBe(1);
+    expect(route).toHaveBeenCalledTimes(2);
+    expect((await reloaded.listPending()).records).toEqual([]);
+  });
+
   it("serializes concurrent append and accept without losing either update", async () => {
     const { adapter } = fakeFiles();
     const queue = new WriteQueue();

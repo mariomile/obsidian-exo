@@ -16,11 +16,39 @@ import type {
 } from "./proposal-router";
 
 type OpenLoopTarget = ProposalAcceptanceDeps["loops"];
+type TaskTarget = ProposalAcceptanceDeps["tasks"];
 type DecisionTarget = ProposalAcceptanceDeps["decisions"];
 type PlaybookTarget = ProposalAcceptanceDeps["playbooks"];
 
 export const OPEN_LOOPS_PATH = "_system/memory/open-loops.md";
 export const DECISIONS_DIR = "_system/memory/decisions";
+
+/** Invisible durable key carried by Markdown-backed proposal targets. */
+export function proposalMarker(proposalId: string): string {
+  return `<!-- exo-proposal:${encodeURIComponent(proposalId)} -->`;
+}
+
+function withMarker(content: string, proposalId: string): string {
+  return `${content.trimEnd()}\n\n${proposalMarker(proposalId)}`;
+}
+
+/** Structural slice of TaskStore needed for atomic create-or-return. */
+export interface ProposalTaskStore {
+  createOnce(task: { title: string; prompt: string; model?: string }, marker: string): Promise<{ id: string }>;
+}
+
+export class TaskProposalTarget implements TaskTarget {
+  constructor(private readonly tasks: ProposalTaskStore) {}
+
+  create(input: Parameters<TaskTarget["create"]>[0]): Promise<{ id: string }> {
+    const marker = proposalMarker(input.proposalId);
+    return this.tasks.createOnce({
+      title: input.title,
+      prompt: withMarker(input.prompt, input.proposalId),
+      ...(input.model ? { model: input.model } : {}),
+    }, marker);
+  }
+}
 
 /** Minimal shared vault surface used by both file-backed proposal targets. */
 export interface ProposalTargetVaultAdapter {
@@ -45,6 +73,9 @@ export class OpenLoopProposalTarget implements OpenLoopTarget {
       const existing = this.vault.getFile(OPEN_LOOPS_PATH);
       const current = existing ? await this.vault.read(OPEN_LOOPS_PATH) : "";
       const entries = current ? parseLoopsFile(current) : [];
+      const marker = proposalMarker(input.proposalId);
+      const prior = entries.find(({ note }) => note.includes(marker));
+      if (prior) return { id: prior.id };
 
       // Date.now() alone can collide when two proposals are accepted in the
       // same millisecond. Re-check against the freshly-read ledger while still
@@ -56,7 +87,7 @@ export class OpenLoopProposalTarget implements OpenLoopTarget {
       const entry: LoopEntry = {
         id: `loop-${openedAt}`,
         title: input.title,
-        note: input.note,
+        note: withMarker(input.note, input.proposalId),
         openedAt,
         status: "open",
         ...(input.resurface ? { resurface: input.resurface } : {}),
@@ -97,13 +128,18 @@ export class DecisionProposalTarget implements DecisionTarget {
   async captureRawPreserving(input: DecisionCaptureInput): Promise<{ path: string }> {
     const date = localDate(this.now());
     const path = `${DECISIONS_DIR}/${date}-${slugify(input.title)}.md`;
-    if (this.vault.getFile(path)) throw new Error(`Already exists: ${path}`);
+    if (this.vault.getFile(path)) {
+      const current = await this.vault.read(path);
+      if (current.includes(proposalMarker(input.proposalId))) return { path };
+      throw new Error(`Already exists: ${path}`);
+    }
 
     const body =
       `# Decision: ${input.title}\n\n` +
       `## Contesto\n${input.context}\n\n` +
       `## Decisione\n${input.decision}\n\n` +
-      `## Razionale\n${input.rationale}\n`;
+      `## Razionale\n${input.rationale}\n\n` +
+      `${proposalMarker(input.proposalId)}\n`;
     const content = patchFrontmatter(body, {
       type: "decision",
       created_by: "exo",
@@ -121,6 +157,7 @@ export class DecisionProposalTarget implements DecisionTarget {
 
 export interface ProposalPlaybookSettings {
   customPrompts: { name: string; prompt: string }[];
+  proposalPlaybookReceipts?: Record<string, string>;
 }
 
 /** Live settings access; the getter prevents a stale settings snapshot. */
@@ -136,15 +173,19 @@ export class PlaybookProposalTarget implements PlaybookTarget {
     private readonly access: ProposalPlaybookAccess
   ) {}
 
-  save(playbook: { name: string; prompt: string }): Promise<{ name: string }> {
+  save(playbook: { proposalId: string; name: string; prompt: string }): Promise<{ name: string }> {
     return this.queue.enqueue(async () => {
       const settings = this.access.settings();
+      const receipts = settings.proposalPlaybookReceipts ??= {};
+      const prior = receipts[playbook.proposalId];
+      if (prior) return { name: prior };
       const name = uniquePlaybookName(
         playbook.name,
         settings.customPrompts.map(({ name: existing }) => existing)
       );
       const saved = { name, prompt: playbook.prompt };
       settings.customPrompts.push(saved);
+      receipts[playbook.proposalId] = name;
       try {
         await this.access.saveSettings();
       } catch (error) {
@@ -152,6 +193,7 @@ export class PlaybookProposalTarget implements PlaybookTarget {
         // fails. The router will convert the rejection into a retry result.
         const index = settings.customPrompts.indexOf(saved);
         if (index >= 0) settings.customPrompts.splice(index, 1);
+        delete receipts[playbook.proposalId];
         throw error;
       }
       return { name };
@@ -160,8 +202,8 @@ export class PlaybookProposalTarget implements PlaybookTarget {
 }
 
 export interface ProposalAcceptanceTargetOptions {
-  /** Pass the plugin's one shared TaskStore instance through unchanged. */
-  tasks: ProposalAcceptanceDeps["tasks"];
+  /** The plugin's one shared TaskStore instance. */
+  tasks: ProposalTaskStore;
   vault: ProposalTargetVaultAdapter;
   /** The plugin's shared Open Loops queue. */
   loopsWriteQueue: WriteQueue;
@@ -177,7 +219,7 @@ export function createProposalAcceptanceDeps(
   options: ProposalAcceptanceTargetOptions
 ): ProposalAcceptanceDeps {
   return {
-    tasks: options.tasks,
+    tasks: new TaskProposalTarget(options.tasks),
     loops: new OpenLoopProposalTarget(options.vault, options.loopsWriteQueue, options.nowMs),
     decisions: new DecisionProposalTarget(options.vault, options.nowDate),
     playbooks: new PlaybookProposalTarget(options.playbooksWriteQueue, options.playbooks),

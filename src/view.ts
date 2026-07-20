@@ -4704,11 +4704,12 @@ export class ChatView extends ItemView {
       // stage-2 recovery uses. This generalizes that narrow path to close every
       // cold-start hole (poisoned-and-stopped, nuclear reset, fresh process after a
       // crash) with one invariant. Skipped when a stage-2 recap prefix is already
-      // present (never double) and on a convo's first turn (no assistant history).
+      // present (never double) and on a convo's first turn (no prior message).
       const coldRecap = shouldColdReseed({
         hasSessionId: !!c.sessionId,
         hasRecapPrefix: !!opts?.sendPrefix,
-        hasAssistantHistory: c.messages.some((m) => m.role === "assistant"),
+        // The current user turn is already persisted before this send starts.
+        hasPriorHistory: c.messages.length > 1,
       })
         ? buildRecap(c.messages)
         : "";
