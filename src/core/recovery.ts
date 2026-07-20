@@ -1,8 +1,9 @@
 /**
  * Session-recovery pure logic — extracted verbatim from `view.ts`.
  */
-import type { Message } from "./model";
+import type { Message, Segment } from "./model";
 import { planRecapLabel } from "./plan";
+import { isEndedSessionFailure } from "./errors";
 
 /**
  * True when an error message signals a *recoverable* session death — the kind
@@ -18,9 +19,31 @@ export function isRecoverableSessionError(msg: string): boolean {
   if (/session expired|session not found|invalid session|session invalid|process exited with code/.test(m)) {
     return true;
   }
+  if (isEndedSessionFailure(m)) return true;
   // A resume that itself failed/errored is recoverable (escalates to fresh+recap).
   if (m.includes("resume") && (m.includes("failed") || m.includes("error"))) return true;
   return false;
+}
+
+/**
+ * Persist one terminal error per assistant turn. Providers can report the same
+ * failure more than once (for example, an error JSONL item followed by a
+ * non-zero process close). Keeping the first error makes both the persisted
+ * transcript and the live warning idempotent. Explicit presentation flags keep
+ * the error card (which owns Retry) and the recovery footer on the same
+ * first-signal-only decision.
+ */
+export type TurnErrorDecision = {
+  showErrorCard: boolean;
+  showRecoveryFooter: boolean;
+};
+
+export function recordTurnError(segments: Segment[], message: string): TurnErrorDecision {
+  if (segments.some((segment) => segment.t === "error")) {
+    return { showErrorCard: false, showRecoveryFooter: false };
+  }
+  segments.push({ t: "error", message });
+  return { showErrorCard: true, showRecoveryFooter: true };
 }
 
 /**

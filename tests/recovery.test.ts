@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildRecap,
   isRecoverableSessionError,
+  recordTurnError,
   resolveRecovery,
   shouldColdReseed,
   stopAction,
@@ -99,6 +100,9 @@ describe("isRecoverableSessionError", () => {
     "Process exited with code 143 (SIGTERM)",
     "Failed to resume session",
     "resume attempt returned an error",
+    "Claude session ended unexpectedly.",
+    "Claude session ended — sending again starts a fresh session.",
+    "Session stream ended unexpectedly.",
   ])("matches recoverable session death: %s", (msg) => {
     expect(isRecoverableSessionError(msg)).toBe(true);
   });
@@ -118,6 +122,35 @@ describe("isRecoverableSessionError", () => {
   it("requires 'session' adjacency — a bare 'invalid' does not match", () => {
     expect(isRecoverableSessionError("invalid model name")).toBe(false);
     expect(isRecoverableSessionError("invalid session")).toBe(true);
+  });
+});
+
+describe("recordTurnError", () => {
+  it("records the first terminal error and suppresses duplicate provider errors", () => {
+    const segments: Segment[] = [];
+
+    expect(recordTurnError(segments, "first failure")).toEqual({
+      showErrorCard: true,
+      showRecoveryFooter: true,
+    });
+    expect(recordTurnError(segments, "duplicate close failure")).toEqual({
+      showErrorCard: false,
+      showRecoveryFooter: false,
+    });
+    expect(segments).toEqual([{ t: "error", message: "first failure" }]);
+  });
+
+  it("preserves existing non-error segments", () => {
+    const segments: Segment[] = [{ t: "text", md: "partial answer" }];
+
+    expect(recordTurnError(segments, "stream ended")).toEqual({
+      showErrorCard: true,
+      showRecoveryFooter: true,
+    });
+    expect(segments).toEqual([
+      { t: "text", md: "partial answer" },
+      { t: "error", message: "stream ended" },
+    ]);
   });
 });
 
