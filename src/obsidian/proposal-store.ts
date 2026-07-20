@@ -264,12 +264,6 @@ export class ProposalStore {
     if (validated.status === "invalid") {
       return Promise.resolve({ status: "invalid", errors: validated.errors });
     }
-    if (validated.status === "duplicate") {
-      return Promise.resolve({
-        status: "invalid",
-        errors: [{ code: "invalid_type", path: "$", message: "candidate validation returned an unexpected duplicate" }],
-      });
-    }
     const clean = validated.value[0];
     return this.mutate(({ data }) => {
       data.metrics.generated += 1;

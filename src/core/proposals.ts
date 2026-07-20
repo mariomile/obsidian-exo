@@ -61,9 +61,11 @@ export type ProposalResult<T> =
   | { status: "invalid"; errors: ProposalValidationError[] }
   | { status: "duplicate"; value: T; duplicateOf: ProposalRecord };
 
-type ValidationResult<T> =
+export type ProposalParseResult<T> =
   | { status: "ok"; value: T }
   | { status: "invalid"; errors: ProposalValidationError[] };
+
+type ValidationResult<T> = ProposalParseResult<T>;
 
 export const PROPOSAL_LIMITS = {
   candidates: 3,
@@ -261,7 +263,7 @@ function unwrapJson(raw: string): string {
 }
 
 /** Parse a strict JSON array containing zero to three validated candidates. */
-export function parseProposalCandidates(raw: string): ProposalResult<ProposalCandidate[]> {
+export function parseProposalCandidates(raw: string): ProposalParseResult<ProposalCandidate[]> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(unwrapJson(raw));

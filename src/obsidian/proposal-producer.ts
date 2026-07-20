@@ -14,9 +14,7 @@ export interface ProposalTurnInput {
   responseIsSubstantial: boolean;
   /** True when the response contains an execution/error segment. */
   responseHasError: boolean;
-  hasPendingAsk: boolean;
-  hasPendingPermission: boolean;
-  hasPendingPlan: boolean;
+  hasPendingInteraction: boolean;
   stopped: boolean;
   poisoned: boolean;
   recoveryIncomplete: boolean;
@@ -84,7 +82,7 @@ function skipReason(input: ProposalTurnInput): ProposalProducerSkipReason | unde
   if (!input.successful) return "unsuccessful_turn";
   if (!input.responseIsSubstantial || !input.responseText.trim()) return "insubstantial_response";
   if (input.responseHasError) return "error_response";
-  if (input.hasPendingAsk || input.hasPendingPermission || input.hasPendingPlan) return "pending_interaction";
+  if (input.hasPendingInteraction) return "pending_interaction";
   if (input.stopped) return "stopped";
   if (input.poisoned) return "poisoned";
   if (input.recoveryIncomplete) return "incomplete_recovery";
@@ -201,9 +199,7 @@ export async function produceTurnProposals(
 
   const parsed = parseProposalCandidates(raw);
   if (parsed.status !== "ok") {
-    const detail = parsed.status === "invalid"
-      ? parsed.errors.map((error) => `${error.path}: ${error.message}`).join("; ")
-      : "unexpected duplicate classification";
+    const detail = parsed.errors.map((error) => `${error.path}: ${error.message}`).join("; ");
     await recordParseFailure(
       deps,
       `[Exo] proposal producer rejected output: ${detail}`

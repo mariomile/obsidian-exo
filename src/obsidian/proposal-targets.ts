@@ -136,10 +136,6 @@ export class PlaybookProposalTarget implements PlaybookTarget {
     private readonly access: ProposalPlaybookAccess
   ) {}
 
-  names(): readonly string[] {
-    return this.access.settings().customPrompts.map(({ name }) => name);
-  }
-
   save(playbook: { name: string; prompt: string }): Promise<{ name: string }> {
     return this.queue.enqueue(async () => {
       const settings = this.access.settings();

@@ -8,7 +8,6 @@
  */
 import type { ProposalPayload, ProposalRecord } from "../core/proposals";
 import type { NewBacklogTask } from "../core/tasks";
-import { uniquePlaybookName } from "../core/learning-loop";
 import type { ProposalRouteResult } from "./proposal-store";
 
 export type ProposalAcceptanceResult = ProposalRouteResult;
@@ -46,7 +45,6 @@ export interface ProposalAcceptanceDeps {
    * return a further-disambiguated name if another save won a race.
    */
   playbooks: {
-    names(): readonly string[];
     save(playbook: { name: string; prompt: string }): Promise<{ name: string }>;
   };
 }
@@ -120,8 +118,7 @@ export async function routeAcceptedProposal(
         return { ok: true, target: created.path };
       }
       case "playbook": {
-        const name = uniquePlaybookName(payload.name, [...deps.playbooks.names()]);
-        const created = await deps.playbooks.save({ name, prompt: payload.prompt });
+        const created = await deps.playbooks.save({ name: payload.name, prompt: payload.prompt });
         return { ok: true, target: created.name };
       }
       default:

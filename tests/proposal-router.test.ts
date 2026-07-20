@@ -35,7 +35,6 @@ function deps(): ProposalAcceptanceDeps {
     loops: { create: vi.fn(async () => ({ id: "loop-1" })) },
     decisions: { captureRawPreserving: vi.fn(async () => ({ path: "_system/memory/decisions/decision.md" })) },
     playbooks: {
-      names: vi.fn(() => []),
       save: vi.fn(async ({ name }) => ({ name })),
     },
   };
@@ -73,11 +72,10 @@ describe("routeAcceptedProposal", () => {
     });
   });
 
-  it("routes playbooks through serialized settings save and resolves names case-insensitively", async () => {
+  it("routes the requested playbook name through the serialized settings target", async () => {
     const d = deps();
-    vi.mocked(d.playbooks.names).mockReturnValue(["weekly review", "Weekly Review 2"]);
-    await expect(routeAcceptedProposal(record("playbook"), d)).resolves.toEqual({ ok: true, target: "Weekly Review 3" });
-    expect(d.playbooks.save).toHaveBeenCalledWith({ name: "Weekly Review 3", prompt: "Review this week" });
+    await expect(routeAcceptedProposal(record("playbook"), d)).resolves.toEqual({ ok: true, target: "Weekly Review" });
+    expect(d.playbooks.save).toHaveBeenCalledWith({ name: "Weekly Review", prompt: "Review this week" });
   });
 
   it.each(["task", "loop", "decision", "playbook"] as const)(
