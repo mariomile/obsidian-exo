@@ -86,6 +86,10 @@ import {
   type ProposalProducerResult,
   type ProposalTurnInput,
 } from "./obsidian/proposal-producer";
+import {
+  buildFoundryDistillPrompt,
+  parseFoundryDistillation,
+} from "./core/foundry-distill";
 import { ProposalsModal } from "./ui/proposals-modal";
 import {
   initialAutoCommitState,
@@ -136,6 +140,13 @@ Poi scrivi il digest ESATTAMENTE in questo formato:
 
 ---
 Stato fonti: (una riga: quali fonti hai letto e quali erano non disponibili)`;
+
+/** Typed, quiet outcome of a Workflow Foundry playbook distillation attempt. */
+export type WorkflowDistillOutcome =
+  | { status: "skipped"; reason: "kernel_disabled" | "background_disabled" | "budget_denied" }
+  | { status: "appended"; proposalId: string }
+  | { status: "duplicate" }
+  | { status: "failed"; reason: "empty_output" | "invalid_output" | "utility_error" | "store_error" };
 
 export default class ExoPlugin extends Plugin {
   settings!: MVASettings;
@@ -1905,6 +1916,11 @@ export default class ExoPlugin extends Plugin {
     return record;
   }
 
+  async updateProposalPlaybook(id: string, patch: { name: string; prompt: string }) {
+    if (!this.settings.proposalKernelEnabled) throw new Error("Suggestion inbox is disabled.");
+    return this.proposalStore.updatePendingPlaybook(id, patch);
+  }
+
   async openProposalsModal(): Promise<void> {
     if (!this.settings.proposalKernelEnabled) return;
     const conversations = await this.loadConversations().catch(() => []);
@@ -1920,6 +1936,7 @@ export default class ExoPlugin extends Plugin {
       dismiss: (id) => this.dismissProposal(id),
       sourceTitle: (convoId) => titles.get(convoId) ?? "Conversation",
       lastRouteError: (id) => this.lastProposalRouteError(id),
+      updatePlaybook: (id, patch) => this.updateProposalPlaybook(id, patch),
     }).open();
   }
 
@@ -1951,6 +1968,68 @@ export default class ExoPlugin extends Plugin {
     });
     if (result.status === "generated" && result.appended > 0) void this.refreshCockpit();
     return result;
+  }
+
+  /**
+   * Distill a recurring workflow into an editable playbook proposal. Called only
+   * when the deterministic signal recorder returns a threshold candidate, so the
+   * one utility pass runs at most once per detection. Every failure is typed and
+   * quiet: it never throws, retries, or surfaces a large error in the chat.
+   */
+  async distillWorkflowPlaybook(input: {
+    intent: string;
+    tools: string[];
+    outputType: string;
+    occurrences: number;
+    workflowSignature: string;
+    userText: string;
+    responseText: string;
+    source: ProposalTurnInput["source"];
+  }): Promise<WorkflowDistillOutcome> {
+    if (!this.settings.proposalKernelEnabled) return { status: "skipped", reason: "kernel_disabled" };
+    if (!this.settings.backgroundPassesEnabled) return { status: "skipped", reason: "background_disabled" };
+    const estimate = ExoPlugin.PROPOSAL_TOKEN_ESTIMATE;
+    if (!this.checkBackgroundBudget(estimate)) return { status: "skipped", reason: "budget_denied" };
+
+    let raw: string;
+    try {
+      let actualTokens: number | null = null;
+      raw = await this.runUtilityPass(buildFoundryDistillPrompt(input), {
+        signal: this.proposalAbort.signal,
+        model: this.settings.backgroundModel,
+        timeoutMs: 90_000,
+        onUsage: (tokens) => {
+          actualTokens = tokens;
+        },
+      });
+      this.recordBackgroundSpend(actualTokens ?? estimate);
+    } catch (error) {
+      console.warn("[Exo] foundry distillation utility pass failed (no-op):", error);
+      return { status: "failed", reason: "utility_error" };
+    }
+    if (!raw.trim()) return { status: "failed", reason: "empty_output" };
+
+    const parsed = parseFoundryDistillation(raw, {
+      workflowSignature: input.workflowSignature,
+      occurrences: input.occurrences,
+    });
+    if (parsed.status !== "ok") {
+      console.warn(`[Exo] foundry distillation rejected: ${parsed.error}`);
+      return { status: "failed", reason: "invalid_output" };
+    }
+
+    try {
+      const appended = await this.proposalStore.append(parsed.candidate, input.source);
+      if (appended.status === "appended") {
+        void this.refreshCockpit();
+        return { status: "appended", proposalId: appended.record.id };
+      }
+      if (appended.status === "duplicate") return { status: "duplicate" };
+      return { status: "failed", reason: "invalid_output" };
+    } catch (error) {
+      console.warn("[Exo] foundry distillation could not persist the proposal (no-op):", error);
+      return { status: "failed", reason: "store_error" };
+    }
   }
 
   private async refreshCockpit(): Promise<void> {

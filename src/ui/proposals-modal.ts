@@ -8,6 +8,20 @@ export interface ProposalsModalOptions {
   dismiss(id: string): Promise<ProposalRecord>;
   sourceTitle(convoId: string): string;
   lastRouteError(id: string): string | undefined;
+  /** When present, playbook proposals expose editable name/prompt before Accept. */
+  updatePlaybook?(id: string, patch: { name: string; prompt: string }): Promise<ProposalRecord>;
+}
+
+type PlaybookPayload = Extract<ProposalPayload, { kind: "playbook" }>;
+
+/** The quiet, read-only secondary annotations a Workflow Foundry playbook carries. */
+export function playbookMetadataDetails(payload: PlaybookPayload): { label: string; value: string }[] {
+  return [
+    ...(payload.outcome ? [{ label: "Outcome", value: payload.outcome }] : []),
+    ...(payload.inputs?.length ? [{ label: "Inputs", value: payload.inputs.join(", ") }] : []),
+    ...(payload.capabilities?.length ? [{ label: "Capabilities", value: payload.capabilities.join(", ") }] : []),
+    ...(payload.why ? [{ label: "Why", value: payload.why }] : []),
+  ];
 }
 
 export function proposalTargetLabel(payload: ProposalPayload): string {
@@ -39,7 +53,7 @@ export function proposalPayloadDetails(payload: ProposalPayload): { label: strin
         ...(payload.rationale ? [{ label: "Rationale", value: payload.rationale }] : []),
       ];
     case "playbook":
-      return [{ label: "Prompt", value: payload.prompt }];
+      return [{ label: "Prompt", value: payload.prompt }, ...playbookMetadataDetails(payload)];
   }
 }
 
@@ -49,6 +63,8 @@ export class ProposalsModal extends Modal {
   private selectedId: string | null = null;
   private busyId: string | null = null;
   private readonly sessionErrors = new Map<string, string>();
+  /** Live name/prompt edits for the selected playbook; kept current on input. */
+  private editBuffer: { id: string; name: string; prompt: string } | null = null;
 
   constructor(app: App, private readonly options: ProposalsModalOptions) {
     super(app);
@@ -73,6 +89,9 @@ export class ProposalsModal extends Modal {
       this.records = pending.records;
       if (!this.records.some(({ id }) => id === this.selectedId)) {
         this.selectedId = this.records[0]?.id ?? null;
+      }
+      if (this.editBuffer && !this.records.some(({ id }) => id === this.editBuffer?.id)) {
+        this.editBuffer = null;
       }
       this.render();
     } catch (error) {
@@ -122,10 +141,16 @@ export class ProposalsModal extends Modal {
     meta.createDiv({ text: `From: ${this.options.sourceTitle(record.source.convoId)}` });
     meta.createDiv({ text: `Target: ${proposalTargetLabel(record.payload)}` });
 
-    for (const detail of proposalPayloadDetails(record.payload)) {
-      const row = parent.createDiv({ cls: "mva-proposals-field" });
-      row.createDiv({ cls: "mva-proposals-field-label", text: detail.label });
-      row.createDiv({ cls: "mva-proposals-field-value", text: detail.value });
+    const busy = this.busyId !== null;
+    const editable = record.payload.kind === "playbook" && !!this.options.updatePlaybook;
+    if (editable && record.payload.kind === "playbook") {
+      this.renderPlaybookEditor(parent, record.id, record.payload, busy);
+    } else {
+      for (const detail of proposalPayloadDetails(record.payload)) {
+        const row = parent.createDiv({ cls: "mva-proposals-field" });
+        row.createDiv({ cls: "mva-proposals-field-label", text: detail.label });
+        row.createDiv({ cls: "mva-proposals-field-value", text: detail.value });
+      }
     }
 
     const routeError = this.sessionErrors.get(record.id) ?? this.options.lastRouteError(record.id);
@@ -146,11 +171,64 @@ export class ProposalsModal extends Modal {
       text: "Dismiss",
       attr: { type: "button" },
     });
-    const busy = this.busyId !== null;
     accept.disabled = busy;
     dismiss.disabled = busy;
     accept.onclick = () => void this.accept(record.id);
     dismiss.onclick = () => void this.dismiss(record.id);
+  }
+
+  /** Editable name/prompt for a Foundry playbook; metadata stays read-only. */
+  private renderPlaybookEditor(
+    parent: HTMLElement,
+    id: string,
+    payload: PlaybookPayload,
+    busy: boolean
+  ): void {
+    const buffered = this.editBuffer?.id === id ? this.editBuffer : null;
+    const name = buffered?.name ?? payload.name;
+    const prompt = buffered?.prompt ?? payload.prompt;
+    this.editBuffer = { id, name, prompt };
+
+    const nameField = parent.createDiv({ cls: "mva-proposals-field" });
+    nameField.createDiv({ cls: "mva-proposals-field-label", text: "Name" });
+    const nameInput = nameField.createEl("input", {
+      cls: "mva-pv-input mva-proposals-edit-name",
+      attr: { type: "text", value: name },
+    });
+    nameInput.disabled = busy;
+    nameInput.oninput = () => {
+      if (this.editBuffer?.id === id) this.editBuffer.name = nameInput.value;
+    };
+
+    const promptField = parent.createDiv({ cls: "mva-proposals-field" });
+    promptField.createDiv({ cls: "mva-proposals-field-label", text: "Prompt" });
+    const promptInput = promptField.createEl("textarea", { cls: "mva-pv-input mva-proposals-edit-prompt" });
+    promptInput.value = prompt;
+    promptInput.rows = 6;
+    promptInput.disabled = busy;
+    promptInput.oninput = () => {
+      if (this.editBuffer?.id === id) this.editBuffer.prompt = promptInput.value;
+    };
+
+    for (const detail of playbookMetadataDetails(payload)) {
+      const row = parent.createDiv({ cls: "mva-proposals-field" });
+      row.createDiv({ cls: "mva-proposals-field-label", text: detail.label });
+      row.createDiv({ cls: "mva-proposals-field-value", text: detail.value });
+    }
+  }
+
+  /**
+   * Persist any pending name/prompt edit for a playbook before it is routed, so
+   * Accept always commits the values the user last saw — never a stale copy.
+   */
+  private async persistPlaybookEdit(id: string): Promise<void> {
+    const update = this.options.updatePlaybook;
+    const edit = this.editBuffer;
+    if (!update || !edit || edit.id !== id) return;
+    const record = this.records.find((candidate) => candidate.id === id);
+    if (!record || record.payload.kind !== "playbook") return;
+    if (record.payload.name === edit.name && record.payload.prompt === edit.prompt) return;
+    await update(id, { name: edit.name, prompt: edit.prompt });
   }
 
   private async accept(id: string): Promise<void> {
@@ -158,6 +236,7 @@ export class ProposalsModal extends Modal {
     this.busyId = id;
     this.render();
     try {
+      await this.persistPlaybookEdit(id);
       const result = await this.options.accept(id);
       if (!result.ok) this.sessionErrors.set(id, result.error);
       else this.sessionErrors.delete(id);
