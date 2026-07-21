@@ -1034,9 +1034,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: none;
 }
 .mva-ac-item {
-  display: flex;
+  /* two-line layout: name + kind badge on top, description underneath
+     (grid areas so the DOM order icon→label→desc→detail needn't change) */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "icon label detail"
+    ".    desc  desc";
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
+  row-gap: 1px;
   padding: 5px 8px;
   border-radius: var(--mva-r1);
   cursor: pointer;
@@ -1046,6 +1053,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-modifier-hover);
 }
 .mva-ac-icon {
+  grid-area: icon;
   display: inline-flex;
   color: var(--text-muted);
 }
@@ -1054,15 +1062,15 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 14px;
 }
 .mva-ac-label {
+  grid-area: label;
   color: var(--text-normal);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 0;
-  max-width: 55%;
+  min-width: 0;
 }
 .mva-ac-desc {
-  flex: 1 1 auto;
+  grid-area: desc;
   min-width: 0;
   color: var(--text-faint);
   font-size: 11px;
@@ -1071,16 +1079,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   text-overflow: ellipsis;
 }
 .mva-ac-detail {
-  margin-left: auto;
+  grid-area: detail;
   padding-left: 10px;
   color: var(--text-faint);
   font-size: 11px;
   font-family: var(--font-monospace);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 50%;
-  flex-shrink: 0;
 }
 .mva-toolbar {
   display: flex;
