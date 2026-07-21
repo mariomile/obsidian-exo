@@ -117,12 +117,7 @@ export interface MVASettings {
    *  so the $/@// menus and the capabilities panel are rich immediately after an
    *  Obsidian restart, before the first session's init arrives. Refreshed on
    *  every init; slightly stale is fine (it's menu seeding, not authorization). */
-  cachedSessionCaps: {
-    skills: string[];
-    commands: string[];
-    agents: string[];
-    mcpServers: { name: string; status: string }[];
-  } | null;
+  cachedSessionCaps: import("./providers/types").SessionCaps | null;
   activeTabId: string;
   /** Memory dream pass automation: off | daily | weekly. */
   dreamPassSchedule: "off" | "daily" | "weekly";
@@ -161,6 +156,10 @@ export interface MVASettings {
   exoQueueEnabled: boolean;
   /** Cartella della coda richieste (vault-relative). */
   exoQueueFolder: string;
+  /** Root of Exo's memory layer (vault-relative). All memory paths derive from
+   *  this (see core/paths.ts). Empty = unset → auto-detected at boot: an
+   *  existing `_system/` vault keeps it, a fresh vault adopts `_exo/`. */
+  memoryRoot: string;
   /** Open the Cockpit view automatically when Obsidian's layout is ready. */
   cockpitOnStartup: boolean;
   /** LEGACY scheduled playbook runs ("<Prompt name> | daily" per line) — migrated
@@ -271,6 +270,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   proposalTurnSuggestions: false,
   exoQueueEnabled: true,
   exoQueueFolder: "_system/exo-queue",
+  memoryRoot: "",
   cockpitOnStartup: false,
   scheduledRuns: "",
   automations: [],

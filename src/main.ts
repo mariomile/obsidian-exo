@@ -31,6 +31,7 @@ import {
   manifestContent,
 } from "./core/agent-self";
 import { SCAFFOLD_ITEMS, parentFolder } from "./core/vault-setup";
+import { detectMemoryRoot, LEGACY_MEMORY_ROOT } from "./core/paths";
 import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidian/claudemem";
 import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
@@ -1454,6 +1455,15 @@ export default class ExoPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // Memory-root auto-detect (one-shot): a vault that already has a `_system/`
+    // layer keeps it — existing installs (marioverse included) never migrate —
+    // while a fresh vault adopts the neutral, tool-owned `_exo/`. Persisted so
+    // it's stable and user-overridable in Settings thereafter.
+    if (!this.settings.memoryRoot) {
+      const hasLegacy = await this.app.vault.adapter.exists(LEGACY_MEMORY_ROOT);
+      this.settings.memoryRoot = detectMemoryRoot(hasLegacy);
+      await this.saveSettings();
+    }
     const savedPulseState = this.settings.dailyPulseReviewState;
     this.settings.dailyPulseReviewState = {
       ...DEFAULT_SETTINGS.dailyPulseReviewState,
