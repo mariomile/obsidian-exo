@@ -4471,13 +4471,6 @@ export class ChatView extends ItemView {
       researchModeForTurn = researchCommand.state;
       text = researchCommand.question;
     }
-    // TUI parity: the CLI only expands /commands that OPEN the message. A known
-    // command typed mid/end-message ("do X\n/goal") is hoisted to the front so
-    // it expands instead of reaching the model as literal text.
-    {
-      const caps = this.sessionCaps ?? this.plugin.lastSessionCaps;
-      if (caps?.commands?.length) text = hoistSlashCommand(text, new Set(caps.commands));
-    }
     this.composer.setInputValue("");
     this.composer.autoGrow();
     const images = pendingImages.length ? pendingImages : undefined;
@@ -4496,7 +4489,7 @@ export class ChatView extends ItemView {
       let steered = false;
       if (!c.researchMode.enabled && this.plugin.settings.steerMode === "steer") {
         try {
-          steered = c.session?.steer?.(text, images) ?? false;
+          steered = c.session?.steer?.(this.hoistOutbound(text), images) ?? false;
         } catch {
           steered = false;
         }
@@ -4571,6 +4564,16 @@ export class ChatView extends ItemView {
     this.scrollConvo(c);
   }
 
+  /** TUI parity: the CLI only expands /commands that OPEN the message, so a
+   *  known command typed mid/end-message ("do X\n/goal") is hoisted to the
+   *  front — but ONLY in the outbound payload. The bubble and history keep
+   *  what the user actually typed, the same contract as sendPrefix and
+   *  recall blocks (payload-only riders). */
+  private hoistOutbound(text: string): string {
+    const caps = this.sessionCaps ?? this.plugin.lastSessionCaps;
+    return caps?.commands?.length ? hoistSlashCommand(text, new Set(caps.commands)) : text;
+  }
+
   private async runTurn(
     c: Convo,
     text: string,
@@ -4585,9 +4588,10 @@ export class ChatView extends ItemView {
     const researchMode = opts?.researchMode ?? c.researchMode;
     let turnCaps: SessionCaps | null = c.session?.caps ?? null;
     const paths = c === this.active ? this.composer.contextPaths() : [];
+    const sendText = this.hoistOutbound(text);
     const message = paths.length
-      ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${text}`
-      : text;
+      ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${sendText}`
+      : sendText;
 
     // Images flow to both providers since Tranche A: Claude gets base64 blocks,
     // Codex gets temp files via `codex exec -i` (handled in the adapter).
