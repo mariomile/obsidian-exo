@@ -100,6 +100,12 @@ class ClaudeSession implements AgentSession {
       prompt: input() as AsyncIterable<SDKUserMessage>,
       options: {
         cwd: opts.cwd,
+        // Load filesystem settings (CLAUDE.md + .claude/settings.json) explicitly —
+        // parity with the bare Claude Code CLI. Pinned rather than relying on the
+        // SDK's implicit "omitted = load all" default, which has flipped between SDK
+        // majors: this keeps CLAUDE.md honored on ANY vault, even one with no
+        // _system/ scaffold at all. Must include "project" for CLAUDE.md (SDK docs).
+        settingSources: ["user", "project", "local"],
         ...(opts.model && opts.model !== "default" ? { model: opts.model } : {}),
         ...(opts.effort && opts.effort !== "default"
           ? { effort: opts.effort as "low" | "medium" | "high" | "xhigh" | "max" }
