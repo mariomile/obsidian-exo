@@ -84,6 +84,14 @@ function promptPreview(prompt: string, lines = 3): string {
     .join(" ");
 }
 
+/** A reconcilable card: a stable key, a signature of its rendered state (so an
+ *  unchanged card's DOM is left untouched), and a builder for a fresh element. */
+interface CardModel {
+  key: string;
+  sig: string;
+  build: () => HTMLElement;
+}
+
 export class BoardView extends ItemView {
   private driver: OrchestratorDriver | null = null;
   private boardEl!: HTMLElement;
@@ -105,6 +113,12 @@ export class BoardView extends ItemView {
   /** True while a card context menu is open — suppresses repaints that would
    *  detach the menu's anchor mid-interaction. */
   private menuOpen = false;
+  /** Per-column DOM refs. The column shell is built once; cards are reconciled
+   *  into these lists so the scroller and untouched cards survive every repaint. */
+  private colLists = new Map<TaskStatus, HTMLElement>();
+  private colCounts = new Map<TaskStatus, HTMLElement>();
+  private colHeads = new Map<TaskStatus, HTMLElement>();
+  private bannerEl: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);
@@ -217,99 +231,155 @@ export class BoardView extends ItemView {
     });
   }
 
+  /** Build the static column shell ONCE. Cards are reconciled into the per-column
+   *  lists on every paint, so the horizontal scroll and every untouched card
+   *  survive — no full `empty()`+rebuild (which reset scroll and reflashed cards). */
+  private buildShell(): void {
+    this.boardEl.empty();
+    this.colLists.clear();
+    this.colCounts.clear();
+    this.colHeads.clear();
+    this.bannerEl = null;
+    const cols = this.boardEl.createDiv({ cls: "mva-board-cols" });
+    for (const col of COLUMNS) {
+      const colEl = cols.createDiv({ cls: "mva-board-col" });
+      colEl.dataset.status = col.status;
+      const head = colEl.createDiv({ cls: "mva-board-col-head" });
+      head.createSpan({ cls: "mva-board-col-title", text: col.label });
+      const count = head.createSpan({ cls: "mva-board-col-count", text: "0" });
+      // "+" opens the TaskModal (Backlog only).
+      if (col.status === "backlog") {
+        const addBtn = head.createEl("button", {
+          cls: "mva-board-col-add",
+          attr: { "aria-label": "New task" },
+        });
+        setIcon(addBtn, "plus");
+        addBtn.addEventListener("click", () => this.openTaskModal());
+      }
+      const list = colEl.createDiv({ cls: "mva-board-col-list" });
+      this.wireColumnDrop(list, col.status);
+      this.colLists.set(col.status, list);
+      this.colCounts.set(col.status, count);
+      this.colHeads.set(col.status, head);
+    }
+  }
+
   private paint(): void {
     if (!this.boardEl) return;
-    // Preserve scroll across the full repaint — otherwise every convo-state event
-    // / backstop tick rebuilds the DOM and snaps the board back to the leftmost
-    // (Backlog) column while the user is scrolling.
-    const prevCols = this.boardEl.querySelector(".mva-board-cols") as HTMLElement | null;
-    const savedLeft = prevCols?.scrollLeft ?? this.boardEl.scrollLeft;
-    const savedTop = prevCols?.scrollTop ?? this.boardEl.scrollTop;
-    this.boardEl.empty();
+    if (this.colLists.size === 0) this.buildShell();
+    this.reconcileBanner();
 
-    // Corrupt/malformed tasks.md → an error banner on the BOARD only. Chat is
-    // untouched (it never reads this file). This is a notice, not a blocker —
-    // the parsed-tolerantly tasks still render below.
-    if (this.loadWarnings.length) {
-      const banner = this.boardEl.createDiv({ cls: "mva-board-error" });
-      setIcon(banner.createSpan({ cls: "mva-board-error-icon" }), "alert-triangle");
-      banner.createSpan({
-        text: `Some tasks in the ledger look malformed (${this.loadWarnings.length}). They're shown as best-effort; check _system/orchestration/tasks.md.`,
-      });
-    }
-
-    const cols = this.boardEl.createDiv({ cls: "mva-board-cols" });
     const now = Date.now();
+    const snaps = this.plugin.listSessionSnapshots();
     // Session-cards: the open ChatView's live chats, deduped against task-owned
     // convos. Empty when no ChatView leaf is open (the "leaf open" scope).
-    const sessions = projectSessionCards(this.plugin.listSessionSnapshots(), this.lastTasks);
+    const sessions = projectSessionCards(snaps, this.lastTasks);
+
     for (const col of COLUMNS) {
+      const models: CardModel[] = [];
       const inCol = this.lastTasks
         .filter((t) => t.status === col.status)
         .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
-      const sess = sessions.filter((s) => s.lane === (col.status as SessionLane));
-      this.renderColumn(cols, col.status, col.label, inCol, sess, now);
+      for (const t of inCol) models.push(this.taskCardModel(t, now));
+      // Session-cards follow task-cards in the same lane (running/needs-input/review).
+      for (const s of sessions.filter((s) => s.lane === (col.status as SessionLane))) {
+        models.push(this.sessionCardModel(s, now));
+      }
+      this.reconcileList(this.colLists.get(col.status)!, models);
+      this.colCounts.get(col.status)!.setText(String(models.length));
     }
-    // Restore the pre-repaint scroll (set on both the cols container and the board
-    // root — whichever actually scrolls; the other is a harmless no-op).
-    cols.scrollLeft = savedLeft;
-    cols.scrollTop = savedTop;
-    this.boardEl.scrollLeft = savedLeft;
-    this.boardEl.scrollTop = savedTop;
+
+    this.reconcileArchivedAffordance(snaps);
   }
 
-  private renderColumn(
-    parent: HTMLElement,
-    status: TaskStatus,
-    label: string,
-    tasks: TaskEntry[],
-    sessions: SessionCardVM[],
-    now: number
-  ): void {
-    const colEl = parent.createDiv({ cls: "mva-board-col" });
-    colEl.dataset.status = status;
-    const head = colEl.createDiv({ cls: "mva-board-col-head" });
-    head.createSpan({ cls: "mva-board-col-title", text: label });
-    head.createSpan({ cls: "mva-board-col-count", text: String(tasks.length + sessions.length) });
-
-    // Task creation goes through the full TaskModal (replaced the old inline
-    // quick-add form) — a "+" button in the Backlog column header opens it.
-    if (status === "backlog") {
-      const addBtn = head.createEl("button", {
-        cls: "mva-board-col-add",
-        attr: { "aria-label": "New task" },
+  /** Toggle the malformed-ledger banner in place, without touching the columns. */
+  private reconcileBanner(): void {
+    if (this.loadWarnings.length && !this.bannerEl) {
+      this.bannerEl = createDiv({ cls: "mva-board-error" });
+      setIcon(this.bannerEl.createSpan({ cls: "mva-board-error-icon" }), "alert-triangle");
+      this.bannerEl.createSpan({
+        text: "Some tasks in the ledger look malformed. They're shown as best-effort; check _system/orchestration/tasks.md.",
       });
-      setIcon(addBtn, "plus");
-      addBtn.addEventListener("click", () => this.openTaskModal());
+      this.boardEl.prepend(this.bannerEl);
+    } else if (!this.loadWarnings.length && this.bannerEl) {
+      this.bannerEl.remove();
+      this.bannerEl = null;
     }
+  }
 
-    // Retrieve archived chats from the Review column header (they conceptually
-    // leave the board from review). Only shown when there are archived chats.
-    if (status === "review") {
-      const archived = this.plugin.listSessionSnapshots().filter((s) => s.archived);
-      if (archived.length) {
-        const btn = head.createEl("button", {
-          cls: "mva-board-col-add",
-          attr: { "aria-label": `Show ${archived.length} archived chat(s)` },
-        });
-        setIcon(btn, "archive");
-        btn.addEventListener("click", (e) => this.showArchivedMenu(e, archived));
+  /** Rebuild the Review-header "Show archived" button (cheap; keeps its captured
+   *  list fresh). Present only when there are archived chats. */
+  private reconcileArchivedAffordance(snaps: SessionSnapshot[]): void {
+    const head = this.colHeads.get("review");
+    if (!head) return;
+    head.querySelector(".mva-board-col-archived")?.remove();
+    const archived = snaps.filter((s) => s.archived);
+    if (!archived.length) return;
+    const btn = head.createEl("button", {
+      cls: "mva-board-col-add mva-board-col-archived",
+      attr: { "aria-label": `Show ${archived.length} archived chat(s)` },
+    });
+    setIcon(btn, "archive");
+    btn.addEventListener("click", (e) => this.showArchivedMenu(e, archived));
+  }
+
+  /** Keyed reconciliation (the tabx lesson — never recreate-all): remove gone
+   *  cards, rebuild only cards whose signature changed, add new ones, and reorder
+   *  to match — leaving untouched cards and the scroll position intact. */
+  private reconcileList(list: HTMLElement, desired: CardModel[]): void {
+    const existing = new Map<string, HTMLElement>();
+    for (const el of Array.from(list.children) as HTMLElement[]) {
+      if (el.dataset.cardKey) existing.set(el.dataset.cardKey, el);
+    }
+    const wanted = new Set(desired.map((d) => d.key));
+    for (const [key, el] of existing) {
+      if (!wanted.has(key)) {
+        el.remove();
+        existing.delete(key);
       }
     }
-
-    const list = colEl.createDiv({ cls: "mva-board-col-list" });
-
-    // Column is a drop target: dropping over empty space appends to the end.
-    this.wireColumnDrop(list, status, tasks);
-
-    for (const t of tasks) this.renderCard(list, t, now);
-    // Session-cards render after task-cards in the same lane (running /
-    // needs-input / review only). They are a live projection, not reorderable.
-    for (const s of sessions) this.renderSessionCard(list, s, now);
+    desired.forEach((model, i) => {
+      let el = existing.get(model.key);
+      if (!el || el.dataset.cardSig !== model.sig) {
+        const fresh = model.build();
+        fresh.dataset.cardKey = model.key;
+        fresh.dataset.cardSig = model.sig;
+        if (el) el.replaceWith(fresh);
+        el = fresh;
+        existing.set(model.key, el);
+      }
+      const at = list.children[i] ?? null;
+      if (at !== el) list.insertBefore(el, at);
+    });
   }
 
-  private renderCard(parent: HTMLElement, task: TaskEntry, now: number): void {
-    const card = parent.createDiv({ cls: "mva-board-card" });
+  private taskCardModel(task: TaskEntry, now: number): CardModel {
+    const sig = [
+      task.status,
+      task.order ?? "",
+      task.title,
+      task.model ?? "",
+      task.inputReason ?? "",
+      task.chatMissing ? 1 : 0,
+      timeSince(task.updated, now),
+      promptPreview(task.prompt),
+    ].join("");
+    return { key: `t:${task.id}`, sig, build: () => this.buildTaskCard(task, now) };
+  }
+
+  private sessionCardModel(vm: SessionCardVM, now: number): CardModel {
+    const sig = [
+      vm.lane,
+      vm.reason ?? "",
+      vm.badge ?? "",
+      vm.title,
+      vm.updatedAt ? timeSince(new Date(vm.updatedAt).toISOString(), now) : "",
+    ].join("");
+    return { key: `s:${vm.id}`, sig, build: () => this.buildSessionCard(vm, now) };
+  }
+
+  private buildTaskCard(task: TaskEntry, now: number): HTMLElement {
+    const card = createDiv({ cls: "mva-board-card" });
     card.dataset.taskId = task.id;
     card.draggable = true;
     if (task.status === "running") card.addClass("is-running");
@@ -372,6 +442,7 @@ export class BoardView extends ItemView {
       e.preventDefault();
       this.showCardMenu(e, task);
     });
+    return card;
   }
 
   /** Render a session-card: the live projection of an open ad-hoc chat. Unlike a
@@ -379,8 +450,8 @@ export class BoardView extends ItemView {
    *  chip; its lane already encodes the runtime state, plus an optional
    *  stopped/error badge. Click reveals the chat (U4). Context menu (archive) is
    *  added in U6. */
-  private renderSessionCard(parent: HTMLElement, vm: SessionCardVM, now: number): void {
-    const card = parent.createDiv({ cls: "mva-board-card is-session" });
+  private buildSessionCard(vm: SessionCardVM, now: number): HTMLElement {
+    const card = createDiv({ cls: "mva-board-card is-session" });
     card.dataset.convoId = vm.id;
 
     const header = card.createDiv({ cls: "mva-board-card-head" });
@@ -416,6 +487,7 @@ export class BoardView extends ItemView {
       e.preventDefault();
       this.showSessionCardMenu(e, vm);
     });
+    return card;
   }
 
   /** Reveal a session-card's chat. `plugin.revealConversation` already re-opens
@@ -572,8 +644,10 @@ export class BoardView extends ItemView {
 
   // --- Drag & drop --------------------------------------------------------
 
-  /** Wire a column list as a drop target (append to end of the column). */
-  private wireColumnDrop(list: HTMLElement, status: TaskStatus, tasks: TaskEntry[]): void {
+  /** Wire a column list as a drop target (append to end of the column). The list
+   *  is built once in the shell, so the target task set is read live from
+   *  `lastTasks` at drop time rather than captured. */
+  private wireColumnDrop(list: HTMLElement, status: TaskStatus): void {
     list.addEventListener("dragover", (e) => {
       if (!this.dragTaskId) return;
       e.preventDefault();
@@ -588,7 +662,9 @@ export class BoardView extends ItemView {
       e.preventDefault();
       // Only handle the drop here if it didn't land on a specific card (cards
       // stop propagation for reorder). Append to the end of the column.
-      const maxOrder = tasks.reduce((m, t) => Math.max(m, t.order ?? 0), 0);
+      const maxOrder = this.lastTasks
+        .filter((t) => t.status === status)
+        .reduce((m, t) => Math.max(m, t.order ?? 0), 0);
       void this.driver?.move(id, status, maxOrder + 1);
     });
   }
