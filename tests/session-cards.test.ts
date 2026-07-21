@@ -64,6 +64,28 @@ describe("deriveLane", () => {
       badge: "stopped",
     });
   });
+
+  it("places an idle chat in its manual boardStatus column (default review)", () => {
+    expect(deriveLane(snap({ boardStatus: "done" }))).toEqual({ lane: "done" });
+    expect(deriveLane(snap())).toEqual({ lane: "review" });
+  });
+
+  // The hybrid rule: an actively running/blocked chat always jumps into view,
+  // regardless of where the user parked it.
+  it("lets the auto lanes override the manual boardStatus", () => {
+    expect(deriveLane(snap({ boardStatus: "done", streaming: true }))).toEqual({ lane: "running" });
+    expect(deriveLane(snap({ boardStatus: "backlog", pendingPerm: true }))).toEqual({
+      lane: "needs-input",
+      reason: "perm",
+    });
+  });
+
+  it("keeps the stopped/error badge while the card sits in a manual column", () => {
+    expect(deriveLane(snap({ boardStatus: "done", stopped: true }))).toEqual({
+      lane: "done",
+      badge: "stopped",
+    });
+  });
 });
 
 describe("projectSessionCards", () => {
@@ -134,6 +156,6 @@ describe("canArchive", () => {
   it("allows archiving only from the review lane", () => {
     expect(canArchive("review")).toBe(true);
     expect(canArchive("running")).toBe(false);
-    expect(canArchive("needs-input")).toBe(false);
+    expect(canArchive("done")).toBe(false);
   });
 });

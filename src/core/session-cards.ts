@@ -9,26 +9,34 @@
  * Decision B (see docs/plans/2026-07-21-session-cockpit.md): a session-card is a
  * live projection over `view.convos[]`, NEVER a row in `tasks.md`. A convo a task
  * already owns is rendered once as the task-card; here it is deduped out.
+ *
+ * Lane model (hybrid): running / needs-input are AUTO-derived from runtime state
+ * (you always see what needs attention); when the chat is idle the card sits in
+ * its manually-assigned column (`boardStatus`, default review), so you can drag a
+ * chat to Review/Done to organize it. A stopped/error badge is independent of the
+ * lane.
  */
 import type { Recap } from "./recap";
+import type { TaskStatus } from "./tasks";
 
-/** The board columns a session-card can occupy. A session-card is always live,
- *  so it never sits in backlog/queued, and "done" stays task-only. */
-export type SessionLane = "running" | "needs-input" | "review";
+/** Columns a session-card can occupy. `running`/`needs-input` are auto-derived
+ *  from runtime; the others are assigned manually by dragging. Excludes the
+ *  hidden `archived` status — archiving is a separate flag + the × action. */
+export type SessionLane = Exclude<TaskStatus, "archived">;
 
 /** Why a card is in `needs-input` — surfaced as the reason badge, mirroring the
  *  task-card `inputReason` chip. */
 export type NeedsInputReason = "perm" | "ask";
 
-/** A non-lane annotation shown on a `review` card: the turn was user-stopped or
- *  it errored/poisoned. Distinct from the lane so the 3-column model is intact
- *  (per product decision: stopped/error are badges, not their own lanes). */
+/** A non-lane annotation shown on an idle card: the last turn was user-stopped or
+ *  it errored/poisoned. Independent of the lane, so a stopped chat can still sit
+ *  in whatever column you dragged it to. */
 export type SessionBadge = "stopped" | "error";
 
 /**
  * The raw per-convo signals the board reads off a live `Convo`. The lane is NOT
  * pre-computed here — `deriveLane` owns the precedence so the streaming+pending
- * coexistence rule lives in ONE tested place.
+ * coexistence rule and the manual-vs-auto hybrid live in ONE tested place.
  */
 export interface SessionSnapshot {
   id: string;
@@ -44,6 +52,9 @@ export interface SessionSnapshot {
   stopped: boolean;
   hasMessages: boolean;
   archived: boolean;
+  /** Manually-assigned column (persisted). When set and the chat is idle, the
+   *  card sits here instead of the default `review` lane. */
+  boardStatus?: SessionLane;
   updatedAt?: number;
   /** Optional recap rollup, attached lazily by the board only for rendered cards. */
   recap?: Recap;
@@ -60,12 +71,12 @@ export interface SessionCardVM {
   recap?: Recap;
 }
 
-/** `deriveLane`'s result — includes the `idle` sentinel (no card is rendered). */
-export type DerivedLane =
-  | { lane: "idle" }
-  | { lane: "running" }
-  | { lane: "needs-input"; reason: NeedsInputReason }
-  | { lane: "review"; badge?: SessionBadge };
+/** `deriveLane`'s result — `lane` is `"idle"` when no card should be rendered. */
+export interface DerivedLane {
+  lane: SessionLane | "idle";
+  reason?: NeedsInputReason;
+  badge?: SessionBadge;
+}
 
 /** Anything with an optional owning-convo pointer — the board passes `TaskEntry`s
  *  here, but only `.convo` matters for dedup, so the contract stays minimal. */
@@ -80,19 +91,22 @@ export interface TaskLike {
  *      because a convo blocked on a permission prompt is still `streaming:true`
  *      (the turn's `finally` hasn't run) — checking streaming first would
  *      mislabel "waiting for you" as Running, defeating the whole cockpit.
- *   2. terminal signals precede streaming (a stopped/errored turn is not
- *      "running"). `stopped` wins over `poisoned`, matching
- *      `terminalConvoState` (a user-stopped turn reads as a stop, not an error).
- *   3. streaming → running; else has-messages → review; else idle (no card).
+ *   2. `streaming` → running. (1) and (2) are the AUTO lanes: they always win, so
+ *      a chat that starts working jumps into view regardless of where you parked
+ *      it.
+ *   3. Otherwise the chat is idle: it sits in its manually-assigned column
+ *      (`boardStatus`, default `review`), with an independent stopped/error
+ *      badge. `stopped` wins over `poisoned` (a user-stopped turn reads as a
+ *      stop, not an error — matches `terminalConvoState`). Empty "New chat"
+ *      husks (no messages) produce no card.
  */
 export function deriveLane(s: SessionSnapshot): DerivedLane {
   if (s.pendingPerm) return { lane: "needs-input", reason: "perm" };
   if (s.pendingAsk) return { lane: "needs-input", reason: "ask" };
-  if (s.stopped) return { lane: "review", badge: "stopped" };
-  if (s.poisoned) return { lane: "review", badge: "error" };
   if (s.streaming) return { lane: "running" };
-  if (s.hasMessages) return { lane: "review" };
-  return { lane: "idle" };
+  if (!s.hasMessages) return { lane: "idle" };
+  const badge: SessionBadge | undefined = s.stopped ? "stopped" : s.poisoned ? "error" : undefined;
+  return badge ? { lane: s.boardStatus ?? "review", badge } : { lane: s.boardStatus ?? "review" };
 }
 
 /**
@@ -115,24 +129,20 @@ export function projectSessionCards(
     if (claimed.has(s.id)) continue;
     const d = deriveLane(s);
     if (d.lane === "idle") continue;
-    cards.push({
-      id: s.id,
-      title: s.title,
-      lane: d.lane,
-      ...(d.lane === "needs-input" ? { reason: d.reason } : {}),
-      ...(d.lane === "review" && d.badge ? { badge: d.badge } : {}),
-      ...(s.updatedAt !== undefined ? { updatedAt: s.updatedAt } : {}),
-      ...(s.recap ? { recap: s.recap } : {}),
-    });
+    const card: SessionCardVM = { id: s.id, title: s.title, lane: d.lane };
+    if (d.reason) card.reason = d.reason;
+    if (d.badge) card.badge = d.badge;
+    if (s.updatedAt !== undefined) card.updatedAt = s.updatedAt;
+    if (s.recap) card.recap = s.recap;
+    cards.push(card);
   }
   return cards;
 }
 
 /**
- * Whether a session-card in `lane` may be archived. Only a `review` (turn-ended,
- * idle) card is archivable; archiving a `running`/`needs-input` convo would drop
- * a live turn off the board (and risks the CLI-interrupt-looks-like-crash edge),
- * so it's disabled. Extracted here so the guard is pure and tested.
+ * Whether a session-card in `lane` may be archived from its context menu — only a
+ * `review` card (a running/needs-input chat shouldn't be archived out of a live
+ * turn). Pure so the guard is tested.
  */
 export function canArchive(lane: SessionLane): boolean {
   return lane === "review";
