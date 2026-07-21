@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { readBootContext } from "../src/obsidian/memory";
 import { IDENTITY_ARBITRATION_LINE } from "../src/core/agent-self";
+import { exoPaths } from "../src/core/paths";
+
+// The fake vault is keyed on `_system/…`, so drive the boot fn with the legacy root.
+const P = exoPaths("_system");
 
 /**
  * Boot seam (design §9): with `agentFolderEnabled` OFF, `readBootContext` output
@@ -56,8 +60,8 @@ const BASE_FILES: Record<string, FileSpec> = {
 describe("readBootContext — flag OFF byte-identity", () => {
   it("OFF (no opts) equals OFF (explicit false)", async () => {
     const app = makeApp(BASE_FILES);
-    const a = await readBootContext(app);
-    const b = await readBootContext(app, { agentFolderEnabled: false });
+    const a = await readBootContext(app, P);
+    const b = await readBootContext(app, P, { agentFolderEnabled: false });
     expect(a).toBe(b);
   });
 
@@ -69,8 +73,8 @@ describe("readBootContext — flag OFF byte-identity", () => {
       "_system/agent/now.md": { content: "Shipping the identity layer." },
     });
     const withoutFolder = makeApp(BASE_FILES);
-    const off = await readBootContext(withFolder, { agentFolderEnabled: false });
-    const bare = await readBootContext(withoutFolder, { agentFolderEnabled: false });
+    const off = await readBootContext(withFolder, P, { agentFolderEnabled: false });
+    const bare = await readBootContext(withoutFolder, P, { agentFolderEnabled: false });
     // The folder must not leak into the OFF output.
     expect(off).toBe(bare);
     expect(off).not.toContain("Be terse.");
@@ -81,8 +85,8 @@ describe("readBootContext — flag OFF byte-identity", () => {
 describe("readBootContext — flag ON with no folder", () => {
   it("is byte-identical to OFF when the agent folder is absent", async () => {
     const app = makeApp(BASE_FILES);
-    const off = await readBootContext(app, { agentFolderEnabled: false });
-    const onNoFolder = await readBootContext(app, { agentFolderEnabled: true });
+    const off = await readBootContext(app, P, { agentFolderEnabled: false });
+    const onNoFolder = await readBootContext(app, P, { agentFolderEnabled: true });
     expect(onNoFolder).toBe(off);
   });
 });
@@ -95,7 +99,7 @@ describe("readBootContext — flag ON with a populated folder", () => {
       "_system/agent/human.md": { content: "Mario — 0-to-1 PM." },
       "_system/agent/now.md": { content: "Shipping the identity layer." },
     });
-    const out = await readBootContext(app, { agentFolderEnabled: true });
+    const out = await readBootContext(app, P, { agentFolderEnabled: true });
     expect(out).toContain(IDENTITY_ARBITRATION_LINE);
     expect(out).toContain("Be terse and direct.");
     // Identity must come before the Vault-context section.
@@ -113,8 +117,8 @@ describe("readBootContext — flag ON with a populated folder", () => {
       ...BASE_FILES,
       "_system/memory/session-log.md": { content: longLog },
     });
-    const on = await readBootContext(withNow, { agentFolderEnabled: true });
-    const off = await readBootContext(noNow, { agentFolderEnabled: true });
+    const on = await readBootContext(withNow, P, { agentFolderEnabled: true });
+    const off = await readBootContext(noNow, P, { agentFolderEnabled: true });
     // With now.md present, the log is capped at 600 (truncated marker appears);
     // without it, at 1200 (the whole 1000-char log fits, no marker).
     const onLogRun = on.match(/L+/)?.[0].length ?? 0;
@@ -130,7 +134,7 @@ describe("readBootContext — flag ON with a populated folder", () => {
       "_system/memory/session-log.md": { content: longLog },
       "_system/agent/now.md": { content: "   " }, // blank → no signal
     });
-    const out = await readBootContext(app, { agentFolderEnabled: true });
+    const out = await readBootContext(app, P, { agentFolderEnabled: true });
     expect(out.match(/L+/)?.[0].length ?? 0).toBe(1000);
   });
 });

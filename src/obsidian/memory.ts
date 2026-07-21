@@ -2,10 +2,10 @@ import { App, TFile } from "obsidian";
 import { parseLoopsFile, activeLoops, dueLoops, type LoopEntry } from "../core/open-loops";
 import {
   AGENT_BLOCKS,
-  AGENT_DIR,
   compileIdentity,
   type IdentityBlock,
 } from "../core/agent-self";
+import type { ExoPaths } from "../core/paths";
 
 const cap = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + "\n…(truncated)" : s);
 
@@ -46,7 +46,7 @@ export interface BootOpts {
  * {@link MAX_BOOT_AGENT}. When OFF (or absent), none of the folder is read and the
  * output is byte-identical to before this feature existed (seam test).
  */
-export async function readBootContext(app: App, opts: BootOpts = {}): Promise<string> {
+export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts = {}): Promise<string> {
   const read = async (path: string, max: number): Promise<string> => {
     const f = app.vault.getAbstractFileByPath(path);
     if (f instanceof TFile) {
@@ -68,7 +68,7 @@ export async function readBootContext(app: App, opts: BootOpts = {}): Promise<st
   if (agentOn) {
     const blocks: IdentityBlock[] = [];
     for (const spec of AGENT_BLOCKS) {
-      const path = `${AGENT_DIR}/${spec.name}.md`;
+      const path = `${paths.agentDir}/${spec.name}.md`;
       const f = app.vault.getAbstractFileByPath(path);
       if (!(f instanceof TFile)) continue;
       try {
@@ -83,14 +83,15 @@ export async function readBootContext(app: App, opts: BootOpts = {}): Promise<st
   }
 
   const parts: string[] = [];
-  const ctx = await read("_system/vault-context.md", 3500);
+  const ctx = await read(paths.vaultContext, 3500);
   if (ctx) parts.push(`### Vault context\n${ctx}`);
-  const prefs = await read("_system/memory/preferences/preferences.md", 2500);
+  const prefs = await read(paths.preferences, 2500);
   if (prefs) parts.push(`### Preferences\n${prefs}`);
 
+  const rulesPrefix = `${paths.rules}/`;
   const ruleFiles = app.vault
     .getMarkdownFiles()
-    .filter((f) => f.path.startsWith("_system/memory/rules/"));
+    .filter((f) => f.path.startsWith(rulesPrefix));
   const rules = ruleFiles.slice(0, MAX_RULES).map((f) => `- ${f.basename}`);
   if (ruleFiles.length > MAX_RULES) rules.push(`- …and ${ruleFiles.length - MAX_RULES} more`);
   if (rules.length) parts.push(`### Active rules (read the file for detail)\n${rules.join("\n")}`);
@@ -98,10 +99,10 @@ export async function readBootContext(app: App, opts: BootOpts = {}): Promise<st
   // A non-empty `now.md` is a strictly-better "what matters right now" signal than
   // the recent-sessions digest, so we spend fewer chars on the log when it exists.
   const logChars = nowHasSignal ? SESSION_LOG_CHARS_WITH_NOW : SESSION_LOG_CHARS;
-  const log = await read("_system/memory/session-log.md", logChars);
+  const log = await read(paths.sessionLog, logChars);
   if (log) parts.push(`### Recent sessions (prior sessions — background, NOT the current conversation)\n${log}`);
 
-  const loopsRaw = await read("_system/memory/open-loops.md", MAX_LOOPS_RAW);
+  const loopsRaw = await read(paths.openLoops, MAX_LOOPS_RAW);
   if (loopsRaw) {
     const entries: LoopEntry[] = parseLoopsFile(loopsRaw);
     const due = dueLoops(entries);
