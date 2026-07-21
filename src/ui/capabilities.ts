@@ -463,7 +463,7 @@ export async function renderCapabilitiesPanel(
   // Commands
   {
     const live = ctx.caps?.commands;
-    const b = card("Commands", live ? `${live.length} — live from this session` : ".claude/commands");
+    const b = card("Commands", live ? `${live.length} — available` : ".claude/commands");
     if (live?.length) chipList(b, live, "/");
     else {
       const cmds = mergeByName(await gatherFromVault(app, "commands"), await gatherFromScopes("commands"));
@@ -475,7 +475,7 @@ export async function renderCapabilitiesPanel(
   // Sub-agents
   {
     const live = ctx.caps?.agents;
-    const b = card("Sub-agents", live ? `${live.length} — live from this session` : ".claude/agents");
+    const b = card("Sub-agents", live ? `${live.length} — available` : ".claude/agents");
     if (live?.length) chipList(b, live, "@");
     else {
       const agents = mergeByName(await gatherFromVault(app, "agents"), await gatherFromScopes("agents"));
@@ -489,7 +489,7 @@ export async function renderCapabilitiesPanel(
   // Skills
   {
     const live = ctx.caps?.skills;
-    const b = card("Skills", live ? `${live.length} — live from this session` : ".claude/skills");
+    const b = card("Skills", live ? `${live.length} — available` : ".claude/skills");
     if (live?.length) chipList(b, live, "$");
     else {
       const skills = mergeByName(await gatherFromVault(app, "skills"), await gatherFromScopes("skills"));
@@ -535,7 +535,7 @@ export async function renderCapabilitiesPanel(
     // before the first init snapshot arrives.
     const liveCore = ctx.caps?.tools?.filter((t) => !t.startsWith("mcp__"));
     const core = liveCore?.length ? [...liveCore].sort((a, b) => a.localeCompare(b)) : BUILTIN_TOOLS;
-    const b = card("Tools", liveCore?.length ? `${core.length} — live from this session` : "built-in + Obsidian-native");
+    const b = card("Tools", liveCore?.length ? `${core.length} — available` : "built-in + Obsidian-native");
     for (const t of core) {
       const active = agentic && !(s.nativeFirst && claude && FILE_BUILTINS.has(t));
       chip(b, t, active);
@@ -550,7 +550,7 @@ export async function renderCapabilitiesPanel(
   // MCP
   {
     const live = ctx.caps?.mcpServers;
-    const b = card("MCP servers", live ? `${live.length} — live from this session` : undefined);
+    const b = card("MCP servers", live ? `${live.length} — available` : undefined);
     if (live?.length) {
       // Real per-server status straight from the session's init snapshot.
       for (const srv of live) chip(b, srv.name, srv.status === "connected", srv.status);
