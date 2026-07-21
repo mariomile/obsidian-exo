@@ -33,6 +33,14 @@ export type AgentEvent =
     }
   | { kind: "usage"; usage: ContextUsage }
   | { kind: "compact"; summary?: string }
+  | {
+      kind: "workflow-progress";
+      toolUseId: string;
+      taskId: string;
+      name?: string;
+      entries: import("../core/workflow-progress").WorkflowProgressEntry[];
+      status?: string;
+    }
   | { kind: "rate-limit"; status: RateStatus; utilization?: number; resetsAt?: number; windowType?: string }
   | { kind: "turn-end"; sessionId?: string }
   | { kind: "error"; message: string };

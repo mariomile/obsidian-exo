@@ -48,6 +48,10 @@ class ClaudeSession implements AgentSession {
   private resolveTurn: (() => void) | null = null;
   private rejectTurn: ((e: unknown) => void) | null = null;
   private sessionId?: string;
+  /** task_id → launching Workflow tool_use_id. task_updated events carry no
+   *  tool_use_id, so the binding from task_started resolves them; doubles as
+   *  the "this task IS a workflow" gate for task_progress. */
+  private workflowTasks = new Map<string, string>();
   private permSeed = 0;
   /** Force-deny callback for an in-flight permission request, so interrupt/dispose
    *  unblock the SDK (otherwise parked waiting for canUseTool to resolve → turn hangs). */
@@ -286,6 +290,38 @@ class ClaudeSession implements AgentSession {
 
     if (msg.type === "system" && msg.subtype === "compact_boundary") {
       emit({ kind: "compact", summary: msg.compact_summary });
+      return;
+    }
+    // Workflow background-run progress. task_started binds task_id → the
+    // launching Workflow tool_use; task_progress carries the incremental
+    // agent roster; task_updated (no tool_use_id — resolved via the binding)
+    // carries the terminal status.
+    if (msg.type === "system" && msg.subtype === "task_started" && msg.task_id) {
+      if (msg.task_type === "local_workflow" && msg.tool_use_id) {
+        this.workflowTasks.set(msg.task_id, msg.tool_use_id);
+        emit({
+          kind: "workflow-progress",
+          toolUseId: msg.tool_use_id,
+          taskId: msg.task_id,
+          name: msg.workflow_name,
+          entries: [],
+        });
+      }
+      return;
+    }
+    if (msg.type === "system" && msg.subtype === "task_progress" && msg.task_id) {
+      const toolUseId = msg.tool_use_id ?? this.workflowTasks.get(msg.task_id);
+      if (toolUseId && this.workflowTasks.has(msg.task_id) && msg.workflow_progress?.length) {
+        emit({ kind: "workflow-progress", toolUseId, taskId: msg.task_id, entries: msg.workflow_progress });
+      }
+      return;
+    }
+    if (msg.type === "system" && msg.subtype === "task_updated" && msg.task_id) {
+      const toolUseId = this.workflowTasks.get(msg.task_id);
+      if (toolUseId && msg.patch?.status) {
+        emit({ kind: "workflow-progress", toolUseId, taskId: msg.task_id, entries: [], status: msg.patch.status });
+        if (msg.patch.status === "completed" || msg.patch.status === "failed") this.workflowTasks.delete(msg.task_id);
+      }
       return;
     }
     if (msg.type === "stream_event") {
@@ -588,6 +624,14 @@ interface ClaudeMsg {
     resetsAt?: number;
     rateLimitType?: string;
   };
+  // system/task_* background-run progress (workflow runs surface ONLY here —
+  // per-agent activity never appears as tool_use events; probe 2026-07-21)
+  task_id?: string;
+  tool_use_id?: string;
+  task_type?: string;
+  workflow_name?: string;
+  workflow_progress?: import("../core/workflow-progress").WorkflowProgressEntry[];
+  patch?: { status?: string };
   // system/init capability snapshot (CLI ≥2.1.199 emits it in streaming-input too)
   skills?: string[];
   slash_commands?: string[];

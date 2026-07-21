@@ -55,6 +55,7 @@ import { clickable } from "./ui/dom";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { hoistSlashCommand } from "./core/slash";
+import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
 import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { isVaultSetUp } from "./core/vault-setup";
@@ -4657,6 +4658,11 @@ export class ChatView extends ItemView {
     let sawText = false;
     let sawThinking = false;
     const toolNames = new Map<string, string>();
+    // Live workflow runs this turn, keyed by the launching Workflow tool_use id.
+    // Fed by system/task_* events (the only window into background workflow
+    // agents — they never surface as tool calls) and rendered as a status line
+    // on the Workflow card.
+    const workflowRuns = new Map<string, WorkflowRun>();
 
     const onEvent = (e: AgentEvent) => {
       switch (e.kind) {
@@ -4940,6 +4946,27 @@ export class ChatView extends ItemView {
           setIcon(div.createSpan({ cls: "mva-compact-icon" }), "scissors");
           div.createSpan({ text: "Context compacted" });
           this.scrollConvo(c);
+          break;
+        }
+        case "workflow-progress": {
+          let run = workflowRuns.get(e.toolUseId);
+          if (!run) {
+            run = createWorkflowRun(e.taskId, e.toolUseId, e.name);
+            workflowRuns.set(e.toolUseId, run);
+            this.diag.push("tool", `workflow ${e.name ?? e.taskId} started`);
+          }
+          if (e.status) run.status = e.status;
+          applyWorkflowProgress(run, e.entries);
+          const refs = ctx.cards.get(e.toolUseId);
+          if (refs) {
+            const head = refs.statusEl.parentElement;
+            let s = head?.querySelector<HTMLElement>(".mva-tool-wf") ?? null;
+            if (!s && head) {
+              s = createSpan({ cls: "mva-tool-wf" });
+              head.insertBefore(s, refs.elapsedEl);
+            }
+            if (s) s.setText(summarizeWorkflowRun(run).label);
+          }
           break;
         }
         case "turn-end":

@@ -2000,6 +2000,20 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+/* Live workflow status on the Workflow tool card ("2 agents running · phase X") */
+.mva-tool-wf {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+.mva-tool-wf + .mva-tool-elapsed {
+  margin-left: 0;
+}
 .mva-tool-body {
   padding: 2px 10px 10px;
 }
