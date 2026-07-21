@@ -29,6 +29,7 @@ import type { InputReason } from "../core/orchestrator";
 import { OrchestratorDriver, type DriverDeps } from "../obsidian/orchestrator-driver";
 import { clickable } from "./dom";
 import { TaskModal } from "./task-modal";
+import { reconcileList, type CardModel } from "./keyed-reconcile";
 
 /** The board view type — registered in main.ts, opens in the main pane. */
 export const BOARD_VIEW_TYPE = "exo-board";
@@ -82,14 +83,6 @@ function promptPreview(prompt: string, lines = 3): string {
     .filter(Boolean)
     .slice(0, lines)
     .join(" ");
-}
-
-/** A reconcilable card: a stable key, a signature of its rendered state (so an
- *  unchanged card's DOM is left untouched), and a builder for a fresh element. */
-interface CardModel {
-  key: string;
-  sig: string;
-  build: () => HTMLElement;
 }
 
 export class BoardView extends ItemView {
@@ -285,7 +278,7 @@ export class BoardView extends ItemView {
       for (const s of sessions.filter((s) => s.lane === (col.status as SessionLane))) {
         models.push(this.sessionCardModel(s, now));
       }
-      this.reconcileList(this.colLists.get(col.status)!, models);
+      reconcileList(this.colLists.get(col.status)!, models);
       this.colCounts.get(col.status)!.setText(String(models.length));
     }
 
@@ -321,36 +314,6 @@ export class BoardView extends ItemView {
     });
     setIcon(btn, "archive");
     btn.addEventListener("click", (e) => this.showArchivedMenu(e, archived));
-  }
-
-  /** Keyed reconciliation (the tabx lesson — never recreate-all): remove gone
-   *  cards, rebuild only cards whose signature changed, add new ones, and reorder
-   *  to match — leaving untouched cards and the scroll position intact. */
-  private reconcileList(list: HTMLElement, desired: CardModel[]): void {
-    const existing = new Map<string, HTMLElement>();
-    for (const el of Array.from(list.children) as HTMLElement[]) {
-      if (el.dataset.cardKey) existing.set(el.dataset.cardKey, el);
-    }
-    const wanted = new Set(desired.map((d) => d.key));
-    for (const [key, el] of existing) {
-      if (!wanted.has(key)) {
-        el.remove();
-        existing.delete(key);
-      }
-    }
-    desired.forEach((model, i) => {
-      let el = existing.get(model.key);
-      if (!el || el.dataset.cardSig !== model.sig) {
-        const fresh = model.build();
-        fresh.dataset.cardKey = model.key;
-        fresh.dataset.cardSig = model.sig;
-        if (el) el.replaceWith(fresh);
-        el = fresh;
-        existing.set(model.key, el);
-      }
-      const at = list.children[i] ?? null;
-      if (at !== el) list.insertBefore(el, at);
-    });
   }
 
   private taskCardModel(task: TaskEntry, now: number): CardModel {
