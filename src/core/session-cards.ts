@@ -11,7 +11,6 @@
  * already owns is rendered once as the task-card; here it is deduped out.
  */
 import type { Recap } from "./recap";
-import type { ConvoStateReason } from "./convo-state";
 
 /** The board columns a session-card can occupy. A session-card is always live,
  *  so it never sits in backlog/queued, and "done" stays task-only. */
@@ -138,7 +137,3 @@ export function projectSessionCards(
 export function canArchive(lane: SessionLane): boolean {
   return lane === "review";
 }
-
-// Re-export for callers that map the board reason chip; keeps the vocabulary
-// single-sourced with the convo-state channel.
-export type { ConvoStateReason };

@@ -518,12 +518,7 @@ export class BoardView extends ItemView {
           })
       );
     }
-    this.menuOpen = true;
-    menu.onHide(() => {
-      this.menuOpen = false;
-      this.scheduleRerender();
-    });
-    menu.showAtMouseEvent(e);
+    this.openMenu(menu, e);
   }
 
   /** "Show archived" affordance (Review column header): list archived chats.
@@ -550,6 +545,17 @@ export class BoardView extends ItemView {
           if (any) this.scheduleRerender();
         })
     );
+    this.openMenu(menu, e);
+  }
+
+  /** Show a context menu with the repaint guard: suppress session-card repaints
+   *  while it's open (a repaint would detach its anchor) and catch up on close. */
+  private openMenu(menu: Menu, e: MouseEvent): void {
+    this.menuOpen = true;
+    menu.onHide(() => {
+      this.menuOpen = false;
+      this.scheduleRerender();
+    });
     menu.showAtMouseEvent(e);
   }
 
@@ -618,12 +624,7 @@ export class BoardView extends ItemView {
     );
     // Suppress session-card repaints while the menu is open (a repaint would
     // detach its anchor); catch up on close.
-    this.menuOpen = true;
-    menu.onHide(() => {
-      this.menuOpen = false;
-      this.scheduleRerender();
-    });
-    menu.showAtMouseEvent(e);
+    this.openMenu(menu, e);
   }
 
   /** Edit an existing task through the same TaskModal, prefilled. Selecting the

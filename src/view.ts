@@ -1126,29 +1126,31 @@ export class ChatView extends ItemView {
     };
   }
 
-  /** Live (non-archived) conversations for conversations.json. Empty "New chat"
-   *  husks are dropped (unless pinned: active/open tab) and the rest evicted by
-   *  recency; pinned always kept, original array order preserved. Archived chats
-   *  are split out here and persisted untrimmed by `serializeArchived`. See
-   *  core/persistence for the full contract. */
-  private serialize(): ConvoData[] {
-    this.saveActive();
-    const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
-    const { live } = partitionConvos(all);
-    const kept = planPersistedConvos(live, this.active.id, this.openTabs, MAX_CONVOS);
-    return kept.map((c) => this.toConvoData(c));
+  /** All conversations including the active one — which isn't always in `convos`
+   *  (several paths push it lazily). The canonical "full set" for persistence and
+   *  snapshots. */
+  private allConvos(): Convo[] {
+    return this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
   }
 
-  /** Archived conversations for the separate untrimmed store — every archived
-   *  chat is kept (never evicted), so history is never lost. */
-  private serializeArchived(): ConvoData[] {
-    const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
-    const { archived } = partitionConvos(all);
-    return archived.map((c) => this.toConvoData(c));
+  /** Split the conversation set into the live payload (empty husks dropped unless
+   *  pinned, then recency-trimmed for conversations.json) and the archived payload
+   *  (untrimmed, for the separate store — never evicted). One partition, one
+   *  `saveActive`: the two payloads are a single consistent snapshot with no
+   *  ordering coupling. See core/persistence for the full contract. */
+  private serializeSplit(): { live: ConvoData[]; archived: ConvoData[] } {
+    this.saveActive();
+    const { live, archived } = partitionConvos(this.allConvos());
+    const kept = planPersistedConvos(live, this.active.id, this.openTabs, MAX_CONVOS);
+    return {
+      live: kept.map((c) => this.toConvoData(c)),
+      archived: archived.map((c) => this.toConvoData(c)),
+    };
   }
 
   private persist(): void {
-    void this.plugin.saveConversations(this.serialize()).then((ok) => {
+    const { live, archived } = this.serializeSplit();
+    void this.plugin.saveConversations(live).then((ok) => {
       if (ok) return;
       // Throttle so a persistent disk problem doesn't spam a Notice every turn.
       const now = Date.now();
@@ -1159,7 +1161,7 @@ export class ChatView extends ItemView {
     });
     // Archive store is best-effort and shares the same serialized write queue; a
     // failure just retries on the next persist (the flag stays in memory).
-    void this.plugin.saveArchivedConversations(this.serializeArchived());
+    void this.plugin.saveArchivedConversations(archived);
   }
 
   /* ------------------------- conversations -------------------------- */
@@ -5456,8 +5458,7 @@ export class ChatView extends ItemView {
   /** Live attention snapshot for the Cockpit: conversations blocked on a
    *  permission/ask card, or currently streaming. Plain data — no DOM refs. */
   convoAttention(): { id: string; title: string; blocked: boolean; streaming: boolean }[] {
-    const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
-    return all
+    return this.allConvos()
       .map((c) => ({
         id: c.id,
         title: c.title,
