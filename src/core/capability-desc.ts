@@ -166,6 +166,22 @@ export async function buildDescIndex(app: App): Promise<DescIndex> {
   const idx: DescIndex = { skills: new Map(), commands: new Map(), agents: new Map() };
   await scanScope(idx, vaultScope(app));
   await scanScope(idx, fsScope(`${homedir()}/.claude`));
+  // Codex keeps its own catalog under ~/.codex — mostly mirrors of the Claude
+  // set, so first-write-wins dedup makes this scope nearly free, but it is the
+  // only desc source for Codex-exclusive skills.
+  await scanScope(idx, fsScope(`${homedir()}/.codex`));
   for (const scope of await pluginScopes()) await scanScope(idx, scope);
   return idx;
+}
+
+/** Skill names under `~/.codex/skills` (folder-per-skill or loose .md).
+ *  The Codex CLI is spawn-per-turn — there is no init capability snapshot —
+ *  so this direct scan is the only way Exo can list Codex-native skills.
+ *  Missing dir → empty. */
+export async function codexSkillNames(): Promise<string[]> {
+  const { folders, files } = await fsScope(`${homedir()}/.codex`).list("skills");
+  const base = (p: string) => p.split("/").pop()!.replace(/\.md$/, "");
+  return [...folders.map(base), ...files.filter((f) => f.endsWith(".md")).map(base)].sort((a, b) =>
+    a.localeCompare(b)
+  );
 }

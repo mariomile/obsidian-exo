@@ -8,7 +8,7 @@ import {
   Notice,
 } from "obsidian";
 import { Autocomplete, type AcItem } from "./autocomplete";
-import { buildDescIndex, type DescIndex } from "../core/capability-desc";
+import { buildDescIndex, codexSkillNames, type DescIndex } from "../core/capability-desc";
 import type ExoPlugin from "../main";
 import { ADAPTERS } from "../providers/registry";
 import type {
@@ -406,7 +406,8 @@ export class Composer {
 
   /* --------------------------- autocomplete ------------------------- */
 
-  private slashCache: { commands: string[]; skills: string[]; agents: string[]; ts: number } | null = null;
+  private slashCache: { commands: string[]; skills: string[]; agents: string[]; ts: number; provider: string } | null =
+    null;
   private static readonly SLASH_TTL = 30_000;
 
   // Descriptions are read from frontmatter across vault + global + plugin
@@ -429,7 +430,16 @@ export class Composer {
   }
 
   private async loadSlash(): Promise<{ commands: string[]; skills: string[]; agents: string[] }> {
-    if (this.slashCache && Date.now() - this.slashCache.ts < Composer.SLASH_TTL) return this.slashCache;
+    // Provider keys the cache: the Codex list carries ~/.codex/skills entries a
+    // Claude session must not see (and vice versa) — a provider switch inside
+    // the TTL would otherwise serve the wrong catalog.
+    if (
+      this.slashCache &&
+      this.slashCache.provider === this.host.provider &&
+      Date.now() - this.slashCache.ts < Composer.SLASH_TTL
+    ) {
+      return this.slashCache;
+    }
     const commands: string[] = [];
     const skills: string[] = [];
     const agents: string[] = [];
@@ -456,16 +466,26 @@ export class Composer {
     // Union with the session's live init snapshot (global + plugin + vault —
     // the vault scan above only ever saw the vault's own .claude/). Dedup keeps
     // the menus stable when both sources know the same name.
+    const add = (into: string[], names: string[]) => {
+      const seen = new Set(into);
+      for (const n of names) if (!seen.has(n)) (seen.add(n), into.push(n));
+    };
     if (this.host.sessionCaps) {
-      const add = (into: string[], names: string[]) => {
-        const seen = new Set(into);
-        for (const n of names) if (!seen.has(n)) (seen.add(n), into.push(n));
-      };
       add(commands, this.host.sessionCaps.commands);
       add(skills, this.host.sessionCaps.skills);
       add(agents, this.host.sessionCaps.agents);
     }
-    this.slashCache = { commands, skills, agents, ts: Date.now() };
+    // Codex has no init snapshot (spawn-per-turn), so its native skill catalog
+    // (~/.codex/skills) is scanned directly — without this, Codex sessions only
+    // ever saw the vault's own .claude/ skills.
+    if (this.host.provider === "codex") {
+      try {
+        add(skills, await codexSkillNames());
+      } catch {
+        /* no ~/.codex — nothing to add */
+      }
+    }
+    this.slashCache = { commands, skills, agents, ts: Date.now(), provider: this.host.provider };
     return this.slashCache;
   }
 
