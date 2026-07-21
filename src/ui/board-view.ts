@@ -219,6 +219,12 @@ export class BoardView extends ItemView {
 
   private paint(): void {
     if (!this.boardEl) return;
+    // Preserve scroll across the full repaint — otherwise every convo-state event
+    // / backstop tick rebuilds the DOM and snaps the board back to the leftmost
+    // (Backlog) column while the user is scrolling.
+    const prevCols = this.boardEl.querySelector(".mva-board-cols") as HTMLElement | null;
+    const savedLeft = prevCols?.scrollLeft ?? this.boardEl.scrollLeft;
+    const savedTop = prevCols?.scrollTop ?? this.boardEl.scrollTop;
     this.boardEl.empty();
 
     // Corrupt/malformed tasks.md → an error banner on the BOARD only. Chat is
@@ -244,6 +250,12 @@ export class BoardView extends ItemView {
       const sess = sessions.filter((s) => s.lane === (col.status as SessionLane));
       this.renderColumn(cols, col.status, col.label, inCol, sess, now);
     }
+    // Restore the pre-repaint scroll (set on both the cols container and the board
+    // root — whichever actually scrolls; the other is a harmless no-op).
+    cols.scrollLeft = savedLeft;
+    cols.scrollTop = savedTop;
+    this.boardEl.scrollLeft = savedLeft;
+    this.boardEl.scrollTop = savedTop;
   }
 
   private renderColumn(
