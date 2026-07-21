@@ -18,7 +18,13 @@ import { ADAPTERS } from "../providers/registry";
 import type { ProviderId } from "../providers/types";
 import { modelOptions } from "../core/model-options";
 import type { TaskEntry, TaskStatus } from "../core/tasks";
-import { projectSessionCards, type SessionCardVM, type SessionLane } from "../core/session-cards";
+import {
+  projectSessionCards,
+  canArchive,
+  type SessionCardVM,
+  type SessionLane,
+  type SessionSnapshot,
+} from "../core/session-cards";
 import type { InputReason } from "../core/orchestrator";
 import { OrchestratorDriver, type DriverDeps } from "../obsidian/orchestrator-driver";
 import { clickable } from "./dom";
@@ -265,6 +271,20 @@ export class BoardView extends ItemView {
       addBtn.addEventListener("click", () => this.openTaskModal());
     }
 
+    // Retrieve archived chats from the Review column header (they conceptually
+    // leave the board from review). Only shown when there are archived chats.
+    if (status === "review") {
+      const archived = this.plugin.listSessionSnapshots().filter((s) => s.archived);
+      if (archived.length) {
+        const btn = head.createEl("button", {
+          cls: "mva-board-col-add",
+          attr: { "aria-label": `Show ${archived.length} archived chat(s)` },
+        });
+        setIcon(btn, "archive");
+        btn.addEventListener("click", (e) => this.showArchivedMenu(e, archived));
+      }
+    }
+
     const list = colEl.createDiv({ cls: "mva-board-col-list" });
 
     // Column is a drop target: dropping over empty space appends to the end.
@@ -379,6 +399,11 @@ export class BoardView extends ItemView {
       if ((e.target as HTMLElement).closest("input, textarea, select, button")) return;
       void this.onSessionCardClick(vm);
     });
+
+    card.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      this.showSessionCardMenu(e, vm);
+    });
   }
 
   /** Reveal a session-card's chat. `plugin.revealConversation` already re-opens
@@ -386,6 +411,62 @@ export class BoardView extends ItemView {
   private async onSessionCardClick(vm: SessionCardVM): Promise<void> {
     const ok = await this.plugin.revealConversation(vm.id);
     if (!ok) new Notice("That chat is no longer open.");
+  }
+
+  /** Context menu for a session-card: open the chat, and archive it — but only
+   *  from the `review` lane (a running/needs-input chat can't be archived, or its
+   *  live turn would vanish from the board). */
+  private showSessionCardMenu(e: MouseEvent, vm: SessionCardVM): void {
+    const menu = new Menu();
+    menu.addItem((i) =>
+      i
+        .setTitle("Open chat")
+        .setIcon("message-square")
+        .onClick(() => void this.onSessionCardClick(vm))
+    );
+    if (canArchive(vm.lane)) {
+      menu.addItem((i) =>
+        i
+          .setTitle("Archive")
+          .setIcon("archive")
+          .onClick(() => {
+            if (this.plugin.setConvoArchived(vm.id, true)) this.scheduleRerender();
+          })
+      );
+    }
+    this.menuOpen = true;
+    menu.onHide(() => {
+      this.menuOpen = false;
+      this.scheduleRerender();
+    });
+    menu.showAtMouseEvent(e);
+  }
+
+  /** "Show archived" affordance (Review column header): list archived chats.
+   *  Clicking one reveals it (resuming a turn there auto-un-archives it); a bulk
+   *  "Un-archive" restores them to the board's active lanes. */
+  private showArchivedMenu(e: MouseEvent, archived: SessionSnapshot[]): void {
+    const menu = new Menu();
+    for (const s of archived) {
+      menu.addItem((i) =>
+        i
+          .setTitle(s.title || "(untitled chat)")
+          .setIcon("message-square")
+          .onClick(() => void this.plugin.revealConversation(s.id))
+      );
+    }
+    menu.addSeparator();
+    menu.addItem((i) =>
+      i
+        .setTitle(archived.length === 1 ? "Un-archive" : "Un-archive all")
+        .setIcon("archive-restore")
+        .onClick(() => {
+          let any = false;
+          for (const s of archived) any = this.plugin.setConvoArchived(s.id, false) || any;
+          if (any) this.scheduleRerender();
+        })
+    );
+    menu.showAtMouseEvent(e);
   }
 
   /** Open the TaskModal to create a new task; optionally enqueue it right away

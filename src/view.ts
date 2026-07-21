@@ -1527,6 +1527,23 @@ export class ChatView extends ItemView {
   }
 
   /**
+   * Set or clear the archived flag on a conversation and persist. Used by the
+   * board's Session Cockpit archive / un-archive actions (U6). Archiving hides
+   * the chat from the board's active lanes and moves it to the separate
+   * untrimmed store; it stays open in the chat gallery. Returns false if the
+   * convo id isn't found.
+   */
+  setConvoArchived(convoId: string, archived: boolean): boolean {
+    const c =
+      this.convos.find((x) => x.id === convoId) ??
+      (this.active?.id === convoId ? this.active : undefined);
+    if (!c) return false;
+    c.archived = archived;
+    this.persist();
+    return true;
+  }
+
+  /**
    * Additive public selector for the Orchestration Board (workstream B5): make
    * the conversation with `convoId` the active tab, so clicking a board card
    * focuses that task's chat. Returns true if the convo was found and revealed,
@@ -4307,7 +4324,12 @@ export class ChatView extends ItemView {
 
   private setStreaming(c: Convo, on: boolean): void {
     c.streaming = on;
-    if (on) this.plugin.emitConvoState(c.id, "turn-start"); // fire-and-forget board hook (no-op when off; can't throw)
+    if (on) {
+      // A resumed turn on an archived chat auto-un-archives it (Session Cockpit
+      // R6): never leave a live, token-burning turn invisible on the board.
+      if (c.archived) c.archived = false;
+      this.plugin.emitConvoState(c.id, "turn-start"); // fire-and-forget board hook (no-op when off; can't throw)
+    }
     if (c === this.active) this.syncSendButton();
     this.refreshAgentIndicators(); // per-tab streaming dot + agent counts + pinned chip
     // Never show the tail "Related" section mid-stream — hide it the instant a

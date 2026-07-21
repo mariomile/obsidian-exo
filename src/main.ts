@@ -909,6 +909,15 @@ export default class ExoPlugin extends Plugin {
   }
 
   /**
+   * Set/clear a conversation's archived flag (Session Cockpit U6). Returns false
+   * when no ChatView leaf is open or the convo id is unknown.
+   */
+  setConvoArchived(convoId: string, archived: boolean): boolean {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    return view instanceof ChatView ? view.setConvoArchived(convoId, archived) : false;
+  }
+
+  /**
    * Make sure a ChatView leaf EXISTS without revealing or focusing anything —
    * the background counterpart to `activateView`. Spawning is a system action
    * (the orchestrator consuming its queue), so it must never move the UI; only
