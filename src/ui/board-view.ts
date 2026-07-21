@@ -18,6 +18,7 @@ import { ADAPTERS } from "../providers/registry";
 import type { ProviderId } from "../providers/types";
 import { modelOptions } from "../core/model-options";
 import type { TaskEntry, TaskStatus } from "../core/tasks";
+import { projectSessionCards, type SessionCardVM, type SessionLane } from "../core/session-cards";
 import type { InputReason } from "../core/orchestrator";
 import { OrchestratorDriver, type DriverDeps } from "../obsidian/orchestrator-driver";
 import { clickable } from "./dom";
@@ -84,6 +85,20 @@ export class BoardView extends ItemView {
   private dragTaskId: string | null = null;
   /** Whether the last store load surfaced malformed-file warnings. */
   private loadWarnings: string[] = [];
+  /** Last task list from the driver — kept so a session-card-only rerender
+   *  (triggered by convo-state, not a task change) can repaint without a driver
+   *  round-trip. */
+  private lastTasks: TaskEntry[] = [];
+  /** Unsubscribe from the convo-state channel (session-card freshness). */
+  private convoUnsub: (() => void) | null = null;
+  /** Timer backstop: catches convo lifecycle changes the channel doesn't emit
+   *  (e.g. a deleted convo → ghost card), so the board self-heals. */
+  private backstop: number | null = null;
+  /** Coalesce flag so a burst of convo-state events causes ONE repaint. */
+  private rerenderQueued = false;
+  /** True while a card context menu is open — suppresses repaints that would
+   *  detach the menu's anchor mid-interaction. */
+  private menuOpen = false;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);
@@ -124,9 +139,24 @@ export class BoardView extends ItemView {
     this.loadWarnings = loaded.warnings;
     await this.driver.start();
     this.render(this.driver.snapshot());
+
+    // Session Cockpit (U3): project the open ChatView's live chats as cards.
+    // Subscribe directly to convo-state so session-card freshness doesn't depend
+    // on the driver's task-emit cadence (the driver DOES emit on un-owned convos
+    // today, but the board shouldn't rely on that internal). Both paths repaint,
+    // so scheduleRerender coalesces. A low-frequency timer backstop catches
+    // lifecycle changes the channel never emits (e.g. a deleted convo → ghost).
+    this.convoUnsub = this.plugin.onConvoState(() => this.scheduleRerender());
+    this.backstop = window.setInterval(() => this.scheduleRerender(), 5000);
   }
 
   async onClose(): Promise<void> {
+    this.convoUnsub?.();
+    this.convoUnsub = null;
+    if (this.backstop != null) {
+      window.clearInterval(this.backstop);
+      this.backstop = null;
+    }
     this.driver?.stop();
     this.driver = null;
   }
@@ -159,7 +189,29 @@ export class BoardView extends ItemView {
     });
   }
 
+  /** Task-driven render entry point (driver onChange / onOpen / reloadTasks):
+   *  store the fresh task list, then paint. Session-card-only refreshes call
+   *  `paint()` directly through `scheduleRerender`. */
   private render(tasks: TaskEntry[]): void {
+    this.lastTasks = tasks;
+    this.paint();
+  }
+
+  /** Coalesced, gesture-safe repaint for session-card freshness. A burst of
+   *  convo-state events collapses to one paint; the paint is dropped while a
+   *  drag or a card menu is in flight (it would detach the drop target / menu
+   *  anchor) — the timer backstop and the dragend/menu-close handlers catch up. */
+  private scheduleRerender(): void {
+    if (this.rerenderQueued) return;
+    this.rerenderQueued = true;
+    queueMicrotask(() => {
+      this.rerenderQueued = false;
+      if (this.dragTaskId != null || this.menuOpen) return;
+      this.paint();
+    });
+  }
+
+  private paint(): void {
     if (!this.boardEl) return;
     this.boardEl.empty();
 
@@ -176,11 +228,15 @@ export class BoardView extends ItemView {
 
     const cols = this.boardEl.createDiv({ cls: "mva-board-cols" });
     const now = Date.now();
+    // Session-cards: the open ChatView's live chats, deduped against task-owned
+    // convos. Empty when no ChatView leaf is open (the "leaf open" scope).
+    const sessions = projectSessionCards(this.plugin.listSessionSnapshots(), this.lastTasks);
     for (const col of COLUMNS) {
-      const inCol = tasks
+      const inCol = this.lastTasks
         .filter((t) => t.status === col.status)
         .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
-      this.renderColumn(cols, col.status, col.label, inCol, now);
+      const sess = sessions.filter((s) => s.lane === (col.status as SessionLane));
+      this.renderColumn(cols, col.status, col.label, inCol, sess, now);
     }
   }
 
@@ -189,13 +245,14 @@ export class BoardView extends ItemView {
     status: TaskStatus,
     label: string,
     tasks: TaskEntry[],
+    sessions: SessionCardVM[],
     now: number
   ): void {
     const colEl = parent.createDiv({ cls: "mva-board-col" });
     colEl.dataset.status = status;
     const head = colEl.createDiv({ cls: "mva-board-col-head" });
     head.createSpan({ cls: "mva-board-col-title", text: label });
-    head.createSpan({ cls: "mva-board-col-count", text: String(tasks.length) });
+    head.createSpan({ cls: "mva-board-col-count", text: String(tasks.length + sessions.length) });
 
     // Task creation goes through the full TaskModal (replaced the old inline
     // quick-add form) — a "+" button in the Backlog column header opens it.
@@ -214,6 +271,9 @@ export class BoardView extends ItemView {
     this.wireColumnDrop(list, status, tasks);
 
     for (const t of tasks) this.renderCard(list, t, now);
+    // Session-cards render after task-cards in the same lane (running /
+    // needs-input / review only). They are a live projection, not reorderable.
+    for (const s of sessions) this.renderSessionCard(list, s, now);
   }
 
   private renderCard(parent: HTMLElement, task: TaskEntry, now: number): void {
@@ -233,6 +293,8 @@ export class BoardView extends ItemView {
     card.addEventListener("dragend", () => {
       this.dragTaskId = null;
       card.removeClass("is-dragging");
+      // Catch up any session-card repaint that was suppressed during the drag.
+      this.scheduleRerender();
     });
     // Drop onto another card = reorder before it (or move into this column).
     this.wireCardDrop(card, task);
@@ -278,6 +340,52 @@ export class BoardView extends ItemView {
       e.preventDefault();
       this.showCardMenu(e, task);
     });
+  }
+
+  /** Render a session-card: the live projection of an open ad-hoc chat. Unlike a
+   *  task-card it is not draggable (it has no ledger order) and carries no model
+   *  chip; its lane already encodes the runtime state, plus an optional
+   *  stopped/error badge. Click reveals the chat (U4). Context menu (archive) is
+   *  added in U6. */
+  private renderSessionCard(parent: HTMLElement, vm: SessionCardVM, now: number): void {
+    const card = parent.createDiv({ cls: "mva-board-card is-session" });
+    card.dataset.convoId = vm.id;
+
+    const header = card.createDiv({ cls: "mva-board-card-head" });
+    header.createSpan({ cls: "mva-board-card-title", text: vm.title || "(untitled chat)" });
+
+    const chips = card.createDiv({ cls: "mva-board-card-chips" });
+    if (vm.lane === "running") {
+      chips.createSpan({ cls: "mva-board-dot" }).setAttribute("aria-label", "streaming");
+    }
+    if (vm.lane === "needs-input") {
+      chips.createSpan({
+        cls: "mva-board-chip mva-board-chip-reason",
+        text: vm.reason === "perm" ? "Permission" : "Question",
+      });
+    }
+    if (vm.badge) {
+      chips.createSpan({
+        cls: `mva-board-chip ${vm.badge === "error" ? "mva-board-chip-missing" : "mva-board-chip-reason"}`,
+        text: vm.badge === "error" ? "Error" : "Stopped",
+      });
+    }
+    if (vm.updatedAt) {
+      const since = timeSince(new Date(vm.updatedAt).toISOString(), now);
+      if (since) chips.createSpan({ cls: "mva-board-card-time", text: since });
+    }
+
+    clickable(card, (e) => {
+      if ((e.target as HTMLElement).closest("input, textarea, select, button")) return;
+      void this.onSessionCardClick(vm);
+    });
+  }
+
+  /** Reveal a session-card's chat. `plugin.revealConversation` already re-opens
+   *  the ChatView leaf if it was closed, so no extra "ensure" step is needed. */
+  private async onSessionCardClick(vm: SessionCardVM): Promise<void> {
+    const ok = await this.plugin.revealConversation(vm.id);
+    if (!ok) new Notice("That chat is no longer open.");
   }
 
   /** Open the TaskModal to create a new task; optionally enqueue it right away
@@ -343,6 +451,13 @@ export class BoardView extends ItemView {
         .setIcon("archive")
         .onClick(() => void this.driver?.archive(task.id))
     );
+    // Suppress session-card repaints while the menu is open (a repaint would
+    // detach its anchor); catch up on close.
+    this.menuOpen = true;
+    menu.onHide(() => {
+      this.menuOpen = false;
+      this.scheduleRerender();
+    });
     menu.showAtMouseEvent(e);
   }
 
