@@ -161,6 +161,10 @@ export class BoardView extends ItemView {
     // lifecycle changes the channel never emits (e.g. a deleted convo → ghost).
     this.convoUnsub = this.plugin.onConvoState(() => this.scheduleRerender());
     this.backstop = window.setInterval(() => this.scheduleRerender(), 5000);
+    // Cold-open catch-up: the ChatView may still be restoring its convos when the
+    // board first paints (session cards would momentarily be empty). One delayed
+    // repaint picks them up without waiting for the 5s backstop.
+    window.setTimeout(() => this.scheduleRerender(), 800);
   }
 
   async onClose(): Promise<void> {
