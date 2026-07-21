@@ -1948,7 +1948,7 @@ export class ChatView extends ItemView {
       attachRelated: (p) => this.attachRelated(p),
       vaultSetupNeeded:
         this.plugin.settings.memoryWriteEnabled &&
-        !isVaultSetUp((p) => !!this.app.vault.getAbstractFileByPath(p)),
+        !isVaultSetUp((p) => !!this.app.vault.getAbstractFileByPath(p), this.plugin.paths),
       runVaultSetup: () => void this.plugin.runVaultSetup(),
     });
   }

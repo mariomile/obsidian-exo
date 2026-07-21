@@ -30,8 +30,8 @@ import {
   parseSeedBlocks,
   manifestContent,
 } from "./core/agent-self";
-import { SCAFFOLD_ITEMS, parentFolder } from "./core/vault-setup";
-import { detectMemoryRoot, LEGACY_MEMORY_ROOT } from "./core/paths";
+import { scaffoldItems, parentFolder } from "./core/vault-setup";
+import { detectMemoryRoot, exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "./core/paths";
 import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidian/claudemem";
 import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
@@ -1327,7 +1327,14 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
-  /** Vault setup — create every `_system/` path Exo reads/writes that's
+  /** Exo's memory-layer paths, derived from the configured `memoryRoot`. Single
+   *  accessor so every consumer resolves the same paths without re-reading a
+   *  literal — the vault's structure lives in one place (core/paths.ts). */
+  get paths(): ExoPaths {
+    return exoPaths(this.settings.memoryRoot);
+  }
+
+  /** Vault setup — create every memory-layer path Exo reads/writes that's
    *  currently missing (Global Constraints: never touches what already
    *  exists). Shared by the `setup-vault-memory` command and the empty-state
    *  banner (ChatView calls this directly, hence no `private`). */
@@ -1336,7 +1343,7 @@ export default class ExoPlugin extends Plugin {
     let skipped = 0;
     let failed = 0;
     const writtenPaths: string[] = [];
-    for (const item of SCAFFOLD_ITEMS) {
+    for (const item of scaffoldItems(this.paths)) {
       const existed = !!this.app.vault.getAbstractFileByPath(item.path);
       if (existed) {
         skipped++;
