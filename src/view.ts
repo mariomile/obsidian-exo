@@ -54,6 +54,7 @@ import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
+import { hoistSlashCommand } from "./core/slash";
 import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { isVaultSetUp } from "./core/vault-setup";
@@ -761,7 +762,7 @@ export class ChatView extends ItemView {
     // the system prompt; Codex prefixes it to the session's first turn.
     if (s.memoryReadEnabled) {
       if (!this.memoryPreamble)
-        this.memoryPreamble = await readBootContext(this.app, {
+        this.memoryPreamble = await readBootContext(this.app, this.plugin.paths, {
           agentFolderEnabled: s.agentFolderEnabled,
         });
       memoryPreamble = this.memoryPreamble || undefined;
@@ -4461,6 +4462,13 @@ export class ChatView extends ItemView {
       this.updateRecap();
       researchModeForTurn = researchCommand.state;
       text = researchCommand.question;
+    }
+    // TUI parity: the CLI only expands /commands that OPEN the message. A known
+    // command typed mid/end-message ("do X\n/goal") is hoisted to the front so
+    // it expands instead of reaching the model as literal text.
+    {
+      const caps = this.sessionCaps ?? this.plugin.lastSessionCaps;
+      if (caps?.commands?.length) text = hoistSlashCommand(text, new Set(caps.commands));
     }
     this.composer.setInputValue("");
     this.composer.autoGrow();
