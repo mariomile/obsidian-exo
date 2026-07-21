@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DiagLog } from "./core/diag";
+import type { SessionSnapshot } from "./core/session-cards";
 import { handoffPrefix } from "./core/handoff";
 import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { CockpitView, COCKPIT_VIEW_TYPE, COCKPIT_ICON } from "./ui/cockpit-view";
@@ -894,6 +895,17 @@ export default class ExoPlugin extends Plugin {
     const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
     if (view instanceof ChatView) return view.readConvoState(convoId);
     return { exists: false, streaming: false, hasPending: false };
+  }
+
+  /**
+   * Plugin-level wrapper around `ChatView.listSessionSnapshots` for the
+   * Orchestration Board's Session Cockpit: project the open ChatView's live
+   * conversations into UI-free snapshots. Returns `[]` when no ChatView leaf is
+   * open (the documented "leaf open" scope boundary). Pure read.
+   */
+  listSessionSnapshots(): SessionSnapshot[] {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    return view instanceof ChatView ? view.listSessionSnapshots() : [];
   }
 
   /**

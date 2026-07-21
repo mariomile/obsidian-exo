@@ -49,10 +49,11 @@ import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
 import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
+import type { SessionSnapshot } from "./core/session-cards";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
 import { StepsRun } from "./ui/steps";
-import { firstErrorLine, stepPlacement } from "./core/steps";
+import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { isVaultSetUp } from "./core/vault-setup";
@@ -171,6 +172,10 @@ export interface Convo {
   listEl: HTMLElement;
   title: string;
   sessionId?: string;
+  /** True when the user archived this chat: hidden from the board's active
+   *  Session-Cockpit lanes and moved to a separate untrimmed store (never
+   *  evicted). Persisted. */
+  archived?: boolean;
   provider: ProviderId;
   model: string;
   allow: Set<string>;
@@ -1457,6 +1462,36 @@ export class ChatView extends ItemView {
   }
 
   /**
+   * Read API for the Session Cockpit (Session Cockpit plan, U2): project every
+   * live conversation into a UI-free `SessionSnapshot` the board turns into
+   * session-cards. The active convo isn't guaranteed to be in `convos` (it's
+   * pushed lazily in several paths), so it's folded in — mirroring the serialize
+   * idiom — else the chat most likely to be running would be silently dropped.
+   * Pure read; never mutates chat state. `poisoned` is best-effort from
+   * `resumeRisky` (the durable "last turn ended poisoned" hint; the transient
+   * in-turn `poisoned` local is not kept on the Convo). The lane derivation
+   * itself lives in the pure `deriveLane` (core/session-cards), not here.
+   */
+  listSessionSnapshots(): SessionSnapshot[] {
+    const all =
+      this.active && !this.convos.includes(this.active)
+        ? [...this.convos, this.active]
+        : this.convos;
+    return all.map((c) => ({
+      id: c.id,
+      title: c.title,
+      streaming: c.streaming,
+      pendingPerm: c.pendingPerm != null,
+      pendingAsk: c.pendingAsk != null,
+      poisoned: !!c.resumeRisky,
+      stopped: c.stopped,
+      hasMessages: c.messages.length > 0,
+      archived: !!c.archived,
+      updatedAt: c.updatedAt,
+    }));
+  }
+
+  /**
    * Additive public selector for the Orchestration Board (workstream B5): make
    * the conversation with `convoId` the active tab, so clicking a board card
    * focuses that task's chat. Returns true if the convo was found and revealed,
@@ -2591,8 +2626,22 @@ export class ChatView extends ItemView {
   /** Close the current run (fold to "N steps ⌄"). Safe to over-call.
    *  `interrupted` threads through to the header's status glyph (x vs check) —
    *  pass true only where the turn's stopped/errored state is already known. */
-  private closeStepsRun(ctx: AssistantCtx, interrupted = false): void {
-    ctx.stepsRun?.close(ctx.convo.listEl, interrupted);
+  /** Fold the current steps-run — but keep it live (in-progress, still ticking, no
+   *  ✓) while a foreground subagent it launched is still running: the run's completed
+   *  state depends on its children, not just the parent's own tool calls. The next
+   *  natural close trigger (parent text resumes, turn-end) folds it once the subagent
+   *  has resolved. `force` (turn-end) and `interrupted` fold regardless, so a subagent
+   *  that never resolves can't strand the run open. */
+  private closeStepsRun(ctx: AssistantCtx, interrupted = false, force = false): void {
+    const run = ctx.stepsRun;
+    if (!run) return;
+    if (
+      !run.closed &&
+      !shouldFoldStepsRun({ runningSubagents: ctx.runningTasks.size, force, interrupted })
+    ) {
+      return; // a descendant subagent is still in flight — stay in-progress
+    }
+    run.close(ctx.convo.listEl, interrupted);
     ctx.stepsRun = null;
   }
 
@@ -2882,7 +2931,7 @@ export class ChatView extends ItemView {
     }
     this.renderText(ctx, false);
     this.clearCaret(ctx);
-    this.closeStepsRun(ctx, interrupted);
+    this.closeStepsRun(ctx, interrupted, /* force */ true); // turn is over — fold regardless of tracked subagents
     // Final-cleanup fallback: the tracked ref covers every live path, but the
     // turn is over — sweep the transcript so no caret can survive a desync.
     ctx.convo.listEl.querySelectorAll(".mva-caret").forEach((el) => el.remove());
@@ -4613,7 +4662,7 @@ export class ChatView extends ItemView {
           // isn't tracked, so nothing is lost.
           if (!(e.parentId && this.addSubagentRow(ctx, e.parentId, e.id, e.name, e.input))) {
             this.addToolCard(ctx, e.id, e.name, e.input);
-            if (e.name === "Task") {
+            if (isSubagentTool(e.name)) {
               this.registerTaskCard(ctx, e.id);
               ctx.runningTasks.add(e.id); // subagent in flight → counts as a running agent
             }
@@ -4623,7 +4672,7 @@ export class ChatView extends ItemView {
             if (uniquePaths.length) ctx.noteTouchIds.add(e.id);
             // Update the per-chat agent count when a subagent or a background shell
             // just launched (trackBackgroundTask records bg shells in ctx.bgTasks).
-            if (e.name === "Task" || ctx.bgTasks.has(e.id)) this.refreshAgentIndicators();
+            if (isSubagentTool(e.name) || ctx.bgTasks.has(e.id)) this.refreshAgentIndicators();
           }
           // Working row: phase verb from the tool metadata, re-appended last so it
           // stays visible below the tool card during execution.
