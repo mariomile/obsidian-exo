@@ -12,6 +12,31 @@
 import { WRITE_TOOLS } from "./touched";
 import { toolFilePath } from "../ui/tools";
 
+/** Tool names that spawn a subagent. The CLI renamed this tool `Task` → `Agent`;
+ *  Exo must accept both or a recent-CLI subagent (name `Agent`) is never registered
+ *  as a nesting target and never tracked as a running agent — its child tool calls
+ *  leak as flat top-level cards and the steps-run stamps a ✓ while the agent is still
+ *  running. Keyed by name because that's all the tool-call event carries. */
+export const SUBAGENT_TOOLS = new Set(["Task", "Agent"]);
+
+export function isSubagentTool(name: string): boolean {
+  return SUBAGENT_TOOLS.has(name);
+}
+
+/** Whether a steps-run may fold (stamp its ✓ and freeze its elapsed) right now, or
+ *  must stay live because a foreground subagent it owns is still running — the run's
+ *  "completed" state depends on its children, not just the parent's own tool calls.
+ *  Turn-end (`force`) and interrupts always fold, so a dead/never-resolving subagent
+ *  can't strand the run open. */
+export function shouldFoldStepsRun(opts: {
+  runningSubagents: number;
+  force: boolean;
+  interrupted: boolean;
+}): boolean {
+  if (opts.force || opts.interrupted) return true;
+  return opts.runningSubagents === 0;
+}
+
 export type StepPlacement = "timeline" | "flat";
 
 export function stepPlacement(name: string, input: unknown): StepPlacement {

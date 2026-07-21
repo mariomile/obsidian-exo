@@ -1,6 +1,39 @@
 import { describe, it, expect } from "vitest";
 import { stepPlacement, stepsLabel, fileEditKey, isCommandTool, summarizeSteps } from "../src/core/steps";
 import { firstErrorLine, isLargeContent } from "../src/core/steps";
+import { isSubagentTool, shouldFoldStepsRun } from "../src/core/steps";
+
+describe("isSubagentTool", () => {
+  it("recognizes both the legacy Task name and the current Agent name", () => {
+    // The CLI renamed the subagent-spawning tool Task → Agent; both must count
+    // so nesting + running-agent tracking survive the rename.
+    expect(isSubagentTool("Task")).toBe(true);
+    expect(isSubagentTool("Agent")).toBe(true);
+  });
+
+  it("is false for ordinary tools", () => {
+    expect(isSubagentTool("Bash")).toBe(false);
+    expect(isSubagentTool("Read")).toBe(false);
+    expect(isSubagentTool("mcp__obsidian__log_session")).toBe(false);
+  });
+});
+
+describe("shouldFoldStepsRun", () => {
+  it("folds when no subagent is running", () => {
+    expect(shouldFoldStepsRun({ runningSubagents: 0, force: false, interrupted: false })).toBe(true);
+  });
+
+  it("stays live (in-progress) while a foreground subagent is still running", () => {
+    // The header must not stamp a ✓ while a descendant subagent spins.
+    expect(shouldFoldStepsRun({ runningSubagents: 1, force: false, interrupted: false })).toBe(false);
+    expect(shouldFoldStepsRun({ runningSubagents: 3, force: false, interrupted: false })).toBe(false);
+  });
+
+  it("always folds at turn-end (force) or on interrupt, even with a subagent tracked", () => {
+    expect(shouldFoldStepsRun({ runningSubagents: 2, force: true, interrupted: false })).toBe(true);
+    expect(shouldFoldStepsRun({ runningSubagents: 2, force: false, interrupted: true })).toBe(true);
+  });
+});
 
 describe("stepPlacement", () => {
   it("puts generic tools in the timeline", () => {

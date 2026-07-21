@@ -127,7 +127,9 @@ function baseMeta(name: string, input: unknown): Omit<ToolMeta, "openPath"> {
       return { icon: "globe", label: "Web search", target: asString(i.query) };
     case "TodoWrite":
       return { icon: "list-checks", label: "Update todos", target: "" };
+    // Subagent-spawning tool — `Task` (legacy) and `Agent` (current CLI name).
     case "Task":
+    case "Agent":
       return { icon: "bot", label: "Subagent", target: asString(i.description) };
     default:
       return { icon: "wrench", label: name, target: "" };
@@ -161,6 +163,7 @@ export function toolWorkingLabel(name: string, input: unknown): string {
     case "WebSearch":
       return "Searching the web…";
     case "Task":
+    case "Agent":
       return "Running subagent…";
   }
   const label = baseMeta(name, input).label;

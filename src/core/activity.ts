@@ -79,6 +79,7 @@ export function describeActivity(name: string, input: unknown): string {
       return s ? `Running ${s}` : "Running a skill";
     }
     case "Task":
+    case "Agent":
       return "Delegating to a subagent";
     case "Grep":
     case "Glob":
