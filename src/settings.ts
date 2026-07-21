@@ -1000,6 +1000,24 @@ export class MVASettingTab extends PluginSettingTab {
       );
 
     new Setting(el)
+      .setName("Cartella memoria")
+      .setDesc(
+        "Dove Exo salva la sua memoria (vault-relative). Auto-rilevata al primo avvio: " +
+          "un vault con _system/ lo mantiene, uno nuovo usa _exo/. Cambiala per puntare Exo " +
+          "a un'altra cartella — i file esistenti NON vengono spostati; svuota il campo per " +
+          "tornare all'auto-rilevamento al prossimo avvio."
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("_exo")
+          .setValue(s.memoryRoot)
+          .onChange(async (v) => {
+            s.memoryRoot = v.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(el)
       .setName("Cartella della coda")
       .setDesc("Percorso vault-relative delle note richiesta.")
       .addText((t) =>
