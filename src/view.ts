@@ -68,7 +68,7 @@ import {
   type PersistedMessage,
 } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
-import { planPersistedConvos } from "./core/persistence";
+import { planPersistedConvos, partitionConvos } from "./core/persistence";
 import {
   buildRecap,
   isRecoverableSessionError,
@@ -164,6 +164,9 @@ interface ConvoData {
   updatedAt?: number;
   usage?: ContextUsage;
   researchMode?: ResearchModeState;
+  /** True for chats the user archived (persisted to the separate archive store,
+   *  never evicted). Absent/false for live chats. */
+  archived?: boolean;
   messages: PersistedMessage[];
 }
 
@@ -1004,7 +1007,15 @@ export class ChatView extends ItemView {
   /* ------------------------- persistence ---------------------------- */
 
   private async restore(): Promise<void> {
-    const raw = (await this.plugin.loadConversations()) as ConvoData[];
+    const live = (await this.plugin.loadConversations()) as ConvoData[];
+    const archivedRaw = (await this.plugin.loadArchivedConversations()) as ConvoData[];
+    // Merge the live store with the separate, untrimmed archive store. Archived
+    // chats carry archived:true — present (retrievable) but hidden by the board
+    // from active lanes. A missing/corrupt archive file just yields no archives.
+    const raw = [
+      ...(Array.isArray(live) ? live : []),
+      ...(Array.isArray(archivedRaw) ? archivedRaw : []),
+    ];
     // Only build transcript DOM for conversations that will actually be shown
     // (open tabs + the active one). Everything else renders lazily on first
     // open (switchTo) — with dozens of stored conversations this is the bulk
@@ -1034,6 +1045,7 @@ export class ChatView extends ItemView {
         listEl: createDiv({ cls: "mva-list" }),
         title: d.title || "New chat",
         sessionId: d.sessionId,
+        archived: d.archived === true,
         provider,
         model,
         allow: new Set(),
@@ -1092,14 +1104,10 @@ export class ChatView extends ItemView {
     this.rebuildOutline();
   }
 
-  private serialize(): ConvoData[] {
-    this.saveActive();
-    const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
-    // Drop empty "New chat" husks (unless pinned: active/open tab) and evict by
-    // recency (updatedAt desc), keeping pinned always and preserving original
-    // array order. See core/persistence for the full contract.
-    const kept = planPersistedConvos(all, this.active.id, this.openTabs, MAX_CONVOS);
-    return kept.map((c) => ({
+  /** Map a live Convo to its on-disk shape. Shared by the live and archive
+   *  serializers; `archived` is written only when true (keeps the file clean). */
+  private toConvoData(c: Convo): ConvoData {
+    return {
       id: c.id,
       title: c.title,
       provider: c.provider,
@@ -1108,11 +1116,35 @@ export class ChatView extends ItemView {
       updatedAt: c.updatedAt,
       usage: c.usage,
       researchMode: c.researchMode,
-      messages: c.messages.map((message) => persistMessage(message, {
-        maxToolOutput: MAX_PERSIST_OUTPUT,
-        maxCheckpointFile: MAX_CHECKPOINT_FILE,
-      })),
-    }));
+      ...(c.archived ? { archived: true } : {}),
+      messages: c.messages.map((message) =>
+        persistMessage(message, {
+          maxToolOutput: MAX_PERSIST_OUTPUT,
+          maxCheckpointFile: MAX_CHECKPOINT_FILE,
+        })
+      ),
+    };
+  }
+
+  /** Live (non-archived) conversations for conversations.json. Empty "New chat"
+   *  husks are dropped (unless pinned: active/open tab) and the rest evicted by
+   *  recency; pinned always kept, original array order preserved. Archived chats
+   *  are split out here and persisted untrimmed by `serializeArchived`. See
+   *  core/persistence for the full contract. */
+  private serialize(): ConvoData[] {
+    this.saveActive();
+    const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
+    const { live } = partitionConvos(all);
+    const kept = planPersistedConvos(live, this.active.id, this.openTabs, MAX_CONVOS);
+    return kept.map((c) => this.toConvoData(c));
+  }
+
+  /** Archived conversations for the separate untrimmed store — every archived
+   *  chat is kept (never evicted), so history is never lost. */
+  private serializeArchived(): ConvoData[] {
+    const all = this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
+    const { archived } = partitionConvos(all);
+    return archived.map((c) => this.toConvoData(c));
   }
 
   private persist(): void {
@@ -1125,6 +1157,9 @@ export class ChatView extends ItemView {
         new Notice("Exo couldn't save conversation history — check disk space and vault permissions.");
       }
     });
+    // Archive store is best-effort and shares the same serialized write queue; a
+    // failure just retries on the next persist (the flag stays in memory).
+    void this.plugin.saveArchivedConversations(this.serializeArchived());
   }
 
   /* ------------------------- conversations -------------------------- */

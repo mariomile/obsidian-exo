@@ -68,3 +68,19 @@ export function planPersistedConvos<
   }
   return filtered.filter((c) => keptIds.has(c.id));
 }
+
+/**
+ * Split conversations into the live set (persisted to `conversations.json` and
+ * subject to `planPersistedConvos` trimming) and the archived set (persisted to
+ * the separate, never-trimmed archive store). Keeping this pure lets the
+ * partition — the round-trip contract's foundation — be unit-tested without the
+ * Obsidian view. Original order is preserved within each side.
+ */
+export function partitionConvos<T extends { archived?: boolean }>(
+  all: T[],
+): { live: T[]; archived: T[] } {
+  const live: T[] = [];
+  const archived: T[] = [];
+  for (const c of all) (c.archived ? archived : live).push(c);
+  return { live, archived };
+}

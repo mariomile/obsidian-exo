@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { planPersistedConvos, parseConversationsSource } from "../src/core/persistence";
+import {
+  planPersistedConvos,
+  parseConversationsSource,
+  partitionConvos,
+} from "../src/core/persistence";
 
 type C = { id: string; messages: unknown[]; updatedAt?: number };
 
@@ -131,5 +135,35 @@ describe("parseConversationsSource", () => {
     const r = parseConversationsSource(arr(2), arr(9));
     expect(r.source).toBe("main");
     expect(r.data).toHaveLength(2);
+  });
+});
+
+describe("partitionConvos", () => {
+  const c = (id: string, archived?: boolean) => ({ id, archived });
+
+  it("splits archived from live, preserving order within each side", () => {
+    const { live, archived } = partitionConvos([
+      c("a"),
+      c("b", true),
+      c("c"),
+      c("d", true),
+    ]);
+    expect(live.map((x) => x.id)).toEqual(["a", "c"]);
+    expect(archived.map((x) => x.id)).toEqual(["b", "d"]);
+  });
+
+  it("treats a missing archived flag as live", () => {
+    const { live, archived } = partitionConvos([{ id: "a" }]);
+    expect(live.map((x) => x.id)).toEqual(["a"]);
+    expect(archived).toEqual([]);
+  });
+
+  it("handles all-archived and all-live inputs", () => {
+    expect(partitionConvos([c("a", true), c("b", true)]).live).toEqual([]);
+    expect(partitionConvos([c("a"), c("b")]).archived).toEqual([]);
+  });
+
+  it("returns empty sides for empty input", () => {
+    expect(partitionConvos([])).toEqual({ live: [], archived: [] });
   });
 });

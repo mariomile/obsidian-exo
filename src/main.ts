@@ -1502,8 +1502,8 @@ export default class ExoPlugin extends Plugin {
     this.applyOrchestrationToggle();
   }
 
-  private convoFile(): string {
-    return `${this.manifest.dir}/conversations.json`;
+  private convoFile(base = "conversations.json"): string {
+    return `${this.manifest.dir}/${base}`;
   }
 
   /**
@@ -1515,9 +1515,9 @@ export default class ExoPlugin extends Plugin {
    * `<file>.corrupt-<epoch>` for forensics, and the user is told whether history
    * was recovered from backup or lost.
    */
-  async loadConversations(): Promise<unknown[]> {
+  async loadConversations(base = "conversations.json"): Promise<unknown[]> {
     const adapter = this.app.vault.adapter;
-    const p = this.convoFile();
+    const p = this.convoFile(base);
     const bak = `${p}.bak`;
     const readOrNull = async (path: string): Promise<string | null> => {
       try {
@@ -1553,13 +1553,13 @@ export default class ExoPlugin extends Plugin {
    *   2. rotate the current main file to `<file>.bak` (one generation)
    *   3. rename `.tmp` over the main path
    */
-  async saveConversations(data: unknown[]): Promise<boolean> {
+  async saveConversations(data: unknown[], base = "conversations.json"): Promise<boolean> {
     // Snapshot the payload at call time; the caller's arrays keep mutating while
     // this request waits behind earlier saves.
     const json = JSON.stringify(data);
     return this.conversationWriteQueue.enqueue(async () => {
       const adapter = this.app.vault.adapter;
-      const p = this.convoFile();
+      const p = this.convoFile(base);
       const tmp = `${p}.tmp`;
       const bak = `${p}.bak`;
       try {
@@ -1585,6 +1585,19 @@ export default class ExoPlugin extends Plugin {
         return false;
       }
     });
+  }
+
+  /**
+   * Archived conversations live in a SEPARATE, never-trimmed store so archive
+   * growth (each keeps its full transcript) can't tax the write-hot
+   * `conversations.json` that the active chat re-serializes every turn. Same
+   * atomic/backup/recovery machinery, different file.
+   */
+  loadArchivedConversations(): Promise<unknown[]> {
+    return this.loadConversations("conversations-archive.json");
+  }
+  saveArchivedConversations(data: unknown[]): Promise<boolean> {
+    return this.saveConversations(data, "conversations-archive.json");
   }
 
   private dreamFile(): string {
