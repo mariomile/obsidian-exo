@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DiagLog } from "./core/diag";
-import type { SessionSnapshot } from "./core/session-cards";
+import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { handoffPrefix } from "./core/handoff";
 import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { CockpitView, COCKPIT_VIEW_TYPE, COCKPIT_ICON } from "./ui/cockpit-view";
@@ -916,6 +916,18 @@ export default class ExoPlugin extends Plugin {
   setConvoArchived(convoId: string, archived: boolean): boolean {
     const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
     return view instanceof ChatView ? view.setConvoArchived(convoId, archived) : false;
+  }
+
+  /** Set a conversation's manually-assigned board column (Session Cockpit drag). */
+  setConvoBoardStatus(convoId: string, status: SessionLane): boolean {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    return view instanceof ChatView ? view.setConvoBoardStatus(convoId, status) : false;
+  }
+
+  /** The board × action: archive a conversation and close its sidebar tab. */
+  archiveAndCloseTab(convoId: string): boolean {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    return view instanceof ChatView ? view.archiveAndCloseTab(convoId) : false;
   }
 
   /**

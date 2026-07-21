@@ -4460,6 +4460,41 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   line-height: 1.3;
   color: var(--text-normal);
 }
+/* Session-card × (archive + close tab): reveal on card hover, top-right. */
+.mva-board-card-head {
+  gap: 6px;
+}
+.mva-board-card-head .mva-board-card-title {
+  flex: 1;
+  min-width: 0;
+}
+.mva-board-card-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 2px;
+  margin: -1px -2px 0 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  border-radius: var(--mva-r1);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--mva-t);
+}
+.mva-board-card:hover .mva-board-card-x {
+  opacity: 1;
+}
+.mva-board-card-x .svg-icon {
+  width: 13px;
+  height: 13px;
+}
+.mva-board-card-x:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
 .mva-board-card-chips {
   display: flex;
   flex-wrap: wrap;

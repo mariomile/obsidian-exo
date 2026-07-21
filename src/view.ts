@@ -172,6 +172,8 @@ interface ConvoData {
   /** True for chats the user archived (persisted to the separate archive store,
    *  never evicted). Absent/false for live chats. */
   archived?: boolean;
+  /** Manually-assigned Session-Cockpit column (persisted). Absent = default. */
+  boardStatus?: SessionLane;
   messages: PersistedMessage[];
 }
 
@@ -1055,6 +1057,7 @@ export class ChatView extends ItemView {
         title: d.title || "New chat",
         sessionId: d.sessionId,
         archived: d.archived === true,
+        boardStatus: d.boardStatus,
         provider,
         model,
         allow: new Set(),
@@ -1126,6 +1129,7 @@ export class ChatView extends ItemView {
       usage: c.usage,
       researchMode: c.researchMode,
       ...(c.archived ? { archived: true } : {}),
+      ...(c.boardStatus ? { boardStatus: c.boardStatus } : {}),
       messages: c.messages.map((message) =>
         persistMessage(message, {
           maxToolOutput: MAX_PERSIST_OUTPUT,
@@ -1540,6 +1544,7 @@ export class ChatView extends ItemView {
       stopped: c.stopped,
       hasMessages: c.messages.length > 0,
       archived: !!c.archived,
+      boardStatus: c.boardStatus,
       updatedAt: c.updatedAt,
     }));
   }
@@ -1558,6 +1563,35 @@ export class ChatView extends ItemView {
     if (!c) return false;
     c.archived = archived;
     this.persist();
+    return true;
+  }
+
+  /** Set the manually-assigned board column for a conversation (Session Cockpit
+   *  drag) and persist. Running/needs-input still auto-override at render time.
+   *  Returns false if the convo id isn't found. */
+  setConvoBoardStatus(convoId: string, status: SessionLane): boolean {
+    const c =
+      this.convos.find((x) => x.id === convoId) ??
+      (this.active?.id === convoId ? this.active : undefined);
+    if (!c) return false;
+    c.boardStatus = status;
+    this.persist();
+    return true;
+  }
+
+  /** The board × action: archive a conversation AND close its sidebar tab. The
+   *  card leaves the board, the tab closes, and the chat is kept in the separate
+   *  archive store (retrievable via "Show archived"). Returns false if not found. */
+  archiveAndCloseTab(convoId: string): boolean {
+    const c =
+      this.convos.find((x) => x.id === convoId) ??
+      (this.active?.id === convoId ? this.active : undefined);
+    if (!c) return false;
+    c.archived = true;
+    // closeTab frees the session, switches active if needed, and persists (→ the
+    // archive store). For a convo that isn't an open tab, persist directly.
+    if (this.openTabs.includes(c.id)) this.closeTab(c);
+    else this.persist();
     return true;
   }
 

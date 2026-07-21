@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   deriveLane,
   projectSessionCards,
-  canArchive,
   type SessionSnapshot,
 } from "../src/core/session-cards";
 
@@ -149,13 +148,5 @@ describe("projectSessionCards", () => {
 
   it("returns nothing for empty input", () => {
     expect(projectSessionCards([], [])).toEqual([]);
-  });
-});
-
-describe("canArchive", () => {
-  it("allows archiving only from the review lane", () => {
-    expect(canArchive("review")).toBe(true);
-    expect(canArchive("running")).toBe(false);
-    expect(canArchive("done")).toBe(false);
   });
 });

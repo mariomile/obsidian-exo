@@ -138,12 +138,3 @@ export function projectSessionCards(
   }
   return cards;
 }
-
-/**
- * Whether a session-card in `lane` may be archived from its context menu — only a
- * `review` card (a running/needs-input chat shouldn't be archived out of a live
- * turn). Pure so the guard is tested.
- */
-export function canArchive(lane: SessionLane): boolean {
-  return lane === "review";
-}

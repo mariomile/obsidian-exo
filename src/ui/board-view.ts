@@ -20,7 +20,6 @@ import { modelOptions } from "../core/model-options";
 import type { TaskEntry, TaskStatus } from "../core/tasks";
 import {
   projectSessionCards,
-  canArchive,
   type SessionCardVM,
   type SessionLane,
   type SessionSnapshot,
@@ -88,8 +87,8 @@ function promptPreview(prompt: string, lines = 3): string {
 export class BoardView extends ItemView {
   private driver: OrchestratorDriver | null = null;
   private boardEl!: HTMLElement;
-  /** The active drag payload — the task id being dragged. */
-  private dragTaskId: string | null = null;
+  /** The active drag payload — a task or session card being dragged. */
+  private dragItem: { kind: "task" | "session"; id: string } | null = null;
   /** Whether the last store load surfaced malformed-file warnings. */
   private loadWarnings: string[] = [];
   /** Last task list from the driver — kept so a session-card-only rerender
@@ -223,7 +222,7 @@ export class BoardView extends ItemView {
     this.rerenderQueued = true;
     queueMicrotask(() => {
       this.rerenderQueued = false;
-      if (this.dragTaskId != null || this.menuOpen) return;
+      if (this.dragItem != null || this.menuOpen) return;
       this.paint();
     });
   }
@@ -354,13 +353,13 @@ export class BoardView extends ItemView {
 
     // Drag source.
     card.addEventListener("dragstart", (e) => {
-      this.dragTaskId = task.id;
+      this.dragItem = { kind: "task", id: task.id };
       card.addClass("is-dragging");
       e.dataTransfer?.setData("text/plain", task.id);
       if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
     });
     card.addEventListener("dragend", () => {
-      this.dragTaskId = null;
+      this.dragItem = null;
       card.removeClass("is-dragging");
       // Catch up any session-card repaint that was suppressed during the drag.
       this.scheduleRerender();
@@ -420,9 +419,34 @@ export class BoardView extends ItemView {
   private buildSessionCard(vm: SessionCardVM, now: number): HTMLElement {
     const card = createDiv({ cls: "mva-board-card is-session" });
     card.dataset.convoId = vm.id;
+    card.draggable = true;
+    // Drag a session-card between columns to set its manual boardStatus (idle
+    // chats only — running/needs-input auto-override at render time).
+    card.addEventListener("dragstart", (e) => {
+      this.dragItem = { kind: "session", id: vm.id };
+      card.addClass("is-dragging");
+      e.dataTransfer?.setData("text/plain", vm.id);
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    });
+    card.addEventListener("dragend", () => {
+      this.dragItem = null;
+      card.removeClass("is-dragging");
+      this.scheduleRerender();
+    });
 
     const header = card.createDiv({ cls: "mva-board-card-head" });
     header.createSpan({ cls: "mva-board-card-title", text: vm.title || "(untitled chat)" });
+    // × closes the chat: archive it (kept in the archive store, retrievable via
+    // "Show archived") AND close its sidebar tab.
+    const x = header.createEl("button", {
+      cls: "mva-board-card-x",
+      attr: { "aria-label": "Close chat" },
+    });
+    setIcon(x, "x");
+    x.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (this.plugin.archiveAndCloseTab(vm.id)) this.scheduleRerender();
+    });
 
     const chips = card.createDiv({ cls: "mva-board-card-chips" });
     if (vm.lane === "running") {
@@ -464,9 +488,8 @@ export class BoardView extends ItemView {
     if (!ok) new Notice("That chat is no longer open.");
   }
 
-  /** Context menu for a session-card: open the chat, and archive it — but only
-   *  from the `review` lane (a running/needs-input chat can't be archived, or its
-   *  live turn would vanish from the board). */
+  /** Context menu for a session-card. Closing is the card's × button (archive +
+   *  close tab); the menu just opens the chat. */
   private showSessionCardMenu(e: MouseEvent, vm: SessionCardVM): void {
     const menu = new Menu();
     menu.addItem((i) =>
@@ -475,16 +498,6 @@ export class BoardView extends ItemView {
         .setIcon("message-square")
         .onClick(() => void this.onSessionCardClick(vm))
     );
-    if (canArchive(vm.lane)) {
-      menu.addItem((i) =>
-        i
-          .setTitle("Archive")
-          .setIcon("archive")
-          .onClick(() => {
-            if (this.plugin.setConvoArchived(vm.id, true)) this.scheduleRerender();
-          })
-      );
-    }
     this.openMenu(menu, e);
   }
 
@@ -498,7 +511,11 @@ export class BoardView extends ItemView {
         i
           .setTitle(s.title || "(untitled chat)")
           .setIcon("message-square")
-          .onClick(() => void this.plugin.revealConversation(s.id))
+          .onClick(() => {
+            this.plugin.setConvoArchived(s.id, false); // bring it back to the board
+            void this.plugin.revealConversation(s.id);
+            this.scheduleRerender();
+          })
       );
     }
     menu.addSeparator();
@@ -617,7 +634,7 @@ export class BoardView extends ItemView {
    *  `lastTasks` at drop time rather than captured. */
   private wireColumnDrop(list: HTMLElement, status: TaskStatus): void {
     list.addEventListener("dragover", (e) => {
-      if (!this.dragTaskId) return;
+      if (!this.dragItem) return;
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
       list.addClass("is-drop-target");
@@ -625,11 +642,16 @@ export class BoardView extends ItemView {
     list.addEventListener("dragleave", () => list.removeClass("is-drop-target"));
     list.addEventListener("drop", (e) => {
       list.removeClass("is-drop-target");
-      const id = this.dragTaskId ?? e.dataTransfer?.getData("text/plain") ?? null;
+      const item = this.dragItem;
+      const id = item?.id ?? e.dataTransfer?.getData("text/plain") ?? null;
       if (!id) return;
       e.preventDefault();
-      // Only handle the drop here if it didn't land on a specific card (cards
-      // stop propagation for reorder). Append to the end of the column.
+      // Session-card: dropping into a column sets its manual boardStatus.
+      if (item?.kind === "session") {
+        if (this.plugin.setConvoBoardStatus(id, status as SessionLane)) this.scheduleRerender();
+        return;
+      }
+      // Task-card: append to the end of the column (cards stop propagation for reorder).
       const maxOrder = this.lastTasks
         .filter((t) => t.status === status)
         .reduce((m, t) => Math.max(m, t.order ?? 0), 0);
@@ -641,7 +663,8 @@ export class BoardView extends ItemView {
    *  card just before it, in the same column. */
   private wireCardDrop(card: HTMLElement, target: TaskEntry): void {
     card.addEventListener("dragover", (e) => {
-      if (!this.dragTaskId || this.dragTaskId === target.id) return;
+      // Only task-cards reorder onto each other; session drops bubble to the column.
+      if (this.dragItem?.kind !== "task" || this.dragItem.id === target.id) return;
       e.preventDefault();
       e.stopPropagation();
       card.addClass("is-drop-before");
@@ -649,8 +672,9 @@ export class BoardView extends ItemView {
     card.addEventListener("dragleave", () => card.removeClass("is-drop-before"));
     card.addEventListener("drop", (e) => {
       card.removeClass("is-drop-before");
-      const id = this.dragTaskId ?? e.dataTransfer?.getData("text/plain") ?? null;
-      if (!id || id === target.id) return;
+      if (this.dragItem?.kind !== "task") return; // session drops bubble to the column
+      const id = this.dragItem.id;
+      if (id === target.id) return;
       e.preventDefault();
       e.stopPropagation(); // don't also fire the column's append drop
       // Insert just before the target card: use an order slightly less than the
