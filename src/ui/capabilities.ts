@@ -19,7 +19,7 @@ interface NamedItem {
 }
 
 const BUILTIN_TOOLS = [
-  "Read", "Write", "Edit", "MultiEdit", "Bash", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "Task", "TodoWrite",
+  "Read", "Write", "Edit", "MultiEdit", "Bash", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "Agent", "TodoWrite",
 ];
 const FILE_BUILTINS = new Set(["Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS", "NotebookEdit"]);
 const NATIVE_READ = ["search_vault", "read_note", "get_backlinks", "get_neighborhood", "list_notes", "list_tags", "get_active_context"];
@@ -163,6 +163,7 @@ interface Ctx {
     skills: string[];
     commands: string[];
     agents: string[];
+    tools: string[];
     mcpServers: { name: string; status: string }[];
   } | null;
   /** Insert text into the composer (used by clickable skill/command/agent chips). */
@@ -526,8 +527,16 @@ export async function renderCapabilitiesPanel(
 
   // Tools
   {
-    const b = card("Tools", "built-in + Obsidian-native");
-    for (const t of BUILTIN_TOOLS) {
+    // Prefer the session's REAL tool inventory (Workflow, Task, ScheduleWakeup,
+    // Cron*, Monitor, ToolSearch, Skill … — everything the old hardcoded
+    // BUILTIN_TOOLS list silently missed as the CLI grew orchestration tools).
+    // MCP tools (mcp__*) have their own cards (MCP servers + Obsidian-native
+    // below), so drop them here. Fall back to BUILTIN_TOOLS on older CLIs or
+    // before the first init snapshot arrives.
+    const liveCore = ctx.caps?.tools?.filter((t) => !t.startsWith("mcp__"));
+    const core = liveCore?.length ? [...liveCore].sort((a, b) => a.localeCompare(b)) : BUILTIN_TOOLS;
+    const b = card("Tools", liveCore?.length ? `${core.length} — live from this session` : "built-in + Obsidian-native");
+    for (const t of core) {
       const active = agentic && !(s.nativeFirst && claude && FILE_BUILTINS.has(t));
       chip(b, t, active);
     }

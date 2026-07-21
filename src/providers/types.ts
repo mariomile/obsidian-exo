@@ -114,6 +114,11 @@ export interface SessionCaps {
   skills: string[];
   commands: string[];
   agents: string[];
+  /** Every tool the session registered — built-ins AND MCP tools (Workflow,
+   *  Task, ScheduleWakeup, Cron*, Monitor, ToolSearch, Skill, mcp__*…). The
+   *  Capabilities panel renders this instead of a hardcoded list, which silently
+   *  drifted every time the CLI added an orchestration tool. */
+  tools: string[];
   mcpServers: { name: string; status: string }[];
 }
 

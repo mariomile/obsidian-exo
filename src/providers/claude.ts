@@ -249,6 +249,7 @@ class ClaudeSession implements AgentSession {
         skills: msg.skills ?? [],
         commands: msg.slash_commands ?? [],
         agents: msg.agents ?? [],
+        tools: msg.tools ?? [],
         mcpServers: (msg.mcp_servers ?? []).flatMap((s) =>
           s?.name ? [{ name: s.name, status: s.status ?? "unknown" }] : []
         ),
@@ -591,6 +592,7 @@ interface ClaudeMsg {
   skills?: string[];
   slash_commands?: string[];
   agents?: string[];
+  tools?: string[];
   mcp_servers?: Array<{ name?: string; status?: string }>;
   event?: { type?: string; delta?: { type?: string; text?: string; thinking?: string } };
   message?: {
