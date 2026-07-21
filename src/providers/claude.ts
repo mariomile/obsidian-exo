@@ -243,6 +243,35 @@ class ClaudeSession implements AgentSession {
     }
   }
 
+  /** Workflow background-run progress (`system/task_*`). task_started binds
+   *  task_id → the launching Workflow tool_use; task_progress carries the
+   *  incremental agent roster; task_updated carries the terminal status.
+   *  Progress events carry their own tool_use_id, so the binding is also
+   *  registered lazily — a missed task_started (e.g. no listener attached at
+   *  that moment) doesn't mute the rest of the run. Non-workflow background
+   *  tasks (shells) pass through untouched: they never carry
+   *  workflow_progress and never enter the binding map. */
+  private routeTaskEvent(msg: ClaudeMsg, taskId: string, emit: (e: AgentEvent) => void): void {
+    if (msg.subtype === "task_started") {
+      if (msg.task_type === "local_workflow" && msg.tool_use_id) {
+        this.workflowTasks.set(taskId, msg.tool_use_id);
+        emit({ kind: "workflow-progress", toolUseId: msg.tool_use_id, taskId, name: msg.workflow_name, entries: [] });
+      }
+    } else if (msg.subtype === "task_progress") {
+      const toolUseId = msg.tool_use_id ?? this.workflowTasks.get(taskId);
+      if (toolUseId && msg.workflow_progress?.length) {
+        this.workflowTasks.set(taskId, toolUseId); // lazy binding for task_updated
+        emit({ kind: "workflow-progress", toolUseId, taskId, entries: msg.workflow_progress });
+      }
+    } else if (msg.subtype === "task_updated") {
+      const toolUseId = this.workflowTasks.get(taskId);
+      if (toolUseId && msg.patch?.status) {
+        emit({ kind: "workflow-progress", toolUseId, taskId, entries: [], status: msg.patch.status });
+        if (msg.patch.status === "completed" || msg.patch.status === "failed") this.workflowTasks.delete(taskId);
+      }
+    }
+  }
+
   private route(msg: ClaudeMsg): void {
     if (msg.session_id) this.sessionId = msg.session_id;
 
@@ -292,36 +321,8 @@ class ClaudeSession implements AgentSession {
       emit({ kind: "compact", summary: msg.compact_summary });
       return;
     }
-    // Workflow background-run progress. task_started binds task_id → the
-    // launching Workflow tool_use; task_progress carries the incremental
-    // agent roster; task_updated (no tool_use_id — resolved via the binding)
-    // carries the terminal status.
-    if (msg.type === "system" && msg.subtype === "task_started" && msg.task_id) {
-      if (msg.task_type === "local_workflow" && msg.tool_use_id) {
-        this.workflowTasks.set(msg.task_id, msg.tool_use_id);
-        emit({
-          kind: "workflow-progress",
-          toolUseId: msg.tool_use_id,
-          taskId: msg.task_id,
-          name: msg.workflow_name,
-          entries: [],
-        });
-      }
-      return;
-    }
-    if (msg.type === "system" && msg.subtype === "task_progress" && msg.task_id) {
-      const toolUseId = msg.tool_use_id ?? this.workflowTasks.get(msg.task_id);
-      if (toolUseId && this.workflowTasks.has(msg.task_id) && msg.workflow_progress?.length) {
-        emit({ kind: "workflow-progress", toolUseId, taskId: msg.task_id, entries: msg.workflow_progress });
-      }
-      return;
-    }
-    if (msg.type === "system" && msg.subtype === "task_updated" && msg.task_id) {
-      const toolUseId = this.workflowTasks.get(msg.task_id);
-      if (toolUseId && msg.patch?.status) {
-        emit({ kind: "workflow-progress", toolUseId, taskId: msg.task_id, entries: [], status: msg.patch.status });
-        if (msg.patch.status === "completed" || msg.patch.status === "failed") this.workflowTasks.delete(msg.task_id);
-      }
+    if (msg.type === "system" && msg.task_id && msg.subtype?.startsWith("task_")) {
+      this.routeTaskEvent(msg, msg.task_id, emit);
       return;
     }
     if (msg.type === "stream_event") {

@@ -180,8 +180,7 @@ export async function buildDescIndex(app: App): Promise<DescIndex> {
  *  Missing dir → empty. */
 export async function codexSkillNames(): Promise<string[]> {
   const { folders, files } = await fsScope(`${homedir()}/.codex`).list("skills");
-  const base = (p: string) => p.split("/").pop()!.replace(/\.md$/, "");
-  return [...folders.map(base), ...files.filter((f) => f.endsWith(".md")).map(base)].sort((a, b) =>
+  return [...folders.map(baseName), ...files.filter((f) => f.endsWith(".md")).map(baseName)].sort((a, b) =>
     a.localeCompare(b)
   );
 }

@@ -14,16 +14,6 @@
 
 const COMMAND_LINE = /^\/([A-Za-z0-9][\w:-]*)(?:\s+(.*))?$/;
 
-/** Normalize a command name for matching: the caps list may carry either
- *  "name" or "namespace:name"; users may type either. */
-function matchesKnown(name: string, known: ReadonlySet<string>): boolean {
-  if (known.has(name)) return true;
-  // "/brainstorming" should match a listed "superpowers:brainstorming" only
-  // when unambiguous — skip that guesswork: exact match only, but tolerate
-  // the list carrying a leading slash.
-  return known.has(`/${name}`);
-}
-
 /**
  * If `text` contains a known `/command` line that isn't already at the start,
  * hoist it to the front. The rest of the message becomes the argument:
@@ -42,11 +32,11 @@ export function hoistSlashCommand(text: string, known: ReadonlySet<string>): str
   const lines = text.split("\n");
   // Already command-first? Leave the message alone — the CLI handles it.
   const first = COMMAND_LINE.exec(lines[0].trim());
-  if (first && matchesKnown(first[1], known)) return text;
+  if (first && known.has(first[1])) return text;
 
   for (let i = 0; i < lines.length; i++) {
     const m = COMMAND_LINE.exec(lines[i].trim());
-    if (!m || !matchesKnown(m[1], known)) continue;
+    if (!m || !known.has(m[1])) continue;
     const rest = [...lines.slice(0, i), ...lines.slice(i + 1)].join("\n").trim();
     const cmd = `/${m[1]}`;
     const ownArgs = m[2]?.trim();

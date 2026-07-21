@@ -49,7 +49,7 @@ import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
 import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
-import type { SessionSnapshot } from "./core/session-cards";
+import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
 import { StepsRun } from "./ui/steps";
@@ -154,6 +154,9 @@ interface ToolCard {
   bodyEl: HTMLElement;
   elapsedEl: HTMLElement;
   startedAt: number;
+  /** Live workflow status span — created on the first workflow-progress event
+   *  for this card (Workflow launches only). */
+  wfEl?: HTMLElement;
 }
 
 /* ----- persisted data model (types in ./core/model) ----- */
@@ -181,6 +184,10 @@ export interface Convo {
    *  Session-Cockpit lanes and moved to a separate untrimmed store (never
    *  evicted). Persisted. */
   archived?: boolean;
+  /** Manually-assigned Session-Cockpit column (persisted). When set and the chat
+   *  is idle, its card sits here instead of the default review lane; running /
+   *  needs-input still auto-override. */
+  boardStatus?: SessionLane;
   provider: ProviderId;
   model: string;
   allow: Set<string>;
@@ -4959,13 +4966,11 @@ export class ChatView extends ItemView {
           applyWorkflowProgress(run, e.entries);
           const refs = ctx.cards.get(e.toolUseId);
           if (refs) {
-            const head = refs.statusEl.parentElement;
-            let s = head?.querySelector<HTMLElement>(".mva-tool-wf") ?? null;
-            if (!s && head) {
-              s = createSpan({ cls: "mva-tool-wf" });
-              head.insertBefore(s, refs.elapsedEl);
+            if (!refs.wfEl) {
+              refs.wfEl = createSpan({ cls: "mva-tool-wf" });
+              refs.statusEl.parentElement?.insertBefore(refs.wfEl, refs.elapsedEl);
             }
-            if (s) s.setText(summarizeWorkflowRun(run).label);
+            refs.wfEl.setText(summarizeWorkflowRun(run).label);
           }
           break;
         }
