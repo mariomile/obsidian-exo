@@ -1508,11 +1508,18 @@ export class ChatView extends ItemView {
    * itself lives in the pure `deriveLane` (core/session-cards), not here.
    */
   listSessionSnapshots(): SessionSnapshot[] {
-    const all =
-      this.active && !this.convos.includes(this.active)
-        ? [...this.convos, this.active]
-        : this.convos;
-    return all.map((c) => ({
+    // Scope to the OPEN chats (tabs) + the active one + anything currently
+    // running or waiting on input — the "parallel chats I'm working with", NOT
+    // the whole persisted history (`this.convos` holds every stored conversation,
+    // dozens of them, which floods the board). Running/pending convos are shown
+    // even if their tab is closed, so a background turn is never invisible.
+    const openIds = new Set(this.openTabs);
+    if (this.active) openIds.add(this.active.id);
+    return this.convos
+      .filter(
+        (c) => openIds.has(c.id) || c.streaming || c.pendingPerm != null || c.pendingAsk != null,
+      )
+      .map((c) => ({
       id: c.id,
       title: c.title,
       streaming: c.streaming,
