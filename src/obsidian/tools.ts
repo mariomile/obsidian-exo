@@ -3,6 +3,7 @@ import { z } from "zod";
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import type { SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { resolveLink, neighborhood, basename } from "./graph";
+import { exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "../core/paths";
 import { gatherConnections, linkMentionsIn } from "../mentions/connections";
 import { loadIgnoreStore, ignoreMention } from "../mentions/ignore-store";
 import { fold } from "../mentions/tokenizer";
@@ -35,11 +36,6 @@ import {
   type AutomationConfig,
   type AutomationRunRecord,
 } from "../core/automations";
-
-/** Folder holding the append-only Memory Union Store (monthly markdown files). */
-const MEMORY_STORE_DIR = "_system/memory/store";
-/** Single-file Open-Loops Ledger (tickler / follow-up tracking). */
-const OPEN_LOOPS_PATH = "_system/memory/open-loops.md";
 
 type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -211,6 +207,8 @@ export interface ObsidianToolOpts {
   tasksWriteQueue?: WriteQueue;
   agentFolderEnabled?: boolean;
   rethinkBridge?: (req: RethinkRequest) => Promise<string>;
+  /** Resolved memory-layer paths. Absent → legacy `_system/` (test/fallback). */
+  paths?: ExoPaths;
 }
 
 /**
@@ -248,6 +246,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
      *  writes (now/human) or records a pending proposal card (persona), and renders
      *  the feed diff+undo. Absent → the tool is not registered. */
     rethinkBridge,
+    paths = exoPaths(LEGACY_MEMORY_ROOT),
   } = opts ?? {};
   const need = (target: string): TFile => {
     const f = resolveLink(app, target);
@@ -739,7 +738,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       domain: z.string().optional(),
     },
     async (args) => {
-      const path = `_system/memory/decisions/${today()}-${slugify(args.title)}.md`;
+      const path = `${paths.decisions}/${today()}-${slugify(args.title)}.md`;
       if (app.vault.getAbstractFileByPath(path)) return err(`Already exists: ${path}`);
       await ensureParentFolder(app, path);
       const body =
@@ -765,7 +764,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     "Prepend an entry to _system/memory/session-log.md. type ∈ ingest|query|decision|lint|build|triage.",
     { title: z.string(), summary: z.string(), type: z.string().optional() },
     async (args) => {
-      const path = "_system/memory/session-log.md";
+      const path = paths.sessionLog;
       const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
       const entry = `## [${stamp}] ${args.type ?? "query"} | ${args.title}\n\n${args.summary}\n\n`;
       const file = app.vault.getAbstractFileByPath(path);
@@ -792,7 +791,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       confidence: z.enum(["low", "med", "high"]).optional(),
     },
     async (args) => {
-      const path = `_system/memory/learnings/${today()}-${slugify(args.title)}.md`;
+      const path = `${paths.learnings}/${today()}-${slugify(args.title)}.md`;
       if (app.vault.getAbstractFileByPath(path)) return err(`Already exists: ${path}`);
       await ensureParentFolder(app, path);
       const body =
@@ -840,7 +839,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
         ...(args.supersedes ? { supersedes: args.supersedes } : {}),
         text: args.text,
       };
-      const path = `${MEMORY_STORE_DIR}/${monthFileName(at)}`;
+      const path = `${paths.store}/${monthFileName(at)}`;
       const block = formatEntry(entry);
       // Serialize the read-modify-write through the shared queue so concurrent
       // store writers never interleave or clobber the monthly file.
@@ -870,7 +869,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       if (asOfDate !== undefined && !isValidAsOfDate(asOfDate)) {
         return err(`Invalid as_of date "${asOfDate}" — expected a real calendar date in YYYY-MM-DD.`);
       }
-      const files = app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${MEMORY_STORE_DIR}/`));
+      const files = app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${paths.store}/`));
       const all: MemoryEntry[] = [];
       for (const f of files) {
         try {
@@ -941,7 +940,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
   const RESURFACE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
   async function readLoops(): Promise<LoopEntry[]> {
-    const f = app.vault.getAbstractFileByPath(OPEN_LOOPS_PATH);
+    const f = app.vault.getAbstractFileByPath(paths.openLoops);
     if (!(f instanceof TFile)) return [];
     try {
       return parseLoopsFile(await app.vault.cachedRead(f));
@@ -975,13 +974,13 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       };
       const block = formatLoop(entry);
       await loopsWriteQueue.enqueue(async () => {
-        const existing = app.vault.getAbstractFileByPath(OPEN_LOOPS_PATH);
+        const existing = app.vault.getAbstractFileByPath(paths.openLoops);
         if (existing instanceof TFile) {
           const cur = await app.vault.read(existing);
           await app.vault.modify(existing, `${cur.replace(/\s+$/, "")}\n\n${block}\n`);
         } else {
-          await ensureParentFolder(app, OPEN_LOOPS_PATH);
-          await app.vault.create(OPEN_LOOPS_PATH, `${block}\n`);
+          await ensureParentFolder(app, paths.openLoops);
+          await app.vault.create(paths.openLoops, `${block}\n`);
         }
       });
       return ok(`Opened ${entry.id}: ${entry.title}${entry.resurface ? ` (resurfaces ${entry.resurface})` : ""}.`);
@@ -995,7 +994,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     async (args) => {
       let result: Result | undefined;
       await loopsWriteQueue.enqueue(async () => {
-        const f = app.vault.getAbstractFileByPath(OPEN_LOOPS_PATH);
+        const f = app.vault.getAbstractFileByPath(paths.openLoops);
         if (!(f instanceof TFile)) {
           result = err(`No open-loops ledger yet — nothing to close.`);
           return;
@@ -1239,7 +1238,8 @@ export function createObsidianToolServer(
   tasksWriteQueue: WriteQueue = new WriteQueue(),
   agentFolderEnabled = false,
   rethinkBridge?: (req: RethinkRequest) => Promise<string>,
-  loopsWriteQueue: WriteQueue = new WriteQueue()
+  loopsWriteQueue: WriteQueue = new WriteQueue(),
+  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT)
 ) {
   return createSdkMcpServer({
     name: "obsidian",
@@ -1258,6 +1258,7 @@ export function createObsidianToolServer(
       tasksWriteQueue,
       agentFolderEnabled,
       rethinkBridge,
+      paths,
     }),
   });
 }

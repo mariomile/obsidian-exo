@@ -744,7 +744,8 @@ export class ChatView extends ItemView {
           (req) => this.rethinkBridge(c, req),
           // Same contract for the single-file Open-Loops Ledger. Kept last in
           // the positional API so existing callers retain their argument slots.
-          this.plugin.loopsWriteQueue
+          this.plugin.loopsWriteQueue,
+          this.plugin.paths
         )
       : undefined;
 
@@ -799,6 +800,7 @@ export class ChatView extends ItemView {
           loopsWriteQueue: this.plugin.loopsWriteQueue,
           orchestrationEnabled: s.orchestrationEnabled && !readOnlySandbox,
           tasksWriteQueue: this.plugin.tasksWriteQueue,
+          paths: this.plugin.paths,
         });
         const READ_BASENAMES = new Set(
           [...OBSIDIAN_READ_TOOLS].map((n) => n.replace("mcp__obsidian__", ""))
