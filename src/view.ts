@@ -4424,8 +4424,19 @@ export class ChatView extends ItemView {
     }
   }
 
-  /** Jump to the card behind a live task. Stub — fleshed out in Task 5. */
-  private jumpToLiveTask(_rec: LiveTaskRecord): void {}
+  /** Scroll the task's card into view, flash it, and close the popover. */
+  private jumpToLiveTask(rec: LiveTaskRecord): void {
+    this.closeAgentPopover();
+    if (!rec.cardEl.isConnected) return; // card was cleaned (old turn) — nothing to show
+    rec.cardEl.scrollIntoView({ block: "center", behavior: "smooth" });
+    this.flashCard(rec.cardEl);
+  }
+
+  /** Transient highlight so the eye lands on the right card after a jump. */
+  private flashCard(el: HTMLElement): void {
+    el.addClass("mva-flash");
+    window.setTimeout(() => el.removeClass("mva-flash"), 1000);
+  }
 
   /** Refresh both per-chat agent affordances: the per-tab count badges (via
    *  renderTabs) and the pinned chip above the composer, which reflects ONLY the

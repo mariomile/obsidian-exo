@@ -4030,6 +4030,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   from { background: var(--background-modifier-hover); }
   to { background: transparent; }
 }
+/* Brief highlight when a card is jumped to from the live-tasks popover. */
+.mva-flash {
+  animation: mva-flash 1s ease-out;
+}
+@keyframes mva-flash {
+  0% { box-shadow: 0 0 0 2px var(--interactive-accent); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
 @media (prefers-reduced-motion: reduce) {
   .mva-outline-strip,
   .mva-outline-tick,
@@ -4037,6 +4045,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
     transition: none;
   }
   .mva-user.is-flash {
+    animation: none;
+  }
+  .mva-flash {
     animation: none;
   }
 }
