@@ -642,7 +642,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   const openNote = tool(
     "open_note",
-    "Open a note in the Obsidian UI for the user.",
+    "Open a note in the Obsidian UI, replacing what's in the user's main workspace view. This is disruptive — call it ONLY when the user explicitly asked to open/see/jump to that note. Never call it as a courtesy after writing, creating, or finding a note: those results are already visible in the chat, and switching the user's view uninvited interrupts whatever they're doing in the main pane.",
     { target: z.string() },
     async (args) => {
       await app.workspace.openLinkText(args.target.replace(/^\[\[|\]\]$/g, ""), "", false);

@@ -257,7 +257,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   proactiveRecallK: 3,
   featureSurfacing: true,
   featureWikilinkify: true,
-  revealEditedNotes: true,
+  revealEditedNotes: false,
   systemNotifications: true,
   seededPrompts: false,
   aiTitles: true,
@@ -557,7 +557,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Reveal edited notes",
-      "When the agent edits or creates a note, open it in a tab beside the chat so you watch it change live. Only fires for the chat you're looking at — background conversations never move your view.",
+      "When the agent edits or creates a note, open it in a tab beside the chat so you watch it change live. Off by default — what the agent does is already visible in the chat itself; turn this on only if you want writes to also jump into your workspace.",
       "revealEditedNotes"
     );
     this.toggleSetting(
