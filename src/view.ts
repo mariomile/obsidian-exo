@@ -4417,7 +4417,10 @@ export class ChatView extends ItemView {
       row.createSpan({ cls: `mva-subagent-dot ${liveTaskDotClass(rec.status)}` });
       row.createSpan({ cls: "mva-agents-row-label", text: rec.label });
       row.createSpan({ cls: "mva-agents-row-status", text: liveTaskStatusText(rec.status) });
-      this.clickable(row, () => this.jumpToLiveTask(rec));
+      this.clickable(row, (e) => {
+        e.stopPropagation();
+        this.jumpToLiveTask(rec);
+      });
       const x = row.createSpan({ cls: "mva-agents-row-x" });
       setIcon(x, "x");
       this.clickable(x, (e) => {
