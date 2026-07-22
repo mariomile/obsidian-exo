@@ -58,7 +58,7 @@ import { hoistSlashCommand } from "./core/slash";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
 import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
-import { isVaultSetUp } from "./core/vault-setup";
+import { isVaultSetUp, memorySetupNeeded } from "./core/vault-setup";
 import { buildRelatedChips } from "./ui/related";
 import {
   persistMessage,
@@ -1971,8 +1971,11 @@ export class ChatView extends ItemView {
       attachRelated: (p) => this.attachRelated(p),
       vaultSetupNeeded:
         this.plugin.settings.memoryWriteEnabled &&
-        !isVaultSetUp((p) => !!this.app.vault.getAbstractFileByPath(p), this.plugin.paths),
-      runVaultSetup: () => void this.plugin.runVaultSetup(),
+        memorySetupNeeded(
+          this.plugin.settings.memorySetup,
+          isVaultSetUp((p) => !!this.app.vault.getAbstractFileByPath(p), this.plugin.paths)
+        ),
+      applyMemorySetup: (preset) => void this.plugin.applyMemorySetup(preset),
     });
   }
 

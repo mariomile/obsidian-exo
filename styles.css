@@ -3270,6 +3270,45 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   align-self: flex-start;
   margin-top: 2px;
 }
+/* Onboarding memory-setup picker: three tappable option rows. */
+.mva-onboard-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+.mva-onboard-opt {
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r1);
+  cursor: pointer;
+}
+.mva-onboard-opt:hover {
+  background: var(--background-modifier-hover);
+  border-color: color-mix(in srgb, var(--color-orange, #e0a341) 40%, var(--background-modifier-border));
+}
+.mva-onboard-opt-icon {
+  display: inline-flex;
+  color: var(--color-orange, #e0a341);
+  padding-top: 1px;
+}
+.mva-onboard-opt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mva-onboard-opt-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-normal);
+}
+.mva-onboard-opt-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
 
 /* ----------------------------- surfacing ------------------------------ */
 .mva-surface {

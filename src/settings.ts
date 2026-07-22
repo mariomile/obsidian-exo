@@ -9,6 +9,7 @@ import { ADAPTERS } from "./providers/registry";
 import { modelOptions } from "./core/model-options";
 import type { AutomationConfig } from "./core/automations";
 import { initialDailyPulseReviewState, type DailyPulseReviewState } from "./core/daily-pulse";
+import type { MemorySetup } from "./core/vault-setup";
 import {
   parseMcpJson,
   serializeMcpJson,
@@ -164,6 +165,11 @@ export interface MVASettings {
    *  this (see core/paths.ts). Empty = unset → auto-detected at boot: an
    *  existing legacy-root vault keeps it, a fresh vault adopts the default. */
   memoryRoot: string;
+  /** The onboarding memory-scaffold choice ("none" | "minimal" | "full").
+   *  `undefined` = not chosen yet → the empty-state picker is offered. Recording
+   *  any value (including "none") dismisses it permanently. Pre-picker installs
+   *  are `undefined` but detected as already-set-up, so they never see it. */
+  memorySetup?: MemorySetup;
   /** Open the Cockpit view automatically when Obsidian's layout is ready. */
   cockpitOnStartup: boolean;
   /** LEGACY scheduled playbook runs ("<Prompt name> | daily" per line) — migrated

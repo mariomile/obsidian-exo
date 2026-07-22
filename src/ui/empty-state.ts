@@ -2,6 +2,7 @@ import { App, setIcon } from "obsidian";
 import { relatedNotes, basename as noteBasename } from "../obsidian/graph";
 import { clickable } from "./dom";
 import { buildRelatedChips } from "./related";
+import type { MemorySetup } from "../core/vault-setup";
 
 /** What the empty state needs from the view. Kept narrow: the collaborators the
  *  starter grid, custom-prompt list, and related-note surfacing call back into. */
@@ -19,11 +20,12 @@ export interface EmptyStateHost {
   usePrompt(promptText: string): void;
   /** Attach a surfaced related note as context + focus the composer. */
   attachRelated(path: string): void;
-  /** True when the vault-context note is absent AND memory writes are
-   *  enabled — shows the setup banner. */
+  /** True when no memory-setup choice has been made yet AND memory writes are
+   *  enabled — shows the onboarding picker. */
   vaultSetupNeeded: boolean;
-  /** Runs the scaffold (`ExoPlugin.runVaultSetup`). */
-  runVaultSetup(): void;
+  /** Records the onboarding choice and scaffolds accordingly
+   *  (`ExoPlugin.applyMemorySetup`). */
+  applyMemorySetup(preset: MemorySetup): void;
 }
 
 const STARTERS: [string, string, string][] = [
@@ -65,21 +67,52 @@ export function renderEmptyState(host: EmptyStateHost): void {
   staggered.forEach((el, i) => el.style.setProperty("--i", String(i)));
 }
 
-/** "Exo's memory isn't set up in this vault yet" card — reuses the existing
- *  `.mva-onboard` pattern (styles.css) already used for the CLI-not-ready
- *  card in view.ts, for visual consistency. Returns null (renders nothing)
- *  when setup isn't needed, so the empty state's stagger list stays correct. */
+/** The three onboarding choices, in escalating footprint. Each records the
+ *  choice (dismissing the picker for good) and scaffolds accordingly. */
+const MEMORY_SETUP_OPTIONS: { preset: MemorySetup; icon: string; title: string; desc: string }[] = [
+  {
+    preset: "full",
+    icon: "sparkles",
+    title: "Full memory",
+    desc: "The operational layer plus a knowledge-OS scaffold (preferences, vault context, rules & decisions).",
+  },
+  {
+    preset: "minimal",
+    icon: "folder-plus",
+    title: "Just the essentials",
+    desc: "Only what Exo's memory features need — task board, open loops, store, reports. No opinionated structure.",
+  },
+  {
+    preset: "none",
+    icon: "circle-slash",
+    title: "Not now",
+    desc: "Create nothing. Exo works from your CLAUDE.md; you can set memory up later in settings.",
+  },
+];
+
+/** Onboarding memory-setup picker — reuses the `.mva-onboard` card pattern
+ *  (styles.css, shared with the CLI-not-ready card in view.ts). Offers the
+ *  None/Minimal/Full choice; picking any option records it and dismisses the
+ *  picker for good. Returns null (renders nothing) when a choice is already
+ *  made, so the empty state's stagger list stays correct. */
 function renderSetupBanner(host: EmptyStateHost, parent: HTMLElement): HTMLElement | null {
   if (!host.vaultSetupNeeded) return null;
   const card = parent.createDiv({ cls: "mva-onboard" });
   setIcon(card.createDiv({ cls: "mva-onboard-icon" }), "folder-plus");
-  card.createDiv({ cls: "mva-onboard-title", text: "Exo's memory isn't active in this vault yet" });
+  card.createDiv({ cls: "mva-onboard-title", text: "Set up Exo's memory in this vault" });
   card.createDiv({
     cls: "mva-onboard-msg",
-    text: "Creates the memory files Exo reads and writes to. Nothing that already exists is ever touched.",
+    text: "Pick how much Exo should scaffold. Nothing that already exists is ever touched.",
   });
-  const btn = card.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Set up now" });
-  btn.onclick = () => host.runVaultSetup();
+  const opts = card.createDiv({ cls: "mva-onboard-opts" });
+  for (const o of MEMORY_SETUP_OPTIONS) {
+    const row = opts.createDiv({ cls: "mva-onboard-opt" });
+    setIcon(row.createDiv({ cls: "mva-onboard-opt-icon" }), o.icon);
+    const body = row.createDiv({ cls: "mva-onboard-opt-body" });
+    body.createDiv({ cls: "mva-onboard-opt-title", text: o.title });
+    body.createDiv({ cls: "mva-onboard-opt-desc", text: o.desc });
+    clickable(row, () => host.applyMemorySetup(o.preset));
+  }
   return card;
 }
 

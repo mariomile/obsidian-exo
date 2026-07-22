@@ -23,63 +23,80 @@ import type { ExoPaths } from "./paths";
 
 export type ScaffoldKind = "folder" | "file";
 
+/**
+ * What the user picks at onboarding (persisted as `settings.memorySetup`):
+ *  - `none`    → create nothing; memory features stay inert until the user
+ *                opts into setup later. Boot reads CLAUDE.md only.
+ *  - `minimal` → the tool's own operational layer (store, task board, open
+ *                loops, reports, session log) — no marioverse knowledge-OS.
+ *  - `full`    → minimal + the marioverse content scaffold (preferences,
+ *                vault-context, rules/decisions/learnings folders).
+ * `undefined` (setting unset) = not chosen yet → the picker is still offered.
+ */
+export type MemorySetup = "none" | "minimal" | "full";
+
+/** Whether a scaffold item belongs to the tool's operational layer
+ *  (`mechanism`, created by both minimal and full) or the marioverse
+ *  knowledge-OS (`content`, full only). Mirrors the split documented on
+ *  `ExoPaths` in core/paths.ts. */
+export type ScaffoldTier = "mechanism" | "content";
+
 export interface ScaffoldItem {
   path: string;
   kind: ScaffoldKind;
+  tier: ScaffoldTier;
   /** Starter content for `kind: "file"`. Always absent for `kind: "folder"`. */
   content?: string;
 }
 
 const heading = (title: string, body: string): string => `# ${title}\n\n${body}\n`;
 
-/** The create-only-if-absent scaffold for a given memory root. */
-export function scaffoldItems(paths: ExoPaths): ScaffoldItem[] {
+/** Every create-only-if-absent item for a given memory root, tagged by tier.
+ *  `scaffoldItems` filters this by the chosen preset — this stays the single
+ *  place the full item set is defined. */
+function allScaffoldItems(paths: ExoPaths): ScaffoldItem[] {
   return [
-    { path: paths.decisions, kind: "folder" },
-    { path: paths.learnings, kind: "folder" },
-    { path: paths.rules, kind: "folder" },
-    { path: paths.store, kind: "folder" },
-    { path: paths.queue, kind: "folder" },
-    { path: paths.reports, kind: "folder" },
-    {
-      path: paths.preferences,
-      kind: "file",
-      content: heading("Preferences", "_Nothing recorded yet._"),
-    },
-    {
-      path: paths.openLoops,
-      kind: "file",
-      content: heading("Open loops", "_Nothing tracked yet._"),
-    },
-    {
-      path: paths.sessionLog,
-      kind: "file",
-      content: "# Session log\n",
-    },
+    // ── mechanism (minimal + full) ─────────────────────────────────────────
+    { path: paths.store, kind: "folder", tier: "mechanism" },
+    { path: paths.queue, kind: "folder", tier: "mechanism" },
+    { path: paths.reports, kind: "folder", tier: "mechanism" },
+    { path: paths.openLoops, kind: "file", tier: "mechanism", content: heading("Open loops", "_Nothing tracked yet._") },
+    { path: paths.sessionLog, kind: "file", tier: "mechanism", content: "# Session log\n" },
     {
       path: paths.knownFalse,
       kind: "file",
+      tier: "mechanism",
       content: heading(
         "Known false",
         "_Corrections and debunked assumptions go here — dream-pass proposals matching these patterns are culled before they reach you._"
       ),
     },
-    {
-      path: paths.tasks,
-      kind: "file",
-      content: heading("Tasks", "_Nothing tracked yet._"),
-    },
+    { path: paths.tasks, kind: "file", tier: "mechanism", content: heading("Tasks", "_Nothing tracked yet._") },
+    // ── content (full only) ────────────────────────────────────────────────
+    { path: paths.decisions, kind: "folder", tier: "content" },
+    { path: paths.learnings, kind: "folder", tier: "content" },
+    { path: paths.rules, kind: "folder", tier: "content" },
+    { path: paths.preferences, kind: "file", tier: "content", content: heading("Preferences", "_Nothing recorded yet._") },
     {
       path: paths.vaultContext,
       kind: "file",
+      tier: "content",
       content: heading("Vault context", "_Nothing recorded yet — Exo will keep this current as you work._"),
     },
   ];
 }
 
+/** The create-only-if-absent scaffold for a given memory root and preset.
+ *  `minimal` yields the mechanism items; `full` yields all of them. (`none`
+ *  never scaffolds, so it isn't a valid preset here.) */
+export function scaffoldItems(paths: ExoPaths, preset: Exclude<MemorySetup, "none">): ScaffoldItem[] {
+  const items = allScaffoldItems(paths);
+  return preset === "full" ? items : items.filter((it) => it.tier === "mechanism");
+}
+
 /** The parent directory of a scaffold path, or null if the path has no
  *  slash (top-level). Every `kind: "file"` item is nested, so this always
- *  resolves for them — `runVaultSetup` uses it to ensure the parent folder
+ *  resolves for them — `applyMemorySetup` uses it to ensure the parent folder
  *  exists before creating the file, since `vault.create()` (unlike
  *  `vault.createFolder()`) does not create intermediate directories. */
 export function parentFolder(path: string): string | null {
@@ -88,8 +105,20 @@ export function parentFolder(path: string): string | null {
 }
 
 /** True when the vault already has Exo's memory layer set up — detected via the
- *  vault-context file (also the natural first file to scaffold). `exists` is
- *  injected so this stays pure and testable without an Obsidian App. */
+ *  vault-context file. This is the LEGACY fallback for installs that predate
+ *  the onboarding picker (they never recorded a `memorySetup` choice but do
+ *  have the layer). `exists` is injected so this stays pure and testable
+ *  without an Obsidian App. Note: a `minimal` install has no vault-context, so
+ *  this returns false for it — that's why the picker gates on `memorySetup`
+ *  first (see `memorySetupNeeded`), not on this check alone. */
 export function isVaultSetUp(exists: (path: string) => boolean, paths: ExoPaths): boolean {
   return exists(paths.vaultContext);
+}
+
+/** Whether to offer the onboarding picker. Offered only when the user hasn't
+ *  made a choice yet (`memorySetup` unset) AND the vault isn't already a
+ *  pre-picker install with the layer in place. Once any choice is recorded —
+ *  including `none` — this is false, so the picker never nags again. */
+export function memorySetupNeeded(memorySetup: MemorySetup | undefined, isSetUp: boolean): boolean {
+  return memorySetup === undefined && !isSetUp;
 }

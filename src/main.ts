@@ -29,7 +29,7 @@ import {
   parseSeedBlocks,
   manifestContent,
 } from "./core/agent-self";
-import { scaffoldItems, parentFolder } from "./core/vault-setup";
+import { scaffoldItems, parentFolder, type MemorySetup } from "./core/vault-setup";
 import { detectMemoryRoot, exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "./core/paths";
 import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidian/claudemem";
 import { formatDreamSummary } from "./core/dream-proposals";
@@ -562,7 +562,9 @@ export default class ExoPlugin extends Plugin {
       // scaffolding when the user has turned vault-memory writes off.
       checkCallback: (checking: boolean) => {
         if (!this.settings.memoryWriteEnabled) return false;
-        if (!checking) void this.runVaultSetup();
+        // The explicit command scaffolds the complete layer; the empty-state
+        // picker is where "minimal" vs "full" is chosen.
+        if (!checking) void this.applyMemorySetup("full");
         return true;
       },
     });
@@ -1349,12 +1351,21 @@ export default class ExoPlugin extends Plugin {
    *  currently missing (Global Constraints: never touches what already
    *  exists). Shared by the `setup-vault-memory` command and the empty-state
    *  banner (ChatView calls this directly, hence no `private`). */
-  async runVaultSetup(): Promise<void> {
+  /** Apply the onboarding memory-scaffold choice: record it (so the picker
+   *  never re-offers) and, for minimal/full, create the create-only-if-absent
+   *  items for that preset. "none" persists the choice and creates nothing. */
+  async applyMemorySetup(preset: MemorySetup): Promise<void> {
+    this.settings.memorySetup = preset;
+    await this.saveSettings();
+    if (preset === "none") {
+      new Notice("Exo memory: nothing created. You can set it up later in settings.");
+      return;
+    }
     let written = 0;
     let skipped = 0;
     let failed = 0;
     const writtenPaths: string[] = [];
-    for (const item of scaffoldItems(this.paths)) {
+    for (const item of scaffoldItems(this.paths, preset)) {
       const existed = !!this.app.vault.getAbstractFileByPath(item.path);
       if (existed) {
         skipped++;
