@@ -56,6 +56,7 @@ import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { hoistSlashCommand } from "./core/slash";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
+import { type LiveTask, type LiveTaskStatus } from "./core/live-tasks";
 import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { isVaultSetUp, memorySetupNeeded } from "./core/vault-setup";
@@ -169,6 +170,10 @@ interface ConvoData {
   messages: PersistedMessage[];
 }
 
+/** A live task plus its scroll-to target card. The DOM-free `LiveTask` fields
+ *  feed the pure core; `cardEl` is view-only. */
+export type LiveTaskRecord = LiveTask & { cardEl: HTMLElement };
+
 export interface Convo {
   id: string;
   listEl: HTMLElement;
@@ -210,6 +215,11 @@ export interface Convo {
    *  target for its session's ask_user cards, so parallel conversations can't
    *  cross-render into each other's transcripts. */
   currentCtx: AssistantCtx | null;
+  /** Live background work this conversation owns RIGHT NOW — subagents, background
+   *  Bash, and Workflow agents. Lives on the Convo (NOT the per-turn AssistantCtx)
+   *  so it OUTLIVES the turn: keep-alive Level 1. Keyed by tool-call id (subagent/
+   *  bash) or Workflow tool_use id. Drives the expandable agents chip. Runtime-only. */
+  liveTasks: Map<string, LiveTaskRecord>;
   /** The discreet "Related" section appended below the last turn when the
    *  transcript doesn't fill the viewport (null when not shown). */
   tailSurfaceEl: HTMLElement | null;
@@ -1054,6 +1064,7 @@ export class ChatView extends ItemView {
         queue: [],
         pendingEl: null,
         currentCtx: null,
+        liveTasks: new Map(),
         tailSurfaceEl: null,
         compactNudged: false,
         cadence: initialCadenceState(),
@@ -1178,6 +1189,7 @@ export class ChatView extends ItemView {
       researchMode: initialResearchModeState(),
       pendingEl: null,
       currentCtx: null,
+      liveTasks: new Map(),
       tailSurfaceEl: null,
       compactNudged: false,
       cadence: initialCadenceState(),
@@ -4332,6 +4344,16 @@ export class ChatView extends ItemView {
     return ctx ? ctx.runningTasks.size + ctx.bgTasks.size : 0;
   }
 
+  /** Insert or update a live task on a convo and refresh the chip. The single
+   *  mutation point so the count/label and any open popover stay in sync. */
+  private liveUpsert(c: Convo, rec: LiveTaskRecord): void {
+    c.liveTasks.set(rec.id, rec);
+    this.refreshAgentIndicators();
+    this.renderAgentPopover(); // no-op until Task 4 adds it; declared there
+  }
+
+  private renderAgentPopover(): void { /* filled in Task 4 */ }
+
   /** Refresh both per-chat agent affordances: the per-tab count badges (via
    *  renderTabs) and the pinned chip above the composer, which reflects ONLY the
    *  open chat's own agents. Strictly local — a background chat's work never leaks
@@ -4718,8 +4740,32 @@ export class ChatView extends ItemView {
             if (isSubagentTool(e.name)) {
               this.registerTaskCard(ctx, e.id);
               ctx.runningTasks.add(e.id); // subagent in flight → counts as a running agent
+              const subCard = ctx.cards.get(e.id)?.card;
+              if (subCard) {
+                const m = toolMeta(e.name, e.input);
+                this.liveUpsert(c, {
+                  id: e.id,
+                  kind: "subagent",
+                  label: m.target || m.label, // description if present, else "Subagent"
+                  status: "running",
+                  startedAt: Date.now(),
+                  cardEl: subCard,
+                });
+              }
             }
             this.trackBackgroundTask(ctx, e.id, e.name, e.input);
+            const bg = ctx.bgTasks.get(e.id);
+            if (bg) {
+              const m = toolMeta(e.name, e.input);
+              this.liveUpsert(c, {
+                id: e.id,
+                kind: "bash",
+                label: m.target || "background task",
+                status: "running",
+                startedAt: Date.now(),
+                cardEl: bg.cardEl,
+              });
+            }
             // A flat, note-touching card is streaming-only feedback — dropped at
             // turn end once the touched-notes footer carries the same fact.
             if (uniquePaths.length) ctx.noteTouchIds.add(e.id);
@@ -4937,6 +4983,16 @@ export class ChatView extends ItemView {
               refs.statusEl.parentElement?.insertBefore(refs.wfEl, refs.elapsedEl);
             }
             refs.wfEl.setText(summarizeWorkflowRun(run).label);
+            const wfStatus: LiveTaskStatus =
+              run.status === "completed" ? "done" : run.status === "failed" ? "error" : "running";
+            this.liveUpsert(c, {
+              id: e.toolUseId,
+              kind: "workflow",
+              label: `${run.name ?? "workflow"} · ${summarizeWorkflowRun(run).label}`,
+              status: wfStatus,
+              startedAt: c.liveTasks.get(e.toolUseId)?.startedAt ?? Date.now(),
+              cardEl: refs.card,
+            });
           }
           break;
         }
