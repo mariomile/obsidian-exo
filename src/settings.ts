@@ -1011,12 +1011,12 @@ export class MVASettingTab extends PluginSettingTab {
       );
 
     new Setting(el)
-      .setName("Cartella memoria")
+      .setName("Memory folder")
       .setDesc(
-        "Dove Exo salva la sua memoria (vault-relative). Auto-rilevata al primo avvio: " +
-          `un vault con ${LEGACY_MEMORY_ROOT}/ lo mantiene, uno nuovo usa ${DEFAULT_MEMORY_ROOT}/. Cambiala per puntare Exo ` +
-          "a un'altra cartella — i file esistenti NON vengono spostati; svuota il campo per " +
-          "tornare all'auto-rilevamento al prossimo avvio."
+        "Where Exo stores its memory (vault-relative). Auto-detected on first launch: " +
+          `a vault with ${LEGACY_MEMORY_ROOT}/ keeps it, a fresh one uses ${DEFAULT_MEMORY_ROOT}/. Change it to point Exo ` +
+          "at a different folder — existing files are NOT moved; clear the field to " +
+          "return to auto-detection on the next launch."
       )
       .addText((t) =>
         t
@@ -1029,8 +1029,8 @@ export class MVASettingTab extends PluginSettingTab {
       );
 
     new Setting(el)
-      .setName("Cartella della coda")
-      .setDesc("Percorso vault-relative delle note richiesta.")
+      .setName("Queue folder")
+      .setDesc("Vault-relative path for request notes.")
       .addText((t) =>
         t
           .setPlaceholder(LEGACY_QUEUE_FOLDER)

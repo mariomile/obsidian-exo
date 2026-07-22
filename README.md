@@ -24,9 +24,9 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 <p align="center"><em>The tune dialog — model, effort, and permission in one place.</em></p>
 
 <p align="center">
-  <img src="assets/screenshot-setup-banner.png" width="380" alt="Exo — the vault memory setup banner" />
+  <img src="assets/screenshot-setup-banner.png" width="380" alt="Exo — the vault memory setup picker" />
 </p>
-<p align="center"><em>On a fresh vault, a one-click banner sets up everything Exo's memory features need.</em></p>
+<p align="center"><em>On a fresh vault, a picker lets you choose how much Exo should set up — from nothing to a guided starter scaffold.</em></p>
 
 ## Features
 
@@ -46,7 +46,7 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 ### Obsidian-native (Claude; all toggleable in settings)
 
 - **Native tools** — an in-process MCP server gives the agent graph- and metadata-aware tools alongside the standard ones: `search_vault`, `read_note`, `get_backlinks`, `get_neighborhood`, `list_notes`, `list_tags`, `get_active_context`, `create_note` (tag/frontmatter aware), `append_to_note`, `update_frontmatter`, `add_links`, `open_note`. `search_vault` uses the **Omnisearch** plugin's index (BM25 + fuzzy, attachments) when installed, and transparently falls back to a built-in scorer otherwise.
-- **Vault memory** — boots each conversation with context from `_system/` (vault-context, preferences, active rules, recent sessions), and can write back via gated tools: `capture_decision`, `log_session`, `capture_learning` (tagged `created_by: exo`).
+- **Vault memory** — boots each conversation with context from its memory folder (vault-context, preferences, active rules, recent sessions), and can write back via gated tools: `capture_decision`, `log_session`, `capture_learning` (tagged `created_by: exo`).
 - **Touched-notes footer** — after each turn, a grouped footer shows what the agent **Edited** (with an ×N edit count, plus per-note hover **diff** and two-step **revert** on live turns) and what it **Read**. Replies are **wikilink-ified** by default (mentions of existing notes become clickable `[[links]]`); related notes surface in the empty state.
 - **Composer power-ups** — `/` opens a palette of custom prompts + your vault's `.claude/` commands and skills; `@` mentions a file or folder to add it as context. **Settings are organized into tabs** (General / Chat / Agent & Permissions / Memory / Advanced), including a **default model per provider** that every new chat starts with, and **AI-generated chat titles** (a quick Haiku pass names the tab after the first exchange).
 - **Context as document cards** — the active note and anything you attach (via `@` or "+ Note") appear as uniform cards above the composer: images preview as thumbnails, notes show a text preview, other files show an icon — each with a title, a *Current Document* / *Document* label, click-to-open and remove.
@@ -66,7 +66,7 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 
 **Network use.** Exo itself makes no network requests and sends no telemetry — it collects no data and does not phone home to the plugin author or anyone else. What Exo *does* is spawn the **`claude`** and/or **`codex`** CLI that you already have installed and authenticated on your machine, as a local child process (this is why the plugin is desktop-only — see `isDesktopOnly` in `manifest.json`). Those CLIs are the ones that talk to the network: `claude` calls Anthropic's API, `codex` calls OpenAI's API, each using **your own existing CLI login / API key** — never a key or account belonging to Exo or its author.
 
-**What leaves your machine, and to whom.** When you send a message, the prompt text plus whatever context Exo attaches (the active note, `@`-mentioned files/folders, tool results, and — if you enable the Obsidian-native layer — `_system/` memory content) is passed to the CLI process, which forwards it to Anthropic (Claude) or OpenAI (Codex) as part of your own authenticated session with them. That data goes only to the provider you're using, governed by your own account/agreement with them — **nothing is sent to, or visible to, the Exo author.**
+**What leaves your machine, and to whom.** When you send a message, the prompt text plus whatever context Exo attaches (the active note, `@`-mentioned files/folders, tool results, and — if you enable the Obsidian-native layer — your memory folder's content) is passed to the CLI process, which forwards it to Anthropic (Claude) or OpenAI (Codex) as part of your own authenticated session with them. That data goes only to the provider you're using, governed by your own account/agreement with them — **nothing is sent to, or visible to, the Exo author.**
 
 **Your vault is the agent's working directory.** The CLI is launched with your vault as its working directory, so the agent can read, write, and edit files in your vault (and run shell commands) as directed by your prompts and its own reasoning.
 
@@ -88,12 +88,17 @@ In short: Exo is a thin, local UI over CLIs you already trust and are already si
 
 ## Vault memory setup
 
-Exo's Obsidian-native features (vault memory, the cockpit, open loops, the task board) read and write a fixed set of files under `_system/` in your vault. On a fresh vault none of that exists yet — Exo sets it up for you:
+Exo's Obsidian-native features (vault memory, the cockpit, open loops, the task board) read and write a fixed set of files under a **memory folder** in your vault — configurable, editable any time in Settings. A fresh vault gets a neutral `_exo/`; a vault that already has a `_system/` layer (an earlier Exo install, or a vault built around it) keeps that automatically, with nothing to migrate.
 
-- **Automatic** — the first time you open a new chat in a vault without `_system/vault-context.md`, a card offers to set it up. One click creates every file Exo needs; it never touches anything that already exists.
-- **Manual** — run **Exo: Set up vault memory** from the command palette any time (idempotent — safe to re-run, fills in only what's missing).
+On a fresh vault, the first new chat offers a **one-time picker** for how much to set up:
 
-This only creates Exo's own `_system/` files — it doesn't require or impose any particular note-organization scheme (folders like `Active/`, `Atlas/`, etc. are entirely up to you).
+- **Full memory** — the operational layer plus a guided knowledge-OS starter: vault-context, preferences, and hand-fillable identity blocks (`persona`/`human`/`now`) you can either fill in yourself or hand to **Exo: Seed agent folder** to draft from what you've already written.
+- **Just the essentials** — only what Exo's own features need (task board, open loops, memory store, reports) — no imposed structure or content.
+- **Not now** — creates nothing; Exo runs from your `CLAUDE.md`/`AGENTS.md` alone. Set it up later from Settings whenever you want.
+
+Whichever you pick, it's remembered — you won't see the picker again. Run **Exo: Set up vault memory** from the command palette any time to (re-)apply the full scaffold (idempotent — safe to re-run, fills in only what's missing; nothing that already exists is ever touched).
+
+This only creates Exo's own memory-folder files — it doesn't require or impose any particular note-organization scheme (folders like `Active/`, `Atlas/`, etc. are entirely up to you).
 
 ## Develop
 
@@ -116,7 +121,7 @@ Create a `.obsidian-plugin-dir` file containing the absolute path to your vault'
 
 ## Status
 
-Implemented: text + reasoning streaming, agentic tools with permission gating (Claude), Codex backend with tool cards, theme-aware transparent UI, context chips + multi-note attach, persistent conversation history, parallel conversations with a message queue + stop, `/` and `@` palettes, effort + permission selectors, the **Capabilities** panel, and the full Obsidian-native layer (graph tools, `_system/` memory read/write, graph UI). Codex tool-event parsing is best-effort (the CLI event schema is version-sensitive); per-action Codex approvals (`codex proto`) are not yet wired — Codex relies on its sandbox. The Obsidian-native tools and memory writes are **Claude-only** (Codex has no in-process MCP equivalent).
+Implemented: text + reasoning streaming, agentic tools with permission gating (Claude), Codex backend with tool cards, theme-aware transparent UI, context chips + multi-note attach, persistent conversation history, parallel conversations with a message queue + stop, `/` and `@` palettes, effort + permission selectors, the **Capabilities** panel, and the full Obsidian-native layer (graph tools, configurable-root memory read/write, graph UI). Codex tool-event parsing is best-effort (the CLI event schema is version-sensitive); per-action Codex approvals (`codex proto`) are not yet wired — Codex relies on its sandbox. The Obsidian-native tools and memory writes are **Claude-only** (Codex has no in-process MCP equivalent).
 
 ## License
 
