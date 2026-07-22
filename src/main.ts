@@ -109,13 +109,13 @@ const MAX_AUTOMATION_SNAPSHOT = 64_000;
 /** Seeded "Morning Digest" playbook — Dia-style: vault + connected external
  *  tools (MCP, read-only). Sources degrade gracefully; the wording keeps the
  *  report short and phone-readable. Editable like any custom prompt. */
-const MORNING_DIGEST_PROMPT = `Sei il mio chief of staff. Prepara il MORNING DIGEST di oggi, in italiano, leggibile da telefono: righe corte, liste, niente tabelle. Massimo ~60 righe.
+const morningDigestPrompt = (paths: ExoPaths): string => `Sei il mio chief of staff. Prepara il MORNING DIGEST di oggi, in italiano, leggibile da telefono: righe corte, liste, niente tabelle. Massimo ~60 righe.
 
 Raccogli dalle fonti in quest'ordine. Se una fonte non è disponibile (tool assente o permesso negato), scrivi "— non disponibile" nella sua sezione e prosegui senza fermarti.
 
 IMPORTANTE: non scrivere NULLA prima del digest — niente premesse, niente narrazione del processo. La tua risposta deve iniziare esattamente con "# ☀️ Morning Digest". Eventuali caveat sulle fonti vanno solo nella riga "Stato fonti" in fondo.
 
-1. VAULT — leggi: _system/memory/open-loops.md (loop attivi e scaduti), _system/orchestration/tasks.md (task running / needs-input / review), conteggio note in _inbox/, la daily note di ieri e di oggi in Journal/Daily/ se esistono.
+1. VAULT — leggi: ${paths.openLoops} (loop attivi e scaduti), ${paths.tasks} (task running / needs-input / review), conteggio note in _inbox/, la daily note di ieri e di oggi in Journal/Daily/ se esistono.
 2. CALENDAR — con i tool MCP di Google Calendar: gli eventi di oggi, con orari.
 3. GMAIL — con i tool MCP di Gmail: cerca i thread NON letti o importanti delle ultime 24 ore; riporta al massimo 5: mittente — oggetto — perché conta in una riga.
 4. SLACK — con i tool MCP di Slack: mention e messaggi rilevanti delle ultime 24 ore; al massimo 5 conversazioni: canale — sintesi in una riga.
@@ -304,17 +304,18 @@ export default class ExoPlugin extends Plugin {
       },
       write: (relativePath, content) => adapter.write(`${proposalRoot}/${relativePath}`, content),
     }, this.proposalWriteQueue);
-    const workflowSignalsPath = "_system/memory/workflow-signals.json";
+    const workflowSignalsPath = this.paths.workflowSignals;
+    const memoryDir = this.paths.memory;
     this.workflowSignalStore = new WorkflowSignalStore({
       read: async () => await adapter.exists(workflowSignalsPath)
         ? adapter.read(workflowSignalsPath)
         : null,
       write: async (content) => {
-        if (!(await adapter.exists("_system/memory"))) {
+        if (!(await adapter.exists(memoryDir))) {
           try {
-            await adapter.mkdir("_system/memory");
+            await adapter.mkdir(memoryDir);
           } catch (error) {
-            if (!(await adapter.exists("_system/memory"))) throw error;
+            if (!(await adapter.exists(memoryDir))) throw error;
           }
         }
         await adapter.write(workflowSignalsPath, content);
@@ -521,7 +522,7 @@ export default class ExoPlugin extends Plugin {
 
     this.addCommand({
       id: "memory-dream-pass",
-      name: "Run memory dream pass (consolidate _system/memory)",
+      name: `Run memory dream pass (consolidate ${this.paths.memory})`,
       callback: () => void this.openDreamPass(),
     });
     this.addCommand({
@@ -575,7 +576,7 @@ export default class ExoPlugin extends Plugin {
           new Notice("No custom prompts yet — add some in Exo settings.");
           return;
         }
-        new PlaybookPicker(this.app, prompts, (p) => void this.runPlaybook(p.name, p.prompt)).open();
+        new PlaybookPicker(this.app, prompts, (p) => void this.runPlaybook(p.name, p.prompt), this.paths.reports).open();
       },
     });
     this.addCommand({
@@ -1275,9 +1276,9 @@ export default class ExoPlugin extends Plugin {
     };
 
     const sources = {
-      mentalModel: await readSource("_system/memory/mental-model.md"),
-      preferences: await readSource("_system/memory/preferences/preferences.md"),
-      vaultContext: await readSource("_system/vault-context.md"),
+      mentalModel: await readSource(this.paths.mentalModel),
+      preferences: await readSource(this.paths.preferences),
+      vaultContext: await readSource(this.paths.vaultContext),
     };
     if (!sources.mentalModel && !sources.preferences && !sources.vaultContext) {
       new Notice("Nothing to seed from — the _system/ source files are empty or missing.");
@@ -1523,7 +1524,7 @@ export default class ExoPlugin extends Plugin {
     // never re-seeded). Schedule it with "Morning Digest | daily" in settings.
     if (!this.settings.seededDigest) {
       if (!this.settings.customPrompts.some((p) => p.name.toLowerCase() === "morning digest")) {
-        this.settings.customPrompts.push({ name: "Morning Digest", prompt: MORNING_DIGEST_PROMPT });
+        this.settings.customPrompts.push({ name: "Morning Digest", prompt: morningDigestPrompt(this.paths) });
       }
       this.settings.seededDigest = true;
       await this.saveSettings();
@@ -2483,10 +2484,11 @@ class PlaybookPicker extends FuzzySuggestModal<{ name: string; prompt: string }>
   constructor(
     app: import("obsidian").App,
     private prompts: { name: string; prompt: string }[],
-    private onPick: (p: { name: string; prompt: string }) => void
+    private onPick: (p: { name: string; prompt: string }) => void,
+    reportsDir: string
   ) {
     super(app);
-    this.setPlaceholder("Run a playbook (read-only, report to _system/reports/)…");
+    this.setPlaceholder(`Run a playbook (read-only, report to ${reportsDir}/)…`);
   }
   getItems(): { name: string; prompt: string }[] {
     return this.prompts;
