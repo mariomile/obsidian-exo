@@ -135,7 +135,7 @@ export function memoryStats(input: MemoryCardInput): HubStat[] {
 export interface MemoryActionsInput {
   /** A dream snapshot exists → undo is available. */
   snapshotPresent: boolean;
-  /** `_system/review.md` exists → the review row is shown. */
+  /** The review note (`paths.review`) exists → the review row is shown. */
   reviewExists: boolean;
   loops: LoopEntry[];
   now: number;

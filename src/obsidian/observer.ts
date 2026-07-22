@@ -19,7 +19,7 @@ import {
 } from "../core/observer";
 import { exoPaths, LEGACY_MEMORY_ROOT } from "../core/paths";
 
-/** Default store dir — legacy `_system/…` for tests/fallback; the live plugin
+/** Default store dir — the legacy location for tests/fallback; the live plugin
  *  passes the configured `paths.store` at construction. */
 const LEGACY_STORE_DIR = exoPaths(LEGACY_MEMORY_ROOT).store;
 /** Cap on how many existing active entries we compare against for dedupe. */
@@ -94,7 +94,7 @@ export class MemoryObserver {
      *  tool and future dream passes — one FIFO, no cross-writer clobber (w1-1). */
     private readonly queue: WriteQueue,
     /** Store dir the monthly union-store files live under (`paths.store`).
-     *  Defaults to the legacy `_system/…` location for tests/fallback. */
+     *  Defaults to the legacy location for tests/fallback. */
     private readonly storeDir: string = LEGACY_STORE_DIR
   ) {}
 

@@ -16,7 +16,7 @@ import { exoPaths, LEGACY_MEMORY_ROOT } from "../core/paths";
 
 const execFileAsync = promisify(execFile);
 
-/** Default watermark file — legacy `_system/…` for tests/fallback; live callers
+/** Default watermark file — the legacy location for tests/fallback; live callers
  *  pass the configured `paths.claudememSync`. */
 const LEGACY_SYNC_STATE_PATH = exoPaths(LEGACY_MEMORY_ROOT).claudememSync;
 /** Verified location of the claude-mem SQLite DB (inspected 2026-07-05). */
@@ -77,7 +77,7 @@ export interface ReadObservationsOpts {
   projects: string[];
   /** Max rows to read (N=100 for the dream stage). */
   limit: number;
-  /** Watermark file path. Absent → legacy `_system/…` (test/fallback). */
+  /** Watermark file path. Absent → the legacy location (test/fallback). */
   syncStatePath?: string;
 }
 

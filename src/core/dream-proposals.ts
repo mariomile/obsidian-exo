@@ -33,7 +33,7 @@ export interface CulledProposal {
 export interface GateContext {
   /** Ids of store entries with `source: user` — never merge-away/supersede these. */
   userEntryIds: Set<string>;
-  /** Truth-firewall patterns from `_system/memory/known-false.md`. */
+  /** Truth-firewall patterns from the known-false note (`paths.knownFalse`). */
   knownFalse: RegExp[];
   /** Canonical keys of proposals already applied on a prior run (dedup). */
   appliedKeys: Set<string>;
@@ -118,7 +118,7 @@ export function parseProposals(raw: string): ParseResult {
 /* --------------------------- known-false parse -------------------------- */
 
 /**
- * Parse `_system/memory/known-false.md` into a tolerant regex list: one pattern
+ * Parse the known-false note (`paths.knownFalse`) into a tolerant regex list: one pattern
  * per non-blank, non-`#`-comment line, compiled case-insensitive. A line that is
  * not a valid regex is SKIPPED (never crashes the pass).
  */
@@ -234,7 +234,7 @@ export interface RuleDraftWrite {
 export interface LlmWritePlan {
   /** New `@generated` entries to append to the store, in order. */
   storeEntries: MemoryEntry[];
-  /** Candidate rule-draft files to write under `_system/memory/learnings/`. */
+  /** Candidate rule-draft files to write under the learnings dir (`paths.learnings`). */
   ruleDrafts: RuleDraftWrite[];
   /** claude-mem observation ids imported this run — advance the watermark ONLY on apply. */
   importedIds: number[];

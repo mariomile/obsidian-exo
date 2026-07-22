@@ -266,7 +266,13 @@ export class CockpitView extends ItemView {
       );
       this.tile(grid, "Resume", "history", resume, "No recent conversations.");
 
-      const health = healthRows({ inboxCount: inbox, contextAgeDays: ctxAge, lastReport: report, now });
+      const health = healthRows({
+        inboxCount: inbox,
+        contextAgeDays: ctxAge,
+        lastReport: report,
+        now,
+        vaultContextPath: this.plugin.paths.vaultContext,
+      });
       this.tile(grid, "Health", "heart-pulse", health, "Vault is healthy.");
     } finally {
       this.rendering = false;

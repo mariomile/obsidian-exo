@@ -26,7 +26,7 @@ import {
 import { RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { MarkdownView, TFile } from "obsidian";
 import type ExoPlugin from "../main";
-import { gatherOutgoing } from "./connections";
+import { gatherOutgoing, defaultExcludePrefixes } from "./connections";
 import { loadIgnoreStore } from "./ignore-store";
 import { openMentionPopover } from "./popover";
 import type { FlatOutgoing } from "./mentions-core";
@@ -126,6 +126,7 @@ export function mentionsExtension(plugin: ExoPlugin) {
         const flats = await gatherOutgoing(plugin.app, file, ignore, {
           stem: !!plugin.settings.connectionsStemming,
           text: view.state.doc.toString(),
+          excludePrefixes: defaultExcludePrefixes(plugin.paths.root),
         });
         view.dispatch({ effects: setOutgoing.of({ path: file.path, flats }) });
       }

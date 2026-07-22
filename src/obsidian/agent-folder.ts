@@ -3,7 +3,7 @@ import type { WriteQueue } from "../core/write-queue";
 import { AGENT_DIR, isAgentBlock, type BlockName } from "../core/agent-self";
 
 /**
- * The Agent Is the Folder — Obsidian-side block IO for `_system/agent/`.
+ * The Agent Is the Folder — Obsidian-side block IO for the agent folder.
  *
  * The pure identity logic (registry, manifest parse, `compileIdentity`,
  * `planRethink`) lives in `src/core/agent-self.ts`. This module is the thin,

@@ -1,7 +1,7 @@
 /**
  * Sidecar persistence for the unlinked-mention ignore-list. The store itself is
  * pure (`store-core.ts`); this module is the thin Obsidian I/O layer that reads
- * and writes `_system/mentions/ignore.json`. Tolerant of an absent/corrupt file
+ * and writes ignore.json in the mentions dir. Tolerant of an absent/corrupt file
  * (→ empty store) so a first run never errors.
  */
 
@@ -16,7 +16,7 @@ import {
 } from "./store-core";
 import { exoPaths, LEGACY_MEMORY_ROOT } from "../core/paths";
 
-/** Default mentions dir — legacy `_system/mentions` for tests/fallback; live
+/** Default mentions dir — the legacy location for tests/fallback; live
  *  callers pass the configured `paths.mentions`. */
 const LEGACY_IGNORE_DIR = exoPaths(LEGACY_MEMORY_ROOT).mentions;
 const ignorePath = (dir: string) => `${dir}/ignore.json`;

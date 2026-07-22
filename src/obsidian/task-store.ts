@@ -1,6 +1,6 @@
 /**
  * B3 task-store — the single write path for creating Orchestration Board
- * tasks (`_system/orchestration/tasks.md`). Both the `add_task` SDK tool
+ * tasks (the `paths.tasks` ledger). Both the `add_task` SDK tool
  * (chat-driven) and the board's own quick-add UI must create tasks through
  * `createBacklogTask` so every write is serialized on the SAME `WriteQueue`
  * instance — never a direct `vault.modify`/`adapter.write` from a caller —
@@ -109,7 +109,7 @@ export interface LoadedTasks {
 }
 
 /**
- * The ONLY module allowed to touch `_system/orchestration/tasks.md`. Owns
+ * The ONLY module allowed to touch the tasks ledger. Owns
  * every read and, more importantly, serializes every write through ONE shared
  * `WriteQueue` instance (constructor-injected — same contract as
  * `createBacklogTask` above and the Memory Union Store / Open-Loops Ledger in
@@ -128,7 +128,7 @@ export class TaskStore {
   constructor(
     private readonly vault: TaskVaultAdapter,
     private readonly queue: WriteQueue,
-    /** Vault-relative tasks-ledger path. Defaults to the legacy _system location
+    /** Vault-relative tasks-ledger path. Defaults to the legacy location
      *  (tests + fallback); production passes the configured `plugin.paths.tasks`. */
     private readonly tasksPath: string = TASKS_PATH
   ) {}

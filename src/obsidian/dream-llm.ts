@@ -38,7 +38,7 @@ export interface DreamLlmDeps {
   now: number;
   session: string;
   model?: string;
-  /** Resolved memory-layer paths. Absent → legacy `_system/` (test/fallback). */
+  /** Resolved memory-layer paths. Absent → the legacy root (test/fallback). */
   paths?: ExoPaths;
 }
 
@@ -71,7 +71,7 @@ export async function collectStoreEntries(app: App, storeDir: string = LEGACY_PA
   return all;
 }
 
-/** Markdown files directly under a `_system/memory/*` directory. */
+/** Markdown files directly under a memory-layer directory. */
 function filesIn(app: App, dir: string): TFile[] {
   return app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(dir + "/"));
 }

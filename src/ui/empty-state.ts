@@ -19,7 +19,7 @@ export interface EmptyStateHost {
   usePrompt(promptText: string): void;
   /** Attach a surfaced related note as context + focus the composer. */
   attachRelated(path: string): void;
-  /** True when `_system/vault-context.md` is absent AND memory writes are
+  /** True when the vault-context note is absent AND memory writes are
    *  enabled — shows the setup banner. */
   vaultSetupNeeded: boolean;
   /** Runs the scaffold (`ExoPlugin.runVaultSetup`). */
@@ -76,7 +76,7 @@ function renderSetupBanner(host: EmptyStateHost, parent: HTMLElement): HTMLEleme
   card.createDiv({ cls: "mva-onboard-title", text: "Exo's memory isn't active in this vault yet" });
   card.createDiv({
     cls: "mva-onboard-msg",
-    text: "Creates the _system/ files Exo reads and writes to. Nothing that already exists is ever touched.",
+    text: "Creates the memory files Exo reads and writes to. Nothing that already exists is ever touched.",
   });
   const btn = card.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Set up now" });
   btn.onclick = () => host.runVaultSetup();

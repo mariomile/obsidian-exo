@@ -175,14 +175,14 @@ export default class ExoPlugin extends Plugin {
 
   /**
    * THE ONE shared write path for every append to the Memory Union Store
-   * (`_system/memory/store/`). Plugin-scoped so all store writers — the
+   * (`paths.store`). Plugin-scoped so all store writers — the
    * `remember` tool, the Self-Writing Memory observer (append + undo), and any
    * future dream pass — enqueue on the SAME FIFO and never interleave a
    * read-modify-write cycle (w1-1 contract). Injected into both
    * `createObsidianToolServer` and `MemoryObserver`.
    */
   readonly memoryWriteQueue = new WriteQueue();
-  /** One shared write path for `_system/memory/open-loops.md` across every
+  /** One shared write path for the open-loops ledger (`paths.openLoops`) across every
    *  Claude/Codex conversation. Each session gets a fresh tool registry, so a
    *  queue created inside that registry cannot prevent lost updates. */
   readonly loopsWriteQueue = new WriteQueue();
@@ -196,7 +196,7 @@ export default class ExoPlugin extends Plugin {
   private readonly dreamSnapshotWriteQueue = new WriteQueue();
   /**
    * THE ONE shared write path for every append to the Orchestration Board
-   * tasks ledger (`_system/orchestration/tasks.md`). Both the `add_task` SDK
+   * tasks ledger (`paths.tasks`). Both the `add_task` SDK
    * tool (chat-driven) and the "Promote to task" command enqueue on this SAME
    * queue — same contract as `memoryWriteQueue` above — so board and
    * chat-driven task creation never interleave a read-modify-write cycle.
@@ -208,7 +208,7 @@ export default class ExoPlugin extends Plugin {
   private readonly proposalWriteQueue = new WriteQueue();
   /** Settings mutation + persistence boundary for accepted playbooks. */
   private readonly proposalPlaybookWriteQueue = new WriteQueue();
-  /** One serialized read-modify-write boundary for `_system/review.md`. */
+  /** One serialized read-modify-write boundary for the review note (`paths.review`). */
   private readonly dailyPulseWriteQueue = new WriteQueue();
   /** Serialized privacy-safe Workflow Foundry signal ledger. */
   private readonly workflowSignalWriteQueue = new WriteQueue();
@@ -217,7 +217,7 @@ export default class ExoPlugin extends Plugin {
   private readonly dailyPulseSlotRunner = new DailyPulseSlotRunner();
   /**
    * THE ONE shared `TaskStore` instance — the typed load/create/update/move/
-   * archive API over the same ledger (`_system/orchestration/tasks.md`),
+   * archive API over the same ledger (`paths.tasks`),
    * built on `tasksWriteQueue` above so it can never race a caller still
    * using the lower-level `createBacklogTask` directly. Constructed in
    * `onload()` (needs `this.app`); the future board view/driver should read
@@ -1281,7 +1281,7 @@ export default class ExoPlugin extends Plugin {
       vaultContext: await readSource(this.paths.vaultContext),
     };
     if (!sources.mentalModel && !sources.preferences && !sources.vaultContext) {
-      new Notice("Nothing to seed from — the _system/ source files are empty or missing.");
+      new Notice(`Nothing to seed from — the ${this.paths.root}/ source files are empty or missing.`);
       return;
     }
 
@@ -1473,7 +1473,7 @@ export default class ExoPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    // Memory-root auto-detect (one-shot): a vault that already has a `_system/`
+    // Memory-root auto-detect (one-shot): a vault that already has a legacy-root
     // layer keeps it — existing installs (marioverse included) never migrate —
     // while a fresh vault adopts the neutral, tool-owned `_exo/`. Persisted so
     // it's stable and user-overridable in Settings thereafter.

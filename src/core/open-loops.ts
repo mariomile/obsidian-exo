@@ -8,7 +8,7 @@
  * append-only outcome note. Closing NEVER deletes the entry — the ledger is
  * append-only in spirit, same as `memory-store.ts`.
  *
- * On-disk shape — a single markdown file (`_system/memory/open-loops.md`),
+ * On-disk shape — a single markdown file (the `paths.openLoops` ledger),
  * one block per entry, mirroring the Memory Union Store's block format:
  *
  *   ## loop-<epochMs>

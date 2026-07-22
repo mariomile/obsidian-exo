@@ -216,9 +216,9 @@ export interface ProposalAcceptanceTargetOptions {
   playbooks: ProposalPlaybookAccess;
   nowMs?: () => number;
   nowDate?: () => Date;
-  /** Open-loops ledger path (`paths.openLoops`). Absent → legacy `_system/…`. */
+  /** Open-loops ledger path (`paths.openLoops`). Absent → the legacy location. */
   openLoopsPath?: string;
-  /** Decisions dir (`paths.decisions`). Absent → legacy `_system/…`. */
+  /** Decisions dir (`paths.decisions`). Absent → the legacy location. */
   decisionsDir?: string;
 }
 

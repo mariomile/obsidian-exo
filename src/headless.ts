@@ -189,7 +189,7 @@ export async function runHeadlessPlaybook(
 }
 
 /** Write the run report to the configured reports dir and return its vault path.
- *  `reportsDir` defaults to the legacy `_system/reports` for tests/fallback. */
+ *  `reportsDir` defaults to the legacy reports dir for tests/fallback. */
 export async function writeReport(
   app: App,
   name: string,

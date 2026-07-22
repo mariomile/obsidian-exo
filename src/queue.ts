@@ -1,7 +1,7 @@
 /* Exo Queue — "Exo in tasca" via Obsidian Sync (2026-07-10, mobile #7 v1).
  *
  * Architettura remote-head SENZA infrastruttura: il telefono scrive una nota
- * richiesta in `_system/exo-queue/`; Obsidian Sync la porta sul desktop; qui
+ * richiesta nella cartella coda configurata; Obsidian Sync la porta sul desktop; qui
  * il watcher la esegue HEADLESS e READ-ONLY (runHeadlessPlaybook: tool di
  * lettura auto-consentiti, ogni mutazione negata) e appende la risposta
  * NELLA STESSA NOTA; Sync riporta la risposta al telefono. Nessun server,

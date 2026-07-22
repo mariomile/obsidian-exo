@@ -99,7 +99,7 @@ export interface SessionOpts {
   obsidianServer?: unknown;
   /** Disable built-in file tools so the agent uses Obsidian-native ones. */
   nativeFirst?: boolean;
-  /** Vault `_system/` memory preamble appended to the system prompt. */
+  /** Vault memory-layer preamble appended to the system prompt. */
   memoryPreamble?: string;
   /** Auto-compact the conversation when the context window fills (token saver). */
   autoCompact?: boolean;

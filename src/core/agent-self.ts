@@ -1,7 +1,7 @@
 /**
  * The Agent Is the Folder — pure identity core (NO `obsidian` imports).
  *
- * `_system/agent/` is the vault's tool-agnostic identity layer: a manifest plus
+ * The agent folder (`paths.agentDir`) is the vault's tool-agnostic identity layer: a manifest plus
  * three char-limited Markdown blocks (`persona.md`, `human.md`, `now.md`). Exo is
  * the single owner — it hydrates them at boot and maintains them through the
  * governed `rethink_memory` tool and observer proposals; external tools (Claude
@@ -62,7 +62,7 @@ export const AGENT_BLOCKS: readonly BlockSpec[] = [
 /** Block names in compile order — `["persona", "human", "now"]`. */
 export const AGENT_BLOCK_NAMES: readonly BlockName[] = AGENT_BLOCKS.map((b) => b.name);
 
-/** Legacy default identity-layer folder (`_system/agent`) — tests/fallback only;
+/** Legacy default identity-layer folder — tests/fallback only;
  *  live callers derive the folder from the configured `paths.agentDir`. */
 export const AGENT_DIR = exoPaths(LEGACY_MEMORY_ROOT).agentDir;
 
@@ -196,11 +196,11 @@ const SEED_CLOSE = (name: BlockName): string => `<<<end-${name}>>>`;
 
 /** The raw source material the seeder distills the three blocks FROM. */
 export interface SeedSources {
-  /** `_system/memory/mental-model.md`. */
+  /** The mental-model note (`paths.mentalModel`). */
   mentalModel: string;
-  /** `_system/memory/preferences/preferences.md`. */
+  /** The preferences note (`paths.preferences`). */
   preferences: string;
-  /** `_system/vault-context.md`. */
+  /** The vault-context note (`paths.vaultContext`). */
   vaultContext: string;
 }
 

@@ -4,7 +4,7 @@ import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import type { SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { resolveLink, neighborhood, basename } from "./graph";
 import { exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "../core/paths";
-import { gatherConnections, linkMentionsIn } from "../mentions/connections";
+import { gatherConnections, linkMentionsIn, defaultExcludePrefixes } from "../mentions/connections";
 import { loadIgnoreStore, ignoreMention } from "../mentions/ignore-store";
 import { fold } from "../mentions/tokenizer";
 import {
@@ -207,14 +207,14 @@ export interface ObsidianToolOpts {
   tasksWriteQueue?: WriteQueue;
   agentFolderEnabled?: boolean;
   rethinkBridge?: (req: RethinkRequest) => Promise<string>;
-  /** Resolved memory-layer paths. Absent → legacy `_system/` (test/fallback). */
+  /** Resolved memory-layer paths. Absent → the legacy root (test/fallback). */
   paths?: ExoPaths;
 }
 
 /**
  * Build the gated array of Obsidian-native tool definitions: graph
  * navigation, metadata-aware read/search, convention-aware writes, and
- * `_system/` memory capture. Handlers run in-process and use the Obsidian API
+ * memory capture. Handlers run in-process and use the Obsidian API
  * (metadataCache/vault/fileManager) — no shell, graph- and frontmatter-aware.
  * Consumed directly by the Codex↔Obsidian bridge, and wrapped by
  * {@link createObsidianToolServer} for the Claude Agent SDK.
@@ -234,7 +234,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
      *  every other tool above is unaffected, and the tool list sent to sessions
      *  must be byte-identical to before this parameter existed when this is false. */
     orchestrationEnabled = false,
-    /** Shared write-queue for the tasks ledger (`_system/orchestration/tasks.md`),
+    /** Shared write-queue for the tasks ledger (`paths.tasks`),
      *  injected by the plugin the same way `memoryWriteQueue` is — so `add_task`
      *  and any future board-side writer serialize on the SAME queue. */
     tasksWriteQueue = new WriteQueue(),
@@ -383,7 +383,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       const file = args.target ? need(args.target) : app.workspace.getActiveFile();
       if (!file) return ok("No active note.");
       const ignore = await loadIgnoreStore(app, paths.mentions);
-      const c = await gatherConnections(app, file, ignore);
+      const c = await gatherConnections(app, file, ignore, { excludePrefixes: defaultExcludePrefixes(paths.root) });
       const fmt = (xs: string[]) => (xs.length ? xs.map((p) => `  - [[${p}]]`).join("\n") : "  (none)");
       const unlinked = c.unlinked.length
         ? c.unlinked
@@ -727,7 +727,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   const captureDecision = tool(
     "capture_decision",
-    "Record a decision into _system/memory/decisions/ following the vault's decision-record convention.",
+    `Record a decision into ${paths.decisions}/ following the vault's decision-record convention.`,
     {
       title: z.string(),
       context: z.string(),
@@ -761,7 +761,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   const logSession = tool(
     "log_session",
-    "Prepend an entry to _system/memory/session-log.md. type ∈ ingest|query|decision|lint|build|triage.",
+    `Prepend an entry to ${paths.sessionLog}. type ∈ ingest|query|decision|lint|build|triage.`,
     { title: z.string(), summary: z.string(), type: z.string().optional() },
     async (args) => {
       const path = paths.sessionLog;
@@ -781,7 +781,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   const captureLearning = tool(
     "capture_learning",
-    "Record a learning/pattern into _system/memory/learnings/. Set provenance='stated' when the user explicitly told you this (trusted higher than 'inferred').",
+    `Record a learning/pattern into ${paths.learnings}/. Set provenance='stated' when the user explicitly told you this (trusted higher than 'inferred').`,
     {
       title: z.string(),
       observation: z.string(),
@@ -1077,7 +1077,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
         const last = s.scheduledLastRun[automationLastRunKey(a)] ?? 0;
         const next = a.enabled ? ` · next ${fmtDueIn(nextDueAt(a.cadence, last, now) - now)}` : "";
         const mode = a.system === "daily-pulse"
-          ? "writes _system/review.md (marker-safe)"
+          ? `writes ${paths.review} (marker-safe)`
           : a.write ? "writes (checkpointed, restorable)" : "read-only";
         lines.push(
           `- ${a.name} — ${cadenceLabel(a.cadence)} · ${a.enabled ? "on" : "paused"} · ${mode}${next}`
@@ -1117,7 +1117,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   const manageAutomation = tool(
     "manage_automation",
-    "Create, update, pause, resume, delete, or run an Exo automation. `name` is the playbook name (must exist for create — see list_automations). Cadence: kind hourly|daily|weekly, hour 0–23, day 0–6 or a day name. `write: true` lets scheduled runs edit vault notes (checkpointed + restorable) — confirm with Mario before enabling it. run_now executes the playbook immediately (may take minutes) and reports to _system/reports/.",
+    `Create, update, pause, resume, delete, or run an Exo automation. \`name\` is the playbook name (must exist for create — see list_automations). Cadence: kind hourly|daily|weekly, hour 0–23, day 0–6 or a day name. \`write: true\` lets scheduled runs edit vault notes (checkpointed + restorable) — confirm with Mario before enabling it. run_now executes the playbook immediately (may take minutes) and reports to ${paths.reports}/.`,
     {
       action: z.enum(["create", "update", "pause", "resume", "delete", "run_now"]),
       name: z.string(),
@@ -1143,7 +1143,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
           s.scheduledLastRun[playbook.name] = Date.now();
           await exo.saveSettings();
         }
-        return ok(okRun ? "Run completed — report in _system/reports/." : "Run failed — see the report in _system/reports/.");
+        return ok(okRun ? `Run completed — report in ${paths.reports}/.` : `Run failed — see the report in ${paths.reports}/.`);
       }
       if (args.action === "create") {
         if (!playbook) return ok(`No playbook named "${args.name}" — create it first with save_playbook.`);

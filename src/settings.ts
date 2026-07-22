@@ -20,6 +20,10 @@ import {
   type McpServerEntry,
   type ServerFormInput,
 } from "./core/mcp-config";
+import { exoPaths, DEFAULT_MEMORY_ROOT, LEGACY_MEMORY_ROOT } from "./core/paths";
+
+/** Legacy default for the request-queue folder (kept for existing installs). */
+const LEGACY_QUEUE_FOLDER = exoPaths(LEGACY_MEMORY_ROOT).queue;
 
 export interface MVASettings {
   provider: ProviderId;
@@ -71,7 +75,7 @@ export interface MVASettings {
    *  proposes durable memories and writes them to the store (with veto/undo).
    *  OFF by default — only runs when this AND memoryWriteEnabled are on. */
   selfWritingMemory: boolean;
-  /** The Agent Is the Folder: hydrate boot from `_system/agent/` (persona/human/now)
+  /** The Agent Is the Folder: hydrate boot from the agent folder (persona/human/now)
    *  and enable the governed `rethink_memory` tool + observer now-proposals.
    *  DEFAULT OFF — with it off, boot is byte-identical and the folder is never read.
    *  Natural rollout: seed the folder → review → flip this on. */
@@ -158,7 +162,7 @@ export interface MVASettings {
   exoQueueFolder: string;
   /** Root of Exo's memory layer (vault-relative). All memory paths derive from
    *  this (see core/paths.ts). Empty = unset → auto-detected at boot: an
-   *  existing `_system/` vault keeps it, a fresh vault adopts `_exo/`. */
+   *  existing legacy-root vault keeps it, a fresh vault adopts the default. */
   memoryRoot: string;
   /** Open the Cockpit view automatically when Obsidian's layout is ready. */
   cockpitOnStartup: boolean;
@@ -180,7 +184,7 @@ export interface MVASettings {
   dailyPulseReviewState: DailyPulseReviewState;
   /** Learning loop: propose saving a flow as a reusable playbook when the same
    *  KIND of task (by topic) recurs (free proposal; LLM distillation only on
-   *  accept). Recurrence is tracked in `_system/memory/playbook-signals.json`. */
+   *  accept). Recurrence is tracked in the memory folder's playbook-signals.json. */
   learningLoop: boolean;
   /** How many times a topic must recur before the playbook nudge fires. Default 3. */
   playbookThreshold: number;
@@ -269,7 +273,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   proposalKernelEnabled: true,
   proposalTurnSuggestions: false,
   exoQueueEnabled: true,
-  exoQueueFolder: "_system/exo-queue",
+  exoQueueFolder: LEGACY_QUEUE_FOLDER,
   memoryRoot: "",
   cockpitOnStartup: false,
   scheduledRuns: "",
@@ -741,17 +745,18 @@ export class MVASettingTab extends PluginSettingTab {
 
   private renderMemoryTab(el: HTMLElement): void {
     const s = this.plugin.settings;
+    const paths = this.plugin.paths;
 
     this.toggleSetting(
       el,
       "Read vault memory",
-      "Boot each conversation with context from _system/ (vault-context, preferences, rules, recent sessions). Claude only.",
+      `Boot each conversation with context from ${paths.root}/ (vault-context, preferences, rules, recent sessions). Claude only.`,
       "memoryReadEnabled"
     );
     this.toggleSetting(
       el,
       "Write vault memory",
-      "Let the agent capture decisions, learnings, and session-log entries into _system/ — every write is still permission-gated. Claude only.",
+      `Let the agent capture decisions, learnings, and session-log entries into ${paths.root}/ — every write is still permission-gated. Claude only.`,
       "memoryWriteEnabled"
     );
     this.toggleSetting(
@@ -763,7 +768,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "The agent is the folder (identity)",
-      "Hydrate every conversation from _system/agent/ — three short blocks (persona = how Exo behaves, human = a distilled model of you, now = what matters right now) that give Exo AND any external tool (Claude Code, Codex) a coherent identity. Adds the rethink_memory tool (now/human rewrite freely, persona is propose-only) and an observer that proposes now.md updates after a turn. Off by default; with it off, boot is unchanged and the folder is never read. Rollout: run \"Exo: Seed agent folder\", review human.md, then flip this on. Claude only.",
+      `Hydrate every conversation from ${paths.agentDir}/ — three short blocks (persona = how Exo behaves, human = a distilled model of you, now = what matters right now) that give Exo AND any external tool (Claude Code, Codex) a coherent identity. Adds the rethink_memory tool (now/human rewrite freely, persona is propose-only) and an observer that proposes now.md updates after a turn. Off by default; with it off, boot is unchanged and the folder is never read. Rollout: run "Exo: Seed agent folder", review human.md, then flip this on. Claude only.`,
       "agentFolderEnabled"
     );
 
@@ -831,7 +836,7 @@ export class MVASettingTab extends PluginSettingTab {
     new Setting(el)
       .setName("Memory dream pass")
       .setDesc(
-        "Consolidate _system/memory deterministically: merge duplicate learnings, promote well-evidenced ones to rules, mark stale rules. Every run is snapshotted and undoable; set a schedule to automate it, or run it manually from the command palette."
+        `Consolidate ${this.plugin.paths.memory} deterministically: merge duplicate learnings, promote well-evidenced ones to rules, mark stale rules. Every run is snapshotted and undoable; set a schedule to automate it, or run it manually from the command palette.`
       )
       .addDropdown((d) =>
         d
@@ -929,7 +934,7 @@ export class MVASettingTab extends PluginSettingTab {
     new Setting(el)
       .setName("Automations")
       .setDesc(
-        "Run playbooks unattended on a schedule (hourly / daily / weekly at a set time). Read-only runs produce a report in _system/reports/; write-enabled runs may also edit vault notes, with every touched file snapshotted so the whole run can be restored. Prompts with {{variables}} can't be scheduled."
+        `Run playbooks unattended on a schedule (hourly / daily / weekly at a set time). Read-only runs produce a report in ${this.plugin.paths.reports}/; write-enabled runs may also edit vault notes, with every touched file snapshotted so the whole run can be restored. Prompts with {{variables}} can't be scheduled.`
       )
       .addButton((b) => {
         b.setButtonText(`Manage… (${s.automations.length})`).onClick(() => {
@@ -1003,13 +1008,13 @@ export class MVASettingTab extends PluginSettingTab {
       .setName("Cartella memoria")
       .setDesc(
         "Dove Exo salva la sua memoria (vault-relative). Auto-rilevata al primo avvio: " +
-          "un vault con _system/ lo mantiene, uno nuovo usa _exo/. Cambiala per puntare Exo " +
+          `un vault con ${LEGACY_MEMORY_ROOT}/ lo mantiene, uno nuovo usa ${DEFAULT_MEMORY_ROOT}/. Cambiala per puntare Exo ` +
           "a un'altra cartella — i file esistenti NON vengono spostati; svuota il campo per " +
           "tornare all'auto-rilevamento al prossimo avvio."
       )
       .addText((t) =>
         t
-          .setPlaceholder("_exo")
+          .setPlaceholder(DEFAULT_MEMORY_ROOT)
           .setValue(s.memoryRoot)
           .onChange(async (v) => {
             s.memoryRoot = v.trim();
@@ -1022,10 +1027,10 @@ export class MVASettingTab extends PluginSettingTab {
       .setDesc("Percorso vault-relative delle note richiesta.")
       .addText((t) =>
         t
-          .setPlaceholder("_system/exo-queue")
+          .setPlaceholder(LEGACY_QUEUE_FOLDER)
           .setValue(s.exoQueueFolder)
           .onChange(async (v) => {
-            s.exoQueueFolder = v.trim() || "_system/exo-queue";
+            s.exoQueueFolder = v.trim() || LEGACY_QUEUE_FOLDER;
             await this.plugin.saveSettings();
           })
       );

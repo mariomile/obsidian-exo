@@ -108,7 +108,7 @@ class ClaudeSession implements AgentSession {
         // parity with the bare Claude Code CLI. Pinned rather than relying on the
         // SDK's implicit "omitted = load all" default, which has flipped between SDK
         // majors: this keeps CLAUDE.md honored on ANY vault, even one with no
-        // _system/ scaffold at all. Must include "project" for CLAUDE.md (SDK docs).
+        // memory scaffold at all. Must include "project" for CLAUDE.md (SDK docs).
         settingSources: ["user", "project", "local"],
         ...(opts.model && opts.model !== "default" ? { model: opts.model } : {}),
         ...(opts.effort && opts.effort !== "default"

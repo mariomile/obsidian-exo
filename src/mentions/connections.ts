@@ -23,15 +23,22 @@ import {
 } from "./mentions-core";
 import { fold } from "./tokenizer";
 import { isIgnored, filterIgnored, type IgnoreStore, EMPTY_IGNORE_STORE } from "./store-core";
+import { exoPaths, LEGACY_MEMORY_ROOT } from "../core/paths";
 
-/** Path prefixes never scanned for mentions (mirrors `rule-auto-link` exclusions). */
-export const DEFAULT_EXCLUDE_PREFIXES = [
-  "Journal/Daily/",
-  "Resources/Readwise/",
-  "Resources/Templates/",
-  "_system/",
-  ".archive/",
-];
+/** Path prefixes never scanned for mentions (mirrors `rule-auto-link` exclusions).
+ *  The memory layer is tool data, not notes, so the configured root is excluded. */
+export function defaultExcludePrefixes(memoryRoot: string): string[] {
+  return [
+    "Journal/Daily/",
+    "Resources/Readwise/",
+    "Resources/Templates/",
+    `${exoPaths(memoryRoot).root}/`,
+    ".archive/",
+  ];
+}
+
+/** Legacy-root default for tests/fallback; live callers pass the configured root. */
+export const DEFAULT_EXCLUDE_PREFIXES = defaultExcludePrefixes(LEGACY_MEMORY_ROOT);
 
 const MAX_SCAN_FILES = 4000;
 const SKIP_LARGER_THAN = 200_000;

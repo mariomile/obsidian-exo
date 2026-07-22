@@ -2,8 +2,8 @@
  * Orchestration Board — task ledger, pure logic (no Obsidian imports).
  *
  * A "task" is a unit of work that can spawn an Exo chat conversation. Tasks
- * persist in a single markdown file (`_system/orchestration/tasks.md`), one
- * block per entry, mirroring the Open-Loops Ledger's block format
+ * persist in a single markdown file (the `paths.tasks` ledger), one block per
+ * entry, mirroring the Open-Loops Ledger's block format
  * (`src/core/open-loops.ts`):
  *
  *   ## task-<epochMs>
@@ -28,8 +28,11 @@
  * interleave a read-modify-write cycle.
  */
 
-/** Canonical on-disk path for the tasks ledger. */
-export const TASKS_PATH = "_system/orchestration/tasks.md";
+import { exoPaths, LEGACY_MEMORY_ROOT } from "./paths";
+
+/** Legacy default path for the tasks ledger (tests/fallback); live callers pass
+ *  the configured `paths.tasks`. */
+export const TASKS_PATH = exoPaths(LEGACY_MEMORY_ROOT).tasks;
 
 export type TaskStatus =
   | "backlog"

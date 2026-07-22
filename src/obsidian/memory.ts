@@ -36,12 +36,12 @@ export interface BootOpts {
 }
 
 /**
- * Compose a concise "memory preamble" from the vault's `_system/` layer so the
+ * Compose a concise "memory preamble" from the vault's memory layer so the
  * agent boots with the user's context, preferences, and active rules. The agent can
  * read deeper on demand via the read_note tool.
  *
  * When `agentFolderEnabled` is ON, the compiled identity section (from
- * `_system/agent/`) is prepended BEFORE every existing section, the session-log
+ * the agent folder) is prepended BEFORE every existing section, the session-log
  * slice halves when `now.md` carries signal, and the overall cap widens to
  * {@link MAX_BOOT_AGENT}. When OFF (or absent), none of the folder is read and the
  * output is byte-identical to before this feature existed (seam test).

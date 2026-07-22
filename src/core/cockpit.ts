@@ -8,6 +8,7 @@
  */
 
 import { activeLoops, dueLoops, type LoopEntry } from "./open-loops";
+import { exoPaths, LEGACY_MEMORY_ROOT } from "./paths";
 import { formatAge } from "./actions-hub";
 import type { TaskEntry, TaskStatus } from "./tasks";
 
@@ -145,10 +146,13 @@ export function previewFromMessages(
 
 export interface HealthInput {
   inboxCount: number;
-  /** Age of _system/vault-context.md in days; null = file missing/unreadable. */
+  /** Age of the vault-context note in days; null = file missing/unreadable. */
   contextAgeDays: number | null;
   lastReport: { path: string; name: string; mtime: number } | null;
   now: number;
+  /** Vault-context note path (`paths.vaultContext`) — named in the stale-context
+   *  prompt. Absent → the legacy location (test/fallback). */
+  vaultContextPath?: string;
 }
 
 /** Maintenance debt made visible. Only real signals — a healthy vault renders
@@ -169,7 +173,7 @@ export function healthRows(h: HealthInput): CockpitRow[] {
       badge: `${Math.floor(h.contextAgeDays)}d`,
       action: {
         kind: "ask",
-        arg: "Rinfreschiamo _system/vault-context.md — è stale. Rileggi lo stato attuale del vault e proponi gli aggiornamenti alla sezione dinamica.",
+        arg: `Rinfreschiamo ${h.vaultContextPath ?? exoPaths(LEGACY_MEMORY_ROOT).vaultContext} — è stale. Rileggi lo stato attuale del vault e proponi gli aggiornamenti alla sezione dinamica.`,
       },
     });
   }

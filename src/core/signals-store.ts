@@ -3,12 +3,12 @@
  * superseded by the Workflow Foundry, which distills playbooks through the
  * Proposal Kernel (`foundry-distill.ts` + `proposal-store.ts`). This module is
  * no longer wired into the active turn path. It is retained — not deleted — so
- * `_system/memory/playbook-signals.json` remains readable for a future
+ * the on-disk playbook-signals.json remains readable for a future
  * migration; the data file itself is never auto-deleted.
  *
  * Sidecar persistence for the playbook-recurrence ledger. The ledger logic is
  * pure (`learning-loop.ts`); this is the thin Obsidian I/O layer that reads and
- * writes `_system/memory/playbook-signals.json`. It lives in `_system/` (not
+ * writes playbook-signals.json in the memory dir. It lives in the vault (not
  * plugin data) so it fits the vault's memory protocol and stays grep-inspectable.
  * Tolerant of an absent/corrupt file (→ empty ledger).
  */
@@ -17,7 +17,7 @@ import { App } from "obsidian";
 import { EMPTY_LEDGER, type SignalLedger, type PlaybookSignal } from "./learning-loop";
 import { exoPaths, LEGACY_MEMORY_ROOT } from "./paths";
 
-/** Default memory dir — legacy `_system/memory` for the retired ledger's
+/** Default memory dir — the legacy location for the retired ledger's
  *  fallback; callers on a configured vault pass `paths.memory`. */
 const LEGACY_DIR = exoPaths(LEGACY_MEMORY_ROOT).memory;
 const signalsPath = (dir: string) => `${dir}/playbook-signals.json`;

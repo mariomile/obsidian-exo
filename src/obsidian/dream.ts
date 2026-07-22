@@ -7,7 +7,7 @@ import { exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "../core/paths";
 /**
  * Deterministic (no-LLM) memory-consolidation engine — "dream" pass.
  *
- * The vault's `_system/memory/` layer accumulates raw learnings over time. This
+ * The vault's memory layer accumulates raw learnings over time. This
  * engine consolidates that layer with pure string/date/count math (no model
  * calls, fully reproducible):
  *   1. **Dedup** — collapse learnings that share a slug, summing their evidence.
@@ -90,7 +90,7 @@ function daysSince(dateStr: string, mtimeMs: number): number {
   return Math.floor((Date.now() - t) / 86400000);
 }
 
-/** Markdown files living directly under a `_system/memory/*` directory. */
+/** Markdown files living directly under a memory-layer directory. */
 function filesIn(app: App, dir: string): TFile[] {
   return app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(dir + "/"));
 }

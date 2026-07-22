@@ -294,7 +294,7 @@ export class BoardView extends ItemView {
       this.bannerEl = createDiv({ cls: "mva-board-error" });
       setIcon(this.bannerEl.createSpan({ cls: "mva-board-error-icon" }), "alert-triangle");
       this.bannerEl.createSpan({
-        text: "Some tasks in the ledger look malformed. They're shown as best-effort; check _system/orchestration/tasks.md.",
+        text: `Some tasks in the ledger look malformed. They're shown as best-effort; check ${this.plugin.paths.tasks}.`,
       });
       this.boardEl.prepend(this.bannerEl);
     } else if (!this.loadWarnings.length && this.bannerEl) {

@@ -28,7 +28,7 @@ import type { TaskEntry } from "../core/tasks";
 import type { WriteQueue } from "../core/write-queue";
 import { exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "../core/paths";
 
-/** Legacy default review-note path (`_system/review.md`). Live callers pass the
+/** Legacy default review-note path. Live callers pass the
  *  configured `paths.review`; kept as the module-level default so the many
  *  existing call sites and tests stay byte-identical. */
 export const DAILY_PULSE_TARGET_PATH = exoPaths(LEGACY_MEMORY_ROOT).review;
@@ -106,7 +106,7 @@ export interface DailyPulseCollectionOptions {
   /** Missing on the first run; a bounded 24-hour lookback is used instead. */
   lastPulseAt?: number | null;
   /** The review-note path to exclude from "recent notes" (Exo's own output must
-   *  not surface as a recent note). Absent → legacy `_system/review.md`. */
+   *  not surface as a recent note). Absent → the legacy review-note path. */
   reviewPath?: string;
 }
 

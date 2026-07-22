@@ -24,7 +24,7 @@ export interface ClaudeMemObservation {
   createdAtEpoch: number;
 }
 
-/** Import watermark, persisted at `_system/memory/claudemem-sync-state.json`. */
+/** Import watermark, persisted at the configured `paths.claudememSync`. */
 export interface SyncState {
   /** Highest observation `id` already imported into the store. */
   lastImportedId: number;

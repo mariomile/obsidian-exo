@@ -72,7 +72,7 @@ export class AutomationsModal extends Modal {
     contentEl.createEl("h3", { text: "Automations" });
     contentEl.createDiv({
       cls: "mva-auto-sub",
-      text: "Playbooks that run unattended on a schedule. Read-only runs report to _system/reports/; write runs may also edit notes — every touched file is snapshotted and the whole run can be restored below.",
+      text: `Playbooks that run unattended on a schedule. Read-only runs report to ${this.plugin.paths.reports}/; write runs may also edit notes — every touched file is snapshotted and the whole run can be restored below.`,
     });
 
     const list = contentEl.createDiv({ cls: "mva-auto-list" });

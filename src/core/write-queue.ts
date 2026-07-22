@@ -1,7 +1,7 @@
 /**
  * WriteQueue — a pure, in-process promise-chain serializer (no Obsidian imports).
  *
- * Every append to the Memory Union Store (`_system/memory/store/`) must go through
+ * Every append to the Memory Union Store (`paths.store`) must go through
  * ONE shared WriteQueue so concurrent writers — the `remember` tool today, the
  * future observer and dream passes — never interleave a read-modify-write cycle
  * and never clobber a monthly store file.
