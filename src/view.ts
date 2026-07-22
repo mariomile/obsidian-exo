@@ -496,6 +496,7 @@ export class ChatView extends ItemView {
     // Per-chat agents chip: in-flow sibling of listWrap, created BEFORE the composer
     // so it pins directly above it. Reflects only the OPEN chat's own background work.
     this.agentChipEl = this.listWrap.createDiv({ cls: "mva-agents is-hidden" });
+    this.clickable(this.agentChipEl, () => this.toggleAgentPopover());
     this.buildComposer();
     // View-level Esc-to-stop: the composer's own Escape handler only fires while the
     // textarea is focused, but clicking into the transcript blurs it — so "esc to stop"
@@ -602,6 +603,7 @@ export class ChatView extends ItemView {
     for (const c of this.convos) this.dropSession(c);
     this.memoryObserver?.dispose();
     this.memoryObserver = null;
+    this.closeAgentPopover();
   }
 
   /** Build the composer subsystem, wiring the narrow host adapter (turn engine,
@@ -4373,7 +4375,7 @@ export class ChatView extends ItemView {
   private liveUpsert(c: Convo, rec: LiveTaskRecord): void {
     c.liveTasks.set(rec.id, rec);
     this.refreshAgentIndicators();
-    this.renderAgentPopover(); // no-op until Task 4 adds it; declared there
+    this.renderAgentPopover();
   }
 
   /** Mark a live task terminal (done/error/stopped), stamp `doneAt`, and schedule
@@ -4415,7 +4417,7 @@ export class ChatView extends ItemView {
       row.createSpan({ cls: `mva-subagent-dot ${liveTaskDotClass(rec.status)}` });
       row.createSpan({ cls: "mva-agents-row-label", text: rec.label });
       row.createSpan({ cls: "mva-agents-row-status", text: liveTaskStatusText(rec.status) });
-      this.clickable(row, () => this.jumpToLiveTask(rec)); // added in Task 5
+      this.clickable(row, () => this.jumpToLiveTask(rec));
       const x = row.createSpan({ cls: "mva-agents-row-x" });
       setIcon(x, "x");
       this.clickable(x, (e) => {
@@ -4482,7 +4484,6 @@ export class ChatView extends ItemView {
     setIcon(icon, sum.spinner ? "loader" : "check");
     chip.createSpan({ cls: "mva-agents-label", text: sum.chipLabel });
     setIcon(chip.createSpan({ cls: "mva-agents-caret" }), "chevron-up");
-    this.clickable(chip, () => this.toggleAgentPopover());
     if (this.agentPopoverEl) chip.appendChild(this.agentPopoverEl);
   }
 
