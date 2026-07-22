@@ -138,6 +138,13 @@ class ClaudeSession implements AgentSession {
         })(),
         ...(opts.resumeSessionId ? { resume: opts.resumeSessionId } : {}),
         pathToClaudeCodeExecutable: opts.cli.bin,
+        // Obsidian (a GUI app) doesn't inherit the login-shell PATH, so external
+        // MCP stdio servers the CLI spawns (e.g. `npx @playwright/mcp`, plugin
+        // `.cjs` runners needing `node`) fail to launch and surface as "isn't
+        // connected". Pass the enriched PATH that cli.ts already resolves — the
+        // same fix the Codex provider carries (codex.ts). HTTP servers (e.g. a
+        // local Thymer port) are unaffected: those fail only when their app is down.
+        env: { ...process.env, PATH: opts.cli.pathEnv },
         includePartialMessages: true,
         // Keep a short tail of CLI stderr so an opaque execution error (empty
         // `result`) can still surface actionable detail. Bounded ring buffer.
