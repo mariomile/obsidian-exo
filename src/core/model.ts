@@ -5,8 +5,6 @@
  * unit-tested without importing `obsidian`.
  */
 
-import { normalizeResearchReceipt, type ResearchReceipt } from "./research";
-
 export interface AskQuestion {
   question: string;
   header: string;
@@ -31,7 +29,6 @@ export type Message =
       role: "assistant";
       segments: Segment[];
       checkpoint?: Checkpoint;
-      researchReceipt?: ResearchReceipt;
     };
 
 /** On-disk form of a message: the checkpoint Map is stored as [path, content] entries.
@@ -42,7 +39,6 @@ export type PersistedMessage =
       role: "assistant";
       segments: Segment[];
       checkpoint?: [string, string | null][];
-      researchReceipt?: ResearchReceipt;
     };
 
 export interface MessagePersistenceLimits {
@@ -70,18 +66,15 @@ export function persistMessage(
           ),
         }
       : {}),
-    ...(message.researchReceipt ? { researchReceipt: message.researchReceipt } : {}),
   };
 }
 
 /** Canonical disk → runtime codec; old messages naturally omit new fields. */
 export function revivePersistedMessage(message: PersistedMessage): Message {
   if (message.role === "user") return message;
-  const researchReceipt = normalizeResearchReceipt(message.researchReceipt);
   return {
     role: "assistant",
     segments: message.segments,
     ...(Array.isArray(message.checkpoint) ? { checkpoint: new Map(message.checkpoint) } : {}),
-    ...(researchReceipt ? { researchReceipt } : {}),
   };
 }

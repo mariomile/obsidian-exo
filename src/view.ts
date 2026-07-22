@@ -96,13 +96,11 @@ import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, typ
 import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
 import { caretHost, type CaretNode } from "./core/caret-host";
 import {
-  buildResearchReceipt,
   buildResearchOutbound,
   initialResearchModeState,
   normalizeResearchModeState,
   parseResearchCommand,
   toggleResearchMode as nextResearchMode,
-  type ResearchReceipt,
   type ResearchModeState,
 } from "./core/research";
 
@@ -557,21 +555,8 @@ export class ChatView extends ItemView {
       this.recapHost,
       buildConvoRecap(this.active.messages, (p) => this.relPath(p)),
       null,
-      {
-        enabled: this.active.researchMode.enabled,
-        receipt: this.latestResearchReceipt(this.active),
-      }
+      { enabled: this.active.researchMode.enabled }
     );
-  }
-
-  private latestResearchReceipt(c: Convo): ResearchReceipt | undefined {
-    for (let index = c.messages.length - 1; index >= 0; index--) {
-      const message = c.messages[index];
-      // The rail describes the latest assistant result. Do not let an older
-      // research receipt mask newer ordinary-chat knowledge in the recap.
-      if (message.role === "assistant") return message.researchReceipt;
-    }
-    return undefined;
   }
 
   /** Live Context refresh during a streaming turn. Same panel, but two things
@@ -590,10 +575,7 @@ export class ChatView extends ItemView {
       this.recapHost,
       buildConvoRecap(live, (p) => this.relPath(p)),
       this.currentActivity,
-      {
-        enabled: this.active.researchMode.enabled,
-        receipt: this.latestResearchReceipt(this.active),
-      }
+      { enabled: this.active.researchMode.enabled }
     );
   }
 
@@ -5135,30 +5117,11 @@ export class ChatView extends ItemView {
         ctx.el.addClass("mva-aborted");
         ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
       }
-      const researchReceipt = ctx.segments.length && researchMode.enabled
-        ? buildResearchReceipt({
-            state: researchMode,
-            completedAt: Date.now(),
-            availability: {
-              vault: s.toolsEnabled,
-              web: c.provider === "claude" && s.toolsEnabled,
-              mcpServers: (turnCaps?.mcpServers ?? []).filter((server) =>
-                server.name.toLowerCase() !== "obsidian"
-              ),
-            },
-            tools: ctx.segments.flatMap((segment) =>
-              segment.t === "tool"
-                ? [{ name: segment.name, input: segment.input, ok: segment.ok }]
-                : []
-            ),
-          })
-        : undefined;
       if (ctx.segments.length) {
         c.messages.push({
           role: "assistant",
           segments: ctx.segments,
           ...(checkpoint.size ? { checkpoint } : {}),
-          ...(researchReceipt ? { researchReceipt } : {}),
         });
       }
       // Turn finalized — the live activity row is gone; refresh the conversation

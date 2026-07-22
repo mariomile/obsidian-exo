@@ -10,11 +10,6 @@
  */
 import { App, setIcon, setTooltip } from "obsidian";
 import type { Recap, RecapWeb, RecapWrite } from "../core/recap";
-import {
-  summarizeResearchReceipt,
-  type ResearchReceipt,
-  type ResearchReceiptSource,
-} from "../core/research";
 import { basename as noteBasename } from "../obsidian/graph";
 import { clickable } from "./dom";
 
@@ -39,23 +34,15 @@ export class RecapPanel {
     container: HTMLElement,
     recap: Recap,
     current?: { phrase: string } | null,
-    research?: { enabled: boolean; receipt?: ResearchReceipt }
+    research?: { enabled: boolean }
   ): void {
     container.empty();
-    const total = recap.web.length + recap.read.length + recap.written.length + recap.skills.length
-      + (research?.receipt?.sources.length ?? 0);
+    const total = recap.web.length + recap.read.length + recap.written.length + recap.skills.length;
     const titleRow = container.createDiv({ cls: "mva-recap-title" });
     titleRow.createSpan({
       cls: "mva-recap-title-text",
-      text: research?.enabled || research?.receipt ? "Research" : "Context",
+      text: research?.enabled ? "Research" : "Context",
     });
-    if (research?.receipt) {
-      const summary = summarizeResearchReceipt(research.receipt);
-      titleRow.createSpan({
-        cls: `mva-research-summary is-${research.receipt.status}`,
-        text: summary.label,
-      });
-    }
     if (current) this.nowRow(container, current.phrase);
     if (total === 0) {
       // A live current-activity row is enough on its own — the placeholder only
@@ -75,11 +62,7 @@ export class RecapPanel {
     // per-kind icons: WebSearch = query, WebFetch = fetched URL) and come first,
     // then the vault notes read — a subtle sub-label separates the two when both
     // are present so web reads as its own cluster, not mixed into notes.
-    if (research?.receipt) {
-      const summary = summarizeResearchReceipt(research.receipt);
-      const body = this.section(container, "Sources", summary.consulted || undefined);
-      for (const source of research.receipt.sources) this.researchSourceRow(body, source);
-    } else if (recap.web.length || recap.read.length) {
+    if (recap.web.length || recap.read.length) {
       const body = this.section(container, "Knowledge", recap.web.length || undefined);
       const bothKinds = recap.web.length > 0 && recap.read.length > 0;
       if (recap.web.length) {
@@ -106,18 +89,6 @@ export class RecapPanel {
       const chips = body.createDiv({ cls: "mva-recap-chips" });
       for (const s of recap.skills) chips.createSpan({ cls: "mva-recap-chip", text: s });
     }
-  }
-
-  private researchSourceRow(parent: HTMLElement, source: ResearchReceiptSource): void {
-    const row = parent.createDiv({ cls: `mva-recap-row mva-research-source is-${source.status}` });
-    const icon = source.kind === "vault" ? "file-text" : source.kind === "web" ? "globe" : "database";
-    setIcon(row.createSpan({ cls: "mva-recap-ico" }), icon);
-    row.createSpan({ cls: "mva-recap-label", text: source.label });
-    row.createSpan({
-      cls: "mva-research-source-status",
-      text: source.status === "consulted" ? "Checked" : source.status,
-    });
-    if (source.detail) setTooltip(row, source.detail);
   }
 
   /** Live current-activity row: a subtle pulse dot + the in-flight tool phrase,
