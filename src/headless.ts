@@ -6,6 +6,7 @@ import { createObsidianToolServer, OBSIDIAN_READ_TOOLS } from "./obsidian/tools"
 import { READ_ONLY_TOOLS, toolFilePath, toolFilePaths } from "./ui/tools";
 import { isReadOnlyExternalTool } from "./core/headless-tools";
 import { WRITE_TOOLS } from "./core/touched";
+import { exoPaths, LEGACY_MEMORY_ROOT } from "./core/paths";
 import type { MVASettings } from "./settings";
 
 /** Per-step idle timeout — no event for this long aborts the run (bounded autonomy). */
@@ -187,9 +188,15 @@ export async function runHeadlessPlaybook(
   }
 }
 
-/** Write the run report to _system/reports/ and return its vault path. */
-export async function writeReport(app: App, name: string, result: HeadlessResult): Promise<string> {
-  const dir = "_system/reports";
+/** Write the run report to the configured reports dir and return its vault path.
+ *  `reportsDir` defaults to the legacy `_system/reports` for tests/fallback. */
+export async function writeReport(
+  app: App,
+  name: string,
+  result: HeadlessResult,
+  reportsDir: string = exoPaths(LEGACY_MEMORY_ROOT).reports
+): Promise<string> {
+  const dir = reportsDir;
   if (!app.vault.getAbstractFileByPath(dir)) {
     try {
       await app.vault.createFolder(dir);

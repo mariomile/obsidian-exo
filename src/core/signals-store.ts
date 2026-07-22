@@ -15,9 +15,12 @@
 
 import { App } from "obsidian";
 import { EMPTY_LEDGER, type SignalLedger, type PlaybookSignal } from "./learning-loop";
+import { exoPaths, LEGACY_MEMORY_ROOT } from "./paths";
 
-const DIR = "_system/memory";
-const PATH = `${DIR}/playbook-signals.json`;
+/** Default memory dir — legacy `_system/memory` for the retired ledger's
+ *  fallback; callers on a configured vault pass `paths.memory`. */
+const LEGACY_DIR = exoPaths(LEGACY_MEMORY_ROOT).memory;
+const signalsPath = (dir: string) => `${dir}/playbook-signals.json`;
 
 function isSignal(x: unknown): x is PlaybookSignal {
   const s = x as Partial<PlaybookSignal> | null;
@@ -31,10 +34,11 @@ function isSignal(x: unknown): x is PlaybookSignal {
   );
 }
 
-export async function loadSignalLedger(app: App): Promise<SignalLedger> {
+export async function loadSignalLedger(app: App, dir: string = LEGACY_DIR): Promise<SignalLedger> {
+  const path = signalsPath(dir);
   try {
-    if (!(await app.vault.adapter.exists(PATH))) return EMPTY_LEDGER;
-    const parsed = JSON.parse(await app.vault.adapter.read(PATH)) as Partial<SignalLedger>;
+    if (!(await app.vault.adapter.exists(path))) return EMPTY_LEDGER;
+    const parsed = JSON.parse(await app.vault.adapter.read(path)) as Partial<SignalLedger>;
     if (!parsed || !Array.isArray(parsed.signals)) return EMPTY_LEDGER;
     return { signals: parsed.signals.filter(isSignal) };
   } catch {
@@ -42,7 +46,7 @@ export async function loadSignalLedger(app: App): Promise<SignalLedger> {
   }
 }
 
-export async function saveSignalLedger(app: App, ledger: SignalLedger): Promise<void> {
-  if (!(await app.vault.adapter.exists(DIR))) await app.vault.adapter.mkdir(DIR);
-  await app.vault.adapter.write(PATH, JSON.stringify(ledger, null, 2));
+export async function saveSignalLedger(app: App, ledger: SignalLedger, dir: string = LEGACY_DIR): Promise<void> {
+  if (!(await app.vault.adapter.exists(dir))) await app.vault.adapter.mkdir(dir);
+  await app.vault.adapter.write(signalsPath(dir), JSON.stringify(ledger, null, 2));
 }

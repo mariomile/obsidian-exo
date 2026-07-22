@@ -2151,7 +2151,8 @@ export class ChatView extends ItemView {
         (prompt, signal) => this.plugin.runObserver(prompt, signal),
         // Same shared store write-queue the `remember` tool uses — observer
         // appends and undo serialize against every other store writer (w1-1).
-        this.plugin.memoryWriteQueue
+        this.plugin.memoryWriteQueue,
+        this.plugin.paths.store
       );
     }
     return this.memoryObserver;

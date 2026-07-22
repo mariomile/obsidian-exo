@@ -12,11 +12,13 @@ import {
   type ClaudeMemObservation,
   type SyncState,
 } from "../core/claudemem-reader";
+import { exoPaths, LEGACY_MEMORY_ROOT } from "../core/paths";
 
 const execFileAsync = promisify(execFile);
 
-/** Watermark file (last imported observation id), inside the AI memory layer. */
-const SYNC_STATE_PATH = "_system/memory/claudemem-sync-state.json";
+/** Default watermark file — legacy `_system/…` for tests/fallback; live callers
+ *  pass the configured `paths.claudememSync`. */
+const LEGACY_SYNC_STATE_PATH = exoPaths(LEGACY_MEMORY_ROOT).claudememSync;
 /** Verified location of the claude-mem SQLite DB (inspected 2026-07-05). */
 const DB_PATH = path.join(os.homedir(), ".claude-mem", "claude-mem.db");
 
@@ -26,21 +28,26 @@ const DB_PATH = path.join(os.homedir(), ".claude-mem", "claude-mem.db");
 let hasWarnedOnce = false;
 
 /** Read + parse the import watermark (zero watermark on missing/garbage). */
-export async function readSyncState(app: App): Promise<SyncState> {
+export async function readSyncState(app: App, syncStatePath: string = LEGACY_SYNC_STATE_PATH): Promise<SyncState> {
   try {
     const adapter = app.vault.adapter;
-    if (!(await adapter.exists(SYNC_STATE_PATH))) return initialSyncState();
-    return parseSyncState(await adapter.read(SYNC_STATE_PATH));
+    if (!(await adapter.exists(syncStatePath))) return initialSyncState();
+    return parseSyncState(await adapter.read(syncStatePath));
   } catch {
     return initialSyncState();
   }
 }
 
 /** Persist the watermark through the shared write-queue (serializes with store writes). */
-export async function writeSyncState(app: App, queue: WriteQueue, state: SyncState): Promise<void> {
+export async function writeSyncState(
+  app: App,
+  queue: WriteQueue,
+  state: SyncState,
+  syncStatePath: string = LEGACY_SYNC_STATE_PATH
+): Promise<void> {
   await queue.enqueue(async () => {
     try {
-      await app.vault.adapter.write(SYNC_STATE_PATH, JSON.stringify(state, null, 2));
+      await app.vault.adapter.write(syncStatePath, JSON.stringify(state, null, 2));
     } catch {
       /* non-fatal — the watermark just won't advance this run */
     }
@@ -52,10 +59,11 @@ export async function advanceAndPersistWatermark(
   app: App,
   queue: WriteQueue,
   importedIds: readonly number[],
-  runISO: string
+  runISO: string,
+  syncStatePath: string = LEGACY_SYNC_STATE_PATH
 ): Promise<void> {
-  const current = await readSyncState(app);
-  await writeSyncState(app, queue, advanceWatermark(current, importedIds, runISO));
+  const current = await readSyncState(app, syncStatePath);
+  await writeSyncState(app, queue, advanceWatermark(current, importedIds, runISO), syncStatePath);
 }
 
 /** SQL-escape a single-quoted string literal (double the quotes). */
@@ -69,6 +77,8 @@ export interface ReadObservationsOpts {
   projects: string[];
   /** Max rows to read (N=100 for the dream stage). */
   limit: number;
+  /** Watermark file path. Absent → legacy `_system/…` (test/fallback). */
+  syncStatePath?: string;
 }
 
 /**
@@ -87,7 +97,7 @@ export async function readUnimportedObservations(
   opts: ReadObservationsOpts
 ): Promise<ClaudeMemObservation[]> {
   try {
-    const { lastImportedId } = await readSyncState(app);
+    const { lastImportedId } = await readSyncState(app, opts.syncStatePath ?? LEGACY_SYNC_STATE_PATH);
     const afterId = Math.max(0, Math.floor(Number.isFinite(lastImportedId) ? lastImportedId : 0));
     const limit = Math.max(1, Math.min(500, Math.floor(opts.limit) || 100));
     const projects = opts.projects.filter((p) => typeof p === "string" && p.length);

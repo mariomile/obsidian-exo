@@ -80,7 +80,6 @@ import {
 } from "./core/daily-pulse";
 import {
   generateAndWriteDailyPulse,
-  DAILY_PULSE_TARGET_PATH,
   type DailyPulseCollectionWarning,
 } from "./obsidian/daily-pulse";
 import {
@@ -1694,7 +1693,7 @@ export default class ExoPlugin extends Plugin {
         snap = mergeSnapshots(snap, llmSnap);
         // Watermark advances ONLY on apply (never on propose/preview).
         if (llm.writePlan.importedIds.length) {
-          await advanceAndPersistWatermark(this.app, this.memoryWriteQueue, llm.writePlan.importedIds, ranAt);
+          await advanceAndPersistWatermark(this.app, this.memoryWriteQueue, llm.writePlan.importedIds, ranAt, this.paths.claudememSync);
         }
         // Persist applied keys so the next run's gate culls duplicates.
         this.settings.appliedProposalKeys = [...this.settings.appliedProposalKeys, ...llm.writePlan.keys].slice(-500);
@@ -1736,6 +1735,7 @@ export default class ExoPlugin extends Plugin {
       const observations = await readUnimportedObservations(this.app, {
         projects: s.claudememProjects,
         limit: 100,
+        syncStatePath: this.paths.claudememSync,
       });
       const result = await runDreamLlm({
         app: this.app,
@@ -1861,7 +1861,7 @@ export default class ExoPlugin extends Plugin {
     const startedAt = Date.now();
     new Notice(`Running playbook "${name}"…`);
     const result = await runHeadlessPlaybook(this.app, this.settings, prompt, opts);
-    const path = await writeReport(this.app, name, result);
+    const path = await writeReport(this.app, name, result, this.paths.reports);
     if (opts.write) await this.recordAutomationRun(name, startedAt, result, path);
     new Notice(
       result.ok ? `Playbook "${name}" done → ${path}` : `Playbook "${name}" failed (report: ${path})`
@@ -2181,7 +2181,7 @@ export default class ExoPlugin extends Plugin {
     }, this.dailyPulseWriteQueue, {
       now,
       lastPulseAt: pulseState.lastSuccessAt || null,
-    });
+    }, this.paths);
 
     return {
       warnings: generated.warnings,
@@ -2268,7 +2268,8 @@ export default class ExoPlugin extends Plugin {
 
   /** Pull surface: generate on first explicit open, then mark current items reviewed. */
   async openDailyPulse(): Promise<void> {
-    let file = this.app.vault.getAbstractFileByPath(DAILY_PULSE_TARGET_PATH);
+    const reviewPath = this.paths.review;
+    let file = this.app.vault.getAbstractFileByPath(reviewPath);
     if (!(file instanceof TFile)) {
       const ok = await this.generateAndPersistDailyPulse(Date.now(), true);
       if (!ok) {
@@ -2276,14 +2277,14 @@ export default class ExoPlugin extends Plugin {
         new Notice("Daily Pulse could not be refreshed. Retry from Automations.");
         return;
       }
-      file = this.app.vault.getAbstractFileByPath(DAILY_PULSE_TARGET_PATH);
+      file = this.app.vault.getAbstractFileByPath(reviewPath);
     }
     if (!(file instanceof TFile)) {
       await this.refreshCockpit();
       new Notice("Daily Pulse review note is unavailable.");
       return;
     }
-    await this.app.workspace.openLinkText(DAILY_PULSE_TARGET_PATH, "", "tab");
+    await this.app.workspace.openLinkText(reviewPath, "", "tab");
     await this.dailyPulseOperationQueue.enqueue(async () => {
       const state = this.settings.dailyPulseReviewState;
       if (state.lastSuccessAt > state.lastReviewedAt) {

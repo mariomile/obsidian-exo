@@ -122,7 +122,7 @@ export function mentionsExtension(plugin: ExoPlugin) {
       private async run(view: EditorView): Promise<void> {
         const file = fileForView(plugin, view);
         if (!file) return;
-        const ignore = await loadIgnoreStore(plugin.app);
+        const ignore = await loadIgnoreStore(plugin.app, plugin.paths.mentions);
         const flats = await gatherOutgoing(plugin.app, file, ignore, {
           stem: !!plugin.settings.connectionsStemming,
           text: view.state.doc.toString(),
@@ -159,6 +159,7 @@ export function mentionsExtension(plugin: ExoPlugin) {
             allRanges: ranges,
             anchor: { x: e.clientX, y: e.clientY + 12 },
             onChange: () => view.dispatch({ effects: forceRecompute.of(null) }),
+            mentionsDir: plugin.paths.mentions,
           });
           return false;
         },

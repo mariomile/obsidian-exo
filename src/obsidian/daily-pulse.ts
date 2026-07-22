@@ -26,8 +26,12 @@ import { dueLoops, type LoopEntry } from "../core/open-loops";
 import type { ProposalKind } from "../core/proposals";
 import type { TaskEntry } from "../core/tasks";
 import type { WriteQueue } from "../core/write-queue";
+import { exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "../core/paths";
 
-export const DAILY_PULSE_TARGET_PATH = "_system/review.md";
+/** Legacy default review-note path (`_system/review.md`). Live callers pass the
+ *  configured `paths.review`; kept as the module-level default so the many
+ *  existing call sites and tests stay byte-identical. */
+export const DAILY_PULSE_TARGET_PATH = exoPaths(LEGACY_MEMORY_ROOT).review;
 export const DAILY_PULSE_START_MARKER = "<!-- exo:daily-pulse:start -->";
 export const DAILY_PULSE_END_MARKER = "<!-- exo:daily-pulse:end -->";
 export const DAILY_PULSE_FIRST_RUN_LOOKBACK_MS = 24 * 60 * 60 * 1_000;
@@ -101,6 +105,9 @@ export interface DailyPulseCollectionOptions {
   now: number;
   /** Missing on the first run; a bounded 24-hour lookback is used instead. */
   lastPulseAt?: number | null;
+  /** The review-note path to exclude from "recent notes" (Exo's own output must
+   *  not surface as a recent note). Absent → legacy `_system/review.md`. */
+  reviewPath?: string;
 }
 
 export interface DailyPulseCollectionResult {
@@ -138,7 +145,7 @@ export class DailyPulseWriteError extends Error {
 }
 
 export interface DailyPulseWriteResult {
-  path: typeof DAILY_PULSE_TARGET_PATH;
+  path: string;
   created: boolean;
   changed: boolean;
 }
@@ -191,10 +198,10 @@ function normalizeVaultPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
-function isExcludedRecentPath(path: string): boolean {
+function isExcludedRecentPath(path: string, reviewPath: string): boolean {
   return path === ".obsidian"
     || path.startsWith(".obsidian/")
-    || path === DAILY_PULSE_TARGET_PATH
+    || path === reviewPath
     || path === "Resources/_artifacts"
     || path.startsWith("Resources/_artifacts/");
 }
@@ -202,12 +209,13 @@ function isExcludedRecentPath(path: string): boolean {
 function collectRecentNotes(
   candidates: readonly RecentNoteCandidate[],
   modifiedAfter: number,
-  now: number
+  now: number,
+  reviewPath: string
 ): DailyPulseInput["recentNotes"] {
   const newestByPath = new Map<string, number>();
   for (const candidate of candidates.slice(0, DAILY_PULSE_RECENT_NOTE_SCAN_LIMIT)) {
     const path = normalizeVaultPath(candidate.path);
-    if (!path || !/\.md$/i.test(path) || isExcludedRecentPath(path)) continue;
+    if (!path || !/\.md$/i.test(path) || isExcludedRecentPath(path, reviewPath)) continue;
     if (!Number.isFinite(candidate.mtime)
       || candidate.mtime <= modifiedAfter
       || candidate.mtime > now) continue;
@@ -245,6 +253,7 @@ export async function collectDailyPulseInput(
   options: DailyPulseCollectionOptions
 ): Promise<DailyPulseCollectionResult> {
   const { now } = options;
+  const reviewPath = options.reviewPath ?? DAILY_PULSE_TARGET_PATH;
   const modifiedAfter = recentBoundary(now, options.lastPulseAt);
   const [tasks, loops, proposals, automations, notes, budget] = await Promise.all([
     capture("tasks", () => sources.taskStore.load(), { tasks: [], warnings: [] }),
@@ -299,7 +308,7 @@ export async function collectDailyPulseInput(
         startedAt: run.startedAt,
         writes: [...run.writes],
       })),
-      recentNotes: collectRecentNotes(notes.value, modifiedAfter, now),
+      recentNotes: collectRecentNotes(notes.value, modifiedAfter, now, reviewPath),
       budget: {
         remaining: budget.value === null ? null : remainingBudget(budget.value, now),
         ...(budget.value === null ? {} : { enabled: budget.value.enabled }),
@@ -361,13 +370,18 @@ function wikiPath(value: string): string {
   return value.replace(/\\/g, "/").replace(/\.md$/i, "").replace(/\]/g, "\\]");
 }
 
-function itemLabel(item: DailyPulseItem): string {
+/** Strip the `.md` suffix so a vault path becomes a wikilink target. */
+function wikiTarget(path: string): string {
+  return path.replace(/\.md$/i, "");
+}
+
+function itemLabel(item: DailyPulseItem, paths: ExoPaths): string {
   const alias = wikiAlias(item.title);
   switch (item.target.kind) {
     case "task":
-      return `[[_system/orchestration/tasks|${alias}]]`;
+      return `[[${wikiTarget(paths.tasks)}|${alias}]]`;
     case "loop":
-      return `[[_system/memory/open-loops|${alias}]]`;
+      return `[[${wikiTarget(paths.openLoops)}|${alias}]]`;
     case "note":
       return `[[${wikiPath(item.target.path)}|${alias}]]`;
     case "proposal":
@@ -424,7 +438,8 @@ function warningLabel(source: DailyPulseCollectionSource): string {
 /** Render marker contents only; callers own marker placement and file IO. */
 export function renderDailyPulseBlock(
   pulse: DailyPulse,
-  warnings: readonly DailyPulseCollectionWarning[]
+  warnings: readonly DailyPulseCollectionWarning[],
+  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT)
 ): string {
   const lines = [
     "# Daily Pulse",
@@ -446,7 +461,7 @@ export function renderDailyPulseBlock(
   for (const section of pulse.sections) {
     lines.push("", `## ${section.title}`, "");
     for (const item of section.items) {
-      lines.push(`- ${itemLabel(item)}${item.detail ? ` — ${oneLine(item.detail)}` : ""}`);
+      lines.push(`- ${itemLabel(item, paths)}${item.detail ? ` — ${oneLine(item.detail)}` : ""}`);
       if (item.action) {
         lines.push(
           `  - Action: ${actionText(item.action)}`,
@@ -501,11 +516,13 @@ export function writeDailyPulse(
   adapter: DailyPulseFileAdapter,
   queue: WriteQueue,
   pulse: DailyPulse,
-  warnings: readonly DailyPulseCollectionWarning[]
+  warnings: readonly DailyPulseCollectionWarning[],
+  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT)
 ): Promise<DailyPulseWriteResult> {
+  const reviewPath = paths.review;
   return queue.enqueue(async () => {
-    const current = await adapter.read(DAILY_PULSE_TARGET_PATH);
-    const rendered = renderDailyPulseBlock(pulse, warnings);
+    const current = await adapter.read(reviewPath);
+    const rendered = renderDailyPulseBlock(pulse, warnings, paths);
     const created = current === null;
     let next: string;
 
@@ -519,10 +536,10 @@ export function writeDailyPulse(
     }
 
     if (next === current) {
-      return { path: DAILY_PULSE_TARGET_PATH, created: false, changed: false };
+      return { path: reviewPath, created: false, changed: false };
     }
-    await adapter.write(DAILY_PULSE_TARGET_PATH, next);
-    return { path: DAILY_PULSE_TARGET_PATH, created, changed: true };
+    await adapter.write(reviewPath, next);
+    return { path: reviewPath, created, changed: true };
   });
 }
 
@@ -531,10 +548,11 @@ export async function generateAndWriteDailyPulse(
   sources: DailyPulseCollectionSources,
   adapter: DailyPulseFileAdapter,
   queue: WriteQueue,
-  options: DailyPulseCollectionOptions
+  options: DailyPulseCollectionOptions,
+  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT)
 ): Promise<GeneratedDailyPulse> {
-  const collected = await collectDailyPulseInput(sources, options);
+  const collected = await collectDailyPulseInput(sources, { ...options, reviewPath: options.reviewPath ?? paths.review });
   const pulse = buildDailyPulse(collected.input);
-  const write = await writeDailyPulse(adapter, queue, pulse, collected.warnings);
+  const write = await writeDailyPulse(adapter, queue, pulse, collected.warnings, paths);
   return { pulse, warnings: collected.warnings, write };
 }

@@ -28,6 +28,8 @@ export interface MentionPopoverCtx {
   anchor: { x: number; y: number };
   /** Recompute + repaint after an action changes the mention set. */
   onChange: () => void;
+  /** Configured mentions dir (`paths.mentions`) for the ignore-list store. */
+  mentionsDir: string;
 }
 
 let current: HTMLElement | null = null;
@@ -81,7 +83,7 @@ export function openMentionPopover(ctx: MentionPopoverCtx): void {
     });
   }
   button(el, "Ignore", () => {
-    void ignoreMention(ctx.app, fold(ctx.targetBasename), ctx.sourcePath, Date.now()).then(() => {
+    void ignoreMention(ctx.app, fold(ctx.targetBasename), ctx.sourcePath, Date.now(), ctx.mentionsDir).then(() => {
       closeMentionPopover();
       ctx.onChange();
     });

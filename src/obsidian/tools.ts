@@ -382,7 +382,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     async (args) => {
       const file = args.target ? need(args.target) : app.workspace.getActiveFile();
       if (!file) return ok("No active note.");
-      const ignore = await loadIgnoreStore(app);
+      const ignore = await loadIgnoreStore(app, paths.mentions);
       const c = await gatherConnections(app, file, ignore);
       const fmt = (xs: string[]) => (xs.length ? xs.map((p) => `  - [[${p}]]`).join("\n") : "  (none)");
       const unlinked = c.unlinked.length
@@ -635,7 +635,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     async (args) => {
       const source = need(args.source);
       const target = need(args.target);
-      await ignoreMention(app, fold(target.basename), source.path, Date.now());
+      await ignoreMention(app, fold(target.basename), source.path, Date.now(), paths.mentions);
       return ok(`Ignoring mentions of [[${target.basename}]] in [[${source.path}]].`);
     }
   );

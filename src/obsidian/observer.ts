@@ -17,9 +17,11 @@ import {
   type TurnDigest,
   type NowProposal,
 } from "../core/observer";
+import { exoPaths, LEGACY_MEMORY_ROOT } from "../core/paths";
 
-/** Folder holding the append-only Memory Union Store (monthly markdown files). */
-const MEMORY_STORE_DIR = "_system/memory/store";
+/** Default store dir — legacy `_system/…` for tests/fallback; the live plugin
+ *  passes the configured `paths.store` at construction. */
+const LEGACY_STORE_DIR = exoPaths(LEGACY_MEMORY_ROOT).store;
 /** Cap on how many existing active entries we compare against for dedupe. */
 const MAX_DEDUPE_ENTRIES = 400;
 
@@ -90,7 +92,10 @@ export class MemoryObserver {
     /** THE shared store write-queue (plugin-scoped). Every append + undo this
      *  observer makes enqueues here so it serializes against the `remember`
      *  tool and future dream passes — one FIFO, no cross-writer clobber (w1-1). */
-    private readonly queue: WriteQueue
+    private readonly queue: WriteQueue,
+    /** Store dir the monthly union-store files live under (`paths.store`).
+     *  Defaults to the legacy `_system/…` location for tests/fallback. */
+    private readonly storeDir: string = LEGACY_STORE_DIR
   ) {}
 
   /**
@@ -203,7 +208,7 @@ export class MemoryObserver {
 
   /** Append entries to the monthly store file through the write-queue; capture a before-image. */
   private async append(entries: MemoryEntry[], at0: number): Promise<ObserverSnapshot> {
-    const path = `${MEMORY_STORE_DIR}/${monthFileName(at0)}`;
+    const path = `${this.storeDir}/${monthFileName(at0)}`;
     const block = entries.map(formatEntry).join("\n\n");
     let before: string | null = null;
     await this.queue.enqueue(async () => {
@@ -224,7 +229,7 @@ export class MemoryObserver {
   private async readActiveEntryTexts(): Promise<string[]> {
     const files = this.app.vault
       .getMarkdownFiles()
-      .filter((f) => f.path.startsWith(`${MEMORY_STORE_DIR}/`));
+      .filter((f) => f.path.startsWith(`${this.storeDir}/`));
     const all: MemoryEntry[] = [];
     for (const f of files) {
       try {
