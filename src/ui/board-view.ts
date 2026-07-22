@@ -596,7 +596,14 @@ export class BoardView extends ItemView {
         i
           .setTitle("Mark done")
           .setIcon("check")
-          .onClick(() => void this.driver?.markDone(task.id))
+          .onClick(() =>
+            void this.driver?.markDone(task.id).then(() => {
+              // Marking done closes+archives the linked chat too (same path as the
+              // session-card "×"), so it lands in the Conversations gallery tagged
+              // "Done" instead of lingering as an open tab.
+              if (task.convo) this.plugin.archiveAndCloseTab(task.convo);
+            })
+          )
       );
     }
     menu.addSeparator();

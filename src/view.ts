@@ -1677,7 +1677,7 @@ export class ChatView extends ItemView {
     if (this.galleryEl) this.hideGallery();
     else {
       if (this.capsEl) this.hideCapabilities();
-      this.showGallery();
+      void this.showGallery();
     }
   }
 
@@ -1732,7 +1732,7 @@ export class ChatView extends ItemView {
     });
   }
 
-  private showGallery(): void {
+  private async showGallery(): Promise<void> {
     this.saveActive();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.listEl.hide();
@@ -1751,6 +1751,13 @@ export class ChatView extends ItemView {
       return;
     }
 
+    // Which convos belong to a "done" orchestration task, for the gallery's
+    // Done/Archiviata chip. taskStore exists even with Orchestration off, so
+    // this is always safe — it just resolves empty in that case.
+    const { tasks } = await this.plugin.taskStore.load();
+    if (this.galleryEl !== wrap) return; // gallery was closed while we awaited
+    const doneConvoIds = new Set(tasks.filter((t) => t.status === "done" && t.convo).map((t) => t.convo!));
+
     const searchWrap = wrap.createDiv({ cls: "mva-gallery-search-wrap" });
     setIcon(searchWrap.createSpan({ cls: "mva-gallery-search-ico" }), "search");
     const search = searchWrap.createEl("input", {
@@ -1766,13 +1773,13 @@ export class ChatView extends ItemView {
         grid.createDiv({ cls: "mva-empty-sub", text: "No matching conversations." });
         return;
       }
-      for (const c of matches) this.renderCard(grid, c);
+      for (const c of matches) this.renderCard(grid, c, doneConvoIds);
     };
     search.addEventListener("input", () => renderGrid(search.value));
     renderGrid("");
   }
 
-  private renderCard(grid: HTMLElement, c: Convo): void {
+  private renderCard(grid: HTMLElement, c: Convo, doneConvoIds: Set<string>): void {
     const card = grid.createDiv({ cls: "mva-card" });
     // A conversation is "active" when it's the focused tab, and "open" when it's
     // any of the tabs currently in the tab strip. Both get a visible marker so the
@@ -1798,8 +1805,16 @@ export class ChatView extends ItemView {
       titleEl.setText(c.title || "New chat");
     }
 
+    // Why this chat left the active board: a completed orchestration task
+    // ("Done") beats a plain manual archive ("Archiviata") when both are true.
+    const badges = head.createDiv({ cls: "mva-card-badges" });
+    if (doneConvoIds.has(c.id)) {
+      badges.createSpan({ cls: "mva-card-status-badge is-done", text: "Done" });
+    } else if (c.archived) {
+      badges.createSpan({ cls: "mva-card-status-badge is-archived", text: "Archiviata" });
+    }
     if (isOpen) {
-      head.createSpan({
+      badges.createSpan({
         cls: "mva-card-open-badge" + (isActive ? " is-active" : ""),
         text: isActive ? "Active" : "Open",
       });

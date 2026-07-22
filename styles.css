@@ -2760,10 +2760,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Right-aligned cluster of state pills in the card head (status + open/active). */
+.mva-card-badges {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 /* "Open" / "Active" state pill in the card head, mirroring the tab strip. */
 .mva-card-open-badge {
   flex: 0 0 auto;
-  margin-left: auto;
   padding: 2px 6px;
   border: 1px solid color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 35%, transparent);
   border-radius: var(--mva-r1, 6px);
@@ -2777,6 +2784,25 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-card-open-badge.is-active {
   border-color: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 55%, transparent);
   color: var(--mva-brand, var(--interactive-accent));
+}
+/* Why the chat left the active board: Done (task completed) vs Archiviata (manual). */
+.mva-card-status-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: var(--mva-r1, 6px);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+.mva-card-status-badge.is-done {
+  border: 1px solid color-mix(in srgb, var(--color-green, #4caf50) 40%, transparent);
+  color: var(--color-green, #4caf50);
+}
+.mva-card-status-badge.is-archived {
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
 }
 .mva-card-preview {
   flex: 1;
