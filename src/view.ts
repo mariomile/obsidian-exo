@@ -4531,7 +4531,6 @@ export class ChatView extends ItemView {
     }
   ): Promise<void> {
     const researchMode = opts?.researchMode ?? c.researchMode;
-    let turnCaps: SessionCaps | null = c.session?.caps ?? null;
     const paths = c === this.active ? this.composer.contextPaths() : [];
     const sendText = this.hoistOutbound(text);
     const message = paths.length
@@ -4959,7 +4958,6 @@ export class ChatView extends ItemView {
 
     try {
       const session = await this.ensureSession(c);
-      turnCaps = session.caps ?? turnCaps;
       // sendPrefix (recovery recap) and the proactive-recall block are prepended to
       // the OUTBOUND provider message only — never to the rendered/persisted user
       // text, so they can't leak into the transcript, c.messages, or serialize().
