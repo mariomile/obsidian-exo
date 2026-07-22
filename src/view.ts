@@ -60,6 +60,7 @@ import {
   summarizeLiveTasks,
   liveTaskDotClass,
   liveTaskStatusText,
+  fadedTaskIds,
   type LiveTask,
   type LiveTaskStatus,
 } from "./core/live-tasks";
@@ -4438,6 +4439,28 @@ export class ChatView extends ItemView {
     window.setTimeout(() => el.removeClass("mva-flash"), 1000);
   }
 
+  /** Turn-start reconciliation: drop live tasks whose card was cleaned (orphaned by
+   *  a finished turn) or whose terminal fade window has elapsed. The keep-alive L1
+   *  backstop — without a session-level event pump (L2, out of scope), a task that
+   *  finished with no active stream can't self-clear; this sweeps it on the next turn. */
+  private reconcileLiveTasks(c: Convo): void {
+    let changed = false;
+    for (const [id, rec] of c.liveTasks) {
+      if (!rec.cardEl.isConnected) {
+        c.liveTasks.delete(id);
+        changed = true;
+      }
+    }
+    for (const id of fadedTaskIds([...c.liveTasks.values()], Date.now(), ChatView.LIVE_FADE_MS)) {
+      c.liveTasks.delete(id);
+      changed = true;
+    }
+    if (changed) {
+      this.refreshAgentIndicators();
+      this.renderAgentPopover();
+    }
+  }
+
   /** Refresh both per-chat agent affordances: the per-tab count badges (via
    *  renderTabs) and the pinned chip above the composer, which reflects ONLY the
    *  open chat's own agents. Strictly local — a background chat's work never leaks
@@ -4729,6 +4752,7 @@ export class ChatView extends ItemView {
     }
     const ctx = this.addAssistantTurn(c, text);
     c.currentCtx = ctx; // target for this conversation's ask_user cards
+    this.reconcileLiveTasks(c); // drop orphaned/faded entries before this turn adds new ones
     c.stopped = false;
     this.setStreaming(c, true);
 
