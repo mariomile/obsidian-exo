@@ -32,8 +32,8 @@ import { reconcileList, type CardModel } from "./keyed-reconcile";
 
 /** The board view type — registered in main.ts, opens in the main pane. */
 export const BOARD_VIEW_TYPE = "exo-board";
-/** Ribbon/tab icon for the board. */
-export const BOARD_ICON = "layout-dashboard";
+/** Ribbon/tab icon for the board — registered via addIcon() in main.ts. */
+export const BOARD_ICON = "hi-workflow";
 
 /** The six visible columns, in order. `archived` is intentionally excluded —
  *  archived tasks keep their block in tasks.md but are hidden from the board. */
