@@ -82,17 +82,18 @@ export function adaptAppToTaskVault(app: App): TaskVaultAdapter {
 export async function createBacklogTask(
   vault: TaskVaultAdapter,
   queue: WriteQueue,
-  task: NewBacklogTask
+  task: NewBacklogTask,
+  tasksPath: string = TASKS_PATH
 ): Promise<TaskEntry> {
   return queue.enqueue(async () => {
-    const existing = vault.getFile(TASKS_PATH);
-    const current = existing ? await vault.read(TASKS_PATH) : "";
+    const existing = vault.getFile(tasksPath);
+    const current = existing ? await vault.read(tasksPath) : "";
     const { content, entry } = addBacklogTask(current, task);
     if (existing) {
-      await vault.modify(TASKS_PATH, content);
+      await vault.modify(tasksPath, content);
     } else {
-      await vault.ensureFolder(TASKS_PATH);
-      await vault.create(TASKS_PATH, content);
+      await vault.ensureFolder(tasksPath);
+      await vault.create(tasksPath, content);
     }
     return entry;
   });
@@ -126,22 +127,25 @@ export interface LoadedTasks {
 export class TaskStore {
   constructor(
     private readonly vault: TaskVaultAdapter,
-    private readonly queue: WriteQueue
+    private readonly queue: WriteQueue,
+    /** Vault-relative tasks-ledger path. Defaults to the legacy _system location
+     *  (tests + fallback); production passes the configured `plugin.paths.tasks`. */
+    private readonly tasksPath: string = TASKS_PATH
   ) {}
 
   /** Missing file -> `{ tasks: [], warnings: [] }`, never an error. Malformed
    *  blocks are parsed tolerantly (never thrown on) and surfaced as warnings. */
   async load(): Promise<LoadedTasks> {
-    const existing = this.vault.getFile(TASKS_PATH);
+    const existing = this.vault.getFile(this.tasksPath);
     if (!existing) return { tasks: [], warnings: [] };
     let content: string;
     try {
-      content = await this.vault.read(TASKS_PATH);
+      content = await this.vault.read(this.tasksPath);
     } catch (e) {
       // Unreadable/corrupt file (I/O error, permissions, etc.) — never throw,
       // surface it as a warning so the board can render its notice state.
       const msg = e instanceof Error ? e.message : String(e);
-      return { tasks: [], warnings: [`Could not read ${TASKS_PATH}: ${msg}`] };
+      return { tasks: [], warnings: [`Could not read ${this.tasksPath}: ${msg}`] };
     }
     return parseTasksFileWithWarnings(content);
   }
@@ -149,7 +153,7 @@ export class TaskStore {
   /** Create a new `backlog` task. Thin wrapper over `createBacklogTask` so
    *  there is exactly one implementation of the create read-modify-write. */
   create(task: NewBacklogTask): Promise<TaskEntry> {
-    return createBacklogTask(this.vault, this.queue, task);
+    return createBacklogTask(this.vault, this.queue, task, this.tasksPath);
   }
 
   /**
@@ -159,17 +163,17 @@ export class TaskStore {
    */
   createOnce(task: NewBacklogTask, marker: string): Promise<TaskEntry> {
     return this.queue.enqueue(async () => {
-      const existing = this.vault.getFile(TASKS_PATH);
-      const current = existing ? await this.vault.read(TASKS_PATH) : "";
+      const existing = this.vault.getFile(this.tasksPath);
+      const current = existing ? await this.vault.read(this.tasksPath) : "";
       const prior = parseTasksFile(current).find(({ prompt }) => prompt.includes(marker));
       if (prior) return prior;
 
       const { content, entry } = addBacklogTask(current, task);
       if (existing) {
-        await this.vault.modify(TASKS_PATH, content);
+        await this.vault.modify(this.tasksPath, content);
       } else {
-        await this.vault.ensureFolder(TASKS_PATH);
-        await this.vault.create(TASKS_PATH, content);
+        await this.vault.ensureFolder(this.tasksPath);
+        await this.vault.create(this.tasksPath, content);
       }
       return entry;
     });
@@ -198,17 +202,17 @@ export class TaskStore {
    *  no-silent-no-op contract as the pure `applyTask*` helpers. */
   private mutate(id: string, apply: (tasks: TaskEntry[], now: number) => TaskEntry[]): Promise<TaskEntry> {
     return this.queue.enqueue(async () => {
-      const existing = this.vault.getFile(TASKS_PATH);
-      const current = existing ? await this.vault.read(TASKS_PATH) : "";
+      const existing = this.vault.getFile(this.tasksPath);
+      const current = existing ? await this.vault.read(this.tasksPath) : "";
       const tasks = current ? parseTasksFile(current) : [];
       const now = Date.now();
       const next = apply(tasks, now);
       const content = serializeTasks(next);
       if (existing) {
-        await this.vault.modify(TASKS_PATH, content);
+        await this.vault.modify(this.tasksPath, content);
       } else {
-        await this.vault.ensureFolder(TASKS_PATH);
-        await this.vault.create(TASKS_PATH, content);
+        await this.vault.ensureFolder(this.tasksPath);
+        await this.vault.create(this.tasksPath, content);
       }
       const updatedEntry = next.find((t) => t.id === id);
       if (!updatedEntry) throw new Error(`Task not found: ${id}`);

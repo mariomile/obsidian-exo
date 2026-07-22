@@ -27,7 +27,7 @@ import {
 import { parseLoopsFile } from "../core/open-loops";
 import { unreviewedWriteRuns } from "../core/automations";
 import { dailyPulseNeedsReview } from "../core/daily-pulse";
-import { parseTasksFile, TASKS_PATH } from "../core/tasks";
+import { parseTasksFile } from "../core/tasks";
 import {
   autonomyStatuses,
   autonomyActions,
@@ -38,9 +38,6 @@ import {
 export const COCKPIT_VIEW_TYPE = "exo-cockpit";
 export const COCKPIT_ICON = "gauge";
 
-const OPEN_LOOPS_PATH = "_system/memory/open-loops.md";
-const VAULT_CONTEXT_PATH = "_system/vault-context.md";
-const REPORTS_DIR = "_system/reports";
 const INBOX_DIR = "_inbox";
 const ATTENTION_ICONS: Record<AttentionItem["kind"], string> = {
   blocked: "shield-alert",
@@ -150,7 +147,7 @@ export class CockpitView extends ItemView {
 
   private async contextAgeDays(now: number): Promise<number | null> {
     try {
-      const st = await this.app.vault.adapter.stat(VAULT_CONTEXT_PATH);
+      const st = await this.app.vault.adapter.stat(this.plugin.paths.vaultContext);
       return st?.mtime ? (now - st.mtime) / 86_400_000 : null;
     } catch {
       return null;
@@ -159,7 +156,7 @@ export class CockpitView extends ItemView {
 
   private async lastReport(): Promise<{ path: string; name: string; mtime: number } | null> {
     try {
-      const res = await this.app.vault.adapter.list(REPORTS_DIR);
+      const res = await this.app.vault.adapter.list(this.plugin.paths.reports);
       let best: { path: string; name: string; mtime: number } | null = null;
       for (const f of res.files.slice(-30)) {
         if (!f.endsWith(".md")) continue;
@@ -186,8 +183,8 @@ export class CockpitView extends ItemView {
       const now = Date.now();
       const [loopsRaw, tasksRaw, queuePending, answers, convos, inbox, ctxAge, report, unreviewedRuns, proposalPending] =
         await Promise.all([
-          this.readOr(OPEN_LOOPS_PATH, ""),
-          this.readOr(TASKS_PATH, ""),
+          this.readOr(this.plugin.paths.openLoops, ""),
+          this.readOr(this.plugin.paths.tasks, ""),
           this.plugin.countQueuePending().catch(() => null),
           this.recentAnswers(now),
           this.plugin.loadConversations().catch(() => []),
@@ -246,7 +243,7 @@ export class CockpitView extends ItemView {
       const loops = loopRows(parseLoopsFile(loopsRaw), now);
       this.tile(grid, "Loops", "target", loops, "No open loops.", {
         label: "open-loops.md",
-        onClick: () => void this.app.workspace.openLinkText(OPEN_LOOPS_PATH, "", "tab"),
+        onClick: () => void this.app.workspace.openLinkText(this.plugin.paths.openLoops, "", "tab"),
       });
 
       const tasks = taskRows(parseTasksFile(tasksRaw));

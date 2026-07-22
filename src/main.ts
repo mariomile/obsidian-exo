@@ -50,7 +50,7 @@ import { WriteQueue } from "./core/write-queue";
 import { WorkflowSignalStore } from "./obsidian/workflow-signal-store";
 import { startCodexBridge, type CodexBridge } from "./obsidian/codex-bridge";
 import { CODEX_BRIDGE_SCRIPT } from "./obsidian/codex-bridge-script";
-import { promoteToTaskCommandVisible, TASKS_PATH } from "./core/tasks";
+import { promoteToTaskCommandVisible } from "./core/tasks";
 import {
   ConvoStateChannel,
   type ConvoState,
@@ -298,7 +298,7 @@ export default class ExoPlugin extends Plugin {
     // ONE shared TaskStore for the whole plugin — built on `tasksWriteQueue` so
     // it can never race the lower-level `createBacklogTask` call in
     // `src/view.ts`/`src/obsidian/tools.ts`, which enqueues on the same queue.
-    this.taskStore = new TaskStore(adaptAppToTaskVault(this.app), this.tasksWriteQueue);
+    this.taskStore = new TaskStore(adaptAppToTaskVault(this.app), this.tasksWriteQueue, this.paths.tasks);
 
     const proposalRoot = this.manifest.dir;
     const adapter = this.app.vault.adapter;
@@ -2300,7 +2300,7 @@ export default class ExoPlugin extends Plugin {
     switch (params.target) {
       case "task":
         if (this.settings.orchestrationEnabled) await this.activateBoard();
-        else await this.app.workspace.openLinkText(TASKS_PATH, "", "tab");
+        else await this.app.workspace.openLinkText(this.paths.tasks, "", "tab");
         return;
       case "loop":
         await this.app.workspace.openLinkText(OPEN_LOOPS_PATH, "", "tab");
