@@ -28,6 +28,7 @@ import {
   buildSeedPrompt,
   parseSeedBlocks,
   manifestContent,
+  isUnfilledAgentBlock,
 } from "./core/agent-self";
 import { scaffoldItems, parentFolder, type MemorySetup } from "./core/vault-setup";
 import { detectMemoryRoot, exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "./core/paths";
@@ -1315,12 +1316,21 @@ export default class ExoPlugin extends Plugin {
       const content = blocks[name];
       if (!content) continue;
       const path = `${agentDir}/${name}.md`;
-      const existed = this.app.vault.getAbstractFileByPath(path) instanceof TFile;
-      if (existed) {
-        skipped++;
-        continue;
+      const existing = this.app.vault.getAbstractFileByPath(path);
+      const body = `${content.replace(/\s+$/, "")}\n`;
+      if (existing instanceof TFile) {
+        // A file left by the "Full" scaffold is an untouched template — replace it
+        // with the distilled block. Once the user has hand-edited it, it reads as
+        // filled and we leave their work alone.
+        const current = await this.app.vault.cachedRead(existing).catch(() => "");
+        if (!isUnfilledAgentBlock(name, current)) {
+          skipped++;
+          continue;
+        }
+        await this.app.vault.modify(existing, body);
+      } else {
+        await this.app.vault.create(path, body);
       }
-      await this.app.vault.create(path, `${content.replace(/\s+$/, "")}\n`);
       written++;
       writtenPaths.push(path);
     }

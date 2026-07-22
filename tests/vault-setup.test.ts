@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { scaffoldItems, isVaultSetUp, parentFolder, memorySetupNeeded } from "../src/core/vault-setup";
 import { exoPaths } from "../src/core/paths";
+import { isUnfilledAgentBlock } from "../src/core/agent-self";
 
 // Exercise with both a legacy (_system) and a fresh (_exo) root so the scaffold
 // is proven root-agnostic — the whole point of the memory-root migration.
@@ -34,12 +35,12 @@ describe("scaffoldItems", () => {
     expect(item?.kind).toBe("file");
   });
 
-  it("does not touch the agent-folder blocks or review.md — those are owned by other features", () => {
-    const paths = scaffoldItems(LEGACY, "full").map((i) => i.path);
-    expect(paths).not.toContain("_system/agent/now.md");
-    expect(paths).not.toContain("_system/agent/persona.md");
-    expect(paths).not.toContain("_system/agent/human.md");
-    expect(paths).not.toContain("_system/review.md");
+  it("never scaffolds review.md — its existence is a UI signal owned by another feature", () => {
+    for (const preset of ["minimal", "full"] as const) {
+      const paths = scaffoldItems(LEGACY, preset).map((i) => i.path);
+      expect(paths).not.toContain(LEGACY.review);
+      expect(paths).not.toContain("_system/review.md");
+    }
   });
 });
 
@@ -63,18 +64,39 @@ describe("scaffoldItems presets", () => {
     expect(minimal).toContain(LEGACY.store);
     expect(minimal).toContain(LEGACY.tasks);
     expect(minimal).toContain(LEGACY.openLoops);
-    // content absent
+    // no content whatsoever — no vault-context, preferences, or agent identity
+    expect(minimal.some((p) => p.startsWith(`${LEGACY.rules}/`))).toBe(false);
     expect(minimal).not.toContain(LEGACY.vaultContext);
     expect(minimal).not.toContain(LEGACY.preferences);
-    expect(minimal).not.toContain(LEGACY.rules);
-    expect(minimal).not.toContain(LEGACY.decisions);
+    expect(minimal.some((p) => p.startsWith(`${LEGACY.agentDir}/`))).toBe(false);
   });
 
-  it("full adds the content tier on top of minimal", () => {
+  it("full lays down the knowledge-OS: guided sources, folder READMEs, agent blocks", () => {
     const full = scaffoldItems(LEGACY, "full").map((i) => i.path);
+    // guided source files
     expect(full).toContain(LEGACY.vaultContext);
     expect(full).toContain(LEGACY.preferences);
-    expect(full).toContain(LEGACY.rules);
+    expect(full).toContain(LEGACY.mentalModel);
+    // folder READMEs (the folders exist by virtue of a file inside them)
+    expect(full).toContain(`${LEGACY.rules}/README.md`);
+    expect(full).toContain(`${LEGACY.decisions}/README.md`);
+    expect(full).toContain(`${LEGACY.learnings}/README.md`);
+    // hand-fillable identity blocks
+    expect(full).toContain(`${LEGACY.agentDir}/persona.md`);
+    expect(full).toContain(`${LEGACY.agentDir}/human.md`);
+    expect(full).toContain(`${LEGACY.agentDir}/now.md`);
+  });
+
+  it("full agent blocks are seeded template content (round-trips through isUnfilledAgentBlock)", () => {
+    const blocks = scaffoldItems(LEGACY, "full").filter((i) => i.path.startsWith(`${LEGACY.agentDir}/`));
+    expect(blocks).toHaveLength(3);
+    for (const b of blocks) {
+      const name = b.path.slice(`${LEGACY.agentDir}/`.length, -".md".length) as "persona" | "human" | "now";
+      // The scaffolded content IS the template → the seeder sees it as unfilled
+      // and will regenerate it; a hand-edit makes it filled.
+      expect(isUnfilledAgentBlock(name, b.content ?? "")).toBe(true);
+      expect(isUnfilledAgentBlock(name, `${b.content}\n\nI wrote my own persona here.`)).toBe(false);
+    }
   });
 });
 

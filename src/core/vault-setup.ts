@@ -12,14 +12,20 @@
  * All paths derive from the caller-supplied `ExoPaths` (core/paths.ts), so the
  * root is configurable and the module stays pure/testable.
  *
- * Deliberately excluded (see the implementation plan's Global Constraints
- * for why): the `agent/{now,human,persona}.md` blocks (owned by the "Agent Is
- * the Folder" LLM seeder — pre-creating blanks would make it think they're
- * already seeded) and `review.md` (its mere existence is read as a UI signal
- * that there's something to review).
+ * The "full" preset also lays down the marioverse knowledge-OS: guided
+ * templates for vault-context/preferences/mental-model, README-documented
+ * rules/decisions/learnings folders, and hand-fillable `agent/{persona,human,
+ * now}.md` identity blocks. The blocks carry a template marker so the "Agent Is
+ * the Folder" seeder regenerates them while untouched (isUnfilledAgentBlock) yet
+ * never clobbers hand-written identity — that's why pre-creating them is now
+ * safe, where a blank stub would once have looked already-seeded.
+ *
+ * Still excluded: `review.md` (its mere existence is read as a UI signal that
+ * there's something to review).
  */
 
 import type { ExoPaths } from "./paths";
+import { AGENT_BLOCK_NAMES, agentBlockTemplate } from "./agent-self";
 
 export type ScaffoldKind = "folder" | "file";
 
@@ -72,19 +78,54 @@ function allScaffoldItems(paths: ExoPaths): ScaffoldItem[] {
       ),
     },
     { path: paths.tasks, kind: "file", tier: "mechanism", content: heading("Tasks", "_Nothing tracked yet._") },
-    // ── content (full only) ────────────────────────────────────────────────
-    { path: paths.decisions, kind: "folder", tier: "content" },
-    { path: paths.learnings, kind: "folder", tier: "content" },
-    { path: paths.rules, kind: "folder", tier: "content" },
-    { path: paths.preferences, kind: "file", tier: "content", content: heading("Preferences", "_Nothing recorded yet._") },
-    {
-      path: paths.vaultContext,
-      kind: "file",
-      tier: "content",
-      content: heading("Vault context", "_Nothing recorded yet — Exo will keep this current as you work._"),
-    },
+    // ── content (full only): guided templates + the knowledge-OS folders ────
+    { path: `${paths.rules}/README.md`, kind: "file", tier: "content", content: FOLDER_README.rules },
+    { path: `${paths.decisions}/README.md`, kind: "file", tier: "content", content: FOLDER_README.decisions },
+    { path: `${paths.learnings}/README.md`, kind: "file", tier: "content", content: FOLDER_README.learnings },
+    { path: paths.preferences, kind: "file", tier: "content", content: PREFERENCES_TEMPLATE },
+    { path: paths.mentalModel, kind: "file", tier: "content", content: MENTAL_MODEL_TEMPLATE },
+    { path: paths.vaultContext, kind: "file", tier: "content", content: VAULT_CONTEXT_TEMPLATE },
+    // Identity blocks: guided, hand-fillable templates that "Seed agent folder"
+    // regenerates while untouched (isUnfilledAgentBlock) and never clobbers once
+    // edited. Path derives from paths.agentDir.
+    ...AGENT_BLOCK_NAMES.map((name) => ({
+      path: `${paths.agentDir}/${name}.md`,
+      kind: "file" as const,
+      tier: "content" as const,
+      content: agentBlockTemplate(name),
+    })),
   ];
 }
+
+const FOLDER_README = {
+  rules: heading(
+    "Rules",
+    "One durable rule per file — patterns confirmed across sessions that Exo should always follow. Promote a learning here once you've seen it hold three times."
+  ),
+  decisions: heading(
+    "Decisions",
+    "One decision record per file: the choice, the context, the trade-offs, and when to revisit it. Exo appends here when you decide something that shapes future work."
+  ),
+  learnings: heading(
+    "Learnings",
+    "Single-session insights — the raw material that graduates into rules. Cheap to write, safe to prune."
+  ),
+} as const;
+
+const PREFERENCES_TEMPLATE = heading(
+  "Preferences",
+  "How you like Exo to communicate and work — language(s), tone, level of detail, formatting, things to always or never do. Exo reads this at boot and refines it as you correct it."
+);
+
+const MENTAL_MODEL_TEMPLATE = heading(
+  "Mental model",
+  "How you think — the frames, heuristics, and vocabulary you reason with. A source the “Seed agent folder” command distils into the agent's persona."
+);
+
+const VAULT_CONTEXT_TEMPLATE = heading(
+  "Vault context",
+  "What this vault is for and its current state — the map Exo reads first. Say what lives where, what you're working on, and any conventions. Exo keeps this current as you work."
+);
 
 /** The create-only-if-absent scaffold for a given memory root and preset.
  *  `minimal` yields the mechanism items; `full` yields all of them. (`none`

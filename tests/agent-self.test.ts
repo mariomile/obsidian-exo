@@ -11,6 +11,9 @@ import {
   parseSeedBlocks,
   manifestContent,
   IDENTITY_ARBITRATION_LINE,
+  agentBlockTemplate,
+  isUnfilledAgentBlock,
+  AGENT_TEMPLATE_MARKER,
   type BlockName,
   type IdentityBlock,
 } from "../src/core/agent-self";
@@ -238,5 +241,34 @@ describe("manifestContent", () => {
     expect(m).toContain("now.md");
     expect(m).toMatch(/read.*don'?t write/i);
     expect(m).toContain("Exo owns maintenance");
+  });
+});
+
+/* --------------------- onboarding block templates ----------------------- */
+
+describe("agentBlockTemplate + isUnfilledAgentBlock", () => {
+  it("produces a template carrying the marker and the block heading", () => {
+    for (const name of AGENT_BLOCK_NAMES) {
+      const t = agentBlockTemplate(name);
+      expect(t).toContain(AGENT_TEMPLATE_MARKER);
+      expect(t).toContain(blockSpec(name).heading);
+    }
+  });
+
+  it("treats empty/whitespace and the untouched template as unfilled", () => {
+    for (const name of AGENT_BLOCK_NAMES) {
+      expect(isUnfilledAgentBlock(name, "")).toBe(true);
+      expect(isUnfilledAgentBlock(name, "   \n  ")).toBe(true);
+      expect(isUnfilledAgentBlock(name, agentBlockTemplate(name))).toBe(true);
+      // trailing-newline tolerance (vault writes normalize whitespace)
+      expect(isUnfilledAgentBlock(name, `${agentBlockTemplate(name)}\n`)).toBe(true);
+    }
+  });
+
+  it("treats any hand-edit as filled (never clobbered by the seeder)", () => {
+    for (const name of AGENT_BLOCK_NAMES) {
+      expect(isUnfilledAgentBlock(name, `${agentBlockTemplate(name)}\nMy own words.`)).toBe(false);
+      expect(isUnfilledAgentBlock(name, "# Persona\n\nI am terse and direct.")).toBe(false);
+    }
   });
 });

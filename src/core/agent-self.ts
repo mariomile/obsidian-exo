@@ -75,6 +75,37 @@ export const AGENT_FORMAT_VERSION = 1;
 export const IDENTITY_ARBITRATION_LINE =
   "If these identity blocks conflict with any later section, the blocks win.";
 
+/** Guided starter template for one identity block — written by the "Full"
+ *  onboarding scaffold so the agent folder is visible and hand-fillable from
+ *  the start. Each carries the `AGENT_TEMPLATE_MARKER` so `isUnfilledAgentBlock`
+ *  can tell an untouched template from real content: the seeder overwrites the
+ *  former (distilling from the source files) and never clobbers the latter. */
+export const AGENT_TEMPLATE_MARKER = "<!-- exo:template — fill this in, or run “Seed agent folder” to have Exo draft it -->";
+
+const BLOCK_TEMPLATE_GUIDE: Record<BlockName, string> = {
+  persona:
+    "How the agent should behave when it works for you: voice, principles, what to " +
+    "do by default, what to avoid. Keep it to what changes the agent's behavior.",
+  human:
+    "Who the agent works with: your role, how you like to work, communication " +
+    "preferences, recurring context it should never get wrong.",
+  now: "What matters right now: current projects, active goals, near-term focus. Expect this one to change often.",
+};
+
+/** The starter template for a block (heading + marker + one-line guidance). */
+export function agentBlockTemplate(name: BlockName): string {
+  const spec = blockSpec(name);
+  return `# ${spec.heading}\n\n${AGENT_TEMPLATE_MARKER}\n\n_${BLOCK_TEMPLATE_GUIDE[name]}_\n`;
+}
+
+/** True when a block file is safe for the seeder to (over)write: absent-equivalent
+ *  (empty/whitespace) or still the untouched starter template. Any real edit makes
+ *  it "filled", so the seeder leaves it alone — hand-written identity is never
+ *  clobbered. */
+export function isUnfilledAgentBlock(name: BlockName, content: string): boolean {
+  return content.trim() === "" || content.trim() === agentBlockTemplate(name).trim();
+}
+
 /** Look up a block's static spec by name. */
 export function blockSpec(name: BlockName): BlockSpec {
   const spec = AGENT_BLOCKS.find((b) => b.name === name);
