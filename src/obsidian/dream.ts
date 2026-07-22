@@ -2,6 +2,7 @@ import { App, TFile } from "obsidian";
 import type { WriteQueue } from "../core/write-queue";
 import { renderStoreBlock, targetStoreFile, type LlmWritePlan } from "../core/dream-proposals";
 import { patchFrontmatter } from "../core/frontmatter-patch";
+import { exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "../core/paths";
 
 /**
  * Deterministic (no-LLM) memory-consolidation engine — "dream" pass.
@@ -47,9 +48,6 @@ export class DreamSnapshotPersistenceError extends Error {
 
 export type DreamSnapshotCheckpoint = (snapshot: DreamSnapshot) => Promise<void>;
 
-const LEARNINGS_DIR = "_system/memory/learnings";
-const RULES_DIR = "_system/memory/rules";
-const STORE_DIR = "_system/memory/store";
 const PROMOTE_AT = 3; // combined evidence needed to promote learning -> rule
 const STALE_DAYS = 120; // rule not updated in this many days -> mark stale
 
@@ -101,8 +99,8 @@ function filesIn(app: App, dir: string): TFile[] {
  * READ-ONLY. Compute the consolidation plan without mutating anything.
  * Safe to call for a preview/dry-run.
  */
-export function computePlan(app: App): DreamPlan {
-  const learnings = filesIn(app, LEARNINGS_DIR);
+export function computePlan(app: App, paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT)): DreamPlan {
+  const learnings = filesIn(app, paths.learnings);
   const plan: DreamPlan = { scanned: learnings.length, dedup: [], promote: [], stale: [] };
 
   // Group learnings by slug identity.
@@ -134,7 +132,7 @@ export function computePlan(app: App): DreamPlan {
 
     // Promote if the effective evidence clears the bar — but never clobber an existing rule.
     if (evidence >= PROMOTE_AT) {
-      const target = `${RULES_DIR}/rule-${key}.md`;
+      const target = `${paths.rules}/rule-${key}.md`;
       const existing = app.vault.getAbstractFileByPath(target);
       if (!(existing instanceof TFile)) {
         plan.promote.push({ from: keep.path, to: target, evidence });
@@ -143,7 +141,7 @@ export function computePlan(app: App): DreamPlan {
   }
 
   // Stale detection over the rules directory.
-  for (const f of filesIn(app, RULES_DIR)) {
+  for (const f of filesIn(app, paths.rules)) {
     const meta = fm(app, f);
     if (String(meta.status) === "stale") continue;
     const lastUpdated = String(meta.last_updated ?? "");
@@ -361,7 +359,8 @@ export async function applyLlmPlan(
   writePlan: LlmWritePlan,
   queue: WriteQueue,
   ranAt: string,
-  onCheckpoint?: DreamSnapshotCheckpoint
+  onCheckpoint?: DreamSnapshotCheckpoint,
+  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT)
 ): Promise<DreamSnapshot> {
   const snapshots = new Map<string, string | null>();
   const snap = (path: string, before: string | null): void => {
@@ -379,7 +378,7 @@ export async function applyLlmPlan(
 
   // 1) Store entries (merge / supersede / import) → append to the monthly file.
   if (writePlan.storeEntries.length) {
-    const path = `${STORE_DIR}/${targetStoreFile(writePlan.storeEntries[0].at)}`;
+    const path = `${paths.store}/${targetStoreFile(writePlan.storeEntries[0].at)}`;
     const block = renderStoreBlock(writePlan.storeEntries);
     await queue.enqueue(async () => {
       const existing = app.vault.getAbstractFileByPath(path);
@@ -399,7 +398,7 @@ export async function applyLlmPlan(
 
   // 2) Rule-draft candidates → one file each under learnings/ (never rules/).
   for (const draft of writePlan.ruleDrafts) {
-    const path = `${LEARNINGS_DIR}/${date}-${draft.slug}.md`;
+    const path = `${paths.learnings}/${date}-${draft.slug}.md`;
     const content = ruleDraftContent(draft.text, draft.evidenceIds, date);
     await queue.enqueue(async () => {
       const existing = app.vault.getAbstractFileByPath(path);

@@ -11,10 +11,10 @@ import {
   type LlmWritePlan,
 } from "../core/dream-proposals";
 import type { ClaudeMemObservation } from "../core/claudemem-reader";
+import { exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "../core/paths";
 
-const STORE_DIR = "_system/memory/store";
-const LEARNINGS_DIR = "_system/memory/learnings";
-const KNOWN_FALSE_PATH = "_system/memory/known-false.md";
+/** Legacy defaults for tests/fallback; the live plugin passes `plugin.paths`. */
+const LEGACY_PATHS = exoPaths(LEGACY_MEMORY_ROOT);
 
 /** Transient, tool-less utility pass (the observer chassis, generalized). */
 export type RunUtilityPass = (prompt: string, opts: { signal: AbortSignal; model?: string }) => Promise<string>;
@@ -38,6 +38,8 @@ export interface DreamLlmDeps {
   now: number;
   session: string;
   model?: string;
+  /** Resolved memory-layer paths. Absent → legacy `_system/` (test/fallback). */
+  paths?: ExoPaths;
 }
 
 export interface DreamLlmResult {
@@ -56,8 +58,8 @@ export interface DreamLlmResult {
 }
 
 /** Read + parse every monthly store file into entries (active + superseded). */
-export async function collectStoreEntries(app: App): Promise<MemoryEntry[]> {
-  const files = app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${STORE_DIR}/`));
+export async function collectStoreEntries(app: App, storeDir: string = LEGACY_PATHS.store): Promise<MemoryEntry[]> {
+  const files = app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${storeDir}/`));
   const all: MemoryEntry[] = [];
   for (const f of files) {
     try {
@@ -75,11 +77,11 @@ function filesIn(app: App, dir: string): TFile[] {
 }
 
 /** Read the truth-firewall patterns; empty list when the file is absent. */
-async function readKnownFalse(app: App): Promise<RegExp[]> {
+async function readKnownFalse(app: App, knownFalsePath: string): Promise<RegExp[]> {
   try {
     const adapter = app.vault.adapter;
-    if (!(await adapter.exists(KNOWN_FALSE_PATH))) return [];
-    return parseKnownFalse(await adapter.read(KNOWN_FALSE_PATH));
+    if (!(await adapter.exists(knownFalsePath))) return [];
+    return parseKnownFalse(await adapter.read(knownFalsePath));
   } catch {
     return [];
   }
@@ -147,10 +149,11 @@ export function buildDreamPrompt(input: {
  * and an empty write plan, so apply is a guaranteed no-op (zero writes).
  */
 export async function runDreamLlm(deps: DreamLlmDeps): Promise<DreamLlmResult> {
-  const storeEntries = await collectStoreEntries(deps.app);
+  const paths = deps.paths ?? LEGACY_PATHS;
+  const storeEntries = await collectStoreEntries(deps.app, paths.store);
   const active = resolveSupersedence(storeEntries);
-  const learningFiles = filesIn(deps.app, LEARNINGS_DIR).map((f) => f.name);
-  const storeCount = filesIn(deps.app, STORE_DIR).length;
+  const learningFiles = filesIn(deps.app, paths.learnings).map((f) => f.name);
+  const storeCount = filesIn(deps.app, paths.store).length;
   const defrag = storeCount > deps.memoryFileBudget || learningFiles.length > deps.memoryFileBudget;
 
   const empty: LlmWritePlan = {
@@ -171,7 +174,7 @@ export async function runDreamLlm(deps: DreamLlmDeps): Promise<DreamLlmResult> {
     return { kept: [], culled: [], defrag, writePlan: empty, storeEntries, raw, error: parsed.error };
   }
 
-  const knownFalse = await readKnownFalse(deps.app);
+  const knownFalse = await readKnownFalse(deps.app, paths.knownFalse);
   const userEntryIds = new Set(storeEntries.filter((e) => e.source === "user").map((e) => e.id));
   const { kept, culled } = runGate(parsed.proposals, { userEntryIds, knownFalse, appliedKeys: deps.appliedKeys });
   const writePlan = planLlmWrites(kept, { now: deps.now, session: deps.session, storeEntries });

@@ -1676,7 +1676,7 @@ export default class ExoPlugin extends Plugin {
    * modal. Nothing mutates until the user clicks Apply.
    */
   private async openDreamPass(): Promise<void> {
-    const plan = computePlan(this.app);
+    const plan = computePlan(this.app, this.paths);
     const llm = await this.maybeRunDreamLlm();
     new DreamModal(this.app, plan, llm, async () => {
       const ranAt = new Date().toISOString();
@@ -1688,7 +1688,8 @@ export default class ExoPlugin extends Plugin {
           llm.writePlan,
           this.memoryWriteQueue,
           ranAt,
-          (partial) => this.requireDreamSnapshot(mergeSnapshots(snap, partial))
+          (partial) => this.requireDreamSnapshot(mergeSnapshots(snap, partial)),
+          this.paths
         );
         snap = mergeSnapshots(snap, llmSnap);
         // Watermark advances ONLY on apply (never on propose/preview).
@@ -1750,6 +1751,7 @@ export default class ExoPlugin extends Plugin {
         now: Date.now(),
         session: "dream",
         model: s.backgroundModel,
+        paths: this.paths,
       });
       // Record spend (rough estimate: prompt overhead + output length).
       this.recordBackgroundSpend(estimate + Math.ceil((result.raw?.length ?? 0) / 4));
@@ -1825,7 +1827,7 @@ export default class ExoPlugin extends Plugin {
     const now = Date.now();
     const period = sched === "daily" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
     if (this.settings.lastDreamPass && now - this.settings.lastDreamPass < period) return;
-    const plan = computePlan(this.app);
+    const plan = computePlan(this.app, this.paths);
     if (plan.promote.length + plan.dedup.length + plan.stale.length === 0) {
       this.settings.lastDreamPass = now;
       await this.saveSettings();
