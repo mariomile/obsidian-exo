@@ -78,7 +78,7 @@ export function buildResearchOutbound(
   const contract = [
     "<research-mode>",
     "This is an explicit deep-research request. By enabling Research Mode the user has explicitly opted into multi-agent orchestration.",
-    "1. Run the vault's named workflow with the user's question below, verbatim:",
+    "1. Run the vault's named workflow with the user's question below, verbatim (if a 'Context notes:' preamble precedes it, the question is the text after that block):",
     '   Workflow({ name: "deep-research", args: { question: "<the user\'s question>" } })',
     "2. Do not answer from memory while it runs. When it returns, write the final report yourself from its structured findings.",
     "Report requirements — all mandatory:",
