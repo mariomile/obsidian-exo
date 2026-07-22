@@ -40,9 +40,10 @@ export interface BlockState {
   mtime?: number;
 }
 
-/** The vault path of a block file, e.g. `_system/agent/now.md`. */
-export function blockPath(block: BlockName): string {
-  return `${AGENT_DIR}/${block}.md`;
+/** The vault path of a block file inside the identity-layer folder (e.g.
+ *  `<agentDir>/now.md`). `agentDir` defaults to the legacy location. */
+export function blockPath(block: BlockName, agentDir: string = AGENT_DIR): string {
+  return `${agentDir}/${block}.md`;
 }
 
 /**
@@ -54,12 +55,14 @@ export class AgentFolder {
   constructor(
     private readonly app: App,
     /** THE shared store write-queue (plugin-scoped). */
-    private readonly queue: WriteQueue
+    private readonly queue: WriteQueue,
+    /** Identity-layer folder (`paths.agentDir`). Defaults to the legacy location. */
+    private readonly agentDir: string = AGENT_DIR
   ) {}
 
   /** Read one block's content + mtime, or null when the file is absent/unreadable. */
   async readBlock(block: BlockName): Promise<BlockState | null> {
-    const f = this.app.vault.getAbstractFileByPath(blockPath(block));
+    const f = this.app.vault.getAbstractFileByPath(blockPath(block, this.agentDir));
     if (!(f instanceof TFile)) return null;
     try {
       return { content: await this.app.vault.cachedRead(f), mtime: f.stat?.mtime };
@@ -82,7 +85,7 @@ export class AgentFolder {
    * can render the feed diff and wire undo.
    */
   async writeBlock(block: BlockName, next: string): Promise<BlockWrite> {
-    const path = blockPath(block);
+    const path = blockPath(block, this.agentDir);
     let previous = "";
     let before: string | null = null;
     await this.queue.enqueue(async () => {

@@ -8,6 +8,7 @@
 import { formatLoop, parseLoopsFile, type LoopEntry } from "../core/open-loops";
 import { patchFrontmatter } from "../core/frontmatter-patch";
 import { uniquePlaybookName } from "../core/learning-loop";
+import { exoPaths, LEGACY_MEMORY_ROOT } from "../core/paths";
 import type { WriteQueue } from "../core/write-queue";
 import type {
   DecisionCaptureInput,
@@ -20,8 +21,9 @@ type TaskTarget = ProposalAcceptanceDeps["tasks"];
 type DecisionTarget = ProposalAcceptanceDeps["decisions"];
 type PlaybookTarget = ProposalAcceptanceDeps["playbooks"];
 
-export const OPEN_LOOPS_PATH = "_system/memory/open-loops.md";
-export const DECISIONS_DIR = "_system/memory/decisions";
+/** Legacy defaults for tests/fallback; the live plugin passes `plugin.paths`. */
+export const OPEN_LOOPS_PATH = exoPaths(LEGACY_MEMORY_ROOT).openLoops;
+export const DECISIONS_DIR = exoPaths(LEGACY_MEMORY_ROOT).decisions;
 
 /** Invisible durable key carried by Markdown-backed proposal targets. */
 export function proposalMarker(proposalId: string): string {
@@ -65,13 +67,14 @@ export class OpenLoopProposalTarget implements OpenLoopTarget {
   constructor(
     private readonly vault: ProposalTargetVaultAdapter,
     private readonly queue: WriteQueue,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly openLoopsPath: string = OPEN_LOOPS_PATH
   ) {}
 
   create(input: OpenLoopCreateInput): Promise<{ id: string }> {
     return this.queue.enqueue(async () => {
-      const existing = this.vault.getFile(OPEN_LOOPS_PATH);
-      const current = existing ? await this.vault.read(OPEN_LOOPS_PATH) : "";
+      const existing = this.vault.getFile(this.openLoopsPath);
+      const current = existing ? await this.vault.read(this.openLoopsPath) : "";
       const entries = current ? parseLoopsFile(current) : [];
       const marker = proposalMarker(input.proposalId);
       const prior = entries.find(({ note }) => note.includes(marker));
@@ -96,10 +99,10 @@ export class OpenLoopProposalTarget implements OpenLoopTarget {
       const content = `${[...entries, entry].map(formatLoop).join("\n\n")}\n`;
 
       if (existing) {
-        await this.vault.modify(OPEN_LOOPS_PATH, content);
+        await this.vault.modify(this.openLoopsPath, content);
       } else {
-        await this.vault.ensureFolder(OPEN_LOOPS_PATH);
-        await this.vault.create(OPEN_LOOPS_PATH, content);
+        await this.vault.ensureFolder(this.openLoopsPath);
+        await this.vault.create(this.openLoopsPath, content);
       }
       return { id: entry.id };
     });
@@ -122,12 +125,13 @@ function localDate(date: Date): string {
 export class DecisionProposalTarget implements DecisionTarget {
   constructor(
     private readonly vault: ProposalTargetVaultAdapter,
-    private readonly now: () => Date = () => new Date()
+    private readonly now: () => Date = () => new Date(),
+    private readonly decisionsDir: string = DECISIONS_DIR
   ) {}
 
   async captureRawPreserving(input: DecisionCaptureInput): Promise<{ path: string }> {
     const date = localDate(this.now());
-    const path = `${DECISIONS_DIR}/${date}-${slugify(input.title)}.md`;
+    const path = `${this.decisionsDir}/${date}-${slugify(input.title)}.md`;
     if (this.vault.getFile(path)) {
       const current = await this.vault.read(path);
       if (current.includes(proposalMarker(input.proposalId))) return { path };
@@ -212,6 +216,10 @@ export interface ProposalAcceptanceTargetOptions {
   playbooks: ProposalPlaybookAccess;
   nowMs?: () => number;
   nowDate?: () => Date;
+  /** Open-loops ledger path (`paths.openLoops`). Absent → legacy `_system/…`. */
+  openLoopsPath?: string;
+  /** Decisions dir (`paths.decisions`). Absent → legacy `_system/…`. */
+  decisionsDir?: string;
 }
 
 /** Build the exact dependency object consumed by `routeAcceptedProposal`. */
@@ -220,8 +228,8 @@ export function createProposalAcceptanceDeps(
 ): ProposalAcceptanceDeps {
   return {
     tasks: new TaskProposalTarget(options.tasks),
-    loops: new OpenLoopProposalTarget(options.vault, options.loopsWriteQueue, options.nowMs),
-    decisions: new DecisionProposalTarget(options.vault, options.nowDate),
+    loops: new OpenLoopProposalTarget(options.vault, options.loopsWriteQueue, options.nowMs, options.openLoopsPath ?? OPEN_LOOPS_PATH),
+    decisions: new DecisionProposalTarget(options.vault, options.nowDate, options.decisionsDir ?? DECISIONS_DIR),
     playbooks: new PlaybookProposalTarget(options.playbooksWriteQueue, options.playbooks),
   };
 }

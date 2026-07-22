@@ -24,7 +24,6 @@ import {
 } from "./obsidian/dream";
 import { runDreamLlm, type DreamLlmResult } from "./obsidian/dream-llm";
 import {
-  AGENT_DIR,
   AGENT_BLOCK_NAMES,
   buildSeedPrompt,
   parseSeedBlocks,
@@ -68,7 +67,6 @@ import {
 import { routeAcceptedProposal, type ProposalAcceptanceDeps } from "./obsidian/proposal-router";
 import {
   createProposalAcceptanceDeps,
-  OPEN_LOOPS_PATH,
   type ProposalTargetVaultAdapter,
 } from "./obsidian/proposal-targets";
 import { parseLoopsFile } from "./core/open-loops";
@@ -347,6 +345,8 @@ export default class ExoPlugin extends Plugin {
         settings: () => this.settings,
         saveSettings: () => this.saveSettings(),
       },
+      openLoopsPath: this.paths.openLoops,
+      decisionsDir: this.paths.decisions,
     });
 
     // Exo brand mark — a concave 4-point star (matches the product logo).
@@ -1303,14 +1303,15 @@ export default class ExoPlugin extends Plugin {
     let written = 0;
     const writtenPaths: string[] = [];
     let skipped = 0;
-    await this.ensureFolder(AGENT_DIR);
-    const manifestPath = `${AGENT_DIR}/manifest.md`;
+    const agentDir = this.paths.agentDir;
+    await this.ensureFolder(agentDir);
+    const manifestPath = `${agentDir}/manifest.md`;
     await this.writeIfMissing(manifestPath, manifestContent(), () => {}, true);
     writtenPaths.push(manifestPath);
     for (const name of AGENT_BLOCK_NAMES) {
       const content = blocks[name];
       if (!content) continue;
-      const path = `${AGENT_DIR}/${name}.md`;
+      const path = `${agentDir}/${name}.md`;
       const existed = this.app.vault.getAbstractFileByPath(path) instanceof TFile;
       if (existed) {
         skipped++;
@@ -1330,7 +1331,7 @@ export default class ExoPlugin extends Plugin {
       `Agent folder seeded — wrote ${written} block(s)${skipped ? `, kept ${skipped} existing` : ""}. Review human.md, then enable "The agent is the folder" in settings.`
     );
     // Open human.md for review (the block most worth a human check).
-    const humanPath = `${AGENT_DIR}/human.md`;
+    const humanPath = `${agentDir}/human.md`;
     if (this.app.vault.getAbstractFileByPath(humanPath) instanceof TFile) {
       await this.app.workspace.openLinkText(humanPath, "", true);
     }
@@ -2149,7 +2150,7 @@ export default class ExoPlugin extends Plugin {
     const generated = await generateAndWriteDailyPulse({
       taskStore: this.taskStore,
       loadLoops: async () => {
-        const file = this.app.vault.getAbstractFileByPath(OPEN_LOOPS_PATH);
+        const file = this.app.vault.getAbstractFileByPath(this.paths.openLoops);
         if (!(file instanceof TFile)) return [];
         return parseLoopsFile(await this.app.vault.read(file));
       },
@@ -2304,7 +2305,7 @@ export default class ExoPlugin extends Plugin {
         else await this.app.workspace.openLinkText(this.paths.tasks, "", "tab");
         return;
       case "loop":
-        await this.app.workspace.openLinkText(OPEN_LOOPS_PATH, "", "tab");
+        await this.app.workspace.openLinkText(this.paths.openLoops, "", "tab");
         return;
       case "proposal":
         await this.openProposalsModal();

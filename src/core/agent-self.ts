@@ -25,6 +25,8 @@
  * `src/obsidian/memory.ts` / `src/obsidian/tools.ts` / `src/view.ts`.
  */
 
+import { exoPaths, LEGACY_MEMORY_ROOT } from "./paths";
+
 /** The three identity blocks, in the fixed compile order persona → human → now. */
 export type BlockName = "persona" | "human" | "now";
 
@@ -60,8 +62,9 @@ export const AGENT_BLOCKS: readonly BlockSpec[] = [
 /** Block names in compile order — `["persona", "human", "now"]`. */
 export const AGENT_BLOCK_NAMES: readonly BlockName[] = AGENT_BLOCKS.map((b) => b.name);
 
-/** Folder holding the identity layer (mirrors the Obsidian-side constant). */
-export const AGENT_DIR = "_system/agent";
+/** Legacy default identity-layer folder (`_system/agent`) — tests/fallback only;
+ *  live callers derive the folder from the configured `paths.agentDir`. */
+export const AGENT_DIR = exoPaths(LEGACY_MEMORY_ROOT).agentDir;
 
 /** Current on-disk format version the manifest documents. */
 export const AGENT_FORMAT_VERSION = 1;

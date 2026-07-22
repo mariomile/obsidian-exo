@@ -2165,7 +2165,7 @@ export class ChatView extends ItemView {
    *  every other store writer (w1-1). */
   private agent(): AgentFolder {
     if (!this.agentFolder) {
-      this.agentFolder = new AgentFolder(this.app, this.plugin.memoryWriteQueue);
+      this.agentFolder = new AgentFolder(this.app, this.plugin.memoryWriteQueue, this.plugin.paths.agentDir);
     }
     return this.agentFolder;
   }
