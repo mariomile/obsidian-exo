@@ -86,7 +86,6 @@ import { terminalConvoState } from "./core/convo-state";
 import { allowKey, permArgText, permRuleLine, decidePermission } from "./core/permissions";
 import { describeCliFailure } from "./core/errors";
 import { isReadOnlyExternalTool } from "./core/headless-tools";
-import { writeResearchDossier } from "./obsidian/research-dossier";
 import {
   createWorkflowSignal,
   evaluateWorkflowEligibility,
@@ -2129,9 +2128,6 @@ export class ChatView extends ItemView {
         this.attachTouched(el, touched, m.checkpoint);
         if (full.trim()) {
           this.attachActions(el, full, lastUser || undefined, c);
-          if (m.researchReceipt) {
-            this.attachResearchDossierAction(el, lastUser, full, m.researchReceipt);
-          }
         }
       }
     }
@@ -3079,73 +3075,6 @@ export class ChatView extends ItemView {
     });
     setIcon(rewindCode, "history");
     rewindCode.onclick = () => void this.rewindCodeTo(convo ?? this.active, turnEl);
-  }
-
-  private attachResearchDossierAction(
-    turnEl: HTMLElement,
-    question: string,
-    response: string,
-    receipt: ResearchReceipt
-  ): void {
-    if (turnEl.querySelector(".mva-research-save")) return;
-    const button = turnEl.createEl("button", {
-      cls: "mva-research-save",
-      attr: { "aria-label": "Save research dossier" },
-    });
-    const icon = button.createSpan({ cls: "mva-research-save-icon" });
-    const label = button.createSpan({ text: "Save research dossier" });
-    setIcon(icon, "file-down");
-    let savedPath: string | null = null;
-
-    button.onclick = () => {
-      if (savedPath) {
-        this.openNote(savedPath);
-        return;
-      }
-      if (button.disabled) return;
-      button.disabled = true;
-      button.removeClass("is-warning");
-      label.setText("Saving dossier…");
-      const now = new Date();
-      const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      const vault = this.app.vault;
-      void writeResearchDossier({
-        exists: (path) => vault.adapter.exists(path),
-        read: async (path) => await vault.adapter.exists(path) ? vault.adapter.read(path) : null,
-        ensureDir: async (path) => {
-          if (vault.getAbstractFileByPath(path)) return;
-          try {
-            await vault.createFolder(path);
-          } catch (error) {
-            if (!vault.getAbstractFileByPath(path)) throw error;
-          }
-        },
-        write: async (path, content) => {
-          await vault.create(path, content);
-        },
-      }, this.plugin.researchDossierWriteQueue, {
-        approved: true,
-        date,
-        question,
-        response,
-        receipt,
-      }).then((result) => {
-        if (result.status !== "saved") return;
-        savedPath = result.path;
-        button.disabled = false;
-        setIcon(icon, "check");
-        label.setText(result.created ? "Open saved dossier" : "Dossier already saved");
-        setTooltip(button, result.path);
-        if (result.created) this.plugin.noteVaultWrite([result.path]);
-        new Notice(result.created ? "Research dossier saved." : "Research dossier already exists.");
-      }).catch(() => {
-        button.disabled = false;
-        button.addClass("is-warning");
-        setIcon(icon, "triangle-alert");
-        label.setText("Retry save");
-        new Notice("Exo couldn't save the research dossier.");
-      });
-    };
   }
 
   /** Conversation-only rewind: drop turns after this one and reset the session.
@@ -5231,9 +5160,6 @@ export class ChatView extends ItemView {
           ...(checkpoint.size ? { checkpoint } : {}),
           ...(researchReceipt ? { researchReceipt } : {}),
         });
-      }
-      if (researchReceipt && ctx.fullText.trim()) {
-        this.attachResearchDossierAction(ctx.el, text, ctx.fullText, researchReceipt);
       }
       // Turn finalized — the live activity row is gone; refresh the conversation
       // recap (full-page rail only) as the idle post-hoc summary.
