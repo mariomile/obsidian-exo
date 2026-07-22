@@ -912,6 +912,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-weight: 500;
   color: var(--text-muted);
   cursor: pointer;
+  position: relative; /* anchor for the absolute list */
 }
 .mva-agents.is-hidden {
   display: none;
@@ -931,6 +932,77 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-agents:hover .mva-agents-label {
   text-decoration: underline;
+}
+.mva-agents-caret {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  color: var(--text-muted);
+}
+.mva-agents-caret .svg-icon {
+  width: 12px;
+  height: 12px;
+}
+.mva-agents-icon.is-idle .svg-icon {
+  animation: none;
+  color: var(--color-green, #19c37d);
+}
+
+/* Enumerable list, anchored above the chip (opens upward). */
+.mva-agents-list {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 14px;
+  right: 14px;
+  max-width: var(--mva-content-max);
+  margin: 0 auto;
+  max-height: 40vh;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r2, 8px);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+  z-index: var(--layer-popover, 30);
+}
+.mva-agents-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--mva-r1, 6px);
+  cursor: pointer;
+}
+.mva-agents-row:hover {
+  background: var(--background-modifier-hover);
+}
+.mva-agents-row-label {
+  color: var(--text-normal);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mva-agents-row-status {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.mva-agents-row-x {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.mva-agents-row-x:hover {
+  color: var(--text-normal);
+}
+.mva-agents-row-x .svg-icon {
+  width: 13px;
+  height: 13px;
 }
 
 .mva-composer {

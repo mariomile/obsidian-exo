@@ -56,7 +56,13 @@ import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { hoistSlashCommand } from "./core/slash";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
-import { summarizeLiveTasks, type LiveTask, type LiveTaskStatus } from "./core/live-tasks";
+import {
+  summarizeLiveTasks,
+  liveTaskDotClass,
+  liveTaskStatusText,
+  type LiveTask,
+  type LiveTaskStatus,
+} from "./core/live-tasks";
 import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { isVaultSetUp, memorySetupNeeded } from "./core/vault-setup";
@@ -387,6 +393,8 @@ export class ChatView extends ItemView {
    *  currently open (its own subagents + background tasks). Always visible while
    *  that chat has background work, even when the working row scrolls off. */
   private agentChipEl: HTMLElement | null = null;
+  /** The enumerable list popover for `agentChipEl`, when open. */
+  private agentPopoverEl: HTMLElement | null = null;
   /** Inner scroll host inside listWrap. Holds the (swapped-per-conversation)
    *  `.mva-list` and any full-pane overlay (gallery/capabilities). Split out from
    *  listWrap so the composer — now a bottom sibling of the list — survives the
@@ -4389,7 +4397,35 @@ export class ChatView extends ItemView {
     }
   }
 
-  private renderAgentPopover(): void { /* filled in Task 4 */ }
+  /** (Re)draw the popover rows from the active convo's live tasks. No-op when the
+   *  popover is closed; auto-closes when the list empties. */
+  private renderAgentPopover(): void {
+    const pop = this.agentPopoverEl;
+    if (!pop) return;
+    const c = this.active;
+    const tasks = c ? [...c.liveTasks.values()] : [];
+    if (!tasks.length) {
+      this.closeAgentPopover();
+      return;
+    }
+    pop.empty();
+    for (const rec of tasks) {
+      const row = pop.createDiv({ cls: "mva-agents-row" });
+      row.createSpan({ cls: `mva-subagent-dot ${liveTaskDotClass(rec.status)}` });
+      row.createSpan({ cls: "mva-agents-row-label", text: rec.label });
+      row.createSpan({ cls: "mva-agents-row-status", text: liveTaskStatusText(rec.status) });
+      this.clickable(row, () => this.jumpToLiveTask(rec)); // added in Task 5
+      const x = row.createSpan({ cls: "mva-agents-row-x" });
+      setIcon(x, "x");
+      this.clickable(x, (e) => {
+        e.stopPropagation();
+        if (c) this.liveRemove(c, rec.id);
+      });
+    }
+  }
+
+  /** Jump to the card behind a live task. Stub — fleshed out in Task 5. */
+  private jumpToLiveTask(_rec: LiveTaskRecord): void {}
 
   /** Refresh both per-chat agent affordances: the per-tab count badges (via
    *  renderTabs) and the pinned chip above the composer, which reflects ONLY the
@@ -4415,9 +4451,37 @@ export class ChatView extends ItemView {
     this.clickable(chip, () => this.toggleAgentPopover());
   }
 
-  /** Opens/closes the agent popover listing live tasks. Stub — fleshed out in
-   *  Task 4 (renderAgentPopover's consumer). */
-  private toggleAgentPopover(): void {}
+  /** Toggle the enumerable list of this chat's live tasks, anchored above the chip. */
+  private toggleAgentPopover(): void {
+    if (this.agentPopoverEl) {
+      this.closeAgentPopover();
+      return;
+    }
+    if (!this.agentChipEl || !this.active?.liveTasks.size) return;
+    const pop = this.agentChipEl.createDiv({ cls: "mva-agents-list" });
+    this.agentPopoverEl = pop;
+    this.renderAgentPopover();
+    // Close on outside click / Esc (registered next tick so THIS click doesn't fire it).
+    window.setTimeout(() => {
+      this.registerDomEvent(document, "click", this.onAgentPopoverOutside);
+      this.registerDomEvent(document, "keydown", this.onAgentPopoverKey);
+    }, 0);
+  }
+
+  private closeAgentPopover(): void {
+    this.agentPopoverEl?.remove();
+    this.agentPopoverEl = null;
+    document.removeEventListener("click", this.onAgentPopoverOutside);
+    document.removeEventListener("keydown", this.onAgentPopoverKey);
+  }
+
+  private onAgentPopoverOutside = (e: MouseEvent): void => {
+    if (this.agentChipEl && !this.agentChipEl.contains(e.target as Node)) this.closeAgentPopover();
+  };
+
+  private onAgentPopoverKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") this.closeAgentPopover();
+  };
 
   /**
    * Terminal convo-state hook, fired once from `runTurn`'s `finally`. Maps the
