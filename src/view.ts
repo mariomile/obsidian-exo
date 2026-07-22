@@ -56,7 +56,7 @@ import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { hoistSlashCommand } from "./core/slash";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
-import { type LiveTask, type LiveTaskStatus } from "./core/live-tasks";
+import { summarizeLiveTasks, type LiveTask, type LiveTaskStatus } from "./core/live-tasks";
 import { Composer, type ComposerDraft } from "./ui/composer";
 import { renderEmptyState } from "./ui/empty-state";
 import { isVaultSetUp, memorySetupNeeded } from "./core/vault-setup";
@@ -3694,10 +3694,22 @@ export class ChatView extends ItemView {
           card.addClass("mva-tool-bg");
           this.addToolBadge(card, "↳ background task");
           task.badgeEl.setText(name === "KillShell" ? "stopped" : "running");
+          if (name === "KillShell") {
+            this.liveStatus(ctx.convo, this.bgIdForShell(ctx, sid), "stopped");
+          }
           break;
         }
       }
     }
+  }
+
+  /** Find the live-task id (original background Bash tool-call id) for a shell
+   *  id — background Bash entries are keyed by their launching tool-call id, not
+   *  the shell id KillShell/BashOutput reference. Guard: `liveStatus(c, "", …)`
+   *  is a harmless no-op (`liveTasks.get("")` → undefined). */
+  private bgIdForShell(ctx: AssistantCtx, sid: string): string {
+    for (const [id, task] of ctx.bgTasks) if (task.shellId === sid) return id;
+    return "";
   }
 
   /** On tool-call-result of a background Bash: parse the shell id from the CLI
@@ -4334,14 +4346,17 @@ export class ChatView extends ItemView {
     }
   }
 
-  /** How many background agents a conversation owns RIGHT NOW: subagent (Task)
-   *  tool-calls still in flight plus background Bash shells launched this turn.
-   *  Read from the convo's live turn context (each convo has its own), so a chat
-   *  streaming in the background reports its own count. Zero once the turn ends
-   *  (currentCtx is cleared) — Exo never claims work it can no longer observe. */
+  /** Terminal live-task rows linger this long before eviction, so a
+   *  done/error/stopped entry is visible rather than vanishing instantly. */
+  private static readonly LIVE_FADE_MS = 2000;
+
+  /** How many background agents a conversation owns RIGHT NOW: every live task
+   *  tracked on the convo — subagents, background Bash, and Workflow runs —
+   *  regardless of whether the turn that spawned them is still streaming. Read
+   *  from `Convo.liveTasks` (not the live turn context), so the chip survives
+   *  turn end while the work itself is still going (keep-alive L1). */
   private agentCount(c: Convo): number {
-    const ctx = c.currentCtx;
-    return ctx ? ctx.runningTasks.size + ctx.bgTasks.size : 0;
+    return c.liveTasks.size;
   }
 
   /** Insert or update a live task on a convo and refresh the chip. The single
@@ -4352,24 +4367,57 @@ export class ChatView extends ItemView {
     this.renderAgentPopover(); // no-op until Task 4 adds it; declared there
   }
 
+  /** Mark a live task terminal (done/error/stopped), stamp `doneAt`, and schedule
+   *  its eviction after the fade window so the row lingers briefly then leaves. */
+  private liveStatus(c: Convo, id: string, status: LiveTaskStatus): void {
+    const rec = c.liveTasks.get(id);
+    if (!rec) return;
+    rec.status = status;
+    rec.doneAt = Date.now();
+    this.refreshAgentIndicators();
+    this.renderAgentPopover();
+    if (status !== "running") {
+      window.setTimeout(() => this.liveRemove(c, id), ChatView.LIVE_FADE_MS);
+    }
+  }
+
+  /** Evict a live task and refresh the chip. */
+  private liveRemove(c: Convo, id: string): void {
+    if (c.liveTasks.delete(id)) {
+      this.refreshAgentIndicators();
+      this.renderAgentPopover();
+    }
+  }
+
   private renderAgentPopover(): void { /* filled in Task 4 */ }
 
   /** Refresh both per-chat agent affordances: the per-tab count badges (via
    *  renderTabs) and the pinned chip above the composer, which reflects ONLY the
    *  open chat's own agents. Strictly local — a background chat's work never leaks
-   *  into the chat you're looking at; you see its count on its own tab. */
+   *  into the chat you're looking at; you see its count on its own tab. Label and
+   *  spinner come from the core `summarizeLiveTasks` projection, so terminal
+   *  (fading) rows still count until evicted by `liveRemove`. */
   private refreshAgentIndicators(): void {
     this.renderTabs();
     const chip = this.agentChipEl;
     if (!chip) return;
-    const n = this.active ? this.agentCount(this.active) : 0;
     chip.empty();
-    chip.toggleClass("is-hidden", n === 0);
-    if (n === 0) return;
-    setIcon(chip.createSpan({ cls: "mva-agents-icon" }), "loader");
-    chip.createSpan({ cls: "mva-agents-label", text: n === 1 ? "1 agent running" : `${n} agents running` });
-    this.clickable(chip, () => this.scrollConvo(this.active));
+    const c = this.active;
+    const tasks = c ? [...c.liveTasks.values()] : [];
+    const sum = summarizeLiveTasks(tasks);
+    chip.toggleClass("is-hidden", sum.count === 0);
+    if (sum.count === 0) return;
+    const icon = chip.createSpan({ cls: "mva-agents-icon" });
+    icon.toggleClass("is-idle", !sum.spinner); // stop the spin when nothing runs
+    setIcon(icon, sum.spinner ? "loader" : "check");
+    chip.createSpan({ cls: "mva-agents-label", text: sum.chipLabel });
+    setIcon(chip.createSpan({ cls: "mva-agents-caret" }), "chevron-up");
+    this.clickable(chip, () => this.toggleAgentPopover());
   }
+
+  /** Opens/closes the agent popover listing live tasks. Stub — fleshed out in
+   *  Task 4 (renderAgentPopover's consumer). */
+  private toggleAgentPopover(): void {}
 
   /**
    * Terminal convo-state hook, fired once from `runTurn`'s `finally`. Maps the
@@ -4795,9 +4843,13 @@ export class ChatView extends ItemView {
             this.resolveToolCard(ctx, e.id, e.ok, e.output);
             this.linkBackgroundResult(ctx, e.id, e.output);
             this.markTaskDone(ctx, e.id); // Task's own result → mark section done
-            // A subagent finished → drop it from the running count (delete returns
-            // true only when it was a tracked Task, so plain tools don't refresh).
-            if (ctx.runningTasks.delete(e.id)) this.refreshAgentIndicators();
+            // A subagent finished → transition its live-task row to terminal
+            // (delete returns true only when it was a tracked Task, so plain
+            // tools don't refresh). liveStatus refreshes the chip and schedules
+            // the fade-out eviction.
+            if (ctx.runningTasks.delete(e.id)) {
+              this.liveStatus(c, e.id, e.ok ? "done" : "error");
+            }
           }
           const wp = ctx.writeById.get(e.id);
           // Reveal only while Mario is actually watching THIS chat: the convo is
