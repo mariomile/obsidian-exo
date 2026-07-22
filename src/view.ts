@@ -4449,6 +4449,7 @@ export class ChatView extends ItemView {
     chip.createSpan({ cls: "mva-agents-label", text: sum.chipLabel });
     setIcon(chip.createSpan({ cls: "mva-agents-caret" }), "chevron-up");
     this.clickable(chip, () => this.toggleAgentPopover());
+    if (this.agentPopoverEl) chip.appendChild(this.agentPopoverEl);
   }
 
   /** Toggle the enumerable list of this chat's live tasks, anchored above the chip. */
@@ -4463,8 +4464,8 @@ export class ChatView extends ItemView {
     this.renderAgentPopover();
     // Close on outside click / Esc (registered next tick so THIS click doesn't fire it).
     window.setTimeout(() => {
-      this.registerDomEvent(document, "click", this.onAgentPopoverOutside);
-      this.registerDomEvent(document, "keydown", this.onAgentPopoverKey);
+      document.addEventListener("click", this.onAgentPopoverOutside);
+      document.addEventListener("keydown", this.onAgentPopoverKey);
     }, 0);
   }
 
