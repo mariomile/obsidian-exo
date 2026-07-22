@@ -621,8 +621,8 @@ export class Composer {
     this.sendBtn.onclick = () => (this.host.streaming ? this.host.stop() : void this.host.send());
   }
 
-  /** Per-conversation Research Mode. The active chip is its own dismiss control;
-   *  the inactive state stays compact so discovery does not dominate the bar. */
+  /** Per-conversation Research Mode — icon-only binoculars toggle. State reads
+   *  through the tooltip + is-active tint; clicking again exits (no x badge). */
   private buildResearchToggle(tb: HTMLElement): void {
     const chip = tb.createDiv({
       cls: "mva-research-chip",
@@ -635,9 +635,11 @@ export class Composer {
       chip.empty();
       chip.toggleClass("is-active", active);
       chip.setAttribute("aria-pressed", String(active));
-      setIcon(chip.createSpan({ cls: "mva-research-chip-icon" }), "search");
-      chip.createSpan({ text: "Research" });
-      if (active) setIcon(chip.createSpan({ cls: "mva-research-chip-x" }), "x");
+      const icon = chip.createSpan({ cls: "mva-research-chip-icon" });
+      setIcon(icon, "binoculars");
+      // Older bundled lucide sets predate the binoculars glyph — setIcon leaves
+      // the span empty there, so fall back to the classic magnifier.
+      if (!icon.querySelector("svg")) setIcon(icon, "search");
       setTooltip(chip, active ? "Exit Research Mode" : "Start Research Mode");
     };
     clickable(chip, () => this.host.toggleResearchMode());
