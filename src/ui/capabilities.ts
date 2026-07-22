@@ -5,6 +5,7 @@ import type { MVASettings } from "../settings";
 import { clickable } from "./dom";
 import { monthFileName, parseStoreFile, type MemoryEntry } from "../core/memory-store";
 import { parseLoopsFile, type LoopEntry } from "../core/open-loops";
+import { exoPaths } from "../core/paths";
 import {
   memoryStats,
   memoryActions,
@@ -182,16 +183,12 @@ interface Ctx {
 
 /* --------------------------- actions hub (W2-UX) --------------------------- */
 
-const STORE_DIR = "_system/memory/store";
-const OPEN_LOOPS_PATH = "_system/memory/open-loops.md";
-const REVIEW_PATH = "_system/review.md";
-
 /** Read + parse every month file in the store dir. Missing dir / unreadable
  *  files are tolerated (→ fewer entries), never thrown on. */
-async function gatherStoreEntries(app: App): Promise<MemoryEntry[]> {
+async function gatherStoreEntries(app: App, storeDir: string): Promise<MemoryEntry[]> {
   const entries: MemoryEntry[] = [];
   try {
-    const res = await app.vault.adapter.list(STORE_DIR);
+    const res = await app.vault.adapter.list(storeDir);
     for (const f of res.files) {
       if (!f.endsWith(".md")) continue;
       try {
@@ -207,10 +204,10 @@ async function gatherStoreEntries(app: App): Promise<MemoryEntry[]> {
 }
 
 /** Read + parse the open-loops ledger (empty when absent/unreadable). */
-async function gatherLoops(app: App): Promise<LoopEntry[]> {
+async function gatherLoops(app: App, loopsPath: string): Promise<LoopEntry[]> {
   try {
-    if (await app.vault.adapter.exists(OPEN_LOOPS_PATH)) {
-      return parseLoopsFile(await app.vault.adapter.read(OPEN_LOOPS_PATH));
+    if (await app.vault.adapter.exists(loopsPath)) {
+      return parseLoopsFile(await app.vault.adapter.read(loopsPath));
     }
   } catch {
     /* missing/unreadable */
@@ -225,6 +222,7 @@ export async function renderCapabilitiesPanel(
   ctx: Ctx
 ): Promise<void> {
   container.empty();
+  const paths = exoPaths(s.memoryRoot);
   // Immediate feedback while the (sometimes async) capability scan runs; removed
   // once the panel is fully built. On the live-caps path this is synchronous and
   // never paints.
@@ -314,9 +312,9 @@ export async function renderCapabilitiesPanel(
   {
     const now = Date.now();
     const [storeEntries, loops, reviewExists, snapshotPresent, queuePending] = await Promise.all([
-      gatherStoreEntries(app),
-      gatherLoops(app),
-      app.vault.adapter.exists(REVIEW_PATH).catch(() => false),
+      gatherStoreEntries(app, paths.store),
+      gatherLoops(app, paths.openLoops),
+      app.vault.adapter.exists(paths.review).catch(() => false),
       ctx.dreamSnapshotPresent?.() ?? Promise.resolve(false),
       ctx.queuePending?.().catch(() => null) ?? Promise.resolve(null),
     ]);
@@ -339,9 +337,9 @@ export async function renderCapabilitiesPanel(
       const handler: Record<string, () => void> = {
         "dream-run": run("exo:memory-dream-pass"),
         "dream-undo": run("exo:memory-dream-undo"),
-        "open-store": openMain(`${STORE_DIR}/${monthFileName(now)}`),
-        "open-loops": openMain(OPEN_LOOPS_PATH),
-        "open-review": openMain(REVIEW_PATH),
+        "open-store": openMain(`${paths.store}/${monthFileName(now)}`),
+        "open-loops": openMain(paths.openLoops),
+        "open-review": openMain(paths.review),
       };
       for (const a of memoryActions({ snapshotPresent, reviewExists, loops, now, dreamLlmEnabled: s.dreamLlmEnabled })) {
         actionChip(b, a, a.enabled ? handler[a.id] : undefined);
@@ -405,13 +403,13 @@ export async function renderCapabilitiesPanel(
   tier("Knowledge");
   // Memory
   {
-    const b = card("Vault memory", "_system/");
+    const b = card("Vault memory", `${paths.root}/`);
     chip(b, "Read at boot", s.memoryReadEnabled && claude);
     chip(b, "Write (gated)", s.memoryWriteEnabled && claude);
     const open = (p: string) => () => ctx.onOpenNote(p);
-    chip(b, "vault-context.md", true, "open", open("_system/vault-context.md"));
-    chip(b, "preferences.md", true, "open", open("_system/memory/preferences/preferences.md"));
-    chip(b, "session-log.md", true, "open", open("_system/memory/session-log.md"));
+    chip(b, "vault-context.md", true, "open", open(paths.vaultContext));
+    chip(b, "preferences.md", true, "open", open(paths.preferences));
+    chip(b, "session-log.md", true, "open", open(paths.sessionLog));
   }
 
   // Playbooks

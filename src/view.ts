@@ -106,11 +106,6 @@ import {
 
 export type { AskQuestion } from "./core/model";
 
-/** Folder holding the append-only Memory Union Store — mirrors the constant in
- *  `obsidian/tools.ts` (the `recall` tool's read path). Duplicated rather than
- *  exported to avoid a view→tools value import for one string. */
-const MEMORY_STORE_DIR = "_system/memory/store";
-
 /** Prompt surface for the Memory Union Store — appended to the boot preamble only
  *  when the store tools are registered. Kept short: the tool descriptions carry
  *  the detail. */
@@ -2343,7 +2338,7 @@ export class ChatView extends ItemView {
    *  cached-read path the `recall` tool uses. Never throws; an unreadable file is
    *  skipped, and a missing store yields `[]`. */
   private async readMemoryStore(): Promise<MemoryEntry[]> {
-    const files = this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${MEMORY_STORE_DIR}/`));
+    const files = this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${this.plugin.paths.store}/`));
     const all: MemoryEntry[] = [];
     for (const f of files) {
       try {
