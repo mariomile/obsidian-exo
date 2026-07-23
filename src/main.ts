@@ -270,8 +270,10 @@ export default class ExoPlugin extends Plugin {
   private static readonly AUTO_COMMIT_DEBOUNCE_MS = 2 * 60 * 1000;
   /** How often the periodic checker ticks. Actual git calls only run when
    *  `isCommitDue` says a debounce or cadence window has elapsed, so most
-   *  ticks are a free no-op. */
-  private static readonly AUTO_COMMIT_CHECK_INTERVAL_MS = 20 * 1000;
+   *  ticks are a free no-op. Kept at 60s (not lower): the shortest real
+   *  commit latency is the 2-min debounce quiet period, so a 60s sampling
+   *  interval detects it with negligible lag while cutting idle wake-ups 3×. */
+  private static readonly AUTO_COMMIT_CHECK_INTERVAL_MS = 60 * 1000;
 
   async onload(): Promise<void> {
     this.unloaded = false;
@@ -653,9 +655,11 @@ export default class ExoPlugin extends Plugin {
     });
 
     // Exo Queue ("Exo in tasca"): evade le note-richiesta arrivate via Sync.
-    // Poll leggero ogni 60s (list di una cartella); drain sequenziale con
+    // Poll leggero ogni 5 min (list di una cartella); drain sequenziale con
     // flag busy — mai due giri concorrenti (una richiesta può durare minuti).
-    this.registerInterval(window.setInterval(() => void this.maybeDrainExoQueue(), 60 * 1000));
+    // È un canale background: 5 min di latenza sono accettabili e il tick più
+    // raro riduce le wake-up in idle (prima era 60s → 300s).
+    this.registerInterval(window.setInterval(() => void this.maybeDrainExoQueue(), 5 * 60 * 1000));
 
     // Git auto-commit safety net: ticks frequently, but only ever runs git
     // commands once the pure debounce/cadence decision says a check is due —
