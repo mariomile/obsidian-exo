@@ -157,3 +157,41 @@ export function assignMcpState(
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/** One skills directory found on the system (an other-project `.claude/skills`
+ *  or Codex's `~/.codex/skills`), tagged by its source. The caller does the fs
+ *  read; this module only flattens + diffs. */
+export interface SkillDir {
+  origin: string;
+  source: SourceId;
+  skills: { name: string; path: string; desc?: string }[];
+}
+
+/** Flatten skill dirs into DiscoveryItems, carrying each dir's source/origin.
+ *  State is provisional `"importable"` — the real diff runs in assignSkillState. */
+export function scanSkillDirs(dirs: SkillDir[]): DiscoveryItem[] {
+  const out: DiscoveryItem[] = [];
+  for (const d of dirs) {
+    for (const s of d.skills) {
+      out.push({ kind: "skill", name: s.name, source: d.source, origin: d.origin, state: "importable", path: s.path, desc: s.desc });
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Diff skill items against what Exo already has. `haveNames` = every skill Exo
+ *  can already use (live caps ∪ `~/.claude/skills`); `vaultNames` = skills
+ *  already copied into the vault. name in vault → active; else already-have →
+ *  have (greyed, no import — the duplicate guard); else importable. Dedups by
+ *  name across all sources. */
+export function assignSkillState(items: DiscoveryItem[], haveNames: Set<string>, vaultNames: Set<string>): DiscoveryItem[] {
+  const seen = new Set<string>();
+  const out: DiscoveryItem[] = [];
+  for (const it of items) {
+    if (seen.has(it.name)) continue;
+    seen.add(it.name);
+    const state: ItemState = vaultNames.has(it.name) ? "active" : haveNames.has(it.name) ? "have" : "importable";
+    out.push({ ...it, state });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}

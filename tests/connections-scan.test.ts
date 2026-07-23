@@ -4,6 +4,8 @@ import {
   scanCodexMcp,
   scanClaudeGlobalMcp,
   assignMcpState,
+  scanSkillDirs,
+  assignSkillState,
 } from "../src/core/connections-scan";
 
 describe("normalizeCodexServer", () => {
@@ -91,5 +93,36 @@ args = [ "-y", "@posthog/mcp" ]
       { activeNames: new Set(["ft"]), inheritedNames: new Set() },
     );
     expect(items[0].state).toBe("active");
+  });
+});
+
+describe("scanSkillDirs + assignSkillState", () => {
+  const dirs = [
+    { origin: "deepagent-saas", source: "other-project" as const, skills: [
+      { name: "rag-pipelines", path: "/p/deepagent-saas/.claude/skills/rag-pipelines", desc: "RAG" },
+      { name: "brainstorming", path: "/p/deepagent-saas/.claude/skills/brainstorming" },
+    ]},
+    { origin: "PH_Pilot", source: "other-project" as const, skills: [
+      { name: "pitch-deck", path: "/p/PH_Pilot/.claude/skills/pitch-deck" },
+    ]},
+    { origin: "Codex", source: "codex" as const, skills: [
+      { name: "gpt-taste", path: "/Users/m/.codex/skills/gpt-taste" },        // codex-exclusive
+      { name: "rag-pipelines", path: "/Users/m/.codex/skills/rag-pipelines" }, // mirror — deduped
+    ]},
+  ];
+  it("flattens dirs into skill items carrying their source", () => {
+    const items = scanSkillDirs(dirs);
+    expect(items.find((i) => i.name === "gpt-taste")!.source).toBe("codex");
+    expect(items.find((i) => i.name === "gpt-taste")!.origin).toBe("Codex");
+    expect(items.find((i) => i.name === "pitch-deck")!.source).toBe("other-project");
+  });
+  it("never offers to import a skill we already have (dedup across all sources)", () => {
+    const items = scanSkillDirs(dirs);
+    const out = assignSkillState(items, new Set(["brainstorming", "rag-pipelines"]), new Set(["pitch-deck"]));
+    const byName = new Map(out.map((i) => [i.name, i]));
+    expect(byName.get("brainstorming")!.state).toBe("have");      // in ~/.claude/skills → greyed
+    expect(byName.get("rag-pipelines")!.state).toBe("have");      // Codex mirror of a Claude skill → greyed
+    expect(byName.get("pitch-deck")!.state).toBe("active");        // already in vault
+    expect(byName.get("gpt-taste")!.state).toBe("importable");     // Codex-exclusive → genuinely new
   });
 });
