@@ -8,6 +8,7 @@ import {
   setTooltip,
   Notice,
   Keymap,
+  debounce,
 } from "obsidian";
 import type ExoPlugin from "./main";
 import { resolveCli, describeError, isAbort } from "./cli";
@@ -538,14 +539,24 @@ export class ChatView extends ItemView {
     );
     // Resizing the pane can flip a short transcript into overflow (or back) without
     // any content change — keep the tail "Related" section in sync with that too.
-    const tailResizeObserver = new ResizeObserver(() => this.renderTailSurfacing(this.active));
+    // Debounced: a drag emits a continuous stream of resize ticks, and each tail
+    // render is markdown work — collapse the burst into one render at rest.
+    const renderTailDebounced = debounce(() => this.renderTailSurfacing(this.active), 120, true);
+    const tailResizeObserver = new ResizeObserver(() => renderTailDebounced());
     tailResizeObserver.observe(this.listWrap);
-    this.register(() => tailResizeObserver.disconnect());
+    this.register(() => {
+      renderTailDebounced.cancel();
+      tailResizeObserver.disconnect();
+    });
     // Recap Rail: full-page-only. Re-evaluate `is-wide` on container resize and on
     // layout-change (dragging the leaf between sidebar and main), then build/clear.
-    this.recapResizeObserver = new ResizeObserver(() => this.applyWideMode());
+    // Debounced for the same reason; the discrete layout-change event below still
+    // drives applyWideMode() promptly when the leaf is docked/undocked.
+    const applyWideDebounced = debounce(() => this.applyWideMode(), 120, true);
+    this.recapResizeObserver = new ResizeObserver(() => applyWideDebounced());
     this.recapResizeObserver.observe(root);
     this.register(() => {
+      applyWideDebounced.cancel();
       this.recapResizeObserver?.disconnect();
       this.recapResizeObserver = null;
     });
