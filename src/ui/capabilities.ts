@@ -118,7 +118,7 @@ export async function gatherOtherProjectSkills(roots: string[]): Promise<SkillDi
 /** Codex-native skills under ~/.codex/skills — reuses the composer's scanner for
  *  names, enriches with desc/path. Mostly mirror the Claude set (deduped later). */
 export async function gatherCodexSkills(): Promise<SkillDir> {
-  const names = await codexSkillNames();
+  const names = (await codexSkillNames()).filter((n) => !n.startsWith(".")); // .system etc. aren't skills
   const dir = `${homedir()}/.codex/skills`;
   const skills = [];
   for (const name of names) {

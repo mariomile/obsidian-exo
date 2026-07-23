@@ -12,6 +12,7 @@ import {
   type DiscoveryItem,
 } from "../core/connections-scan";
 import { connectMcp, importSkill, removeSkill } from "../core/connections-install";
+import { parseMcpJson } from "../core/mcp-config";
 import {
   gatherFromScopes,
   gatherFromVault,
@@ -84,7 +85,15 @@ export class ConnectionsView extends ItemView {
     try { codexToml = await readFile(`${home}/.codex/config.toml`, "utf8"); } catch { /* absent */ }
 
     const mcpItems = [...scanCodexMcp(codexToml), ...scanClaudeGlobalMcp(claudeJson)];
-    const activeNames = new Set<string>((caps?.mcpServers ?? []).map((m) => m.name));
+    // Active = live session servers UNION the ones we've already written into the
+    // vault's .mcp.json (enabled). Without the .mcp.json half, a just-connected
+    // server keeps showing "Connetti" until the next session — looks like a no-op.
+    let ourServers: string[] = [];
+    try {
+      const parsed = parseMcpJson(await this.app.vault.adapter.read(".mcp.json"));
+      if (!parsed.error) ourServers = parsed.servers.filter((s) => s.enabled).map((s) => s.name);
+    } catch { /* no .mcp.json yet */ }
+    const activeNames = new Set<string>([...(caps?.mcpServers ?? []).map((m) => m.name), ...ourServers]);
     const inheritedNames = new Set<string>(Object.keys(claudeJson.mcpServers ?? {}));
     const mcp = assignMcpState(mcpItems, { activeNames, inheritedNames }).map((it) => ({
       ...it,
