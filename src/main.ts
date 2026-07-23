@@ -7,6 +7,7 @@ import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { handoffPrefix } from "./core/handoff";
 import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { CockpitView, COCKPIT_VIEW_TYPE, COCKPIT_ICON } from "./ui/cockpit-view";
+import { ConnectionsView, CONNECTIONS_VIEW_TYPE, CONNECTIONS_ICON } from "./ui/connections-view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
 import { resolveCli, cliDiagnostics, updateClaudeCli } from "./cli";
@@ -375,6 +376,7 @@ export default class ExoPlugin extends Plugin {
     // and never starts the driver (see BoardView.onOpen).
     this.registerView(BOARD_VIEW_TYPE, (leaf) => new BoardView(leaf, this));
     this.registerView(COCKPIT_VIEW_TYPE, (leaf) => new CockpitView(leaf, this));
+    this.registerView(CONNECTIONS_VIEW_TYPE, (leaf) => new ConnectionsView(leaf, this));
 
     // In-note AI: a floating toolbar over the selection (Edit / Continue / Ask
     // Exo). Registered once; gated live behind the `inlineAi` setting, so
@@ -393,6 +395,7 @@ export default class ExoPlugin extends Plugin {
     this.registerEditorExtension(mentionsExtension(this));
 
     this.addRibbonIcon(EXO_ICON, "Open Exo", () => this.activateView());
+    this.addRibbonIcon(CONNECTIONS_ICON, "Open Exo Connections", () => void this.activateConnections());
 
     this.addCommand({
       id: "review-connections",
@@ -415,6 +418,12 @@ export default class ExoPlugin extends Plugin {
       id: "open-chat",
       name: "Open chat",
       callback: () => this.activateView(),
+    });
+
+    this.addCommand({
+      id: "open-connections",
+      name: "Open Exo Connections",
+      callback: () => void this.activateConnections(),
     });
 
     // Paste-ready turn-lifecycle diagnostics (names/kinds/counts only — never
@@ -780,6 +789,16 @@ export default class ExoPlugin extends Plugin {
       // Main-area tab (not the sidebar) — the board is a full-width surface.
       leaf = workspace.getLeaf(true);
       await leaf.setViewState({ type: BOARD_VIEW_TYPE, active: true });
+    }
+    workspace.revealLeaf(leaf);
+  }
+
+  async activateConnections(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(CONNECTIONS_VIEW_TYPE)[0] ?? null;
+    if (!leaf) {
+      leaf = workspace.getLeaf(true);
+      await leaf.setViewState({ type: CONNECTIONS_VIEW_TYPE, active: true });
     }
     workspace.revealLeaf(leaf);
   }
