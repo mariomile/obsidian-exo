@@ -5057,3 +5057,72 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   .mva-proposals-layout { grid-template-columns: 1fr; max-height: 76vh; }
   .mva-proposals-list { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--background-modifier-border); }
 }
+
+/* ── Connections pane ─────────────────────────────────────────────────
+   Two-tab marketplace (MCP / Skills) over what other tools already have.
+   Reuses .mva-btn / .mva-icon-btn; the tab .mva-pill is scoped here. */
+.mva-connections-root .mva-conn-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.mva-connections-root .mva-pill {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: none;
+  transition: background var(--mva-t), color var(--mva-t);
+}
+.mva-connections-root .mva-pill:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.mva-connections-root .mva-pill.is-active {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border-color: var(--background-modifier-border);
+}
+.mva-connections-root .mva-conn-refresh { margin-left: auto; }
+
+.mva-connections-root .mva-conn-list {
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mva-conn-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 11px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r1, 8px);
+  background: var(--background-primary);
+}
+.mva-conn-row.is-muted { opacity: 0.6; }
+.mva-conn-name { font-weight: 600; }
+.mva-conn-origin {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 1px 7px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+}
+.mva-conn-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mva-conn-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.mva-conn-state { font-size: 12px; color: var(--text-muted); }
+.mva-conn-state.is-muted { color: var(--text-faint); }
+.mva-conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+.mva-conn-dot.is-connected { background: var(--color-green, #3fb950); }
+.mva-conn-empty { color: var(--text-muted); padding: 28px 8px; text-align: center; font-size: 13px; }
