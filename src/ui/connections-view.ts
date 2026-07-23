@@ -22,7 +22,9 @@ import {
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 
 export const CONNECTIONS_VIEW_TYPE = "exo-connections";
-export const CONNECTIONS_ICON = "blocks";
+/** Registered via addIcon() in main.ts (Huge Icons puzzle-piece — matches
+ *  the "marketplace of capabilities" concept better than a generic grid). */
+export const CONNECTIONS_ICON = "hi-puzzle";
 
 type Tab = "mcp" | "skills";
 

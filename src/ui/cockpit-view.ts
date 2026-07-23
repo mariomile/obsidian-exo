@@ -36,7 +36,8 @@ import {
 } from "../core/actions-hub";
 
 export const COCKPIT_VIEW_TYPE = "exo-cockpit";
-export const COCKPIT_ICON = "gauge";
+/** Registered via addIcon() in main.ts (Huge Icons dashboard-speed). */
+export const COCKPIT_ICON = "hi-dashboard-speed";
 
 const INBOX_DIR = "_inbox";
 const ATTENTION_ICONS: Record<AttentionItem["kind"], string> = {
