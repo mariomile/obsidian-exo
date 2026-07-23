@@ -47,3 +47,67 @@ export function normalizeCodexServer(raw: Record<string, unknown>): Record<strin
   if (isRecord(raw.env) && Object.keys(raw.env).length) out.env = raw.env;
   return out;
 }
+
+/** Parse the subset of TOML Codex uses for MCP servers into a name→object map.
+ *  Handles `[mcp_servers.NAME]` tables, scalar `key = "value"`, inline arrays
+ *  `args = [ "a", "b" ]`, and the `.http_headers` sub-table; deeper nested
+ *  tables (`.tools.X`) are entered but their keys ignored. Purpose-built — not
+ *  a general TOML parser (keeps the bundle lean; only this shape is needed). */
+function parseCodexServers(toml: string): Map<string, Record<string, unknown>> {
+  const servers = new Map<string, Record<string, unknown>>();
+  let curName: string | null = null;
+  let headerTarget: string | null = null; // name whose http_headers table we're in
+  const unquote = (s: string) => s.trim().replace(/^["']|["']$/g, "");
+  for (const rawLine of toml.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const header = line.match(/^\[mcp_servers\.([^\].]+)(\.[^\]]+)?\]$/);
+    if (header) {
+      const name = header[1];
+      const sub = header[2]; // ".http_headers" or ".tools.browser_run_code_unsafe"
+      if (!servers.has(name)) servers.set(name, {});
+      if (sub === ".http_headers") {
+        headerTarget = name;
+        curName = null;
+        (servers.get(name) as Record<string, unknown>).http_headers ??= {};
+      } else if (sub) {
+        curName = null; // deeper nested (tools.*) — ignore its keys
+        headerTarget = null;
+      } else {
+        curName = name;
+        headerTarget = null;
+      }
+      continue;
+    }
+    if (line.startsWith("[")) { curName = null; headerTarget = null; continue; } // unrelated section
+    const kv = line.match(/^([\w-]+)\s*=\s*(.+)$/);
+    if (!kv) continue;
+    const key = kv[1];
+    const valRaw = kv[2].trim();
+    let value: unknown;
+    if (valRaw.startsWith("[")) {
+      value = valRaw.replace(/^\[|\]$/g, "").split(",").map((s) => unquote(s)).filter(Boolean);
+    } else {
+      value = unquote(valRaw);
+    }
+    if (headerTarget) {
+      const h = (servers.get(headerTarget)!.http_headers ??= {}) as Record<string, unknown>;
+      h[key] = value;
+    } else if (curName) {
+      servers.get(curName)![key] = value;
+    }
+  }
+  return servers;
+}
+
+/** Scan a Codex `config.toml` string into importable MCP DiscoveryItems.
+ *  State is provisional `"importable"` — the real diff runs in assignMcpState. */
+export function scanCodexMcp(tomlText: string): DiscoveryItem[] {
+  const out: DiscoveryItem[] = [];
+  for (const [name, raw] of parseCodexServers(tomlText)) {
+    const config = normalizeCodexServer(raw);
+    if (!config) continue;
+    out.push({ kind: "mcp", name, source: "codex", origin: "Codex", state: "importable", config });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}

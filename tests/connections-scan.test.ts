@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeCodexServer } from "../src/core/connections-scan";
+import { normalizeCodexServer, scanCodexMcp } from "../src/core/connections-scan";
 
 describe("normalizeCodexServer", () => {
   it("maps url form to http config, keeping headers", () => {
@@ -16,5 +16,35 @@ describe("normalizeCodexServer", () => {
   });
   it("returns null when neither url nor command nor args present", () => {
     expect(normalizeCodexServer({ description: "x" })).toBeNull();
+  });
+});
+
+describe("scanCodexMcp", () => {
+  const TOML = `
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+[mcp_servers.context7.http_headers]
+
+[mcp_servers.posthog]
+command = "npx"
+args = [ "-y", "@posthog/mcp" ]
+
+[mcp_servers.playwright]
+args = [ "@playwright/mcp@latest" ]
+[mcp_servers.playwright.tools.browser_run_code_unsafe]
+`;
+  it("returns one importable item per server with a usable transport", () => {
+    const items = scanCodexMcp(TOML);
+    const names = items.map((i) => i.name).sort();
+    expect(names).toEqual(["context7", "playwright", "posthog"]);
+    expect(items.every((i) => i.kind === "mcp" && i.source === "codex" && i.origin === "Codex")).toBe(true);
+  });
+  it("normalizes the http server config", () => {
+    const ctx = scanCodexMcp(TOML).find((i) => i.name === "context7")!;
+    expect(ctx.config).toEqual({ type: "http", url: "https://mcp.context7.com/mcp" });
+  });
+  it("normalizes the stdio server config and drops tool gating", () => {
+    const pw = scanCodexMcp(TOML).find((i) => i.name === "playwright")!;
+    expect(pw.config).toEqual({ args: ["@playwright/mcp@latest"] });
   });
 });
