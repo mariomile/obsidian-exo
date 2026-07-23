@@ -63,7 +63,7 @@ export class RecapPanel {
     // then the vault notes read — a subtle sub-label separates the two when both
     // are present so web reads as its own cluster, not mixed into notes.
     if (recap.web.length || recap.read.length) {
-      const body = this.section(container, "Knowledge", recap.web.length || undefined);
+      const body = this.section(container, "Knowledge");
       const bothKinds = recap.web.length > 0 && recap.read.length > 0;
       if (recap.web.length) {
         if (bothKinds) body.createDiv({ cls: "mva-recap-sublabel", text: "Web" });
