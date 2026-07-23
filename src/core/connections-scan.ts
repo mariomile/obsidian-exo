@@ -111,3 +111,49 @@ export function scanCodexMcp(tomlText: string): DiscoveryItem[] {
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
+
+export interface ClaudeJson {
+  mcpServers?: Record<string, unknown>;
+  projects?: Record<string, { mcpServers?: Record<string, unknown> }>;
+}
+
+/** Scan `~/.claude.json` (already parsed) for MCP servers — top-level (Claude
+ *  global, which Exo also loads) and per-project (other repos' servers). Config
+ *  passes through verbatim: it's already in Claude's `.mcp.json` shape. */
+export function scanClaudeGlobalMcp(claude: ClaudeJson): DiscoveryItem[] {
+  const out: DiscoveryItem[] = [];
+  for (const [name, config] of Object.entries(claude.mcpServers ?? {})) {
+    if (isRecord(config)) out.push({ kind: "mcp", name, source: "claude-global", origin: "Claude global", state: "importable", config });
+  }
+  for (const [projPath, proj] of Object.entries(claude.projects ?? {})) {
+    const base = projPath.split("/").filter(Boolean).pop() ?? projPath;
+    for (const [name, config] of Object.entries(proj?.mcpServers ?? {})) {
+      if (isRecord(config)) out.push({ kind: "mcp", name, source: "claude-project", origin: `Claude · ${base}`, state: "importable", config });
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Diff MCP items against what Exo already has. `activeNames` = servers Exo
+ *  toggled on itself (live caps ∪ enabled `.mcp.json`); `inheritedNames` =
+ *  names Exo loads without a `.mcp.json` entry (Claude global). Dedups by name
+ *  keeping the first occurrence, so a server in both Codex and Claude appears
+ *  once. This is the guard that stops us importing a duplicate. */
+export function assignMcpState(
+  items: DiscoveryItem[],
+  have: { activeNames: Set<string>; inheritedNames: Set<string> },
+): DiscoveryItem[] {
+  const seen = new Set<string>();
+  const out: DiscoveryItem[] = [];
+  for (const it of items) {
+    if (seen.has(it.name)) continue;
+    seen.add(it.name);
+    const state: ItemState = have.activeNames.has(it.name)
+      ? "active"
+      : have.inheritedNames.has(it.name)
+        ? "have"
+        : "importable";
+    out.push({ ...it, state });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
