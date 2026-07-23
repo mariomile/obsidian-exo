@@ -6,6 +6,8 @@ import { clickable } from "./dom";
 import { monthFileName, parseStoreFile, type MemoryEntry } from "../core/memory-store";
 import { parseLoopsFile, type LoopEntry } from "../core/open-loops";
 import { exoPaths } from "../core/paths";
+import type { SkillDir } from "../core/connections-scan";
+import { codexSkillNames } from "../core/capability-desc";
 import {
   memoryStats,
   memoryActions,
@@ -57,7 +59,7 @@ async function readAgentMeta(file: string): Promise<NamedItem | null> {
   }
 }
 
-async function gatherFromScopes(sub: "skills" | "agents" | "commands"): Promise<NamedItem[]> {
+export async function gatherFromScopes(sub: "skills" | "agents" | "commands"): Promise<NamedItem[]> {
   const seen = new Set<string>();
   const items: NamedItem[] = [];
   const roots = [`${homedir()}/.claude/${sub}`]; // global
@@ -79,7 +81,46 @@ async function gatherFromScopes(sub: "skills" | "agents" | "commands"): Promise<
   return items.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-async function gatherFromVault(app: App, sub: string): Promise<NamedItem[]> {
+/** Skills found in OTHER projects' .claude/skills dirs (not this vault, not
+ *  global) — a source the Connections pane can import from. */
+export async function gatherOtherProjectSkills(roots: string[]): Promise<SkillDir[]> {
+  const out: SkillDir[] = [];
+  for (const root of roots) {
+    const projects: string[] = [];
+    try {
+      for (const e of await readdir(root, { withFileTypes: true })) if (e.isDirectory()) projects.push(e.name);
+    } catch {
+      continue; // missing root — skip
+    }
+    for (const proj of projects) {
+      const dir = `${root}/${proj}/.claude/skills`;
+      const { folders } = await scanNames(dir);
+      if (!folders.length) continue;
+      const skills = [];
+      for (const name of folders) {
+        const meta = await readAgentMeta(`${dir}/${name}/SKILL.md`);
+        skills.push({ name, path: `${dir}/${name}`, desc: meta?.desc });
+      }
+      out.push({ origin: proj, source: "other-project", skills });
+    }
+  }
+  return out;
+}
+
+/** Codex-native skills under ~/.codex/skills — reuses the composer's scanner for
+ *  names, enriches with desc/path. Mostly mirror the Claude set (deduped later). */
+export async function gatherCodexSkills(): Promise<SkillDir> {
+  const names = await codexSkillNames();
+  const dir = `${homedir()}/.codex/skills`;
+  const skills = [];
+  for (const name of names) {
+    const meta = await readAgentMeta(`${dir}/${name}/SKILL.md`);
+    skills.push({ name, path: `${dir}/${name}`, desc: meta?.desc });
+  }
+  return { origin: "Codex", source: "codex", skills };
+}
+
+export async function gatherFromVault(app: App, sub: string): Promise<NamedItem[]> {
   const items: NamedItem[] = [];
   try {
     const res = await app.vault.adapter.list(`.claude/${sub}`);
@@ -113,7 +154,7 @@ function mergeByName(a: NamedItem[], b: NamedItem[]): NamedItem[] {
   return [...map.values()].sort((x, y) => x.name.localeCompare(y.name));
 }
 
-async function gatherMcpServers(app: App): Promise<string[]> {
+export async function gatherMcpServers(app: App): Promise<string[]> {
   const names = new Set<string>();
   const tryFile = async (path: string) => {
     try {
