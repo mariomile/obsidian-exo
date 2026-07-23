@@ -42,7 +42,7 @@ function toInt(x: string | undefined): number {
  *  classification, system/init caps in streaming-input mode, result.usage), so
  *  drift outside this range should be *visible*, not a mystery bug. Bump
  *  maxVerified after running `npm run smoke` against a newer CLI. */
-export const VERIFIED_CLAUDE_CLI = { min: "2.1.195", maxVerified: "2.1.201" };
+export const VERIFIED_CLAUDE_CLI = { min: "2.1.195", maxVerified: "2.1.218" };
 
 export type CliVerifyStatus = "verified" | "newer" | "older" | "unknown";
 

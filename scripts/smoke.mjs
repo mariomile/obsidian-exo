@@ -15,7 +15,7 @@
  *      of regression, where the server silently fails to attach and every custom
  *      tool vanishes;
  *   3. the persistent-session contracts Exo's turn lifecycle leans on (verified
- *      on CLI 2.1.195–2.1.201 — see VERIFIED_CLAUDE_CLI in core/semver.ts):
+ *      on CLI 2.1.195–2.1.218 — see VERIFIED_CLAUDE_CLI in core/semver.ts):
  *      partial stream deltas arrive (includePartialMessages), `result.usage`
  *      carries per-turn tokens (W0 cost tracking), an SDK interrupt() comes
  *      back classified as `error_during_execution` (what route()'s

@@ -61,7 +61,7 @@ class ClaudeSession implements AgentSession {
   private stderrTail: string[] = [];
   /** True once WE interrupted the in-flight turn (Stop button, watchdog, dispose).
    *  The CLI reports any SDK interrupt as an `error_during_execution` result even
-   *  though the process and session survive (verified on CLI 2.1.195–2.1.201:
+   *  though the process and session survive (verified on CLI 2.1.195–2.1.218:
    *  its clean-abort classification only covers aborted_streaming/aborted_tools,
    *  and an SDK interrupt lands outside both windows). This flag lets route()
    *  tell a requested abort from a genuine mid-turn failure. Cleared per send(). */
