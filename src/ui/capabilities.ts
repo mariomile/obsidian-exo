@@ -1,5 +1,5 @@
 import { App } from "obsidian";
-import { readdir, readFile } from "fs/promises";
+import { readdir, readFile, stat } from "fs/promises";
 import { homedir } from "os";
 import type { MVASettings } from "../settings";
 import { clickable } from "./dom";
@@ -35,7 +35,15 @@ async function scanNames(dir: string): Promise<{ folders: string[]; mds: string[
   const out = { folders: [] as string[], mds: [] as string[] };
   try {
     for (const e of await readdir(dir, { withFileTypes: true })) {
-      if (e.isDirectory()) out.folders.push(e.name);
+      if (e.name.startsWith(".")) continue; // .DS_Store, .system, .impeccable — never a skill/agent/command
+      let isDir = e.isDirectory();
+      // ~/.claude/skills is mostly symlinks (→ ~/.agents/skills); a symlink
+      // Dirent reports isDirectory()===false, so stat() through the link or the
+      // whole global skill catalog goes missing from every scan.
+      if (!isDir && e.isSymbolicLink()) {
+        try { isDir = (await stat(`${dir}/${e.name}`)).isDirectory(); } catch { /* dangling link */ }
+      }
+      if (isDir) out.folders.push(e.name);
       else if (e.name.endsWith(".md")) out.mds.push(e.name.replace(/\.md$/, ""));
     }
   } catch {

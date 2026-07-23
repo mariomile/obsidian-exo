@@ -95,7 +95,14 @@ export class ConnectionsView extends ItemView {
     const projectRoots = [`${home}/Dev Projects`, `${home}/Projects`];
     const dirs = [...await gatherOtherProjectSkills(projectRoots), await gatherCodexSkills()];
     const skillItems = scanSkillDirs(dirs);
-    const haveNames = new Set<string>(caps?.skills ?? (await gatherFromScopes("skills")).map((s) => s.name));
+    // "Already have" = the live session's loaded skills UNION the on-disk global
+    // catalog. Union, not `??`: caps is authoritative when present but null
+    // pre-init and on Codex; the disk scan (now symlink-aware) covers that gap
+    // so a skill Exo already has is never offered as importable.
+    const haveNames = new Set<string>([
+      ...(caps?.skills ?? []),
+      ...(await gatherFromScopes("skills")).map((s) => s.name),
+    ]);
     const vaultNames = new Set<string>((await gatherFromVault(this.app, "skills")).map((s) => s.name));
     const skills = assignSkillState(skillItems, haveNames, vaultNames);
 
