@@ -420,6 +420,17 @@ export class ChatView extends ItemView {
   private capsEl: HTMLElement | null = null;
   private brandDot!: HTMLElement;
   private lastPersistErrorNotice = 0;
+  /** Coalesces persist() bursts into one write. Many state changes (every
+   *  streaming chunk, tab tweak, turn boundary) call persist(); without this
+   *  each one re-serialized ALL conversations (~MBs) and rotated the .bak —
+   *  dozens of full-file writes per active minute, each re-uploaded by Sync.
+   *  A trailing debounce collapses a burst into a single write; MAX_WAIT bounds
+   *  worst-case latency so a continuous stream still flushes periodically. Any
+   *  pending write is flushed synchronously on close. */
+  private persistTimer: number | null = null;
+  private persistScheduledAt = 0;
+  private static readonly PERSIST_DEBOUNCE_MS = 1500;
+  private static readonly PERSIST_MAX_WAIT_MS = 8000;
   /** Whether the view auto-follows new content to the bottom. False once the
    *  user scrolls up, so streaming no longer yanks them back down. */
   private pinnedToBottom = true;
@@ -599,6 +610,9 @@ export class ChatView extends ItemView {
       cancelAnimationFrame(this.scrollRaf);
       this.scrollRaf = null;
     }
+    // Flush any debounced conversation write before we tear down, so a change
+    // made in the last debounce window isn't lost when the view closes.
+    if (this.persistTimer !== null) this.flushPersist();
     // this.active is always within this.convos, so the loop covers it.
     for (const c of this.convos) this.dropSession(c);
     this.memoryObserver?.dispose();
@@ -1163,7 +1177,29 @@ export class ChatView extends ItemView {
     };
   }
 
+  /** Schedule a debounced write. Callers fire this freely; the actual
+   *  serialize+write is coalesced in flushPersist(). */
   private persist(): void {
+    const now = Date.now();
+    if (this.persistScheduledAt === 0) this.persistScheduledAt = now;
+    // Bound worst-case staleness: if we've been coalescing past MAX_WAIT
+    // (e.g. an unbroken stream of changes), stop deferring and write now.
+    if (now - this.persistScheduledAt >= ChatView.PERSIST_MAX_WAIT_MS) {
+      this.flushPersist();
+      return;
+    }
+    if (this.persistTimer !== null) window.clearTimeout(this.persistTimer);
+    this.persistTimer = window.setTimeout(() => this.flushPersist(), ChatView.PERSIST_DEBOUNCE_MS);
+  }
+
+  /** Serialize the current conversation set and enqueue the atomic write. Runs
+   *  the debounce trailing edge and any forced/close-time flush. */
+  private flushPersist(): void {
+    if (this.persistTimer !== null) {
+      window.clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    this.persistScheduledAt = 0;
     const { live, archived } = this.serializeSplit();
     void this.plugin.saveConversations(live).then((ok) => {
       if (ok) return;
