@@ -123,6 +123,10 @@ Create a `.obsidian-plugin-dir` file containing the absolute path to your vault'
 
 Implemented: text + reasoning streaming, agentic tools with permission gating (Claude), Codex backend with tool cards, theme-aware transparent UI, context chips + multi-note attach, persistent conversation history, parallel conversations with a message queue + stop, `/` and `@` palettes, effort + permission selectors, the **Capabilities** panel, and the full Obsidian-native layer (graph tools, configurable-root memory read/write, graph UI). Codex tool-event parsing is best-effort (the CLI event schema is version-sensitive); per-action Codex approvals (`codex proto`) are not yet wired — Codex relies on its sandbox. The Obsidian-native tools and memory writes are **Claude-only** (Codex has no in-process MCP equivalent).
 
+## Try it
+
+See it running in the [Obsidianverse sample vault](https://github.com/mariomile/obsidianverse-sample-vault) — a small, fictional vault with the whole plugin suite pre-configured.
+
 ## License
 
 MIT
