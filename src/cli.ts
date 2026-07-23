@@ -74,8 +74,8 @@ export function fixedPathCandidates(name: string, home: string): string[] {
 
 /** Version-manager + fallback locations — checked AFTER the live npm prefix, so
  *  a stale copy here can't beat a freshly-updated global install. Order: volta,
- *  asdf, npm-global, $npm_config_prefix (if set), the Obsidian-app-adjacent dir
- *  (macOS only), then nvm version dirs (newest first). Pure/injectable. */
+ *  asdf, bun, npm-global, $npm_config_prefix (if set), the Obsidian-app-adjacent
+ *  dir (macOS only), then nvm version dirs (newest first). Pure/injectable. */
 export function versionManagerCandidates(
   name: string,
   home: string,
@@ -91,6 +91,7 @@ export function versionManagerCandidates(
   const out = [
     `${home}/.volta/bin/${name}`,
     `${home}/.asdf/shims/${name}`,
+    `${home}/.bun/bin/${name}`,
     `${home}/.npm-global/bin/${name}`,
   ];
   if (opts.npmConfigPrefix) out.push(`${opts.npmConfigPrefix}/bin/${name}`);

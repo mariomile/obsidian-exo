@@ -16,7 +16,7 @@ describe("fixedPathCandidates", () => {
 });
 
 describe("versionManagerCandidates", () => {
-  it("orders volta, asdf, npm-global, then nvm dirs (newest first)", () => {
+  it("orders volta, asdf, bun, npm-global, then nvm dirs (newest first)", () => {
     const cands = versionManagerCandidates("claude", HOME, {
       platform: "linux",
       nvmVersions: ["v22.0.0", "v20.0.0"],
@@ -24,6 +24,7 @@ describe("versionManagerCandidates", () => {
     expect(cands).toEqual([
       "/home/u/.volta/bin/claude",
       "/home/u/.asdf/shims/claude",
+      "/home/u/.bun/bin/claude",
       "/home/u/.npm-global/bin/claude",
       "/home/u/.nvm/versions/node/v22.0.0/bin/claude",
       "/home/u/.nvm/versions/node/v20.0.0/bin/claude",

@@ -41,19 +41,37 @@ function toInt(x: string | undefined): number {
  *  Exo depends on per-version CLI behaviors (interrupt → error_during_execution
  *  classification, system/init caps in streaming-input mode, result.usage), so
  *  drift outside this range should be *visible*, not a mystery bug. Bump
- *  maxVerified after running `npm run smoke` against a newer CLI. */
+ *  maxVerified after running `npm run smoke` against a newer CLI.
+ *
+ *  Note: {@link cliVerifyStatus} tolerates *patch-level* drift above maxVerified
+ *  (same major.minor) — Anthropic ships CLI patches often and they almost never
+ *  touch these contracts, so nagging end users on every patch is pure noise. A
+ *  minor/major bump, where the contracts can actually change, still surfaces. */
 export const VERIFIED_CLAUDE_CLI = { min: "2.1.195", maxVerified: "2.1.218" };
 
 export type CliVerifyStatus = "verified" | "newer" | "older" | "unknown";
 
 /** Classify an installed CLI version against a verified range. `null` or a
- *  garbage string (failed probe) → "unknown" — never nag on a bad read. */
+ *  garbage string (failed probe) → "unknown" — never nag on a bad read.
+ *
+ *  Above maxVerified we distinguish patch drift from a real jump: a version in
+ *  the *same major.minor* as maxVerified (e.g. 2.1.219 vs a 2.1.218 ceiling) is
+ *  still "verified" — routine patch, low risk. Only a higher major.minor
+ *  (2.2.x, 3.x) is "newer", because that's where the SDK contracts Exo leans on
+ *  can shift. Below min is always "older". */
 export function cliVerifyStatus(
   version: string | null,
   range: { min: string; maxVerified: string }
 ): CliVerifyStatus {
   if (!version || !/\d+\.\d+\.\d+/.test(version)) return "unknown";
   if (compareSemver(version, range.min) < 0) return "older";
-  if (compareSemver(version, range.maxVerified) > 0) return "newer";
-  return "verified";
+  if (compareSemver(version, range.maxVerified) <= 0) return "verified";
+  return sameMajorMinor(version, range.maxVerified) ? "verified" : "newer";
+}
+
+/** True when two versions share the same major.minor (patch/pre-release differ). */
+function sameMajorMinor(a: string, b: string): boolean {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  return pa.nums[0] === pb.nums[0] && pa.nums[1] === pb.nums[1];
 }

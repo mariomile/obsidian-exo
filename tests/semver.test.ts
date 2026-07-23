@@ -51,9 +51,15 @@ describe("cliVerifyStatus", () => {
     expect(cliVerifyStatus("2.1.201", range)).toBe("verified");
   });
 
-  it("beyond maxVerified → newer (CLI drift: behaviors Exo depends on are per-version)", () => {
-    expect(cliVerifyStatus("v2.1.202", range)).toBe("newer");
+  it("patch drift above maxVerified (same major.minor) → still verified (no noise on routine CLI patches)", () => {
+    expect(cliVerifyStatus("v2.1.202", range)).toBe("verified");
+    expect(cliVerifyStatus("v2.1.250", range)).toBe("verified");
+    expect(cliVerifyStatus("v2.1.999", range)).toBe("verified");
+  });
+
+  it("a minor/major bump beyond maxVerified → newer (contracts Exo depends on can shift)", () => {
     expect(cliVerifyStatus("v2.2.0", range)).toBe("newer");
+    expect(cliVerifyStatus("v2.10.0", range)).toBe("newer");
     expect(cliVerifyStatus("v3.0.0", range)).toBe("newer");
   });
 
