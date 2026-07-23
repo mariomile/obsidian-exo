@@ -11,7 +11,7 @@ import {
   type ClaudeJson,
   type DiscoveryItem,
 } from "../core/connections-scan";
-import { connectMcp, importSkill, removeSkill } from "../core/connections-install";
+import { connectMcp, disconnectMcp, importSkill, removeSkill } from "../core/connections-install";
 import { parseMcpJson } from "../core/mcp-config";
 import {
   gatherFromScopes,
@@ -41,6 +41,9 @@ type Tab = "mcp" | "skills";
 export class ConnectionsView extends ItemView {
   private tab: Tab = "mcp";
   private listEl: HTMLElement | null = null;
+  /** Names of MCP servers that live in the vault's own .mcp.json (ours to
+   *  remove, vs inherited/live-only servers which the Settings manager owns). */
+  private ourMcp = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);
@@ -95,6 +98,7 @@ export class ConnectionsView extends ItemView {
       const parsed = parseMcpJson(await this.app.vault.adapter.read(".mcp.json"));
       if (!parsed.error) ourServers = parsed.servers.filter((s) => s.enabled).map((s) => s.name);
     } catch { /* no .mcp.json yet */ }
+    this.ourMcp = new Set(ourServers);
     const activeNames = new Set<string>([...(caps?.mcpServers ?? []).map((m) => m.name), ...ourServers]);
     const inheritedNames = new Set<string>(Object.keys(claudeJson.mcpServers ?? {}));
     const mcp = assignMcpState(mcpItems, { activeNames, inheritedNames }).map((it) => ({
@@ -126,22 +130,66 @@ export class ConnectionsView extends ItemView {
     pills.forEach((p, i) => p.toggleClass("is-active", (i === 0) === (this.tab === "mcp")));
 
     const { mcp, skills } = await this.gatherConnections();
-    const items = this.tab === "mcp" ? mcp : skills;
 
-    if (!items.length) {
+    if (this.tab === "mcp") {
+      if (!mcp.length) {
+        this.listEl.empty();
+        this.listEl.createDiv({ cls: "mva-conn-empty", text: "Tutto allineato — nessun MCP importabile da Codex." });
+        return;
+      }
+      const models: CardModel[] = mcp.map((it) => ({
+        key: `mcp:${it.name}`,
+        sig: `${it.state}:${it.status ?? ""}:${this.ourMcp.has(it.name)}`,
+        build: () => this.buildRow(it),
+      }));
+      reconcileList(this.listEl, models);
+      return;
+    }
+
+    // Skills tab: active (vault) first, then importable grouped by origin, then a
+    // single collapsed count for the hundreds already available (not 281 rows).
+    const vault = skills.filter((s) => s.state === "active");
+    const importable = skills.filter((s) => s.state === "importable");
+    const haveCount = skills.filter((s) => s.state === "have").length;
+
+    if (!vault.length && !importable.length) {
       this.listEl.empty();
-      this.listEl.createDiv({ cls: "mva-conn-empty", text: this.tab === "mcp"
-        ? "Tutto allineato — nessun MCP importabile da Codex."
+      this.listEl.createDiv({ cls: "mva-conn-empty", text: haveCount
+        ? `Nessuna skill esterna da importare — ${haveCount} già in Exo.`
         : "Nessuna skill esterna da importare." });
       return;
     }
 
-    const models: CardModel[] = items.map((it) => ({
-      key: `${it.kind}:${it.name}`,
-      sig: `${it.state}:${it.status ?? ""}`,
-      build: () => this.buildRow(it),
-    }));
+    const models: CardModel[] = [];
+    for (const it of vault) models.push({ key: `skill:${it.name}`, sig: "active", build: () => this.buildRow(it) });
+
+    const byOrigin = new Map<string, DiscoveryItem[]>();
+    for (const it of importable) {
+      const arr = byOrigin.get(it.origin) ?? [];
+      arr.push(it);
+      byOrigin.set(it.origin, arr);
+    }
+    for (const origin of [...byOrigin.keys()].sort((a, b) => a.localeCompare(b))) {
+      const group = byOrigin.get(origin)!;
+      models.push({ key: `hdr:${origin}`, sig: `${group.length}`, build: () => this.buildGroupHeader(origin, group.length) });
+      for (const it of group) models.push({ key: `skill:${it.name}`, sig: "importable", build: () => this.buildRow(it) });
+    }
+    if (haveCount) models.push({ key: "have-summary", sig: `${haveCount}`, build: () => this.buildHaveSummary(haveCount) });
+
     reconcileList(this.listEl, models);
+  }
+
+  private buildGroupHeader(origin: string, count: number): HTMLElement {
+    const h = createDiv({ cls: "mva-conn-group" });
+    h.createSpan({ cls: "mva-conn-group-name", text: origin });
+    h.createSpan({ cls: "mva-conn-group-count", text: String(count) });
+    return h;
+  }
+
+  private buildHaveSummary(count: number): HTMLElement {
+    const s = createDiv({ cls: "mva-conn-have-summary" });
+    s.setText(`${count} skill già disponibili in Exo — non mostrate`);
+    return s;
   }
 
   private buildRow(it: DiscoveryItem): HTMLElement {
@@ -157,6 +205,12 @@ export class ConnectionsView extends ItemView {
         const dot = right.createSpan({ cls: "mva-conn-dot" });
         dot.toggleClass("is-connected", it.status === "connected");
         right.createSpan({ cls: "mva-conn-state", text: "attivo" });
+        // Only offer removal for servers WE wrote into .mcp.json — inherited /
+        // live-only servers are the Settings MCP manager's to manage.
+        if (this.ourMcp.has(it.name)) {
+          const btn = right.createEl("button", { cls: "mva-btn", text: "Rimuovi" });
+          btn.onclick = () => void this.doRemoveMcp(it, btn);
+        }
       } else {
         right.createSpan({ cls: "mva-conn-state", text: "nel vault" });
         const btn = right.createEl("button", { cls: "mva-btn", text: "Rimuovi" });
@@ -193,6 +247,19 @@ export class ConnectionsView extends ItemView {
       await this.render();
     } catch (e) {
       new Notice(`Import fallito: ${e instanceof Error ? e.message : String(e)}`);
+      btn.disabled = false;
+    }
+  }
+
+  private async doRemoveMcp(it: DiscoveryItem, btn: HTMLButtonElement): Promise<void> {
+    btn.disabled = true;
+    try {
+      const adapter = this.app.vault.adapter;
+      await adapter.write(".mcp.json", disconnectMcp(await adapter.read(".mcp.json"), it.name));
+      new Notice(`MCP "${it.name}" rimosso da Exo.`);
+      await this.render();
+    } catch (e) {
+      new Notice(`Rimozione fallita: ${e instanceof Error ? e.message : String(e)}`);
       btn.disabled = false;
     }
   }
