@@ -334,7 +334,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   margin: 4px 0 2px;
 }
 .mva-recap-empty {
-  font-size: 12px;
+  font-size: var(--font-ui-smaller, 12px);
   color: var(--text-faint);
   line-height: 1.5;
 }
@@ -961,7 +961,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2, 8px);
-  box-shadow: var(--shadow-s);
+  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s));
   padding: 4px;
   z-index: var(--layer-popover, 30);
 }
@@ -1062,7 +1062,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--shadow-l);
+  box-shadow: var(--cosmos-pop-shadow, var(--shadow-l));
   z-index: 30;
   scrollbar-width: none;
 }
@@ -1241,7 +1241,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--shadow-l);
+  box-shadow: var(--cosmos-pop-shadow, var(--shadow-l));
   scrollbar-width: none;
 }
 .mva-sel-pop::-webkit-scrollbar {
@@ -2933,7 +2933,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   inset: 3px;
   border-radius: 50%;
   background: var(--background-primary);
-  transition: background-color 120ms ease;
+  /* Hover wash on the ring's inner disc — micro-feedback tier, so it rides the
+     shared duration token (140ms with Cosmos, 120ms standalone). */
+  transition: background-color var(--cosmos-t-fast, 120ms) ease;
 }
 .mva-ctx-ring:hover::after {
   background: var(--background-modifier-hover);
@@ -3985,7 +3987,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-radius: var(--mva-r2);
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
-  box-shadow: var(--shadow-l);
+  box-shadow: var(--cosmos-pop-shadow, var(--shadow-l));
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -4080,7 +4082,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border: 1px solid transparent;
   box-shadow: none;
   cursor: pointer;
-  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+  transition: background var(--mva-t), color var(--mva-t), border-color var(--mva-t);
 }
 .mva-settings-tab:hover {
   background: var(--background-modifier-hover);
@@ -4128,7 +4130,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--shadow-s, 0 4px 14px rgba(0, 0, 0, 0.18));
+  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s, 0 4px 14px rgba(0, 0, 0, 0.18)));
 }
 .mva-inai-btn {
   display: inline-flex;
@@ -4164,7 +4166,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--shadow-s, 0 6px 20px rgba(0, 0, 0, 0.2));
+  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s, 0 6px 20px rgba(0, 0, 0, 0.2)));
 }
 .mva-inai-head {
   display: flex;
@@ -4307,7 +4309,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--shadow-s, 0 6px 20px rgba(0, 0, 0, 0.2));
+  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s, 0 6px 20px rgba(0, 0, 0, 0.2)));
 }
 .mva-inai-streamchip.is-shown,
 .mva-inai-actionbar.is-shown {
@@ -4932,9 +4934,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   min-width: 160px;
   padding: 6px;
   border: 1px solid var(--background-modifier-border, rgba(0, 0, 0, 0.1));
-  border-radius: 8px;
+  border-radius: var(--cosmos-r-floating-surface, 8px);
   background: var(--background-primary, #fff);
-  box-shadow: var(--shadow-s, 0 2px 8px rgba(0, 0, 0, 0.12));
+  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s, 0 2px 8px rgba(0, 0, 0, 0.12)));
   font-size: var(--font-ui-small, 13px);
 }
 .exo-mention-popover-title {
@@ -5050,6 +5052,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   min-height: 220px;
   color: var(--text-muted);
 }
+/* The empty half of that pair whispers; the loading half keeps body weight. */
+.mva-proposals-empty { color: var(--text-faint); font-size: var(--font-ui-smaller, 12px); }
 .mva-proposals-empty-icon svg { width: 16px; height: 16px; }
 .mva-ck-att.is-proposal .mva-ck-att-icon { color: var(--text-accent); }
 
@@ -5125,7 +5129,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-conn-state.is-muted { color: var(--text-faint); }
 .mva-conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
 .mva-conn-dot.is-connected { background: var(--color-green, #3fb950); }
-.mva-conn-empty { color: var(--text-muted); padding: 28px 8px; text-align: center; font-size: 13px; }
+/* Whisper empty state — faint and one step smaller than body copy; an empty
+   state is not a call to action. */
+.mva-conn-empty { color: var(--text-faint); padding: 28px 8px; text-align: center; font-size: var(--font-ui-smaller, 12px); }
 
 /* Connections — skill source groups + collapsed "have" summary */
 .mva-conn-group {
