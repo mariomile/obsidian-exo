@@ -530,7 +530,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-turn {
   display: flex;
   flex-direction: column;
-  animation: mva-pop 0.18s ease-out;
+  animation: mva-pop var(--cosmos-t-base, 0.18s) ease-out;
 }
 .mva-user {
   align-items: flex-end;
@@ -3660,7 +3660,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 @media (prefers-reduced-motion: reduce) {
   .mva-root *,
   .mva-root *::before,
-  .mva-root *::after {
+  .mva-root *::after,
+  /* Exo's two surfaces that render OUTSIDE .mva-root — the settings tab strip
+     lives in Obsidian's settings modal, the mention popover is body-anchored —
+     so the blanket above never reaches them. */
+  .mva-settings-tab,
+  .exo-mention-popover {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
