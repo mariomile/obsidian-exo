@@ -149,9 +149,9 @@ export async function drainExoQueue(
     if (latest !== content) continue;
     await app.vault.modify(file, next);
     done++;
-    if (result.ok) new Notice(`Exo queue: risposta pronta → ${file.basename}`);
-    else if (attempt < MAX_ATTEMPTS) new Notice(`Exo queue: tentativo ${attempt} fallito — riprovo più tardi.`);
-    else new Notice(`Exo queue: ${file.basename} fallita dopo ${MAX_ATTEMPTS} tentativi.`);
+    if (result.ok) new Notice(`Exo queue: answer ready → ${file.basename}`);
+    else if (attempt < MAX_ATTEMPTS) new Notice(`Exo queue: attempt ${attempt} failed — retrying later.`);
+    else new Notice(`Exo queue: ${file.basename} failed after ${MAX_ATTEMPTS} attempts.`);
   }
   return done;
 }

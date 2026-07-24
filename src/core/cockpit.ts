@@ -47,7 +47,7 @@ export function buildAttention(
 ): AttentionItem[] {
   const out: AttentionItem[] = [];
   for (const c of input.convos) {
-    if (c.blocked) out.push({ kind: "blocked", label: `"${c.title}" aspetta un tuo OK`, target: c.id });
+    if (c.blocked) out.push({ kind: "blocked", label: `"${c.title}" is waiting for your OK`, target: c.id });
   }
   if (input.dailyPulseItems) {
     const n = input.dailyPulseItems;
@@ -60,14 +60,14 @@ export function buildAttention(
     const n = input.unreviewedRuns;
     out.push({
       kind: "runs",
-      label: n === 1 ? "1 automation run da rivedere" : `${n} automation run da rivedere`,
+      label: n === 1 ? "1 automation run to review" : `${n} automation runs to review`,
     });
   }
   for (const c of input.convos) {
-    if (!c.blocked && c.streaming) out.push({ kind: "streaming", label: `"${c.title}" sta lavorando`, target: c.id });
+    if (!c.blocked && c.streaming) out.push({ kind: "streaming", label: `"${c.title}" is working`, target: c.id });
   }
   for (const a of input.answers) {
-    if (input.now - a.answeredAt < DAY) out.push({ kind: "answer", label: `Risposta pronta: ${a.name}`, target: a.path });
+    if (input.now - a.answeredAt < DAY) out.push({ kind: "answer", label: `Answer ready: ${a.name}`, target: a.path });
   }
   return out.slice(0, cap);
 }
@@ -162,7 +162,7 @@ export function healthRows(h: HealthInput): CockpitRow[] {
   const rows: CockpitRow[] = [];
   if (h.inboxCount > 0) {
     rows.push({
-      label: "Inbox da processare",
+      label: "Inbox to triage",
       badge: String(h.inboxCount),
       action: { kind: "ask", arg: "/inbox-triage" },
     });

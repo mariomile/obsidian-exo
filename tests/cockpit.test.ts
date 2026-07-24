@@ -163,7 +163,7 @@ describe("parseAnsweredStamp", () => {
 describe("buildAttention — unreviewed runs", () => {
   it("surfaces the runs item after blocked, with singular/plural label", () => {
     const one = buildAttention({ convos: [], answers: [], unreviewedRuns: 1, now: NOW });
-    expect(one).toEqual([{ kind: "runs", label: "1 automation run da rivedere" }]);
+    expect(one).toEqual([{ kind: "runs", label: "1 automation run to review" }]);
     const items = buildAttention({
       convos: [{ id: "c2", title: "B", blocked: true, streaming: false }],
       answers: [],
@@ -171,7 +171,7 @@ describe("buildAttention — unreviewed runs", () => {
       now: NOW,
     });
     expect(items.map((i) => i.kind)).toEqual(["blocked", "runs"]);
-    expect(items[1].label).toBe("3 automation run da rivedere");
+    expect(items[1].label).toBe("3 automation runs to review");
   });
 
   it("zero/absent → no item", () => {

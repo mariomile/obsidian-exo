@@ -1968,8 +1968,8 @@ export default class ExoPlugin extends Plugin {
     // the report. Same gate as the chat's turn notifications.
     if (this.settings.systemNotifications && !document.hasFocus()) {
       try {
-        const n = new Notification(`Exo — ${result.ok ? `"${name}" pronto` : `"${name}" fallito`}`, {
-          body: result.ok ? "Il report è nel vault — clicca per aprirlo." : "Il run è fallito — report con l'errore nel vault.",
+        const n = new Notification(`Exo — ${result.ok ? `"${name}" ready` : `"${name}" failed`}`, {
+          body: result.ok ? "The report is in the vault — click to open it." : "The run failed — the report has the error.",
           silent: false,
         });
         n.onclick = () => {
@@ -2010,7 +2010,7 @@ export default class ExoPlugin extends Plugin {
       const name = `Richiesta ${stamp.getFullYear()}-${p(stamp.getMonth() + 1)}-${p(stamp.getDate())} ${p(stamp.getHours())}${p(stamp.getMinutes())}${p(stamp.getSeconds())}`;
       const file = await this.app.vault.create(`${folder}/${name}.md`, "");
       await this.app.workspace.getLeaf("tab").openFile(file);
-      new Notice("Scrivi la richiesta nel corpo della nota — Exo risponde al prossimo drain.");
+      new Notice("Write the request in the note body — Exo answers on the next drain.");
     } catch (err) {
       new Notice(`Couldn't create the queue request: ${err instanceof Error ? err.message : String(err)}`);
     }
