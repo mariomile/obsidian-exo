@@ -168,7 +168,9 @@ export default class ExoPlugin extends Plugin {
   /** One-time guard for the codex-bridge node preflight Notice. */
   private nodeWarned = false;
   /** Deferred boot maintenance must never outlive a hot unload/reload. */
-  private startupMaintenanceTimer: number | null = null;
+  /** Handles for idle-scheduled startup chores (requestIdleCallback ids or
+   *  setTimeout ids); cancelled on unload. */
+  private startupIdleHandles: number[] = [];
   private unloaded = false;
 
   /** Latest Claude-plan quota snapshot (pushed by the chat view) — the Cockpit
@@ -674,16 +676,36 @@ export default class ExoPlugin extends Plugin {
   }
 
   /** Keep process spawning and the registry request off Obsidian's critical
-   *  startup path. The work remains best-effort and runs once after layout is
-   *  ready; the timer is cancelled on hot unload. */
+   *  startup path. Both chores are latency-insensitive (the CLI verify is a
+   *  child_process spawn; the update check is a daily-throttled network call),
+   *  so run them when the main thread is actually idle instead of at a fixed
+   *  +2s that collides with every other plugin's boot work. The update check
+   *  is pushed out further still — nothing depends on its freshness. Callbacks
+   *  are cancelled on hot unload and no-op via the `unloaded` guard. */
   private scheduleStartupMaintenance(): void {
-    if (this.startupMaintenanceTimer !== null || this.unloaded) return;
-    this.startupMaintenanceTimer = window.setTimeout(() => {
-      this.startupMaintenanceTimer = null;
-      if (this.unloaded) return;
-      void this.checkCliVerified();
-      void this.maybeCheckCliUpdate().then(() => this.maybeOfferCliUpdate());
-    }, 2_000);
+    if (this.unloaded) return;
+    this.runWhenIdle(() => void this.checkCliVerified(), 5_000);
+    this.runWhenIdle(
+      () => void this.maybeCheckCliUpdate().then(() => this.maybeOfferCliUpdate()),
+      30_000
+    );
+  }
+
+  /** Run `cb` on the next idle slot (or after `timeout` ms, whichever first),
+   *  tracking the handle so onunload can cancel it. Falls back to setTimeout
+   *  where requestIdleCallback is unavailable. */
+  private runWhenIdle(cb: () => void, timeout: number): void {
+    const guarded = () => {
+      if (!this.unloaded) cb();
+    };
+    const ric = (window as unknown as {
+      requestIdleCallback?: (c: () => void, o?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof ric === "function") {
+      this.startupIdleHandles.push(ric(guarded, { timeout }));
+    } else {
+      this.startupIdleHandles.push(window.setTimeout(guarded, timeout));
+    }
   }
 
   /** One-click Claude-CLI update, shared by the command and the boot notice.
@@ -2186,10 +2208,14 @@ export default class ExoPlugin extends Plugin {
   onunload(): void {
     this.unloaded = true;
     this.proposalAbort.abort();
-    if (this.startupMaintenanceTimer !== null) {
-      window.clearTimeout(this.startupMaintenanceTimer);
-      this.startupMaintenanceTimer = null;
+    const cancelIdle = (window as unknown as {
+      cancelIdleCallback?: (h: number) => void;
+    }).cancelIdleCallback;
+    for (const h of this.startupIdleHandles) {
+      if (typeof cancelIdle === "function") cancelIdle(h);
+      window.clearTimeout(h);
     }
+    this.startupIdleHandles = [];
     this.codexBridge?.stop();
   }
 
