@@ -1,4 +1,4 @@
-import { ItemView, Notice, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
 import { homedir } from "os";
 import { readFile } from "fs/promises";
 import type ExoPlugin from "../main";
@@ -71,10 +71,7 @@ export class ConnectionsView extends ItemView {
     };
     mkTab("mcp", "MCP");
     mkTab("skills", "Skills");
-    // Icon, not a text glyph — same `refresh-cw` mark the Cockpit header uses,
-    // so the two panes read as one system at any theme font.
-    const refresh = tabs.createEl("button", { cls: "mva-icon-btn mva-conn-refresh", attr: { "aria-label": "Refresh" } });
-    setIcon(refresh, "refresh-cw");
+    const refresh = tabs.createEl("button", { cls: "mva-icon-btn mva-conn-refresh", text: "↻", attr: { "aria-label": "Refresh" } });
     refresh.onclick = () => void this.render();
 
     this.listEl = root.createDiv({ cls: "mva-conn-list" });
