@@ -1,4 +1,4 @@
-import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, WorkspaceLeaf, setIcon } from "obsidian";
 import { homedir } from "os";
 import { readFile } from "fs/promises";
 import type ExoPlugin from "../main";
@@ -71,7 +71,10 @@ export class ConnectionsView extends ItemView {
     };
     mkTab("mcp", "MCP");
     mkTab("skills", "Skills");
-    const refresh = tabs.createEl("button", { cls: "mva-icon-btn mva-conn-refresh", text: "↻", attr: { "aria-label": "Refresh" } });
+    // Icon, not a text glyph — same `refresh-cw` mark the Cockpit header uses,
+    // so the two panes read as one system at any theme font.
+    const refresh = tabs.createEl("button", { cls: "mva-icon-btn mva-conn-refresh", attr: { "aria-label": "Refresh" } });
+    setIcon(refresh, "refresh-cw");
     refresh.onclick = () => void this.render();
 
     this.listEl = root.createDiv({ cls: "mva-conn-list" });
@@ -96,7 +99,7 @@ export class ConnectionsView extends ItemView {
     const mcpItems = [...scanCodexMcp(codexToml), ...scanClaudeGlobalMcp(claudeJson)];
     // Active = live session servers UNION the ones we've already written into the
     // vault's .mcp.json (enabled). Without the .mcp.json half, a just-connected
-    // server keeps showing "Connetti" until the next session — looks like a no-op.
+    // server keeps showing "Connect" until the next session — looks like a no-op.
     let ourServers: string[] = [];
     try {
       const parsed = parseMcpJson(await this.app.vault.adapter.read(".mcp.json"));
@@ -144,7 +147,7 @@ export class ConnectionsView extends ItemView {
     if (this.tab === "mcp") {
       if (!mcp.length) {
         this.listEl.empty();
-        this.listEl.createDiv({ cls: "mva-conn-empty", text: "Nessun MCP trovato." });
+        this.listEl.createDiv({ cls: "mva-conn-empty", text: "No MCP servers found." });
         return;
       }
       const active = mcp.filter((i) => i.state === "active").sort(byOriginThenName);
@@ -160,9 +163,9 @@ export class ConnectionsView extends ItemView {
           build: () => this.buildRow(it),
         });
       };
-      section("Connessi", active);
-      section("Importabili", importable);
-      section("Ereditati", have);
+      section("Connected", active);
+      section("Importable", importable);
+      section("Inherited", have);
       reconcileList(this.listEl, models);
       return;
     }
@@ -176,8 +179,8 @@ export class ConnectionsView extends ItemView {
     if (!vault.length && !importable.length) {
       this.listEl.empty();
       this.listEl.createDiv({ cls: "mva-conn-empty", text: haveCount
-        ? `Nessuna skill esterna da importare — ${haveCount} già in Exo.`
-        : "Nessuna skill esterna da importare." });
+        ? `No external skills to import — ${haveCount} already in Exo.`
+        : "No external skills to import." });
       return;
     }
 
@@ -209,7 +212,7 @@ export class ConnectionsView extends ItemView {
 
   private buildHaveSummary(count: number): HTMLElement {
     const s = createDiv({ cls: "mva-conn-have-summary" });
-    s.setText(`${count} skill già disponibili in Exo — non mostrate`);
+    s.setText(`${count} skills already in Exo — not shown`);
     return s;
   }
 
@@ -226,25 +229,25 @@ export class ConnectionsView extends ItemView {
         const dot = right.createSpan({ cls: "mva-conn-dot" });
         dot.toggleClass("is-connected", it.status === "connected");
         dot.toggleClass("is-failed", it.status === "failed" || it.status === "needs-auth");
-        // Honest status: "attivo" only when actually connected; otherwise the
+        // Honest status: "active" only when actually connected; otherwise the
         // real reason (needs-auth / failed / disabled) so the user knows why.
-        const label = !it.status || it.status === "connected" ? "attivo" : it.status;
+        const label = !it.status || it.status === "connected" ? "active" : it.status;
         right.createSpan({ cls: "mva-conn-state", text: label });
         // Only offer removal for servers WE wrote into .mcp.json — inherited /
         // live-only / connector servers are managed elsewhere.
         if (this.ourMcp.has(it.name)) {
-          const btn = right.createEl("button", { cls: "mva-btn", text: "Rimuovi" });
+          const btn = right.createEl("button", { cls: "mva-btn", text: "Remove" });
           btn.onclick = () => void this.doRemoveMcp(it, btn);
         }
       } else {
-        right.createSpan({ cls: "mva-conn-state", text: "nel vault" });
-        const btn = right.createEl("button", { cls: "mva-btn", text: "Rimuovi" });
+        right.createSpan({ cls: "mva-conn-state", text: "in vault" });
+        const btn = right.createEl("button", { cls: "mva-btn", text: "Remove" });
         btn.onclick = () => void this.doRemoveSkill(it, btn);
       }
     } else if (it.state === "have") {
-      right.createSpan({ cls: "mva-conn-state is-muted", text: "già in Exo" });
+      right.createSpan({ cls: "mva-conn-state is-muted", text: "already in Exo" });
     } else {
-      const btn = right.createEl("button", { cls: "mva-btn", text: it.kind === "mcp" ? "Connetti" : "Importa" });
+      const btn = right.createEl("button", { cls: "mva-btn", text: it.kind === "mcp" ? "Connect" : "Import" });
       btn.onclick = () => void this.doImport(it, btn);
     }
     return row;
@@ -259,19 +262,19 @@ export class ConnectionsView extends ItemView {
         let raw = '{\n  "mcpServers": {}\n}';
         try { raw = await adapter.read(path); } catch { /* create fresh */ }
         await adapter.write(path, connectMcp(raw, it.name, it.config ?? {}));
-        new Notice(`MCP "${it.name}" connesso — attivo alla prossima sessione.`);
+        new Notice(`MCP "${it.name}" connected — active from the next session.`);
       } else {
         const dest = `${this.base()}/.claude/skills/${it.name}`;
         const res = await importSkill(it.path!, dest);
         if (res === "exists") {
-          if (!confirm(`Una skill "${it.name}" esiste già nel vault. Sovrascrivere?`)) { btn.disabled = false; return; }
+          if (!confirm(`A skill named "${it.name}" already exists in the vault. Overwrite it?`)) { btn.disabled = false; return; }
           await importSkill(it.path!, dest, { overwrite: true });
         }
-        new Notice(`Skill "${it.name}" importata nel vault.`);
+        new Notice(`Skill "${it.name}" imported into the vault.`);
       }
       await this.render();
     } catch (e) {
-      new Notice(`Import fallito: ${e instanceof Error ? e.message : String(e)}`);
+      new Notice(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
       btn.disabled = false;
     }
   }
@@ -281,10 +284,10 @@ export class ConnectionsView extends ItemView {
     try {
       const adapter = this.app.vault.adapter;
       await adapter.write(".mcp.json", disconnectMcp(await adapter.read(".mcp.json"), it.name));
-      new Notice(`MCP "${it.name}" rimosso da Exo.`);
+      new Notice(`MCP "${it.name}" removed from Exo.`);
       await this.render();
     } catch (e) {
-      new Notice(`Rimozione fallita: ${e instanceof Error ? e.message : String(e)}`);
+      new Notice(`Removal failed: ${e instanceof Error ? e.message : String(e)}`);
       btn.disabled = false;
     }
   }
@@ -293,10 +296,10 @@ export class ConnectionsView extends ItemView {
     btn.disabled = true;
     try {
       await removeSkill(`${this.base()}/.claude/skills/${it.name}`);
-      new Notice(`Skill "${it.name}" rimossa dal vault.`);
+      new Notice(`Skill "${it.name}" removed from the vault.`);
       await this.render();
     } catch (e) {
-      new Notice(`Rimozione fallita: ${e instanceof Error ? e.message : String(e)}`);
+      new Notice(`Removal failed: ${e instanceof Error ? e.message : String(e)}`);
       btn.disabled = false;
     }
   }
