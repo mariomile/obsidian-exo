@@ -8,6 +8,7 @@ import {
   assignMcpState,
   scanSkillDirs,
   assignSkillState,
+  scanLiveCaps,
   type ClaudeJson,
   type DiscoveryItem,
 } from "../core/connections-scan";
@@ -27,6 +28,9 @@ export const CONNECTIONS_VIEW_TYPE = "exo-connections";
 export const CONNECTIONS_ICON = "hi-puzzle";
 
 type Tab = "mcp" | "skills";
+
+const byOriginThenName = (a: DiscoveryItem, b: DiscoveryItem): number =>
+  a.origin.localeCompare(b.origin) || a.name.localeCompare(b.name);
 
 /**
  * The Connections pane — a two-tab (MCP / Skills) marketplace over what other
@@ -101,10 +105,16 @@ export class ConnectionsView extends ItemView {
     this.ourMcp = new Set(ourServers);
     const activeNames = new Set<string>([...(caps?.mcpServers ?? []).map((m) => m.name), ...ourServers]);
     const inheritedNames = new Set<string>(Object.keys(claudeJson.mcpServers ?? {}));
-    const mcp = assignMcpState(mcpItems, { activeNames, inheritedNames }).map((it) => ({
+    const mcpFromConfig = assignMcpState(mcpItems, { activeNames, inheritedNames }).map((it) => ({
       ...it,
       status: caps?.mcpServers?.find((m) => m.name === it.name)?.status,
     }));
+    // Everything the live session loaded that ISN'T in a local config file:
+    // claude.ai account connectors + plugin servers. Read-only — shown so the
+    // pane reflects ALL connected MCPs, not just the file-backed ones.
+    const covered = new Set(mcpFromConfig.map((i) => i.name));
+    const live = scanLiveCaps(caps?.mcpServers ?? [], covered);
+    const mcp = [...mcpFromConfig, ...live];
 
     // ---- Skills (sources: other projects + Codex-native) ----
     const projectRoots = [`${home}/Dev Projects`, `${home}/Projects`];
@@ -134,14 +144,25 @@ export class ConnectionsView extends ItemView {
     if (this.tab === "mcp") {
       if (!mcp.length) {
         this.listEl.empty();
-        this.listEl.createDiv({ cls: "mva-conn-empty", text: "Tutto allineato — nessun MCP importabile da Codex." });
+        this.listEl.createDiv({ cls: "mva-conn-empty", text: "Nessun MCP trovato." });
         return;
       }
-      const models: CardModel[] = mcp.map((it) => ({
-        key: `mcp:${it.name}`,
-        sig: `${it.state}:${it.status ?? ""}:${this.ourMcp.has(it.name)}`,
-        build: () => this.buildRow(it),
-      }));
+      const active = mcp.filter((i) => i.state === "active").sort(byOriginThenName);
+      const importable = mcp.filter((i) => i.state === "importable").sort(byOriginThenName);
+      const have = mcp.filter((i) => i.state === "have").sort(byOriginThenName);
+      const models: CardModel[] = [];
+      const section = (label: string, items: DiscoveryItem[]) => {
+        if (!items.length) return;
+        models.push({ key: `sec:${label}`, sig: `${items.length}`, build: () => this.buildGroupHeader(label, items.length) });
+        for (const it of items) models.push({
+          key: `mcp:${it.name}`,
+          sig: `${it.state}:${it.status ?? ""}:${this.ourMcp.has(it.name)}`,
+          build: () => this.buildRow(it),
+        });
+      };
+      section("Connessi", active);
+      section("Importabili", importable);
+      section("Ereditati", have);
       reconcileList(this.listEl, models);
       return;
     }
@@ -204,9 +225,13 @@ export class ConnectionsView extends ItemView {
       if (it.kind === "mcp") {
         const dot = right.createSpan({ cls: "mva-conn-dot" });
         dot.toggleClass("is-connected", it.status === "connected");
-        right.createSpan({ cls: "mva-conn-state", text: "attivo" });
+        dot.toggleClass("is-failed", it.status === "failed" || it.status === "needs-auth");
+        // Honest status: "attivo" only when actually connected; otherwise the
+        // real reason (needs-auth / failed / disabled) so the user knows why.
+        const label = !it.status || it.status === "connected" ? "attivo" : it.status;
+        right.createSpan({ cls: "mva-conn-state", text: label });
         // Only offer removal for servers WE wrote into .mcp.json — inherited /
-        // live-only servers are the Settings MCP manager's to manage.
+        // live-only / connector servers are managed elsewhere.
         if (this.ourMcp.has(it.name)) {
           const btn = right.createEl("button", { cls: "mva-btn", text: "Rimuovi" });
           btn.onclick = () => void this.doRemoveMcp(it, btn);

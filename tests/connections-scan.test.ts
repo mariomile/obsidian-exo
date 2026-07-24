@@ -6,6 +6,7 @@ import {
   assignMcpState,
   scanSkillDirs,
   assignSkillState,
+  scanLiveCaps,
 } from "../src/core/connections-scan";
 
 describe("normalizeCodexServer", () => {
@@ -124,5 +125,24 @@ describe("scanSkillDirs + assignSkillState", () => {
     expect(byName.get("rag-pipelines")!.state).toBe("have");      // Codex mirror of a Claude skill → greyed
     expect(byName.get("pitch-deck")!.state).toBe("active");        // already in vault
     expect(byName.get("gpt-taste")!.state).toBe("importable");     // Codex-exclusive → genuinely new
+  });
+});
+
+describe("scanLiveCaps", () => {
+  const caps = [
+    { name: "context7", status: "connected" },              // covered by config → skip
+    { name: "claude.ai Slack", status: "connected" },
+    { name: "claude.ai Gmail", status: "needs-auth" },
+    { name: "plugin:claude-mem:mcp-search", status: "connected" },
+    { name: "obsidian", status: "connected" },
+  ];
+  it("adds only caps servers not already covered, classified by origin", () => {
+    const items = scanLiveCaps(caps, new Set(["context7"]));
+    const byName = new Map(items.map((i) => [i.name, i]));
+    expect(byName.has("context7")).toBe(false); // covered by a config item → not duplicated
+    expect(byName.get("Slack")).toMatchObject({ source: "claude-connector", origin: "claude.ai", state: "active", status: "connected" });
+    expect(byName.get("Gmail")).toMatchObject({ origin: "claude.ai", status: "needs-auth" });
+    expect(byName.get("claude-mem")).toMatchObject({ source: "plugin", origin: "Plugin" });
+    expect(byName.get("obsidian")).toMatchObject({ source: "plugin", origin: "Exo" });
   });
 });

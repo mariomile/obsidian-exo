@@ -5152,3 +5152,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-faint);
   font-style: italic;
 }
+
+/* Connections — MCP status: amber dot for needs-auth / failed */
+.mva-conn-dot.is-failed { background: var(--color-orange, #e0a458); }

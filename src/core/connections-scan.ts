@@ -9,7 +9,7 @@
 
 export type ItemKind = "mcp" | "skill";
 export type ItemState = "active" | "importable" | "have";
-export type SourceId = "claude-global" | "claude-project" | "codex" | "vault" | "other-project";
+export type SourceId = "claude-global" | "claude-project" | "codex" | "vault" | "other-project" | "claude-connector" | "plugin";
 
 export interface DiscoveryItem {
   kind: ItemKind;
@@ -192,6 +192,33 @@ export function assignSkillState(items: DiscoveryItem[], haveNames: Set<string>,
     seen.add(it.name);
     const state: ItemState = vaultNames.has(it.name) ? "active" : haveNames.has(it.name) ? "have" : "importable";
     out.push({ ...it, state });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Classify a live-session MCP server name into a display item. claude.ai
+ *  connectors (`claude.ai Slack`), plugin servers (`plugin:x:y`), and the Exo
+ *  obsidian bridge are all managed OUTSIDE any local config file — Exo can show
+ *  their status but can't add/remove them, so they render read-only. */
+function classifyLiveServer(name: string): { source: SourceId; origin: string; display: string } {
+  if (name.startsWith("claude.ai ")) return { source: "claude-connector", origin: "claude.ai", display: name.slice("claude.ai ".length) };
+  if (name === "obsidian") return { source: "plugin", origin: "Exo", display: "obsidian" };
+  if (name.startsWith("plugin:")) return { source: "plugin", origin: "Plugin", display: name.split(":")[1] || name };
+  return { source: "claude-global", origin: "sessione", display: name };
+}
+
+/** Turn the live session's MCP roster into read-only "active" items for every
+ *  server NOT already surfaced from a local config file. This is what makes the
+ *  pane show ALL connected MCPs (claude.ai connectors, plugin servers) — not
+ *  just the ones living in a file. `status` carries connected/needs-auth/failed. */
+export function scanLiveCaps(caps: { name: string; status: string }[], coveredNames: Set<string>): DiscoveryItem[] {
+  const out: DiscoveryItem[] = [];
+  const seen = new Set<string>();
+  for (const { name, status } of caps) {
+    if (coveredNames.has(name) || seen.has(name)) continue;
+    seen.add(name);
+    const { source, origin, display } = classifyLiveServer(name);
+    out.push({ kind: "mcp", name: display, source, origin, state: "active", status });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
