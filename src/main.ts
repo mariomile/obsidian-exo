@@ -416,7 +416,8 @@ export default class ExoPlugin extends Plugin {
     this.registerEditorExtension(mentionsExtension(this));
 
     this.addRibbonIcon(EXO_ICON, "Open Exo", () => this.activateView());
-    this.addRibbonIcon(CONNECTIONS_ICON, "Open Exo Connections", () => void this.activateConnections());
+    // Cockpit + Connections are reached from the Exo header's Apps menu, not a
+    // global ribbon icon (Mario: "solo in Exo"). Commands stay for the palette.
 
     this.addCommand({
       id: "review-connections",
@@ -543,7 +544,6 @@ export default class ExoPlugin extends Plugin {
         return true;
       },
     });
-    this.addRibbonIcon(COCKPIT_ICON, "Open Exo Cockpit", () => void this.openCockpit());
     this.app.workspace.onLayoutReady(() => {
       if (this.unloaded) return;
       if (this.settings.cockpitOnStartup && this.app.workspace.getLeavesOfType(COCKPIT_VIEW_TYPE).length === 0) {

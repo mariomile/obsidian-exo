@@ -8,6 +8,7 @@ import {
   setTooltip,
   Notice,
   Keymap,
+  Menu,
   debounce,
 } from "obsidian";
 import type ExoPlugin from "./main";
@@ -957,6 +958,21 @@ export class ChatView extends ItemView {
     setIcon(this.brandDot, EXO_ICON);
     header.createSpan({ cls: "mva-brand-name", text: "Exo" });
     header.createDiv({ cls: "mva-spacer" }).style.flex = "1";
+
+    // Apps menu — the single entry point for Exo's side surfaces (Cockpit,
+    // Connections, Board). These live here, not in the global Obsidian ribbon.
+    const apps = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "Apps" } });
+    setIcon(apps, "hi-puzzle");
+    setTooltip(apps, "Apps");
+    apps.onclick = (e) => {
+      const menu = new Menu();
+      menu.addItem((i) => i.setTitle("Cockpit").setIcon("hi-dashboard-speed").onClick(() => void this.plugin.openCockpit()));
+      menu.addItem((i) => i.setTitle("Connections").setIcon("hi-puzzle").onClick(() => void this.plugin.activateConnections()));
+      if (this.plugin.settings.orchestrationEnabled) {
+        menu.addItem((i) => i.setTitle("Orchestration board").setIcon("hi-workflow").onClick(() => void this.plugin.activateBoard()));
+      }
+      menu.showAtMouseEvent(e);
+    };
 
     const caps = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "Capabilities" } });
     setIcon(caps, "blocks");
