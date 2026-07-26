@@ -675,11 +675,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 
 .mva-bubble {
-  font-size: 14px;
-  /* mv-kit §7 (reading rhythm): chat prose follows the theme's reading leading,
-     so this tracks Cosmos' intentional desktop/phone split (1.6 / 1.55) instead
-     of pinning one number. Fallback = the pre-wave literal, so a Cosmos-less
-     install renders exactly as before. */
+  /* mv-kit §7: an Exo answer is prose you READ — the same kind of content as
+     the note open beside it — so it takes the vault's reading size, not a
+     chat-chrome size. It was pinned at 14px next to a 16px note: two reading
+     sizes in one app with no reason for the difference. In a ~400px sidebar
+     16px still yields ~50 characters per line, inside the 45-75 comfortable
+     measure, so the larger type costs no legibility. Decided on design
+     grounds 2026-07-26; revert = restore the 14px literal. */
+  font-size: var(--font-text-size, 14px);
+  /* Leading tracks Cosmos' intentional desktop/phone split (1.6 / 1.55)
+     instead of pinning one number. Fallback = the pre-wave literal, so a
+     Cosmos-less install renders exactly as before. */
   line-height: var(--line-height-normal, 1.55);
   color: var(--text-normal);
   word-break: break-word;
@@ -720,8 +726,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-md-tail > :first-child {
   margin-top: 0;
 }
+/* Paragraph rhythm moves WITH the size above — they are one system, and
+   raising the size without the rhythm reads worse than changing neither.
+   0.5em was ~7px at 14px: separate thoughts in a multi-paragraph answer ran
+   together. --p-spacing is the rhythm the note beside it already uses, and
+   matches what ChatGPT/Claude give a structured answer. */
 .mva-bubble p {
-  margin: 0.5em 0;
+  margin: var(--p-spacing, 1rem) 0;
 }
 .mva-bubble h1,
 .mva-bubble h2,
@@ -1590,12 +1601,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-input {
   flex: 1;
   resize: none;
-  /* room for ~3 lines before it grows; scrolls past max-height */
-  min-height: 74px;
+  /* mv-kit §7: what you TYPE and what you read back are the same prose, so the
+     composer matches the bubble on both size and leading — otherwise the text
+     visibly re-flows the instant your message becomes a bubble. The "~3 lines"
+     intent below is preserved by re-deriving min-height at the new metrics
+     (3 x 16px x 1.55 = 74px of text + 13px of vertical padding), not by
+     leaving the old number to silently show 2.5 lines. */
+  min-height: 87px;
   max-height: 200px;
   padding: 9px 11px 4px;
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: var(--font-text-size, 14px);
+  line-height: var(--line-height-normal, 1.55);
   color: var(--text-normal);
   background: transparent;
   border: none;
@@ -4217,23 +4233,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   outline: none;
   border-color: var(--interactive-accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
-}
-.mva-inai-stream,
-.mva-inai-cont,
-.mva-inai-diff {
-  max-height: 240px;
-  overflow-y: auto;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-normal);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.mva-inai-cont {
-  color: var(--text-normal);
-  background: color-mix(in srgb, var(--color-green, #19c37d) 12%, transparent);
-  border-radius: var(--mva-r1);
-  padding: 6px 8px;
 }
 .mva-inai-error {
   font-size: 12px;
