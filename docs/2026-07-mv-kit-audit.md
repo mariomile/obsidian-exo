@@ -820,3 +820,189 @@ tests green; full suite **99 files / 1224 tests** green (was 1222; +2).
   (not motion/elevation), and 1636 / 3975 are already tracked in the
   §3 carried-forward list (composer grow-behaviour + the outline-tick FIX #5),
   neither of which is a §6 drag/layout-during-drag violation.
+
+---
+
+## §7 — wave 2026-07 lettura
+
+Cantiere 3 ("Scrittura & lettura") against `obsidian-cosmos-theme/docs/mv-kit.md`
+§7 as of `1898860`. Scope: **coherence + tokenization only**. §7 is explicitly
+descriptive-first — the reading surface is Mario's territory — so every value
+that is a *taste* call (type size, paragraph gap, heading scale) was recorded as
+a proposal below instead of being changed. Nothing in this wave alters a size,
+a spacing feel, or a rhythm that Mario picked.
+
+### What the reading tokens actually resolve to
+
+Measured against this machine's Cosmos, not assumed:
+
+| Token | Cosmos desktop | Cosmos phone | Obsidian native (Cosmos absent) |
+|---|---|---|---|
+| `--line-height-normal` | `1.6` (`cosmos-base.css`, `theme.css`) | `1.55` (`cosmos-phone.css:263`) | `1.5` |
+| `--line-height-tight` | not set → native | not set → native | `1.3` (`obsidian.asar`) |
+| `--font-text-size` | `16px` (user) | `18px` | user |
+| `--p-spacing` | `1rem` | `1rem` | `1rem` |
+
+The desktop/phone `1.6` vs `1.55` split is the intentional one §7 forbids
+"harmonizing". Tokenizing is what **preserves** it: a hardcoded `1.55` is the
+thing that flattens the split, because it renders 1.55 on desktop too.
+
+### Prose vs chrome — every hardcoded `line-height` in `styles.css`
+
+27 sites, all of them in `styles.css`. `src/ui/**`, `src/editor/**` and the rest
+of `src/` set **zero** line-heights in JS or inline styles (`grep -rn
+"lineHeight\|line-height" src/` → 0 hits), so the stylesheet is the whole
+surface. Line numbers are post-fix.
+
+| # | Line | Selector | Value | Verdict |
+|---|---|---|---|---|
+| 1 | 339 | `.mva-recap-empty` | `1.5` | chrome — left on UI scale (empty state, §4 whisper recipe) |
+| 2 | 622 | `.mva-recall-text` | `1.45` | documented deviation — recall snippet inside a chrome accordion, density-tuned at 12px |
+| 3 | 658 | `.mva-rethink-rationale` | `1.45` | documented deviation — one-to-two-line "Why:" gloss, not a reading surface |
+| 4 | **683** | **`.mva-bubble`** | `1.55` → token | **prose-tokenized** → `var(--line-height-normal, 1.55)` |
+| 5 | **736** | **`.mva-bubble h1…h6`** | `1.3` → token | **prose-tokenized** → `var(--line-height-tight, 1.3)` (native value is 1.3 — zero visual delta) |
+| 6 | 1416 | `.mva-doc-thumb` | `1.5` | chrome — a 3.6px fake-text document thumbnail; the value is graphic geometry, not leading |
+| 7 | 1598 | `.mva-input` | `1.45` | documented deviation — composer control, deliberately tighter than the bubble it produces (see proposal 4) |
+| 8 | 1774 | `.mva-empty-sub` | `1.5` | chrome — empty state (§4) |
+| 9 | 1873 | `.mva-error-title` | `1.35` | chrome — error chip title |
+| 10 | 1879 | `.mva-error-summary` | `1.35` | chrome — single-line `nowrap` + ellipsis; leading is unreachable by design |
+| 11 | 2298 | `.mva-tool-output` | `1.5` | documented deviation — preformatted tool output, a code surface |
+| 12 | 2335 | `.mva-diff, .mva-code` | `1.5` | documented deviation — monospace code/diff block (§7 prose rule does not reach code) |
+| 13 | 2860 | `.mva-card-open-badge` | `1` | chrome — badge geometry |
+| 14 | 2876 | `.mva-card-status-badge` | `1` | chrome — badge geometry |
+| 15 | 2889 | `.mva-card-preview` | `1.5` | documented deviation — `-webkit-box` clamped excerpt; leading is a clamp parameter |
+| 16 | **3052** | **`.mva-ie-preview`** | `1.55` → token | **prose-tokenized** → `var(--line-height-normal, 1.55)`; it already consumed `--font-text-size`, this closes the pair |
+| 17 | 3597 | `.mva-caps-glyph` | `1` | chrome — glyph geometry |
+| 18 | 3795 | `.mva-artifact-md` | `1.4` | documented deviation — carries an in-code rationale ("Denser preview so the shorter (132px) card still shows meaningful content"); a deliberate pre-existing decision |
+| 19 | 4025 | `.mva-outline-row` | `1.4` | chrome — navigation row on `--font-ui-small` |
+| 20 | 4227 | `.mva-inai-stream, .mva-inai-cont, .mva-inai-diff` | `1.5` | documented deviation — **dead selectors** (none of the three appears in `src/`; the live inline-AI classes are `…-streamchip` / `…-streamtext` / `…-input` / `…-chip` …) and the group mixes a diff surface in. Left byte-identical; deletion is proposal 5, not a §7 fix |
+| 21 | 4293 | `.mva-inai-chip` | `1` | chrome — 16×16 icon button geometry |
+| 22 | **4350** | **`.mva-inai-streamtext`** | `1.5` → token | **prose-tokenized** → `var(--line-height-normal, 1.5)` |
+| 23 | 4546 | `.mva-board-card-title` | `1.3` | chrome — session-card title |
+| 24 | 4592 | `.mva-board-chip` | `1.6` | chrome — the chip has `padding: 0 6px`, so line-height *is* its height; not leading |
+| 25 | 4618 | `.mva-board-card-preview` | `1.4` | documented deviation — `-webkit-line-clamp: 3` excerpt |
+| 26 | 4689 | `.mva-task-modal textarea.mva-pv-input` | `1.45` | chrome — form input (§5 form language) |
+| 27 | 5047 | `.mva-proposals textarea.mva-pv-input` | `1.45` | chrome — form input (§5) |
+
+**Tally: 4 prose-tokenized · 9 documented deviations · 14 chrome, left on the UI
+scale.**
+
+### §7 MUST NOT — both clear
+
+- **`--file-line-width`**: `grep -rn "file-line-width" styles.css src/` → **0
+  hits**. The plugin never touches the reading measure.
+- **Heading-scale override**: `grep -n "\-\-h[1-6]-size" styles.css src/` → **0
+  hits**. No heading-scale *token* is redefined anywhere, at `:root` or
+  elsewhere. `.mva-bubble h1…h6` do set scoped `em` sizes (1.5 / 1.3 / 1.15 /
+  1.02 / 0.92) inside the chat bubble only — that is a plugin-local type ramp
+  for a 14px chat column, not a redefinition of the theme's scale, and it does
+  not leak to any note surface. It diverges from Obsidian's 1.618 / 1.462 /
+  1.318 ramp, which is a taste question → proposal 3.
+
+### Desktop and phone
+
+Exo is `isDesktopOnly: true`. The stylesheet has exactly one width-scoped block,
+`@media (max-width: 600px)` at 5076, and it sets **no** line-height (only
+`grid-template-columns` / `max-height` / borders on the proposals layout). There
+is no `is-phone` / `is-mobile` prose rule to audit; the single `is-mobile` hit at
+line 39 is a sidedock layout guard. `EmulateMobile` was **not** enabled (it kills
+Node-dependent plugins, Exo included). The phone half of §7 therefore reaches Exo
+only through the token: now that the four prose surfaces consume
+`--line-height-normal`, a future mobile build inherits Cosmos' 1.55 for free.
+
+### Fixes landed
+
+Four one-line declarations, each keeping its pre-wave literal as the `var()`
+fallback, so a Cosmos-less install renders byte-identically:
+
+```css
+.mva-bubble            { line-height: var(--line-height-normal, 1.55); }
+.mva-bubble h1…h6      { line-height: var(--line-height-tight,  1.3);  }
+.mva-ie-preview        { line-height: var(--line-height-normal, 1.55); }
+.mva-inai-streamtext   { line-height: var(--line-height-normal, 1.5);  }
+```
+
+Visual delta under Cosmos desktop: chat prose and the note preview go 1.55 → 1.6
+(they now match the reading view they imitate); the streamed rewrite text goes
+1.5 → 1.6. Headings: none. No font-size, no margin, no selector, no DOM changed.
+
+### Style contract
+
+One assertion added, `§7 prose surfaces read their leading from the reading
+tokens`. It parses `styles.css` into rules, and for each of the four selectors
+asserts there is exactly one `line-height` declaration and that it is the
+tokenized form. Red-before-green was verified for real: run against the pre-fix
+stylesheet it failed with all four sites listed by name
+
+```
+.mva-bubble → ["line-height: 1.55;"] (expected ["line-height: var(--line-height-normal, 1.55);"])
+.mva-bubble h1, … h6 → ["line-height: 1.3;"] (expected ["line-height: var(--line-height-tight, 1.3);"])
+.mva-ie-preview → ["line-height: 1.55;"] (expected ["line-height: var(--line-height-normal, 1.55);"])
+.mva-inai-streamtext → ["line-height: 1.5;"] (expected ["line-height: var(--line-height-normal, 1.5);"])
+```
+
+then passed after the four edits. **Nothing else was asserted**: the 23 chrome
+and deviation sites are deliberately not pinned, because pinning them would
+freeze taste calls this wave had no mandate to make.
+
+### Proposte per Mario (non applicate)
+
+Tutte osservazioni di gusto: §7 dice che il valore di lettura è tuo, quindi
+nessuna di queste è stata toccata nel codice.
+
+1. **Chat prose size — 14px fisso vs `--font-text-size` (16px).** §7 chiede che
+   il prose erediti anche `--font-text-size`, non solo il line-height.
+   `.mva-bubble` sta a 14px hardcoded: la risposta di Exo si legge più piccola
+   della nota che stai leggendo accanto. Passare a
+   `var(--font-text-size, 14px)` allineerebbe le due colonne, ma cambia
+   visibilmente la densità della chat — decisione tua. Alternativa più
+   conservativa e in linea con §7 ("expose a Style Settings control instead of
+   changing it silently"): una voce Style Settings `Chat text size` con default
+   14px.
+2. **Paragraph gap — `0.5em` vs `--p-spacing` (1rem).** `.mva-bubble p` usa
+   `margin: 0.5em 0`, cioè ~7px a 14px; `--p-spacing` vale 16px. Tokenizzare qui
+   raddoppierebbe il respiro tra paragrafi: è un cambio di ritmo vero, non una
+   coerenza. Non applicato. Se ti va di provarlo, il posto è quella riga sola.
+3. **Heading ramp della bolla — 1.5 / 1.3 / 1.15 / 1.02 / 0.92em** vs la scala
+   Obsidian 1.618 / 1.462 / 1.318. Non è una violazione (nessun token
+   ridefinito, tutto scoped a `.mva-bubble`), ed è probabilmente giusta per una
+   colonna stretta a 14px. Segnalata solo perché è l'unico punto in cui Exo ha
+   una scala tipografica propria: se un giorno il punto 1 alza il corpo a 16px,
+   questa ramp va rivista insieme.
+4. **Composer più stretto della bolla.** `.mva-input` sta a `1.45`, la bolla a
+   `1.55` (1.6 con Cosmos): quello che scrivi si legge più compresso di quello
+   che rileggi subito dopo. Allinearli darebbe continuità scrittura → lettura;
+   contro, il composer è alto ~3 righe e a 1.6 cresce. Non applicato.
+5. **Selettori morti da rimuovere.** `.mva-inai-stream`, `.mva-inai-cont`,
+   `.mva-inai-diff` (styles.css:4227-4237) non hanno più nessun uso in `src/`.
+   Sono ~15 righe di CSS che ogni audit futuro dovrà ri-triageare. Cancellazione
+   pulita, ma è dead-code removal, fuori dallo scope di questa ondata.
+6. **Chip a 1.6 (linea 4592).** `.mva-board-chip` è l'unico pezzo di chrome con
+   un line-height da prosa. Non è un bug — lì il line-height fa da altezza del
+   chip (`padding: 0 6px`) — ma se un domani il chip prende un padding
+   verticale, quel `1.6` va sostituito da un'altezza esplicita.
+
+### §7 verification
+
+- `pnpm typecheck` → exit **0**.
+- `pnpm lint` (`eslint src tests`) → exit **0**, 0 warnings.
+- `pnpm test` → **99 test files / 1225 tests passed**, 0 failed (was 1224
+  pre-§7; the single new §7 assertion is the delta).
+- `pnpm build` → `tsc -noEmit -skipLibCheck` clean, esbuild production bundle
+  **1,678,845 bytes**, deployed to the vault plugin dir as usual.
+- `pnpm release:check` (lint → test → build) → green end to end.
+- `git diff --stat` → `styles.css` +19/−4 (the 4 rewritten declarations plus
+  their rationale comments), `src/style-contract.test.ts` +53/−0,
+  `docs/2026-07-mv-kit-audit.md` +184/−0 (pure append — 0 lines deleted, the
+  prior §§1-6 content is byte-identical). No DOM, no TS behaviour, no new
+  selector, no new component.
+- No `:root` token defined by this wave; all four new declarations consume a
+  native reading token with a literal fallback. Exo's own `--mva-` internal
+  tokens were not touched — they are the plugin's own system and §7 does not
+  reach them.
+- No CSS comment in the edits contains the token-glob-then-slash pair; token
+  families are written in prose as "the `--line-height-` family".
+- Pre-existing design-hook findings (`styles.css` side-tab border at 760,
+  composer height animation at 1643, outline-tick width animation at 3984) are
+  **untouched** by this wave — they are §3/§6 carried-forward items, not §7
+  reading-rhythm issues, and none of them sits on a line this wave edited.
