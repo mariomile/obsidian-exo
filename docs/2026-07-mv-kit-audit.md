@@ -650,3 +650,173 @@ inherits a to-do list rather than an archaeology task.
 - Phone verification: **N/A** — `isDesktopOnly: true`. `EmulateMobile` was not
   enabled (it kills Node-dependent plugins, Exo included).
 - Live-vault visual check: not applicable to a documentation-only step.
+
+---
+
+## §6 — wave 2026-07 dinamica
+
+Second audit wave, added 2026-07-26. Scope: mv-kit **§6 "Elevation & motion
+depth"** (added in cosmos-theme `10f5ddc`), plus the two design docs
+`obsidian-cosmos-theme/docs/2026-07-24-suite-coherence-design.md` and
+`2026-07-25-dynamics-depth-design.md`. This section **appends** to the audit
+above; nothing in §§0–5 is rewritten.
+
+§6 has four sub-rules — **elevation hierarchy**, **hover richness**, **drag
+polish**, **panel/tab transitions**. Each surface below is graded on all four,
+desktop first then phone. The verdict vocabulary (pass / FIX / waived) is the
+same table at the top of this file.
+
+**Platform premise carries over verbatim.** `manifest.json:9`
+`"isDesktopOnly": true` — Exo never loads on iOS/Android, `styles.css` has zero
+`.is-mobile` / `.is-phone` / `pointer: coarse` selectors. So every phone-column
+§6 MUST (Pop→bottom-sheet mapping, the `@media (hover: hover)` disclosure gate,
+phone long-press drag) is **structurally unreachable**, exactly as §§2–4 record.
+Each phone cell states its own reason rather than a bare N/A. The one
+platform-independent §6 rule — "drag never animates layout properties" — is
+audited as a live rule, not waived, because it can bite on the only platform Exo
+has.
+
+### §6 audit-procedure sweep (the new dimensions)
+
+Commands as run against the working tree, so a reviewer re-runs and diffs.
+
+```sh
+grep -nE 'backdrop-filter|blur\(' styles.css       # glass tier
+grep -nE 'box-shadow:' styles.css                  # elevation tiers
+grep -nE 'transition:[^;]*(left|top|margin)' styles.css   # drag/layout anim
+grep -nE 'is-drag|is-drop|dragging' styles.css     # drag surfaces
+grep -nE '@media[^{]*hover' styles.css             # hover gates
+grep -nE 'translateY|translate\(' styles.css       # lift transforms
+```
+
+Results, each judged below:
+
+- **Glass:** 1 `blur()` hit — line **1718**, `filter: blur(6px)` on the
+  welcome-hero breathing aura (`.mva-empty-star::before`). A decorative glow on
+  a pseudo-element, **not** a surface glass. **Zero `backdrop-filter`**, zero
+  glass surfaces anywhere. Line **292** carries an explicit inline note: *"Solid
+  elevated surface — it's a panel, not a glass-over-content bar."* So the §6
+  "never glass on a full-height sidebar" MUST NOT is satisfied by there being no
+  glass to misplace.
+- **Elevation:** every non-inset, non-ring `box-shadow` is either a Pop-tier
+  consumption (`var(--cosmos-pop-shadow, …)` at 964, 1065, 1244, 3995, 4138,
+  4174, 4317, 4944 — landed in the §1 wave, `2c660fa`) or a docked-column /
+  control shadow already waived in §1 (307 `.mva-recap`, 477 `.mva-jump-pill`).
+  The rest (79, 2500, 2671, 2776, 4210, 4274, 4045/4046, 4628/4632) are
+  **accent/focus rings and pulse keyframes** (`0 0 0 Npx accent` / `0 0 6px
+  currentColor`), not elevation — correctly outside the tier system.
+- **Drag/layout:** `transition:[^;]*(left|top|margin)` → **0 hits**. No
+  transition animates a layout property for drag. `is-drag` / `is-drop`
+  surfaces: 3189 (`.mva-composer.is-drop`), 4494
+  (`.mva-board-col-list.is-drop-target`), 4515 (`.mva-board-card.is-dragging`),
+  4519 (`.mva-board-card.is-drop-before`).
+- **Hover gates:** `@media (hover: hover)` → **0 hits** (see the hover row).
+- **Lift transforms:** `translateY` on hover at 1809 (`.mva-starter`, −1px) and
+  2808 (`.mva-card`, −2px); the rest are layout/entrance transforms
+  (−50% centering, the 4px `mva-pop` entrance, the outline-strip reveal), not
+  hover lifts.
+
+### Elevation hierarchy
+
+| Surface | Desktop | Phone | Verdict |
+|---|---|---|---|
+| Autocomplete popover (`.mva-ac`, 964), agents-list popover (`.mva-agents-list`, 1065), toolbar selector popover (`.mva-sel-pop`, 1244), chat-outline floating panel (`.mva-outline-panel`, 3995), in-note AI bar/panel/actionbar (`.mva-inai-*`, 4138/4174/4317), mention popover (`.exo-mention-popover`, 4944) | all 8 consume `var(--cosmos-pop-shadow, …)` — the correct **Pop** tier for surfaces that float over content and dismiss on outside-click | N/A — `--cosmos-pop-shadow` is one value across the kit's columns, and Exo paints no floating surface on phone because it paints nothing on phone. On phone the kit maps Pop to the bottom-sheet `cosmos-sheet-rise` recipe, which is unreachable here | **pass** — every floating surface is Pop, none is stacked with a second tier, none uses glass. Closed in the §1 wave; re-verified at HEAD for §6. |
+| Exo Cockpit view (`.mva-ck`, container `cockpit-view.ts:75`), Orchestration Board (`.mva-board-root`, 4376), Connections pane (`.mva-connections-root`) | persistent leaf views. The §6 table names these as **Island** tier — but each renders inside Obsidian's native `workspace-leaf`, which the theme already elevates. None declares a `box-shadow`: `.mva-board-root` (4376) sets only `overflow`, `.mva-ck` has 38 rules with zero `box-shadow`, `.mva-connections-root` none | N/A — Island "has no phone equivalent (full-screen drawer)" per the kit, and these views never load on phone | **pass** — a plugin adding an Island shadow to a view already sitting in an elevated leaf would **stack two elevations** (the §6 MUST NOT). Inheriting the leaf's elevation is the correct read of "Island tier" for a leaf-hosted panel; hand-picking one would be the violation. |
+| Glass tier — command-bar / floating-toolbar candidates | Exo's nearest analogue is the Cockpit command bar (`.mva-ck-bar`, 4786) and the in-note AI bar (`.mva-inai-bar`, 4138). Neither floats *over readable editor content the user is still reading through*: `.mva-ck-bar` is inline chrome inside the Cockpit leaf; `.mva-inai-bar` is Pop-tier (dismissable). Neither uses `backdrop-filter` | N/A — the glass tier is identical across columns; no glass exists to differ | **pass, no glass surface** — the one blur in the file (1718) is a decorative aura, not a surface. The §6 "never glass on a full-height sidebar" MUST NOT cannot be violated: there is no glass and no full-height plugin sidebar. |
+
+### Hover richness
+
+| Surface | Desktop | Phone | Verdict |
+|---|---|---|---|
+| History-gallery card (`.mva-card:hover`, 2805–2808) | colour **and** lift: `background` + `border-color` change **plus** `transform: translateY(-2px)`, eased by `transition: … transform var(--mva-t)` at 2803. Lift is exactly 2px — the §6 ceiling, not over it | N/A — hover is a pointer-only state; the kit's phone column has no hover analogue, and the card never paints on phone | **pass** — satisfies "colour AND a subtle physical lift, never colour alone", lift ≤ 2px. |
+| Welcome-hero starter chip (`.mva-starter:hover`, 1805–1809) | colour + `transform: translateY(-1px)`, eased via `transform var(--mva-t)` at 1802–1803; `:active` returns to `translateY(0)` (1811) | N/A — same pointer-only reason; the welcome hero is desktop chat chrome | **pass** — colour + 1px lift, within ceiling. |
+| Board card (`.mva-board-card:hover`, 4512), board add-column (`.mva-board-col-add:hover`, 4652), composer rows, tool cards, connections rows, automations rows, cockpit rows | colour-wash hovers (`background` / `border-color`), no lift — the "Flat→Wash" tier the §6 table sanctions for inline chrome that sits in the document flow (rows, chips, inline buttons) | N/A — pointer-only; none paints on phone | **pass** — §6 requires the lift only on card-like surfaces that read as physical objects; a list row washing colour with no lift is the explicit **Wash** tier, not a violation. |
+| Lift/wash easing split — every lift above eases the `transform` with `--mva-t` (`0.14s ease`), and every wash eases colour with `--mva-t` too | §6 SHOULD: "colour washes ease with the wash curve, physical lifts with the lift curve — the two easings are not interchangeable." At HEAD both route through Exo's single `--mva-t` token (`0.14s ease`), so the two curves are the *same* (`ease`), not the kit's distinct `--mv-wash` / `--mv-lift` beziers | N/A — the easing tokens carry one value each across the kit's columns; platform-neutral | **waived, value change** — splitting `--mva-t` into a wash curve for colour and a lift curve for transform on ~50 transition sites is a **feel change** (from `ease` to two beziers), not a zero-delta token substitution. Same boundary the §1 `--mv-r-card` (9 vs 11) and §2 micro-label rows draw: a value change is a dedicated-wave decision, not a coherence fix. **Partial fix landed** — the one *entrance-lift* easing token that was already byte-identical to `--mv-lift` (`--mva-ease-out`, 14, `= cubic-bezier(0.22, 1, 0.36, 1)`) is bridged to `var(--mv-lift, cubic-bezier(0.22, 1, 0.36, 1))` — zero rendered delta, now inheriting the kit token under Cosmos. Carried forward: the remaining hover-lift transforms that ride `--mva-t`. |
+| `@media (hover: hover)` gate on custom `:hover` — kit §6 MUST NOT: a touch tap must never strand a hover state | 0 gates in the file. Every `:hover` is unguarded | N/A — the gate exists to stop a **touch** device stranding a hover; Exo has no touch surface (`isDesktopOnly: true`), so an unguarded `:hover` can never be reached by a finger | **waived, N/A (desktop-only)** — adding `@media (hover: hover)` to a plugin that only ever runs under a pointer would be dead scoping asserting a phone capability Exo does not have. Same class as the §2 `--cosmos-touch-min` / press-scale waivers. |
+
+### Drag polish
+
+| Surface | Desktop | Phone | Verdict |
+|---|---|---|---|
+| Orchestration Board card reorder + column drop (`board-view.ts`: `card.draggable = true` at 350/422, `dragstart`/`dragover`/`drop`/`dragend` at 355–433 and 643–682; CSS `.mva-board-card.is-dragging` 4515, `.is-drop-before` 4519, `.mva-board-col-list.is-drop-target` 4494) | **native HTML5 drag-and-drop** — the browser composites the drag ghost; JS never writes `left`/`top`/`margin`/`transform` to position the element (`grep left\|top\|margin` in `board-view.ts` → only string/enum matches, zero style writes). The source card changes **only** `opacity: 0.5` + `cursor: grabbing` while dragging (4515–4517). Drop targets show an inset ring (`box-shadow: inset …`, 4496/4520), not a moved element. Reorder settles via keyed rerender (`keyed-reconcile`), which replaces DOM rather than reflowing under the pointer | Identical rule; native long-press drag (if Exo ever ran on phone) would inherit the same transform-only / opacity-only constraint. Structurally unreachable at HEAD | **pass** — the §6 drag MUST ("uses `transform`, never `left`/`top`/`margin`") holds by construction: native DnD delegates positioning to the compositor, and no transition animates a layout property (`transition:.*(left\|top\|margin)` → 0). There is no `.is-dropped` settle animation, and none is needed — native DnD does not reflow, so the "drop settles with the zero-overshoot easing, no bounce" MUST is met vacuously (no JS-driven settle to overshoot). |
+| Composer drop (`.mva-composer.is-drop`, 3189 — image-attachment drop target) | a drop-affordance highlight (border/background), not a dragged element; the composer itself never moves | N/A — the composer only renders in a desktop leaf | **pass** — a drop *target* highlight is a colour-wash state, not drag positioning; no layout property animates. |
+
+### Panel & tab transitions
+
+| Surface | Desktop | Phone | Verdict |
+|---|---|---|---|
+| Connections marketplace tabs (MCP / Skills) — `connections-view.ts`: `mkTab` at 67–73 toggles `.is-active` on `.mva-pill` (69) and calls `void this.render()` (70) on click; pill CSS transitions `background`/`color` via `--mva-t` at 5091. The tab **body** is rebuilt by `keyed-reconcile` (rows keyed by `key`/`sig` at 194–196) | the content **swaps instantly** — the body has **zero** `transition`/`animation`/`transform`, so a new tab does **not** slide in from the side. The §6 hard MUST ("never slide the new tab in — that is the AI-slop carousel anti-pattern") is satisfied. The §6 SHOULD ("crossfade `opacity` via the base tier") is unmet: the swap is instant, not a crossfade | N/A — the crossfade token is one value across columns; the Connections pane enumerates MCP servers spawned as Node child processes, impossible on mobile | **pass on the MUST, SHOULD not adopted** — no slide-in exists (the anti-pattern the MUST forbids is absent). Adding an opacity crossfade to a keyed-reconciled body means JS-coordinating an entrance class on the reconciled rows — **new behaviour on a DOM-diffing path**, a hard non-goal for a motion/elevation coherence wave. Waived as a SHOULD, named here so a later wave can pick it up deliberately. |
+| Exo Cockpit lanes / sections (`cockpit-view.ts`: `renderAttention` / `renderCommandBar` / `renderAutonomy` / `renderSystem`, 287–397, all stacked in one `render()` guarded by the `rendering` flag at 53/178/279) | the Cockpit has **no tabs and no lanes that swap** — it is a single vertical render; refresh rebuilds the whole content. Zero `.mva-ck` rules declare `transition`/`animation` (verified in §3's out-of-root enumeration) | N/A — desktop leaf view; never loads on phone | **pass** — there is no tab-content swap and no panel open/close to grade; the surface has no structural motion to get wrong. |
+| Panel open/close at hover speed — kit §6 MUST: a panel that opens/closes animates over the panel tier (`--cosmos-t-panel`), not the fast hover tier | Exo has no plugin-owned collapsible panel that animates its own open/close. The chat-outline panel (`.mva-outline-panel`, 3995) reveals via `opacity`/`transform`/`visibility` on `--mva-t` (4000) — a lightweight overlay reveal, the kit's fade-in tier, not a structural sidebar open | N/A — the panel tier is one value across columns; no phone panel exists | **pass** — no structural panel movement runs at hover speed. The outline overlay is a fade-in affordance (the kit's lightweight-chrome tier), not a sidebar open/close, so grading it against `--cosmos-t-panel` would be a category error. |
+| Modals — task modal (`task-modal.ts`), automations modal (`automations-modal.ts`), dream modal (`dream-modal.ts`), prompt-vars, proposals, inline-edit | Obsidian core owns modal entrance; Exo's modal classes (`.mva-task-modal-window`, `.mva-auto-modal`, `.mva-ie-modal`, `.mva-proposals-window`) declare **no** `animation` (confirmed in §3's out-of-root enumeration) | N/A — on phone the kit maps modal entrance to `cosmos-sheet-rise`, which Obsidian core drives for the whole app; a desktop-only plugin adds nothing here | **pass** — Exo defers modal entrance to Obsidian core, which under Cosmos already carries the sheet-rise / pop-in recipes. A plugin re-declaring modal entrance would risk stacking a second animation. |
+
+### §6 verdict summary
+
+| Sub-rule | Desktop | Phone |
+|---|---|---|
+| Elevation hierarchy | **pass** — 8 Pop surfaces tokenized, no glass, no stacked tiers, leaf views inherit native elevation | N/A (desktop-only) — Island has no phone form; Pop→sheet-rise unreachable |
+| Hover richness | **pass** on lift+colour pairing and the ≤2px ceiling; **1 minimal fix landed** (`--mva-ease-out` bridged to `--mv-lift`); easing-split across ~50 sites **waived** (value change) | N/A (desktop-only) — hover has no touch analogue; `@media (hover)` gate is dead scoping here |
+| Drag polish | **pass** — native HTML5 DnD, opacity-only source, zero layout-property animation, no reflow-during-drag | N/A (desktop-only) — same transform-only rule would apply to long-press drag if it existed |
+| Panel/tab transitions | **pass on every MUST** — no slide-in tab carousel, no hover-speed panel move; crossfade **SHOULD** waived (needs JS on the reconcile path) | N/A (desktop-only) — panel/sheet tiers unreachable |
+
+### §6 fixes applied
+
+| # | File / line | Change | Risk |
+|---|---|---|---|
+| 1 | `styles.css:14` | `--mva-ease-out: cubic-bezier(0.22, 1, 0.36, 1);` → `--mva-ease-out: var(--mv-lift, cubic-bezier(0.22, 1, 0.36, 1));` | none — canonical `--mv-lift` value is the same bezier; fallback identical. Byte-identical rendering with Cosmos absent *and* present; under Cosmos the file's entrance-lift easing now routes through the kit token. This is the "companion #1, free" the §§1–5 audit pre-identified (lines 534–537 above). |
+
+No other §6 fix is available inside the allowed categories (shadow-tier /
+easing-duration / hover-lift / drag-transform-only / tab-crossfade) at
+zero-visual-delta. Every remaining §6 gap is a **value/feel change or a new
+behaviour** and is waived above with its reason.
+
+### §6 violations NOT fixed, with justification
+
+1. **Hover-lift / colour-wash easing split** (~50 `--mva-t` sites) — §6 SHOULD
+   that lifts ride `--mv-lift` and washes ride `--mv-wash`. Adopting it changes
+   the timing curve from `ease` to two distinct beziers on every animated
+   surface: a feel change, not a coherence substitution. Carried forward for a
+   dedicated motion-feel wave. The one already-byte-identical token
+   (`--mva-ease-out`) is the sole part landed.
+2. **Connections tab-body crossfade** (§6 SHOULD) — the MUST (no slide-in) is
+   met; the crossfade would require JS to coordinate an entrance class on a
+   keyed-reconciled DOM-diffing path — new behaviour, out of scope.
+3. **`@media (hover: hover)` gate** — waived N/A: `isDesktopOnly: true`, no
+   touch surface can strand a hover.
+
+### §6 contract-test extension
+
+`src/style-contract.test.ts` gains **exactly two** §6 assertions, both tied to
+facts this wave established (zero speculative rules):
+
+1. `§6 physical-lift easing routes through --mv-lift (not a bare bezier)` —
+   pins the fix at `styles.css:14` so it cannot regress to a bare literal.
+2. `§6 drag/motion never animates layout properties (left/top/margin)` —
+   encodes the drag-polish MUST verified above (0 hits at HEAD); would fail the
+   instant a future transition animates `left`/`top`/`margin`.
+
+The stale sanction entry for the old raw-bezier line 14 was removed from
+`SANCTIONED_RAW_VALUES` (the bezier now sits in a `var()` fallback and clears
+the raw scan on its own). Both new assertions were proven non-vacuous (they
+fail on a synthetic regression and pass on compliant motion). All 6 contract
+tests green; full suite **99 files / 1224 tests** green (was 1222; +2).
+
+### §6 verification
+
+- `pnpm typecheck` → exit 0. `pnpm lint` → exit 0.
+- `pnpm test` → **99 test files / 1224 tests passed** (was 1222 pre-§6; the
+  two new §6 assertions are the delta).
+- CSS change is one line; `git diff --stat styles.css` → 1 insertion, 1
+  deletion. No layout, no DOM, no new component, no new selector.
+- No `:root` token defined; the new declaration consumes `--mv-lift` with a
+  literal fallback. No CSS comment in the edit or in this doc contains the
+  token-glob-then-slash pair; token families written as "the `--cosmos-` and
+  `--mv-` tokens".
+- Phone verification: **N/A** — `isDesktopOnly: true`; `EmulateMobile` was not
+  enabled (it kills Node-dependent plugins, Exo included).
+- Pre-existing hook findings (`styles.css:753` side-tab border,
+  `styles.css:1636` composer height animation, `styles.css:3975` outline-tick
+  width animation) are **not** touched by this wave: 753 is out of §6 scope
+  (not motion/elevation), and 1636 / 3975 are already tracked in the
+  §3 carried-forward list (composer grow-behaviour + the outline-tick FIX #5),
+  neither of which is a §6 drag/layout-during-drag violation.
