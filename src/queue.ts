@@ -1,24 +1,24 @@
-/* Exo Queue — "Exo in tasca" via Obsidian Sync (2026-07-10, mobile #7 v1).
+/* Exo Queue — "Exo in your pocket" via Obsidian Sync (2026-07-10, mobile #7 v1).
  *
- * Architettura remote-head SENZA infrastruttura: il telefono scrive una nota
- * richiesta nella cartella coda configurata; Obsidian Sync la porta sul desktop; qui
- * il watcher la esegue HEADLESS e READ-ONLY (runHeadlessPlaybook: tool di
- * lettura auto-consentiti, ogni mutazione negata) e appende la risposta
- * NELLA STESSA NOTA; Sync riporta la risposta al telefono. Nessun server,
- * nessun pairing: il vault è lo stato condiviso, Sync è il trasporto.
- * (Prior art: Claude Dispatch — ma qui il bus è Sync. Primo nell'ecosistema.)
+ * Remote-head architecture WITHOUT infrastructure: the phone writes a request
+ * note into the configured queue folder; Obsidian Sync carries it to the desktop;
+ * there the watcher runs it HEADLESS and READ-ONLY (runHeadlessPlaybook: only
+ * auto-allowed read tools, every mutation denied) and appends the answer
+ * INTO THE SAME NOTE; Sync carries the answer back to the phone. No server,
+ * no pairing: the vault is the shared state, Sync is the transport.
+ * (Prior art: Claude Dispatch — but here the bus is Sync. First in the ecosystem.)
  *
- * Contratto della nota richiesta:
- *   - qualsiasi .md nella cartella coda, corpo = prompt;
- *   - viene processata se il frontmatter NON contiene `exo-answered`;
- *   - la risposta è appesa come `## Risposta (Exo · read-only)` e il
- *     frontmatter riceve `exo-answered: <ISO>` — scrittura a TESTO GREZZO,
- *     mai processFrontMatter (rompe i wikilink non quotati).
- *   - errori: fino a 3 tentativi con backoff persistito nel frontmatter;
- *     `exo-failed` chiude solo dopo l'ultimo fallimento.
+ * Request note contract:
+ *   - any .md in the queue folder, body = prompt;
+ *   - it gets processed if the frontmatter does NOT contain `exo-answered`;
+ *   - the answer is appended as `## Risposta (Exo · read-only)` and the
+ *     frontmatter receives `exo-answered: <ISO>` — written as RAW TEXT,
+ *     never processFrontMatter (breaks unquoted wikilinks).
+ *   - errors: up to 3 attempts with backoff persisted in the frontmatter;
+ *     `exo-failed` closes only after the last failure.
  *
- * Guardie: flag busy in-memory (mai due drain concorrenti), max 3 richieste
- * per ciclo (anti-valanga dopo un sync arretrato), corpo non vuoto.
+ * Guards: in-memory busy flag (never two concurrent drains), max 3 requests
+ * per cycle (anti-avalanche after a lagging sync), non-empty body.
  */
 
 import { Notice, TFile, TFolder, type App } from "obsidian";
@@ -110,12 +110,12 @@ export async function drainExoQueue(
   settings: MVASettings
 ): Promise<number> {
   const folder = app.vault.getAbstractFileByPath(settings.exoQueueFolder);
-  if (!(folder instanceof TFolder)) return 0; // cartella assente = coda vuota
+  if (!(folder instanceof TFolder)) return 0; // folder missing = empty queue
   const pending: TFile[] = [];
   for (const child of folder.children) {
     if (child instanceof TFile && child.extension === "md") pending.push(child);
   }
-  // Ordine stabile: più vecchie prima (ctime), così le risposte arrivano FIFO.
+  // Stable order: oldest first (ctime), so answers arrive FIFO.
   pending.sort((a, b) => a.stat.ctime - b.stat.ctime);
 
   let done = 0;
@@ -142,9 +142,9 @@ export async function drainExoQueue(
       : stampQueueFailure({ fm, body: prompt }, attempt, Date.now());
     const next = `${base.replace(/\s*$/, "")}\n\n${heading}\n\n${answer}\n`;
 
-    // Rileggi prima di scrivere: se la nota è cambiata durante l'esecuzione
-    // (edit dal telefono mid-run), non sovrascrivere — la riprende il
-    // prossimo drain sulla versione nuova.
+    // Reread before writing: if the note changed during execution
+    // (edit from the phone mid-run), don't overwrite — the next
+    // drain will pick it up on the new version.
     const latest = await app.vault.read(file);
     if (latest !== content) continue;
     await app.vault.modify(file, next);
