@@ -71,19 +71,12 @@ describe('mv-kit style contract', () => {
     // Source line numbers are given as `styles.css:N`; the numbers the failure
     // message prints are lower, because the scan runs on comment-stripped CSS.
     const SANCTIONED_RAW_VALUES: ReadonlyArray<{ line: string; value: string; why: string }> = [
-      {
-        // styles.css:14 — the easing token's own definition. A token has to
-        // hold a literal somewhere; this is the one place a bezier is allowed
-        // to be raw, and ~all motion in the file routes through it.
-        // Audit verdict: "waived" — `--mva-ease-out` is the same bezier as the
-        // kit's `--mv-lift`; docs/2026-07-mv-kit-audit.md §"Motion" row
-        // `.mva-empty > *` entrance, and the proposed FIX at lines 535-536
-        // (wrapping it in `var(--mv-lift, …)`) is explicitly byte-identical,
-        // i.e. optional polish rather than a contract breach.
-        line: '--mva-ease-out: cubic-bezier(0.22, 1, 0.36, 1);',
-        value: 'cubic-bezier(0.22, 1, 0.36, 1)',
-        why: 'token definition for --mva-ease-out; audit: waived (= --mv-lift value)',
-      },
+      // styles.css:14 (`--mva-ease-out`) USED to be sanctioned here as a raw
+      // bezier. The 2026-07 §6 "dinamica" wave landed the byte-identical bridge
+      // `--mva-ease-out: var(--mv-lift, cubic-bezier(0.22, 1, 0.36, 1))`, so the
+      // bezier now sits in a var() fallback and clears the raw scan on its own
+      // (`hasVarFallback`). No sanction entry needed; a dedicated §6 assertion
+      // below pins the bridge so it cannot regress to a bare literal.
       {
         // styles.css:2928 — context-ring donut fill. Carries an inline
         // directive at 2925-2927: "Sole sanctioned motion override … Do not
@@ -192,5 +185,44 @@ describe('mv-kit style contract', () => {
     //    Companion to 4064: themes that replace the outline with a glow
     //    box-shadow would otherwise stack a second ring on top of Exo's.
     expect(importantCount).toBeLessThanOrEqual(6);
+  });
+
+  // ---- §6 "Elevation & motion depth" (2026-07 dinamica wave) --------------
+  // Only concrete rules that actually emerged from the §6 audit
+  // (docs/2026-07-mv-kit-audit.md, section "§6 — wave 2026-07 dinamica").
+  // No speculative assertions: each of these pins a fact the audit verified or
+  // a fix it landed, and each would catch a real regression.
+
+  it('§6 physical-lift easing routes through --mv-lift (not a bare bezier)', () => {
+    // §6 hover/reveal MUST: "physical lifts (transform) ease with --mv-lift".
+    // The wave bridged Exo's own lift-easing token to the kit token, keeping
+    // the canonical bezier as the literal fallback (byte-identical rendering).
+    // Regressing it to a bare `cubic-bezier(...)` would silently un-bridge the
+    // file's entrance/reveal easing from the kit under Cosmos.
+    const decl = css
+      .split('\n')
+      .find((line) => /--mva-ease-out\s*:/.test(line))
+      ?.trim();
+
+    expect(decl).toBe('--mva-ease-out: var(--mv-lift, cubic-bezier(0.22, 1, 0.36, 1));');
+  });
+
+  it('§6 drag/motion never animates layout properties (left/top/margin)', () => {
+    // §6 drag-polish MUST: "drag positioning uses transform, never
+    // left/top/margin". The Orchestration Board uses native HTML5 drag (the
+    // browser composites the ghost), so no transition drives layout geometry —
+    // but a future transition that animates left/top/margin would both thrash
+    // layout and break the drag MUST. This scans transition SHORTHANDS for a
+    // layout-triggering property. `.mva-inputwrap.is-anim .mva-input` (height)
+    // and `.mva-outline-tick` (width) are pre-existing waivers tracked in the
+    // audit's carried-forward list; they animate height/width, not the
+    // left/top/margin the §6 drag rule names, so they are not in scope here.
+    const code = stripComments(css);
+    const offenders = code
+      .split('\n')
+      .map((line, idx) => ({ line: line.trim(), n: idx + 1 }))
+      .filter(({ line }) => /transition:[^;]*\b(left|top|margin)\b/.test(line));
+
+    expect(offenders).toEqual([]);
   });
 });
