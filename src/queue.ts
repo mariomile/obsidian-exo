@@ -32,9 +32,9 @@ const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 5 * 60 * 1000;
 
 interface ParsedNote {
-  /** Frontmatter block INCLUSO i delimitatori (o "" se assente). */
+  /** Frontmatter block INCLUDING the delimiters (or "" if absent). */
   fm: string;
-  /** Corpo senza frontmatter. */
+  /** Body without frontmatter. */
   body: string;
 }
 
@@ -70,7 +70,7 @@ export function isQueueRetryDue(content: string, now = Date.now()): boolean {
   return !Number.isFinite(retryAt) || retryAt <= now;
 }
 
-/** Inserisce `exo-answered` nel frontmatter (testo grezzo, wikilink-safe). */
+/** Inserts `exo-answered` into the frontmatter (raw text, wikilink-safe). */
 function stampAnswered(note: ParsedNote, iso: string): string {
   return patchFrontmatter(note.fm + note.body, { "exo-answered": iso }, ["exo-attempts", "exo-retry-after"]);
 }
@@ -87,8 +87,8 @@ export function stampQueueFailure(note: ParsedNote, attempt: number, now: number
   );
 }
 
-/** Conta le richieste pendenti nella coda (per il pannello Autonomy) —
- *  stesso criterio del drain: nota .md, corpo non vuoto, niente exo-answered. */
+/** Counts pending requests in the queue (for the Autonomy panel) —
+ *  same criteria as the drain: .md note, non-empty body, no exo-answered. */
 export async function countPendingQueue(app: App, settings: MVASettings): Promise<number> {
   const folder = app.vault.getAbstractFileByPath(settings.exoQueueFolder);
   if (!(folder instanceof TFolder)) return 0;
@@ -104,7 +104,7 @@ export async function countPendingQueue(app: App, settings: MVASettings): Promis
   return n;
 }
 
-/** Un giro di drain della coda. Ritorna quante richieste ha evaso. */
+/** One drain cycle of the queue. Returns how many requests it fulfilled. */
 export async function drainExoQueue(
   app: App,
   settings: MVASettings
