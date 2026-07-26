@@ -207,6 +207,59 @@ describe('mv-kit style contract', () => {
     expect(decl).toBe('--mva-ease-out: var(--mv-lift, cubic-bezier(0.22, 1, 0.36, 1));');
   });
 
+  // ---- §7 "Reading rhythm" (2026-07 lettura wave) -------------------------
+  // Only the prose surfaces the §7 audit actually re-tokenized
+  // (docs/2026-07-mv-kit-audit.md, section "§7 — wave 2026-07 lettura").
+  // Chrome line-heights (chips, badges, cards, inputs) and the documented
+  // deviations (clamped previews, code/diff blocks, the artifact thumbnail)
+  // are deliberately NOT asserted here — they stay on the UI scale by verdict,
+  // and pinning them would freeze a taste call this wave was not allowed to
+  // make.
+
+  it('§7 prose surfaces read their leading from the reading tokens', () => {
+    // §7 MUST: "a plugin that renders prose (note preview, chat message, card
+    // excerpt, search snippet) inherits the reading tokens — the
+    // `--line-height-` family, `--p-spacing`, `--font-text-size` — rather than
+    // hardcoding its own line-height". These four rules were the hardcoded
+    // ones; each now consumes the token with its pre-wave literal as fallback,
+    // so a Cosmos-less install renders byte-identically and a Cosmos install
+    // inherits the desktop/phone 1.6-vs-1.55 split instead of flattening it.
+    const rules = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+      selector: m[1].replace(/\s+/g, ' ').trim(),
+      body: m[2],
+    }));
+
+    const PROSE_LEADING: ReadonlyArray<readonly [selector: string, decl: string]> = [
+      // Chat message body (user bubble + rendered-markdown assistant answer).
+      ['.mva-bubble', 'line-height: var(--line-height-normal, 1.55);'],
+      // Headings inside that rendered markdown: Obsidian's tight leading, whose
+      // native default IS 1.3 — the pre-wave literal, so nothing moves.
+      [
+        '.mva-bubble h1, .mva-bubble h2, .mva-bubble h3, .mva-bubble h4, .mva-bubble h5, .mva-bubble h6',
+        'line-height: var(--line-height-tight, 1.3);',
+      ],
+      // Inline-edit / note-diff preview: a note preview, and already the one
+      // surface consuming `--font-text-size` before this wave.
+      ['.mva-ie-preview', 'line-height: var(--line-height-normal, 1.55);'],
+      // Live streamed rewrite text in the inline-AI chip: model prose about to
+      // land in the note.
+      ['.mva-inai-streamtext', 'line-height: var(--line-height-normal, 1.5);'],
+    ];
+
+    const offenders: string[] = [];
+    for (const [selector, decl] of PROSE_LEADING) {
+      const declared = rules
+        .filter((r) => r.selector === selector)
+        .flatMap((r) => r.body.match(/line-height:[^;]*;/g) ?? [])
+        .map((d) => d.trim());
+      if (declared.length !== 1 || declared[0] !== decl) {
+        offenders.push(`${selector} → ${JSON.stringify(declared)} (expected ["${decl}"])`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
   it('§6 drag/motion never animates layout properties (left/top/margin)', () => {
     // §6 drag-polish MUST: "drag positioning uses transform, never
     // left/top/margin". The Orchestration Board uses native HTML5 drag (the
