@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { connectMcp, disconnectMcp, importSkill, removeSkill } from "../src/core/connections-install";
+import { connectMcp, disconnectMcp, setMcpEnabled, importSkill, removeSkill } from "../src/core/connections-install";
 import { parseMcpJson } from "../src/core/mcp-config";
 
 describe("connectMcp", () => {
@@ -21,6 +21,20 @@ describe("disconnectMcp", () => {
     const start = connectMcp('{"mcpServers":{}}', "posthog", { command: "npx" });
     const out = disconnectMcp(start, "posthog");
     expect(parseMcpJson(out).servers).toEqual([]);
+  });
+});
+
+describe("setMcpEnabled", () => {
+  it("disables then re-enables a server, preserving its config (reversible)", () => {
+    const start = connectMcp('{"mcpServers":{}}', "posthog", { command: "npx" });
+    const off = setMcpEnabled(start, "posthog", false);
+    const disabled = parseMcpJson(off).servers.find((s) => s.name === "posthog");
+    expect(disabled).toEqual({ name: "posthog", config: { command: "npx" }, enabled: false });
+    const on = setMcpEnabled(off, "posthog", true);
+    expect(parseMcpJson(on).servers.find((s) => s.name === "posthog")?.enabled).toBe(true);
+  });
+  it("throws on unparseable text rather than clobbering", () => {
+    expect(() => setMcpEnabled("{not json", "x", false)).toThrow();
   });
 });
 

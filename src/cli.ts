@@ -330,6 +330,53 @@ export function updateClaudeCli(): Promise<{ ok: boolean; output: string }> {
   });
 }
 
+/* ------------------------------- mcp auth ----------------------------- */
+
+/** (Re)authenticate an OAuth / remote MCP server via `claude mcp login <name>`.
+ *  The CLI opens the system browser for the OAuth round-trip and stores the
+ *  credentials in its own credential store; this resolves when that process
+ *  exits. `cwd` must be the vault root so project-scoped (.mcp.json) servers
+ *  resolve by name, and the enriched PATH is passed for the same reason the
+ *  session spawn does (Obsidian doesn't inherit the login-shell PATH). Args are
+ *  passed as an array (no shell), so the server name can't inject. Never
+ *  rejects — resolves `{ ok, output }` with a bounded tail of stdout+stderr. */
+export function mcpLogin(cli: ResolvedCli, name: string, cwd: string): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    if (!name.trim()) return resolve({ ok: false, output: "No server name." });
+    let out = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (result: { ok: boolean; output: string }): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      resolve(result);
+    };
+    const append = (d: Buffer | string) => {
+      out += d.toString();
+      if (out.length > 8000) out = out.slice(-8000); // bounded ring
+    };
+    try {
+      const c = spawn(cli.bin, ["mcp", "login", name], { cwd, env: { ...process.env, PATH: cli.pathEnv } });
+      c.stdout.on("data", append);
+      c.stderr.on("data", append);
+      c.on("error", (e: Error) => finish({ ok: false, output: e.message }));
+      c.on("close", (code: number | null) => finish({ ok: code === 0, output: out.trim() }));
+      // OAuth is user-paced (browser round-trip) — give it 3 minutes before giving up.
+      timer = setTimeout(() => {
+        try {
+          c.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+        finish({ ok: false, output: out.trim() || "Authentication timed out." });
+      }, 180_000);
+    } catch (e) {
+      finish({ ok: false, output: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
 /* ------------------------------ errors -------------------------------- */
 
 export function makeAbortError(): Error {

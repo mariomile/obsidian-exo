@@ -5174,5 +5174,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-style: italic;
 }
 
-/* Connections — MCP status: amber dot for needs-auth / failed */
+/* Connections — MCP status: amber dot for needs-auth / failed, faint for disabled */
 .mva-conn-dot.is-failed { background: var(--color-orange, #e0a458); }
+.mva-conn-dot.is-disabled { background: var(--text-faint); opacity: 0.5; }
+
+/* Connections — "Add MCP server" action row (control-surface entry point) */
+.mva-conn-addrow { display: flex; padding: 6px 2px 10px; }
+
+/* MCP add/edit modal — canonical form recipe (.mva-pv-* rows, .mva-btn actions) */
+.mva-mcp-modal-title { margin: 0 0 12px; font-size: var(--font-ui-medium, 15px); font-weight: 600; }
+.mva-mcp-modal .mva-pv-row { display: flex; flex-direction: column; gap: 4px; }
+.mva-mcp-modal .mva-sel { align-self: flex-start; }
+.mva-mcp-extra { resize: vertical; min-height: 48px; font-family: var(--font-monospace); }
+.mva-mcp-modal-err { color: var(--text-error); font-size: 12px; min-height: 16px; margin-top: 4px; }
+.mva-mcp-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }

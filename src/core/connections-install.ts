@@ -8,7 +8,7 @@
  * removes only the vault copy.
  */
 
-import { parseMcpJson, serializeMcpJson, upsertServer, removeServer } from "./mcp-config";
+import { parseMcpJson, serializeMcpJson, upsertServer, removeServer, setServerEnabled } from "./mcp-config";
 import { cp, rm, access } from "fs/promises";
 
 /** Apply an MCP import to `.mcp.json` text. Pure string→string so the caller
@@ -24,6 +24,14 @@ export function disconnectMcp(currentRaw: string, name: string): string {
   const parsed = parseMcpJson(currentRaw);
   if (parsed.error) throw new Error(`Refusing to write over unparseable .mcp.json: ${parsed.error}`);
   return serializeMcpJson(removeServer(parsed.servers, name));
+}
+
+/** Flip a vault server's enabled flag in `.mcp.json` text (disabled servers move
+ *  to `mcpServersDisabled`, which the CLI ignores — reversible). Pure string→string. */
+export function setMcpEnabled(currentRaw: string, name: string, enabled: boolean): string {
+  const parsed = parseMcpJson(currentRaw);
+  if (parsed.error) throw new Error(`Refusing to write over unparseable .mcp.json: ${parsed.error}`);
+  return serializeMcpJson(setServerEnabled(parsed.servers, name, enabled));
 }
 
 const exists = async (p: string): Promise<boolean> => {

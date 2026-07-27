@@ -1003,6 +1003,20 @@ export default class ExoPlugin extends Plugin {
     return view instanceof ChatView ? view.archiveAndCloseTab(convoId) : false;
   }
 
+  /** Reconnect MCP servers on the active Exo session (Connections pane). Respawns
+   *  the active conversation's CLI session — which resumes, so context survives —
+   *  re-attempting all MCP connections and picking up new OAuth creds / .mcp.json
+   *  edits. Returns an error when no ChatView leaf is open (nothing to reconnect). */
+  async reloadMcpConnections(): Promise<{
+    ok: boolean;
+    error?: string;
+    servers?: import("./providers/types").SessionCaps["mcpServers"];
+  }> {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (view instanceof ChatView) return view.reloadMcpConnections();
+    return { ok: false, error: "Open an Exo chat first — reconnect runs on the active session." };
+  }
+
   /**
    * Make sure a ChatView leaf EXISTS without revealing or focusing anything —
    * the background counterpart to `activateView`. Spawning is a system action

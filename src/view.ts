@@ -452,6 +452,10 @@ export class ChatView extends ItemView {
   private sessionCaps: SessionCaps | null = null;
   /** MCP servers already warned-about this view (dedupe the degraded Notice). */
   private warnedDegradedMcp = new Set<string>();
+  /** One-shot listeners resolved the next time a session's init caps arrive —
+   *  how `reloadMcpConnections()` (Connections pane) awaits the fresh MCP
+   *  statuses after a respawn without polling. Flushed in the onCaps handler. */
+  private capsWaiters: Array<(caps: SessionCaps) => void> = [];
   /** Whether we've already lazily asked for OS notification permission (once). */
   private notifyPermAsked = false;
 
@@ -906,6 +910,18 @@ export class ChatView extends ItemView {
         this.hideCapabilities();
         this.showCapabilities(); // live panel refresh if it's open
       }
+      // Release any reconnect (Connections pane) waiter parked on the next caps.
+      if (this.capsWaiters.length) {
+        const waiters = this.capsWaiters;
+        this.capsWaiters = [];
+        for (const w of waiters) {
+          try {
+            w(caps);
+          } catch {
+            /* a waiter must never break the caps handler */
+          }
+        }
+      }
     };
     // Superseded while awaiting (newer spawn or dropSession): don't install —
     // dispose the fresh session so it can't leak as an orphaned CLI process.
@@ -930,6 +946,41 @@ export class ChatView extends ItemView {
     // teardown path for close/delete/reset — the title becomes moot).
     c.titleAbort?.abort();
     c.titleAbort = null;
+  }
+
+  /** Reconnect the active conversation's MCP servers by respawning its CLI
+   *  session. Because the spawn resumes the on-disk session id, the conversation
+   *  and its context survive — only the MCP connections are re-attempted, which
+   *  also picks up fresh OAuth credentials (after `claude mcp login`) and any
+   *  `.mcp.json` edits. Declines mid-turn (a respawn would kill the in-flight
+   *  turn). Resolves with the fresh MCP statuses once the new session's init
+   *  caps arrive (or after an 8s cap so the Connections pane never hangs). */
+  async reloadMcpConnections(): Promise<{ ok: boolean; error?: string; servers?: SessionCaps["mcpServers"] }> {
+    const c = this.active;
+    if (!c || c.provider !== "claude") {
+      return { ok: false, error: "No active Claude session to reconnect (MCP is Claude-only)." };
+    }
+    if (c.streaming) {
+      return { ok: false, error: "A turn is running — stop it, then reconnect." };
+    }
+    // Park a one-shot waiter BEFORE the respawn so we catch the new session's
+    // first init caps (not a stale prewarm's). Bounded so a session that never
+    // reports caps (older CLI) still resolves.
+    const nextCaps = new Promise<SessionCaps | null>((resolve) => {
+      const timer = window.setTimeout(() => resolve(this.plugin.lastSessionCaps), 8000);
+      this.capsWaiters.push((caps) => {
+        window.clearTimeout(timer);
+        resolve(caps);
+      });
+    });
+    this.dropSession(c);
+    try {
+      await this.ensureSession(c);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    const caps = await nextCaps;
+    return { ok: true, servers: caps?.mcpServers };
   }
 
   /** Spin up the active conversation's CLI session in the background so the first
