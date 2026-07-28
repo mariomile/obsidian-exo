@@ -42,6 +42,10 @@ export interface MVASettings {
   prewarmSession: boolean;
   /** Run Claude Code hooks (.claude/settings.json) — CC parity, on by default. */
   runHooks: boolean;
+  /** `/goal` command enabled (Claude only). */
+  enableGoal: boolean;
+  /** Per-window auto-iteration cap before `/goal` pauses to ask to continue. */
+  goalMaxIterations: number;
   /** Persistent allow rules — one per line: `Tool` or `Tool(argPrefix)`. */
   permAllowRules: string;
   /** Persistent deny rules — one per line; deny wins over allow. */
@@ -226,6 +230,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   fastStartup: true,
   prewarmSession: true,
   runHooks: true,
+  enableGoal: true,
+  goalMaxIterations: 10,
   permAllowRules: "",
   permDenyRules: "",
   rememberAlwaysAllow: false,
