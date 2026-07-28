@@ -89,6 +89,8 @@ export interface ComposerHost {
   stop(source?: "esc" | "button"): void;
   submitWorkflow(c: Convo, steps: string[]): void;
   compactActive(instructions?: string): void;
+  handleGoalCommand(c: Convo, text: string): void;
+  resumeGoalLoop(c: Convo): void;
   togglePlanMode(): void;
   toggleResearchMode(): void;
   onProviderChange(next: ProviderId, explicitModel?: string): void;
@@ -142,6 +144,7 @@ export class Composer {
   private currentSelection: { text: string; path: string } | null = null;
   private pendingImages: ImageAttachment[] = [];
   private imagesEl!: HTMLElement;
+  private goalPillEl!: HTMLElement;
 
   constructor(private host: ComposerHost) {}
 
@@ -219,6 +222,42 @@ export class Composer {
     this.refreshResearchChip();
   }
 
+  /** Render (or hide) the goal pill from the conversation's goal state. */
+  refreshGoal(c: Convo): void {
+    this.goalPillEl.empty();
+    const g = c.goal;
+    if (!g || g.status === "idle") return;
+
+    const pill = this.goalPillEl.createDiv({ cls: "mva-goal-pill" });
+
+    if (g.status === "met") {
+      pill.createSpan({ cls: "mva-goal-pill-label", text: `✓ Goal met in ${g.iterations} run${g.iterations === 1 ? "" : "s"}` });
+      window.setTimeout(() => {
+        if (c.goal?.status === "met") {
+          c.goal = undefined;
+          this.goalPillEl.empty();
+        }
+      }, 4000);
+      return;
+    }
+
+    const cond = g.condition.length > 48 ? g.condition.slice(0, 47) + "…" : g.condition;
+
+    if (g.status === "paused") {
+      pill.createSpan({ cls: "mva-goal-pill-label", text: `🎯 ${g.iterations} runs, not met yet` });
+      const cont = pill.createEl("button", { cls: "mva-goal-pill-btn", text: `Continue +${g.maxIterations}` });
+      cont.onclick = () => this.host.resumeGoalLoop(c);
+      const stop = pill.createEl("button", { cls: "mva-goal-pill-btn", text: "Stop" });
+      stop.onclick = () => this.host.handleGoalCommand(c, "/goal clear");
+      return;
+    }
+
+    // active
+    pill.createSpan({ cls: "mva-goal-pill-label", text: `🎯 ${cond} · run ${g.windowRuns}/${g.maxIterations}` });
+    const stop = pill.createEl("button", { cls: "mva-goal-pill-btn", text: "stop" });
+    stop.onclick = () => this.host.handleGoalCommand(c, "/goal clear");
+  }
+
   /* ---------------------------- context ----------------------------- */
 
   /** Build the composer (input box + toolbar) and mount it into `root`. */
@@ -241,6 +280,8 @@ export class Composer {
     const box = bar.createDiv({ cls: "mva-inputbox" });
     this.contextEl = box.createDiv({ cls: "mva-context" });
     this.imagesEl = box.createDiv({ cls: "mva-images is-hidden" });
+    // Goal pill host: shown only while a /goal is active. Mounted above the input.
+    this.goalPillEl = box.createDiv({ cls: "mva-goal-pill-host" });
     // The wrap exists only to anchor the expand affordance to the textarea's
     // top-right corner (context/image rows above it move the textarea around).
     this.inputWrapEl = box.createDiv({ cls: "mva-inputwrap" });
@@ -463,6 +504,10 @@ export class Composer {
     } catch {
       /* no agents dir */
     }
+    // Built-in commands Exo handles client-side (not file-based, so the disk
+    // scan above never sees them). Registering `goal` makes autocomplete show
+    // it AND lets hoistSlashCommand recognize a mid-message /goal.
+    if (!commands.includes("goal")) commands.push("goal");
     // Union with the session's live init snapshot (global + plugin + vault —
     // the vault scan above only ever saw the vault's own .claude/). Dedup keeps
     // the menus stable when both sources know the same name.

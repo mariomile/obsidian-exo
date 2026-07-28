@@ -57,6 +57,8 @@ import { clickable } from "./ui/dom";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { hoistSlashCommand } from "./core/slash";
+import type { GoalState } from "./core/goal-loop";
+import { setGoal, clearGoal, advance, resumeGoal, buildContinuationPrompt } from "./core/goal-loop";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
 import {
   summarizeLiveTasks,
@@ -210,6 +212,8 @@ export interface Convo {
   sessionSig: string;
   streaming: boolean;
   stopped: boolean; // set by stop() so the turn renders as "Stopped", not an error
+  /** Active `/goal` (Claude only). In-memory: not persisted across reloads. */
+  goal?: GoalState;
   pendingPerm: (() => void) | null; // cancels an open permission card on stop
   pendingAsk: (() => void) | null; // cancels an open ask card on stop
   queue: {
@@ -677,6 +681,8 @@ export class ChatView extends ItemView {
       stop: (source) => this.stop(source),
       submitWorkflow: (c, steps) => this.submitWorkflow(c, steps),
       compactActive: (instructions) => this.compactActive(instructions),
+      handleGoalCommand: (c, text) => this.handleGoalCommand(c, text),
+      resumeGoalLoop: (c) => this.resumeGoalLoop(c),
       togglePlanMode: () => this.togglePlanMode(),
       toggleResearchMode: () => this.toggleResearchMode(),
       onProviderChange: (next, explicitModel) => this.onProviderChange(next, explicitModel),
@@ -4699,6 +4705,17 @@ export class ChatView extends ItemView {
       this.compactActive(instructions || undefined);
       return;
     }
+    // `/goal` is a built-in the SDK doesn't expand — handle it client-side like
+    // /compact. First hoist a mid-message /goal to the front (completes the
+    // known-command hoisting from 6a5998a), so "fix all tests\n/goal" becomes
+    // "/goal fix all tests" and the surrounding text is the condition.
+    const hoisted = hoistSlashCommand(text, new Set(["goal"]));
+    if (hoisted === "/goal" || hoisted.startsWith("/goal ")) {
+      this.composer.setInputValue("");
+      this.composer.autoGrow();
+      this.handleGoalCommand(c, hoisted);
+      return;
+    }
     const researchCommand = parseResearchCommand(text, c.researchMode, Date.now());
     let researchModeForTurn: ResearchModeState | undefined;
     if (researchCommand?.kind === "invalid") {
@@ -4768,6 +4785,68 @@ export class ChatView extends ItemView {
         : undefined;
       void this.runTurn(c, text, images, turnOpts);
     }
+  }
+
+  /** Client-side `/goal` handler (Claude-only built-in parity). Returns nothing;
+   *  Notices on the guarded cases. */
+  handleGoalCommand(c: Convo, text: string): void {
+    if (!this.plugin.settings.enableGoal) {
+      new Notice("The /goal command is disabled in settings.");
+      return;
+    }
+    if (c.provider !== "claude") {
+      new Notice("/goal is supported only on Claude sessions.");
+      return;
+    }
+    const arg = text.slice("/goal".length).trim();
+    const CLEAR = new Set(["clear", "stop", "off", "reset", "none", "cancel"]);
+    if (!arg) {
+      // Status query, mirroring the native no-arg behavior.
+      if (c.goal && c.goal.status !== "idle") {
+        new Notice(`Goal active: "${c.goal.condition}" · run ${c.goal.windowRuns}/${c.goal.maxIterations}`);
+      } else {
+        new Notice("No goal set. Usage: /goal <condition>");
+      }
+      return;
+    }
+    if (CLEAR.has(arg.toLowerCase())) {
+      if (c.goal) c.goal = clearGoal(c.goal);
+      this.composer.refreshGoal(c);
+      new Notice("Goal cleared.");
+      return;
+    }
+    c.goal = setGoal(arg, this.plugin.settings.goalMaxIterations, Date.now());
+    this.composer.refreshGoal(c);
+    // Kick off the first working turn toward the condition.
+    void this.runTurn(c, arg);
+  }
+
+  /** Called once per clean turn end. Records the turn against the active goal
+   *  and either queues a continuation, pauses for confirmation, or clears.
+   *  A user-queued message takes precedence and cancels the goal. */
+  private advanceGoal(c: Convo, assistantText: string): void {
+    if (!c.goal || c.goal.status === "idle" || c.goal.status === "met") return;
+    // Human input wins: if the user queued their own message during the turn,
+    // stop the auto-loop and let their message run.
+    if (c.queue.length) {
+      c.goal = clearGoal(c.goal);
+      this.composer.refreshGoal(c);
+      return;
+    }
+    const { next, action } = advance(c.goal, assistantText);
+    c.goal = next;
+    if (action === "continue") {
+      c.queue.push({ text: buildContinuationPrompt(next.condition) });
+    }
+    this.composer.refreshGoal(c);
+  }
+
+  /** Continue a paused goal for another window (the pill's "Continue +N"). */
+  resumeGoalLoop(c: Convo): void {
+    if (!c.goal || c.goal.status !== "paused") return;
+    c.goal = resumeGoal(c.goal);
+    this.composer.refreshGoal(c);
+    void this.runTurn(c, buildContinuationPrompt(c.goal.condition));
   }
 
   /** Run a multi-step workflow by enqueuing its steps; the turn-drain loop runs
@@ -5561,6 +5640,9 @@ export class ChatView extends ItemView {
         console.warn("[Exo] proposal producer failed after turn (no-op):", error);
       });
       this.scrollConvo(c);
+      // Goal loop: decide continue/pause/met before draining. On "continue" this
+      // pushes the next re-prompt onto c.queue, which the drain below runs.
+      if (!poisoned && !c.stopped) this.advanceGoal(c, ctx.fullText);
       // Drain the queue: run the next message in this conversation. A recovery
       // retry item carries sendPrefix/isRecoveryRetry — forward them so the recap
       // reaches the provider and no duplicate user bubble is rendered.
