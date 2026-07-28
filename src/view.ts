@@ -2064,6 +2064,7 @@ export class ChatView extends ItemView {
     this.syncSendButton();
     this.composer.updateUsage(next.usage ?? null);
     this.composer.setDraft(next.draft);
+    this.composer.refreshGoal(next);
     this.renderTabs();
     this.persistTabs();
   }
@@ -4794,10 +4795,6 @@ export class ChatView extends ItemView {
       new Notice("The /goal command is disabled in settings.");
       return;
     }
-    if (c.provider !== "claude") {
-      new Notice("/goal is supported only on Claude sessions.");
-      return;
-    }
     const arg = text.slice("/goal".length).trim();
     const CLEAR = new Set(["clear", "stop", "off", "reset", "none", "cancel"]);
     if (!arg) {
@@ -4813,6 +4810,10 @@ export class ChatView extends ItemView {
       if (c.goal) c.goal = clearGoal(c.goal);
       this.composer.refreshGoal(c);
       new Notice("Goal cleared.");
+      return;
+    }
+    if (c.provider !== "claude") {
+      new Notice("/goal is supported only on Claude sessions.");
       return;
     }
     if (c.streaming) {
@@ -4832,6 +4833,10 @@ export class ChatView extends ItemView {
     if (!c.goal || c.goal.status === "idle" || c.goal.status === "met") return;
     // Human input wins: if the user queued their own message during the turn,
     // stop the auto-loop and let their message run.
+    // Invariant: at turn-end c.queue holds only USER-queued messages (the goal's
+    // own continuation is pushed below, after this check; recovery retries are
+    // gated out by the !poisoned caller). If that ever changes, this precedence
+    // check would misread a system-queued item as user input and kill the goal.
     if (c.queue.length) {
       c.goal = clearGoal(c.goal);
       this.composer.refreshGoal(c);

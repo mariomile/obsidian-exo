@@ -70,6 +70,18 @@ describe("goal-loop", () => {
     expect(clearGoal(g).status).toBe("idle");
   });
 
+  it("advance is a no-op on idle or met goals", () => {
+    const idle = clearGoal(setGoal("x", 10, 0));
+    expect(advance(idle, "anything").action).toBe("idle");
+    const met = advance(setGoal("x", 10, 0), `done\n${GOAL_MET_SENTINEL}`).next;
+    expect(advance(met, "anything").action).toBe("idle");
+  });
+
+  it("detectMet tolerates surrounding whitespace and CRLF", () => {
+    expect(detectMet(`  ${GOAL_MET_SENTINEL}  `)).toBe(true);
+    expect(detectMet(`done\r\n${GOAL_MET_SENTINEL}\r\n`)).toBe(true);
+  });
+
   it("buildContinuationPrompt names the condition and the sentinel", () => {
     const p = buildContinuationPrompt("all tests pass");
     expect(p).toContain("all tests pass");
