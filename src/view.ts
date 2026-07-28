@@ -4788,8 +4788,8 @@ export class ChatView extends ItemView {
     }
   }
 
-  /** Client-side `/goal` handler (Claude-only built-in parity). Returns nothing;
-   *  Notices on the guarded cases. */
+  /** Client-side `/goal` handler (built-in parity). Setting a goal is Claude-only;
+   *  status and clear work on any provider. Returns nothing; Notices on the guarded cases. */
   handleGoalCommand(c: Convo, text: string): void {
     if (!this.plugin.settings.enableGoal) {
       new Notice("The /goal command is disabled in settings.");
