@@ -4815,6 +4815,10 @@ export class ChatView extends ItemView {
       new Notice("Goal cleared.");
       return;
     }
+    if (c.streaming) {
+      new Notice("Wait for the current turn to finish, then set a goal.");
+      return;
+    }
     c.goal = setGoal(arg, this.plugin.settings.goalMaxIterations, Date.now());
     this.composer.refreshGoal(c);
     // Kick off the first working turn toward the condition.
@@ -4844,6 +4848,10 @@ export class ChatView extends ItemView {
   /** Continue a paused goal for another window (the pill's "Continue +N"). */
   resumeGoalLoop(c: Convo): void {
     if (!c.goal || c.goal.status !== "paused") return;
+    if (c.streaming) {
+      new Notice("Wait for the current turn to finish, then continue the goal.");
+      return;
+    }
     c.goal = resumeGoal(c.goal);
     this.composer.refreshGoal(c);
     void this.runTurn(c, buildContinuationPrompt(c.goal.condition));

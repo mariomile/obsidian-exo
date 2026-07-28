@@ -235,7 +235,7 @@ export class Composer {
       window.setTimeout(() => {
         if (c.goal?.status === "met") {
           c.goal = undefined;
-          this.goalPillEl.empty();
+          if (this.host.active === c) this.goalPillEl.empty();
         }
       }, 4000);
       return;
