@@ -1,6 +1,9 @@
 import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf, addIcon, requestUrl } from "obsidian";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DiagLog } from "./core/diag";
 import type { SessionSnapshot, SessionLane } from "./core/session-cards";
@@ -101,6 +104,12 @@ import {
   formatCommitMessage,
   type AutoCommitState,
 } from "./core/git-autocommit";
+import {
+  SENTINEL_AGENT,
+  SENTINEL_REL_PATH,
+  normalizeSentinelPaths,
+  sentinelRecordArgs,
+} from "./core/write-sentinel";
 
 const execFileAsync = promisify(execFile);
 
@@ -256,6 +265,11 @@ export default class ExoPlugin extends Plugin {
   /** Last-applied orchestration flag, so `saveSettings` can detect a toggle and
    *  re-sync entry points + tear down the board on disable. */
   private orchestrationApplied = false;
+
+  /** Stable identity for this plugin instance in the cross-session write
+   *  sentinel. Per-load, so a reload starts a fresh logical session and two
+   *  Obsidian windows on one vault register as distinct writers. */
+  private readonly writeSentinelSessionId = `${process.pid}-${Date.now().toString(36)}`;
 
   /** Git auto-commit safety net — debounce/cadence bookkeeping (in-memory
    *  only; resets on reload, which is fine, it's just scheduling state). */
@@ -923,22 +937,51 @@ export default class ExoPlugin extends Plugin {
    * decoupled from any turn. No-ops entirely when the setting is off.
    */
   noteVaultWrite(paths: readonly string[]): void {
-    if (!this.settings.vaultAutoCommit) return;
-    const cwd = this.vaultPath().replace(/\/$/, "");
-    const normalized = paths
-      .map((raw) => {
-        let path = raw.trim().replace(/\\/g, "/");
-        if (!path) return null;
-        if (path.startsWith(cwd + "/")) path = path.slice(cwd.length + 1);
-        else if (path.startsWith("/")) return null;
-        path = path.replace(/^\.\//, "");
-        if (!path || path.split("/").includes("..")) return null;
-        return path;
-      })
-      .filter((path): path is string => path !== null);
+    const normalized = normalizeSentinelPaths(paths, this.vaultPath());
     if (!normalized.length) return;
+
+    // Cross-session visibility is independent of auto-commit: even with the
+    // safety net off, another session writing the same file is worth recording.
+    this.recordToWriteSentinel(normalized);
+
+    if (!this.settings.vaultAutoCommit) return;
     for (const path of normalized) this.gitAutoCommitPaths.set(path, (this.gitAutoCommitPaths.get(path) ?? 0) + 1);
     this.gitAutoCommitState = recordVaultWrite(this.gitAutoCommitState, Date.now(), normalized.length);
+  }
+
+  /**
+   * Publish this turn's writes to the machine-local write sentinel so parallel
+   * sessions (other Exo windows, Claude Code, Codex) can see the overlap.
+   *
+   * Fire-and-forget by design: never awaited, every failure swallowed, and a
+   * no-op when the sentinel isn't installed. A registry that cannot delay or
+   * fail a chat turn is the whole point — it informs, it never gates.
+   */
+  private recordToWriteSentinel(vaultRelativePaths: readonly string[]): void {
+    try {
+      const script = join(homedir(), SENTINEL_REL_PATH);
+      if (!existsSync(script)) return;
+      const args = sentinelRecordArgs(script, vaultRelativePaths);
+      if (!args) return;
+      execFile(
+        process.execPath,
+        args,
+        {
+          env: {
+            ...process.env,
+            MV_SESSION: SENTINEL_AGENT,
+            MV_SESSION_ID: this.writeSentinelSessionId,
+            VAULT_ROOT: this.vaultPath(),
+          },
+          timeout: 5000,
+        },
+        () => {
+          /* Best-effort: a sentinel failure must stay invisible to the turn. */
+        },
+      );
+    } catch {
+      /* Never let bookkeeping surface into a chat turn. */
+    }
   }
 
   /**
