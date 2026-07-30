@@ -103,6 +103,12 @@ export interface MVASettings {
   inlineAi: boolean;
   /** Show the current editor selection as a click-to-attach chip in the composer. */
   showSelectionChip: boolean;
+  /** Inline the body of attached notes into the outbound message instead of just
+   *  their paths, so the model reads them directly instead of choosing to fetch. */
+  injectContextContent: boolean;
+  /** Log the assembled active-context block (chips vs what's actually serialized)
+   *  to the devtools console before each turn — a diagnostic, off by default. */
+  debugContext: boolean;
   /** In-document Connections: underline OUTGOING unlinked mentions (other notes'
    *  titles this note cites in plain text) so they can be linked with one click. */
   connectionsInlineUnderline: boolean;
@@ -257,6 +263,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   aiTitles: true,
   inlineAi: true,
   showSelectionChip: true,
+  injectContextContent: false,
+  debugContext: false,
   openTabIds: [],
   activeTabId: "",
   cachedSessionCaps: null,
@@ -517,6 +525,18 @@ export class MVASettingTab extends PluginSettingTab {
       "Show selection in composer",
       "When you select text in a note, show it as a chip in the chat composer — click it to add the excerpt as context.",
       "showSelectionChip"
+    );
+    this.toggleSetting(
+      el,
+      "Inline note content as context",
+      "Send the full text of attached notes (the current document + manual attachments) with each message, instead of just their paths. The model reads them directly rather than deciding whether to open them — stronger context, larger prompts.",
+      "injectContextContent"
+    );
+    this.toggleSetting(
+      el,
+      "Debug context (console)",
+      "Log the assembled active context before each turn to the developer console ([Exo][ctx]) — the chips you see vs. the text actually sent to the model. Use to diagnose missing selection/page context; leave off normally.",
+      "debugContext"
     );
     new Setting(el)
       .setName("Connections")

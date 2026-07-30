@@ -1143,6 +1143,21 @@ export class Composer {
     return out;
   }
 
+  /** The ambient selection currently advertised by the chip, or null. Bound to
+   *  the SAME predicate the chip renders from (`selectionChipModel`) so that what
+   *  the user sees as "selected text" is exactly what gets serialized into the
+   *  outbound message — closing the display-state≠send-state disconnect. */
+  contextSelection(): { text: string; path: string } | null {
+    return this.selectionChipModel();
+  }
+
+  /** Debug snapshot of the context chips (active doc + manual attachments),
+   *  for the `[Exo][ctx]` diagnostic line. */
+  contextChips(): { doc: string | null; manual: string[] } {
+    const active = this.excludeActiveNote ? null : this.activeNotePath();
+    return { doc: active, manual: this.manualAttached.filter((p) => p !== active) };
+  }
+
   refreshContext(): void {
     if (!this.contextEl) return;
     this.contextEl.empty();

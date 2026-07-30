@@ -51,6 +51,7 @@ import { NoteDiffModal } from "./ui/note-diff";
 import { renderCapabilitiesPanel } from "./ui/capabilities";
 import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
+import { assembleContext, formatContextDebug } from "./core/context-assembly";
 import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
@@ -4928,11 +4929,43 @@ export class ChatView extends ItemView {
     }
   ): Promise<void> {
     const researchMode = opts?.researchMode ?? c.researchMode;
-    const paths = c === this.active ? this.composer.contextPaths() : [];
     const sendText = this.hoistOutbound(text);
-    const message = paths.length
-      ? `Context notes:\n${paths.map((p) => `- ${p}`).join("\n")}\n\n${sendText}`
-      : sendText;
+    // Active-context assembly (2026-07-30): attached-note paths AND the ambient
+    // selection the chip is showing — both read from the same composer state the
+    // UI renders from, so what the user sees is exactly what the model receives.
+    // Optionally inline note bodies so open pages are read, not just referenced.
+    // Only the active convo owns the composer, so a background turn carries none.
+    const isActiveConvo = c === this.active;
+    const paths = isActiveConvo ? this.composer.contextPaths() : [];
+    const selection = isActiveConvo ? this.composer.contextSelection() : null;
+    const injectContent = this.plugin.settings.injectContextContent;
+    let contents: Record<string, string> | undefined;
+    if (injectContent && paths.length) {
+      contents = {};
+      for (const p of paths) {
+        const f = this.app.vault.getAbstractFileByPath(p);
+        if (f instanceof TFile) {
+          try {
+            contents[p] = await this.app.vault.cachedRead(f);
+          } catch {
+            /* missing → assembleContext degrades this path to a bare-path line */
+          }
+        }
+      }
+    }
+    const assembled = assembleContext({ paths, selection, injectContent, contents });
+    const message = assembled.block ? `${assembled.block}\n\n${sendText}` : sendText;
+    if (this.plugin.settings.debugContext && isActiveConvo) {
+      const chips = this.composer.contextChips();
+      console.info(
+        formatContextDebug({
+          turnLabel: `${c.id.slice(0, 6)}#${c.messages.length}`,
+          chips: { doc: chips.doc, manual: chips.manual, selectionChars: selection?.text.length ?? null },
+          assembled,
+          outboundBytes: new TextEncoder().encode(message).length,
+        })
+      );
+    }
 
     // Images flow to both providers since Tranche A: Claude gets base64 blocks,
     // Codex gets temp files via `codex exec -i` (handled in the adapter).
