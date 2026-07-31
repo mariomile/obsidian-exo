@@ -215,6 +215,9 @@ export interface MVASettings {
   orchestrationEnabled: boolean;
   /** Max number of Orchestration Board tasks the driver runs concurrently. */
   orchestrationMaxConcurrent: number;
+  /** Soft ceiling for conversations.json, in megabytes. Exceeding it proposes a
+   *  cleanup in the history — it never deletes anything on its own. */
+  retentionBudgetMb: number;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -299,6 +302,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   vaultAutoCommitIntervalMinutes: 15,
   orchestrationEnabled: false,
   orchestrationMaxConcurrent: 2,
+  retentionBudgetMb: 50,
   connectionsInlineUnderline: true,
   connectionsStemming: true,
 };
@@ -1114,6 +1118,22 @@ export class MVASettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             const n = Number.parseInt(v, 10);
             if (Number.isFinite(n) && n > 0) s.orchestrationMaxConcurrent = n;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(el)
+      .setName("Conversation history budget (MB)")
+      .setDesc(
+        "Soft ceiling for the conversation store. Going over it proposes a cleanup in the history — nothing is ever deleted automatically."
+      )
+      .addText((t) => {
+        const s = this.plugin.settings;
+        t.setPlaceholder("50")
+          .setValue(String(s.retentionBudgetMb))
+          .onChange(async (v) => {
+            const n = Number.parseInt(v, 10);
+            if (Number.isFinite(n) && n > 0) s.retentionBudgetMb = n;
             await this.plugin.saveSettings();
           });
       });
