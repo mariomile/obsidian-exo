@@ -64,3 +64,13 @@ export function planRetention<
   }
   return { keep, candidates, totalBytes };
 }
+
+/**
+ * The ids of explicitly pinned conversations — the `pinnedIds` input to
+ * `planRetention`. Lives here rather than inline in the view so the rule
+ * "only strict true protects" is stated once and stays under test: a truthy
+ * legacy value must never silently make a conversation undeletable.
+ */
+export function pinnedIdsOf<T extends { id: string; pinned?: boolean }>(all: T[]): string[] {
+  return all.filter((c) => c.pinned === true).map((c) => c.id);
+}

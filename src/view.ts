@@ -177,6 +177,13 @@ interface ConvoData {
   /** True for chats the user archived (persisted to the separate archive store,
    *  never evicted). Absent/false for live chats. */
   archived?: boolean;
+  /** Explicit user protection: never a retention cleanup candidate, never
+   *  auto-retired from the tab strip. Persisted. */
+  pinned?: boolean;
+  /** When this conversation left the tab strip (retired or archived). Feeds the
+   *  history's "Ritirate di recente" group. Absent = never been in the strip,
+   *  or still in it. Persisted. */
+  retiredAt?: number;
   /** Manually-assigned Session-Cockpit column (persisted). Absent = default. */
   boardStatus?: SessionLane;
   messages: PersistedMessage[];
@@ -195,6 +202,13 @@ export interface Convo {
    *  Session-Cockpit lanes and moved to a separate untrimmed store (never
    *  evicted). Persisted. */
   archived?: boolean;
+  /** Explicit user protection: never a retention cleanup candidate, never
+   *  auto-retired from the tab strip. Persisted. */
+  pinned?: boolean;
+  /** When this conversation left the tab strip (retired or archived). Feeds the
+   *  history's "Ritirate di recente" group. Absent = never been in the strip,
+   *  or still in it. Persisted. */
+  retiredAt?: number;
   /** Manually-assigned Session-Cockpit column (persisted). When set and the chat
    *  is idle, its card sits here instead of the default review lane; running /
    *  needs-input still auto-override. */
@@ -1157,6 +1171,8 @@ export class ChatView extends ItemView {
         title: d.title || "New chat",
         sessionId: d.sessionId,
         archived: d.archived === true,
+        pinned: d.pinned === true,
+        retiredAt: d.retiredAt,
         boardStatus: d.boardStatus,
         provider,
         model,
@@ -1230,6 +1246,8 @@ export class ChatView extends ItemView {
       usage: c.usage,
       researchMode: c.researchMode,
       ...(c.archived ? { archived: true } : {}),
+      ...(c.pinned ? { pinned: true } : {}),
+      ...(c.retiredAt ? { retiredAt: c.retiredAt } : {}),
       ...(c.boardStatus ? { boardStatus: c.boardStatus } : {}),
       messages: c.messages.map((message) =>
         persistMessage(message, {

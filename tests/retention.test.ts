@@ -88,3 +88,42 @@ describe("planRetention", () => {
     expect(plan.totalBytes).toBe(200);
   });
 });
+
+import { pinnedIdsOf } from "../src/core/retention";
+import { partitionConvos } from "../src/core/persistence";
+
+describe("pinnedIdsOf", () => {
+  it("returns only the ids of conversations flagged pinned", () => {
+    const all = [
+      { id: "a", pinned: true },
+      { id: "b" },
+      { id: "c", pinned: false },
+      { id: "d", pinned: true },
+    ];
+    expect(pinnedIdsOf(all)).toEqual(["a", "d"]);
+  });
+
+  it("returns an empty array when nothing is pinned", () => {
+    expect(pinnedIdsOf([{ id: "a" }, { id: "b", pinned: false }])).toEqual([]);
+  });
+
+  it("treats only strict true as pinned", () => {
+    // Guard against a truthy legacy value ever silently protecting a convo.
+    const all = [{ id: "a", pinned: 1 as unknown as boolean }, { id: "b", pinned: true }];
+    expect(pinnedIdsOf(all)).toEqual(["b"]);
+  });
+});
+
+describe("retention model fields", () => {
+  it("partitionConvos leaves pinned and retiredAt untouched on both sides", () => {
+    // Guard: pinning must not imply archiving, and a retired conversation must
+    // stay in the live partition (retired != archived).
+    const all = [
+      { id: "a", pinned: true, retiredAt: 111 },
+      { id: "b", archived: true, pinned: false, retiredAt: 222 },
+    ];
+    const { live, archived } = partitionConvos(all);
+    expect(live).toEqual([{ id: "a", pinned: true, retiredAt: 111 }]);
+    expect(archived).toEqual([{ id: "b", archived: true, pinned: false, retiredAt: 222 }]);
+  });
+});
