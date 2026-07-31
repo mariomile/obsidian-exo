@@ -68,9 +68,24 @@ describe("handleCodexLine — new codex exec --json schema (0.142.x)", () => {
     expect(events[0]).toEqual({ kind: "thinking-delta", text: "pondering" });
   });
 
-  it("surfaces error items", () => {
+  // In-band `item{type:error}` is a transcript item, NOT a turn verdict: codex can
+  // (and does) emit one — e.g. the benign "Exceeded skills context budget" notice
+  // fired when many skills are installed — and STILL complete the turn with a real
+  // agent_message afterward. So it maps to a non-fatal `notice`, never a poisoning
+  // `error`. Only turn.failed / a non-zero process exit are fatal.
+  it("maps in-band item errors to non-fatal notices", () => {
     const { events } = run(['{"type":"item.completed","item":{"id":"item_0","type":"error","message":"boom"}}']);
-    expect(events[0]).toEqual({ kind: "error", message: "boom" });
+    expect(events[0]).toEqual({ kind: "notice", message: "boom" });
+  });
+
+  it("keeps the real answer when a skills-budget notice precedes the agent_message", () => {
+    const { events } = run([
+      '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Exceeded skills context budget of 2%."}}',
+      '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"PONG"}}',
+      '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":1}}',
+    ]);
+    expect(events.map((e) => e.kind)).toEqual(["notice", "text-delta", "usage"]);
+    expect(events[1]).toMatchObject({ kind: "text-delta", text: "PONG" });
   });
 
   it("surfaces turn.failed errors", () => {

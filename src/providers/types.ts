@@ -43,6 +43,10 @@ export type AgentEvent =
     }
   | { kind: "rate-limit"; status: RateStatus; utilization?: number; resetsAt?: number; windowType?: string }
   | { kind: "turn-end"; sessionId?: string }
+  // Non-fatal, in-band notice from the provider (e.g. Codex's "Exceeded skills
+  // context budget" item). Unlike `error` it MUST NOT poison the turn or discard
+  // the streamed answer — the turn can still complete normally after it.
+  | { kind: "notice"; message: string }
   | { kind: "error"; message: string };
 
 export type RateStatus = "allowed" | "allowed_warning" | "rejected";

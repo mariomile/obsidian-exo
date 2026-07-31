@@ -114,7 +114,12 @@ export function handleCodexLine(
         else onEvent({ kind: "tool-call-start", id: `${id}:${path}`, name: "Edit", input: { file_path: path } });
       }
     } else if (itemType === "error" && done && typeof item.message === "string") {
-      onEvent({ kind: "error", message: item.message });
+      // In-band transcript error item — NOT a turn verdict. Codex emits these
+      // (e.g. the benign "Exceeded skills context budget" notice when many skills
+      // are installed) and still completes the turn with a real agent_message
+      // afterward. Surface it as a non-fatal notice so the answer isn't discarded;
+      // only turn.failed (above) and a non-zero process exit are fatal.
+      onEvent({ kind: "notice", message: item.message });
     }
     return;
   }

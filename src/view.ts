@@ -2082,6 +2082,8 @@ export class ChatView extends ItemView {
                   ? seg.md
                   : seg.t === "error"
                     ? "⚠ response interrupted"
+                  : seg.t === "notice"
+                    ? ""
                   : seg.t === "ask"
                     ? "↳ asked: " + seg.questions.map((q) => q.header).join(", ")
                     : seg.t === "artifact"
@@ -2229,6 +2231,9 @@ export class ChatView extends ItemView {
           } else if (s.t === "error") {
             flushRun();
             this.renderPersistedError(body, s.message, c, lastUser);
+          } else if (s.t === "notice") {
+            flushRun();
+            body.createDiv({ cls: "mva-faint mva-notice", text: s.message });
           } else if (s.t === "ask") {
             flushRun();
             const card = body.createDiv({ cls: "mva-ask" });
@@ -5394,6 +5399,16 @@ export class ChatView extends ItemView {
         case "turn-end":
           this.diag.push("turn", `result session=${e.sessionId ? e.sessionId.slice(0, 8) : "?"}`);
           if (e.sessionId) c.sessionId = e.sessionId;
+          break;
+        case "notice":
+          // Non-fatal in-band notice (e.g. Codex skills-budget). Render it as a
+          // quiet faint line and persist it, but DON'T touch the text stream,
+          // working row, or `poisoned` — the turn continues and its real answer
+          // must survive. (This is the fix for Codex "not responding" when many
+          // skills are installed: the benign notice used to poison the turn.)
+          this.diag.push("notice", e.message);
+          ctx.bodyEl.createDiv({ cls: "mva-faint mva-notice", text: e.message });
+          ctx.segments.push({ t: "notice", message: e.message });
           break;
         case "error":
           this.diag.push("error", e.message);
