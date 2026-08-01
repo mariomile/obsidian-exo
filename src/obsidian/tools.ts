@@ -30,55 +30,15 @@ import { createBacklogTask, adaptAppToTaskVault } from "./task-store";
 import {
   automationLastRunKey,
   cadenceLabel,
+  formatDueIn,
   nextDueAt,
   parseCadenceInput,
   unreviewedWriteRuns,
-  type AutomationConfig,
-  type AutomationRunRecord,
 } from "../core/automations";
-import { triggerLabel, type AgentDef } from "../core/agents";
+import { triggerLabel } from "../core/agents";
+import { ok, err, getExo, type Result } from "./tool-kit";
+import { buildCapabilityTools, CAPABILITY_READ_TOOLS } from "./capability-tools";
 
-type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
-
-/** The slice of the exo plugin the automation tools use — resolved live from
- *  app.plugins (same cross-plugin convention as getSonar; here it's our own
- *  plugin, reached this way to avoid a tools→main import cycle). */
-interface ExoAutomationsHost {
-  settings: {
-    automations: AutomationConfig[];
-    customPrompts: { name: string; prompt: string }[];
-    scheduledLastRun: Record<string, number>;
-  };
-  saveSettings(): Promise<void>;
-  loadAutomationRuns(): Promise<AutomationRunRecord[]>;
-  restoreAutomationRun(id: string): Promise<string[]>;
-  markAutomationRunReviewed(id: string): Promise<void>;
-  runPlaybook(name: string, prompt: string, opts?: { write?: boolean }): Promise<boolean>;
-  /** Resolves false when named agents are disabled in settings. */
-  agentsReady(): Promise<boolean>;
-  agentStore: { list(): AgentDef[]; orphans(): string[] };
-  /** Delegate to another agent; resolves to a human-readable result or refusal. */
-  invokeAgentFromAgent(target: string, task: string): Promise<string>;
-}
-
-function getExo(app: App): ExoAutomationsHost | null {
-  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
-  const p = plugins?.plugins?.["exo"] as Partial<ExoAutomationsHost> | undefined;
-  return p && typeof p.loadAutomationRuns === "function" && typeof p.runPlaybook === "function"
-    ? (p as ExoAutomationsHost)
-    : null;
-}
-
-/** "due now" / "in 3h" / "in 2d" — tool-output twin of the Cockpit's formatter. */
-function fmtDueIn(ms: number): string {
-  if (ms <= 60_000) return "due now";
-  const HOUR = 3_600_000;
-  if (ms < HOUR) return `in ${Math.floor(ms / 60_000)}m`;
-  if (ms < 24 * HOUR) return `in ${Math.floor(ms / HOUR)}h`;
-  return `in ${Math.floor(ms / (24 * HOUR))}d`;
-}
-const ok = (text: string): Result => ({ content: [{ type: "text", text }] });
-const err = (text: string): Result => ({ content: [{ type: "text", text }], isError: true });
 
 /** Structured question shape for `ask_user`. Duplicated from view.ts to avoid a
  *  view→tools import cycle (tools.ts must not import from view.ts). */
@@ -1124,7 +1084,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       if (!s.automations.length) lines.push("No automations configured.");
       for (const a of s.automations) {
         const last = s.scheduledLastRun[automationLastRunKey(a)] ?? 0;
-        const next = a.enabled ? ` · next ${fmtDueIn(nextDueAt(a.cadence, last, now) - now)}` : "";
+        const next = a.enabled ? ` · next ${formatDueIn(nextDueAt(a.cadence, last, now) - now)}` : "";
         const mode = a.system === "daily-pulse"
           ? `writes ${paths.review} (marker-safe)`
           : a.write ? "writes (checkpointed, restorable)" : "read-only";
@@ -1262,6 +1222,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     editNote, insertAtCursor, renameNote, resolveAnnotation, runSonarAction,
     listAgents, invokeAgent,
     listAutomations, savePlaybook, manageAutomation, reviewAutomationRun,
+    ...buildCapabilityTools(app),
     ...(memoryRead ? [recall] : []),
     ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
     // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
@@ -1329,6 +1290,7 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__list_loops",
   "mcp__obsidian__list_automations",
   "mcp__obsidian__list_agents",
+  ...CAPABILITY_READ_TOOLS,
 ]);
 
 /** Memory-write tool names (gated separately by the memoryWrite setting). */

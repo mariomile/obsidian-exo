@@ -71,6 +71,9 @@ const OBSIDIAN_META: Record<string, { icon: string; label: string; targetKey?: s
   capture_decision: { icon: "gavel", label: "Capture decision", targetKey: "title" },
   log_session: { icon: "history", label: "Log session", targetKey: "title" },
   capture_learning: { icon: "lightbulb", label: "Capture learning", targetKey: "title" },
+  list_capabilities: { icon: "hi-puzzle", label: "Capabilities", targetKey: "kind" },
+  manage_mcp_server: { icon: "plug", label: "MCP server", targetKey: "name" },
+  manage_skill: { icon: "sparkles", label: "Skill", targetKey: "name" },
 };
 
 function asString(v: unknown): string {
