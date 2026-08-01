@@ -45,6 +45,9 @@ export class HubView extends ItemView {
    *  another tab must not survive), while a same-tab refresh keeps the DOM for
    *  reconcileList to diff. */
   private renderedTab: HubTab | null = null;
+  /** In-flight render, and whether another was requested while it ran. */
+  private rendering: Promise<void> | null = null;
+  private renderAgain = false;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);
@@ -107,7 +110,28 @@ export class HubView extends ItemView {
     };
   }
 
-  private async render(): Promise<void> {
+  /** Serialized render: tab renderers are async and several of them empty the
+   *  host before awaiting their data, so two overlapping calls would each
+   *  clear and then append — painting the tab twice. Callers are plentiful
+   *  (onOpen, active-leaf-change, caps arrival, every row action), so the
+   *  guard lives here: an in-flight render absorbs concurrent calls and one
+   *  more render runs after it if anything asked while it was busy. */
+  private render(): Promise<void> {
+    if (this.rendering) {
+      this.renderAgain = true;
+      return this.rendering;
+    }
+    this.rendering = this.paint().finally(() => {
+      this.rendering = null;
+      if (this.renderAgain) {
+        this.renderAgain = false;
+        void this.render();
+      }
+    });
+    return this.rendering;
+  }
+
+  private async paint(): Promise<void> {
     if (!this.listEl) return;
     this.contentEl.querySelectorAll<HTMLElement>(".mva-conn-tabs .mva-pill").forEach((p) =>
       p.toggleClass("is-active", p.getAttr("data-tab") === this.tab)
