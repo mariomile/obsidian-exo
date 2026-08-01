@@ -194,3 +194,50 @@ export function deriveTabState(s: TabSignals): TabVM {
 
   return reason ? { state, needsInput, reason } : { state, needsInput };
 }
+
+// ---------------------------------------------------------------------------
+// Tab signature
+// ---------------------------------------------------------------------------
+
+/**
+ * Every fact one tab renders. The strip reconciles keyed on `id` and skips any
+ * node whose signature is unchanged, so this interface IS the contract: a fact
+ * the tab paints but this shape omits becomes a state change that silently
+ * fails to repaint — the exact defect keyed reconciliation was introduced to
+ * fix. Adding a field costs a repaint that would have happened anyway; leaving
+ * one out costs a stale tab, so this errs deliberately towards including more
+ * than the current paint reads.
+ */
+export interface TabFacts {
+  title: string;
+  /** Untitled AND empty: painted as the italic placeholder, which is a
+   *  different element from a plain title even when the two texts match — so
+   *  the title string alone cannot stand in for it. */
+  placeholder: boolean;
+  state: TabState;
+  needsInput: boolean;
+  reason?: NeedsInputReason;
+  /** Live background tasks this conversation owns right now. */
+  agents: number;
+  pinned: boolean;
+  active: boolean;
+  /** Drives the brand dot's colour. */
+  provider: string;
+}
+
+/** Serialize a tab's rendered facts. Pure and total: no field is conditional,
+ *  so a value that changes always changes the string. */
+export function tabSignature(f: TabFacts): string {
+  return [
+    f.title,
+    f.placeholder ? "ph" : "",
+    f.state,
+    // Only meaningful while blocked; normalized so a stale reason left on a
+    // no-longer-blocked tab cannot keep the signature alive.
+    f.needsInput ? (f.reason ?? "?") : "",
+    String(f.agents),
+    f.pinned ? "pin" : "",
+    f.active ? "act" : "",
+    f.provider,
+  ].join("|");
+}

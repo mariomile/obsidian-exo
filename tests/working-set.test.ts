@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { planWorkingSet, deriveTabState, stripCap, toTabCandidate } from "../src/core/working-set";
+import { planWorkingSet, deriveTabState, stripCap, toTabCandidate, tabSignature } from "../src/core/working-set";
+import type { TabFacts } from "../src/core/working-set";
 
 type Cand = Parameters<typeof planWorkingSet>[0][number];
 
@@ -206,5 +207,59 @@ describe("deriveTabState", () => {
 
   it("reports error when poisoned alone", () => {
     expect(deriveTabState(sig({ poisoned: true })).state).toBe("error");
+  });
+});
+
+describe("tabSignature", () => {
+  const facts = (over: Partial<TabFacts> = {}): TabFacts => ({
+    title: "Refactor the parser",
+    placeholder: false,
+    state: "idle",
+    needsInput: false,
+    agents: 0,
+    pinned: false,
+    active: false,
+    provider: "claude",
+    ...over,
+  });
+
+  it("is stable for identical facts", () => {
+    expect(tabSignature(facts())).toBe(tabSignature(facts()));
+  });
+
+  // One case per field: an omitted field is a state change that silently fails
+  // to repaint, so every rendered fact gets its own pin here.
+  const variants: [string, Partial<TabFacts>][] = [
+    ["title", { title: "Something else" }],
+    ["placeholder", { placeholder: true }],
+    ["state", { state: "streaming" }],
+    ["needsInput", { needsInput: true, reason: "perm" }],
+    ["agents", { agents: 1 }],
+    ["pinned", { pinned: true }],
+    ["active", { active: true }],
+    ["provider", { provider: "codex" }],
+  ];
+  for (const [name, over] of variants) {
+    it(`changes when ${name} changes`, () => {
+      expect(tabSignature(facts(over))).not.toBe(tabSignature(facts()));
+    });
+  }
+
+  it("distinguishes the two needs-input reasons", () => {
+    expect(tabSignature(facts({ needsInput: true, reason: "perm" }))).not.toBe(
+      tabSignature(facts({ needsInput: true, reason: "ask" }))
+    );
+  });
+
+  it("ignores a reason left behind on a tab that is no longer blocked", () => {
+    // Otherwise a stale reason would keep the signature different from the
+    // freshly-unblocked one and repaint forever.
+    expect(tabSignature(facts({ needsInput: false, reason: "perm" }))).toBe(tabSignature(facts()));
+  });
+
+  it("does not collide across field boundaries", () => {
+    // Fields are joined, so a value bleeding into its neighbour would make two
+    // different tabs share a signature.
+    expect(tabSignature(facts({ title: "a|b" }))).not.toBe(tabSignature(facts({ title: "a", placeholder: true })));
   });
 });

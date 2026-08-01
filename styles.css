@@ -112,23 +112,41 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 
 /* -------------------------------- list -------------------------------- */
 /* ------------------------------- tab bar ----------------------------- */
-.mva-tabs {
+/* The strip is one row of two containers: `.mva-tabs` holds only the tabs
+   (keyed children owned by the reconciler, so nothing else may live there) and
+   `.mva-tabs-tail` holds the trailing controls. The row owns the gutter and the
+   hidden state so both halves hide together. */
+.mva-tabstrip {
   display: flex;
   align-items: center;
   gap: 2px;
   /* Left/right gutter matches the header (10px) so tabs line up under the
      brand + icon buttons; small bottom breathing room before the transcript. */
   padding: 2px 10px 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
   flex-shrink: 0;
   background: transparent;
+}
+.mva-tabstrip.is-hidden {
+  display: none;
+}
+.mva-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  /* Shrinks (and scrolls) before the tail does, so the trailing controls stay
+     reachable however many tabs are open. */
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 .mva-tabs::-webkit-scrollbar {
   display: none;
 }
-.mva-tabs.is-hidden {
-  display: none;
+.mva-tabs-tail {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 .mva-tab {
   display: flex;

@@ -85,7 +85,10 @@ import {
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { partitionConvos } from "./core/persistence";
 import { planRetention, pinnedIdsOf, retentionBudgetBytes, visibleSelection } from "./core/retention";
-import { planWorkingSet, stripCap, toTabCandidate } from "./core/working-set";
+import { planWorkingSet, stripCap, toTabCandidate, deriveTabState, tabSignature } from "./core/working-set";
+import type { TabVM } from "./core/working-set";
+import { reconcileList } from "./ui/keyed-reconcile";
+import type { CardModel } from "./ui/keyed-reconcile";
 import { DEFAULT_SETTINGS } from "./settings";
 import {
   buildRecap,
@@ -239,6 +242,10 @@ export interface Convo {
   goal?: GoalState;
   pendingPerm: (() => void) | null; // cancels an open permission card on stop
   pendingAsk: (() => void) | null; // cancels an open ask card on stop
+  /** A turn completed on this conversation while it was not the focused tab.
+   *  Runtime-only, never persisted (same discipline as `titledByAi`): after a
+   *  reload there is nothing you "have not seen". */
+  unread?: boolean;
   queue: {
     text: string;
     images?: ImageAttachment[];
@@ -430,7 +437,17 @@ export class ChatView extends ItemView {
    *  strand the document-level listener. */
   private bulkDisarm: (() => void) | null = null;
 
+  /** The strip's outer row. Owns the gutter and the hidden state, so hiding the
+   *  strip still hides the trailing controls along with the tabs. */
+  private tabsRowEl!: HTMLElement;
+  /** Holds ONLY reconciled tabs. Its children are keyed and owned by
+   *  `reconcileList`, which removes anything it did not put there — nothing
+   *  else may be appended here. */
   private tabsEl!: HTMLElement;
+  /** Trailing strip controls (the `+` button, and later the overflow counter).
+   *  A sibling of `tabsEl` precisely because they are not models: living among
+   *  the tabs, they would be unkeyed children and get reconciled away. */
+  private tabsTailEl!: HTMLElement;
   private listWrap!: HTMLElement;
   /** Pinned "N agents running" chip above the composer, reflecting ONLY the chat
    *  currently open (its own subagents + background tasks). Always visible while
@@ -524,7 +541,16 @@ export class ChatView extends ItemView {
     root.empty();
     root.addClass("mva-root");
     this.buildHeader(root);
-    this.tabsEl = root.createDiv({ cls: "mva-tabs" });
+    // The strip is one flex row made of two containers: the tabs (reconciled,
+    // scrollable) and a tail of controls that must survive every reconcile.
+    // The `+` is built once here rather than on every render — it is chrome,
+    // not state.
+    this.tabsRowEl = root.createDiv({ cls: "mva-tabstrip" });
+    this.tabsEl = this.tabsRowEl.createDiv({ cls: "mva-tabs" });
+    this.tabsTailEl = this.tabsRowEl.createDiv({ cls: "mva-tabs-tail" });
+    const addTab = this.tabsTailEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
+    setIcon(addTab, "plus");
+    this.clickable(addTab, () => this.newConversation());
     // Chat column + Recap Rail as flex-row siblings. In the sidebar (not wide)
     // the row is a plain column and the recap host stays display:none (CSS); the
     // chat behaves exactly as before.
@@ -1511,6 +1537,8 @@ export class ChatView extends ItemView {
     this.active.draft = this.composer.getDraft();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.active = c;
+    // You are looking at it now.
+    c.unread = false;
     // The LRU key. Set before applyWorkingSet runs below, so the tab you just
     // opened is the freshest one and can never be the one that retires.
     c.lastActiveAt = Date.now();
@@ -1548,61 +1576,113 @@ export class ChatView extends ItemView {
 
   /* ----------------------------- tab bar ---------------------------- */
 
+  /**
+   * Repaint the strip. Cheap by construction — keyed reconciliation rebuilds
+   * only the tabs whose signature actually changed — so it is safe to call on
+   * every state transition, which is the whole point: before this, the strip
+   * repainted only on structural events and the streaming pulse was correct
+   * mostly by coincidence, whenever an agent count happened to move.
+   *
+   * The entry point for STATE transitions — streaming, needs-input, turn end,
+   * agent counts. The structural sites (restore, switchTo, closeTab, retire)
+   * keep calling `renderTabs` directly: they already had a reason to repaint.
+   * The split is the whole point of the name — it says "a fact this strip
+   * renders just changed", which is why later work adds calls here and not
+   * scattered `renderTabs` calls.
+   */
+  private refreshTabs(): void {
+    this.renderTabs();
+  }
+
   /** Render the open-conversation tab strip. */
   private renderTabs(): void {
     if (!this.tabsEl) return;
-    this.tabsEl.empty();
     const ids = this.openTabs.filter((id) => this.convos.some((c) => c.id === id));
     this.openTabs = ids;
-    // A lone empty tab needs no bar — keep the chrome minimal.
+    // A lone empty tab needs no bar — keep the chrome minimal. The whole row
+    // hides, tail included: the `+` used to live inside `tabsEl` and disappear
+    // with it.
+    this.tabsRowEl.toggleClass("is-hidden", ids.length <= 1);
     if (ids.length <= 1) {
-      this.tabsEl.addClass("is-hidden");
+      reconcileList(this.tabsEl, []); // drop the lone tab, as the old empty() did
       return;
     }
-    this.tabsEl.removeClass("is-hidden");
+
+    const models: CardModel[] = [];
     for (const id of ids) {
       const c = this.convos.find((x) => x.id === id);
       if (!c) continue;
-      const tab = this.tabsEl.createDiv({ cls: "mva-tab" + (c === this.active ? " is-active" : "") });
-      const dot = tab.createSpan({ cls: "mva-tab-dot" });
-      dot.style.background = ADAPTERS[c.provider].brandColor;
-      if (c.streaming) tab.addClass("is-streaming");
-
-      // Detect placeholder tabs (untitled, no messages yet) and render with distinct styling
-      const isPlaceholder = !c.title || (c.title === "New chat" && c.messages.length === 0);
-      const titleEl = tab.createSpan({ cls: "mva-tab-title" + (isPlaceholder ? " is-placeholder" : "") });
-
-      if (isPlaceholder) {
-        setIcon(titleEl, "pencil");
-        titleEl.append("New chat");
-      } else {
-        titleEl.setText(c.title || "New chat");
-      }
-
-      // Per-tab agent count: how many subagents/background tasks THIS chat is
-      // running right now — local to its own tab, so a busy background chat is
-      // visible at a glance without leaking into the chat you're reading.
-      const agents = this.agentCount(c);
-      if (agents > 0) {
-        const badge = tab.createSpan({
-          cls: "mva-tab-agents",
-          attr: { "aria-label": `${agents} agent${agents > 1 ? "s" : ""} running` },
-        });
-        setIcon(badge.createSpan({ cls: "mva-tab-agents-icon" }), "loader");
-        badge.createSpan({ text: String(agents) });
-      }
-
-      const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
-      setIcon(x, "x");
-      this.clickable(x, (e) => {
-        e.stopPropagation();
-        this.closeTab(c);
+      const vm = deriveTabState({
+        streaming: c.streaming,
+        pendingPerm: c.pendingPerm != null,
+        pendingAsk: c.pendingAsk != null,
+        unread: c.unread === true,
+        stopped: c.stopped,
+        poisoned: !!c.resumeRisky,
       });
-      this.clickable(tab, () => this.switchTo(c));
+      const agents = this.agentCount(c);
+      const isActive = c === this.active;
+      // Untitled and empty renders as the placeholder, which the title string
+      // alone cannot express: "New chat" with a first message in it is a plain
+      // title.
+      const placeholder = !c.title || (c.title === "New chat" && c.messages.length === 0);
+      models.push({
+        key: c.id,
+        sig: tabSignature({
+          title: c.title,
+          placeholder,
+          state: vm.state,
+          needsInput: vm.needsInput,
+          reason: vm.reason,
+          agents,
+          pinned: c.pinned === true,
+          active: isActive,
+          provider: c.provider,
+        }),
+        build: () => this.buildTab(c, vm, agents, isActive, placeholder),
+      });
     }
-    const add = this.tabsEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
-    setIcon(add, "plus");
-    this.clickable(add, () => this.newConversation());
+    reconcileList(this.tabsEl, models);
+  }
+
+  /** Build one tab, DETACHED: `reconcileList` owns insertion and ordering, so
+   *  creating this under `tabsEl` would duplicate the node and corrupt the
+   *  order. Every fact it paints must appear in the caller's `tabSignature`
+   *  call, or changing that fact will not repaint. */
+  private buildTab(c: Convo, vm: TabVM, agents: number, isActive: boolean, placeholder: boolean): HTMLElement {
+    const tab = createDiv({ cls: "mva-tab" + (isActive ? " is-active" : "") });
+    const dot = tab.createSpan({ cls: "mva-tab-dot" });
+    dot.style.background = ADAPTERS[c.provider].brandColor;
+    if (vm.state === "streaming") tab.addClass("is-streaming");
+
+    const titleEl = tab.createSpan({ cls: "mva-tab-title" + (placeholder ? " is-placeholder" : "") });
+    if (placeholder) {
+      setIcon(titleEl, "pencil");
+      titleEl.append("New chat");
+    } else {
+      titleEl.setText(c.title || "New chat");
+    }
+
+    // Per-tab agent count: how many subagents/background tasks THIS chat is
+    // running right now — local to its own tab, so a busy background chat is
+    // visible at a glance without leaking into the chat you're reading.
+    if (agents > 0) {
+      const badge = tab.createSpan({
+        cls: "mva-tab-agents",
+        attr: { "aria-label": `${agents} agent${agents > 1 ? "s" : ""} running` },
+      });
+      setIcon(badge.createSpan({ cls: "mva-tab-agents-icon" }), "loader");
+      badge.createSpan({ text: String(agents) });
+    }
+
+    const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
+    setIcon(x, "x");
+    this.clickable(x, (e) => {
+      e.stopPropagation();
+      this.closeTab(c);
+    });
+    this.clickable(tab, () => this.switchTo(c));
+    return tab;
   }
 
   /** Close a tab (the conversation stays in history; reopen from the gallery). */
@@ -2449,6 +2529,10 @@ export class ChatView extends ItemView {
   private setActiveSilently(next: Convo): void {
     this.active.draft = this.composer.getDraft();
     this.active = next;
+    // Same as switchTo: this is the focused tab now. Needed here too, because a
+    // later switchTo to the SAME convo returns early on `c === this.active` and
+    // would never get the chance to clear it.
+    next.unread = false;
     this.provider = next.provider;
     this.model = next.model;
     // Same two facts switchTo records: this is now the focused tab (LRU key) and
@@ -3173,7 +3257,7 @@ export class ChatView extends ItemView {
     if (!c.title || c.title === "New chat") {
       const derived = text.replace(/\s+/g, " ").trim().slice(0, 40);
       c.title = derived || (images?.length ? "Image" : "New chat");
-      this.renderTabs(); // reflect the new title in the tab
+      this.refreshTabs(); // the title is a rendered fact: a state transition
     }
     const at = Date.now();
     c.messages.push({ role: "user", text, at });
@@ -4340,7 +4424,7 @@ export class ChatView extends ItemView {
     ) => {
       if (done) return;
       done = true;
-      c.pendingPerm = null;
+      this.setPendingCard(c, "perm", null);
       card.addClass("is-resolved");
       actions.empty();
       card.createDiv({ cls: "mva-perm-verdict", text: verdict });
@@ -4351,7 +4435,7 @@ export class ChatView extends ItemView {
     ) => finishCard(d.behavior === "deny" ? "Denied" : d.remember ? "Always allowed" : "Allowed", d);
     // If the user presses Stop while this card is open, cancel it (the provider
     // side is already unblocked via interrupt → deny).
-    c.pendingPerm = () => finishCard("Cancelled", { behavior: "deny", message: "Stopped." });
+    this.setPendingCard(c, "perm", () => finishCard("Cancelled", { behavior: "deny", message: "Stopped." }));
     this.plugin.emitConvoState(c.id, "needs-input", { reason: "perm" }); // fire-and-forget board hook (no-op when off; can't throw)
     actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Allow once" }).onclick = () =>
       settle({ behavior: "allow" });
@@ -4439,7 +4523,7 @@ export class ChatView extends ItemView {
     ) => {
       if (done) return;
       done = true;
-      c.pendingPerm = null;
+      this.setPendingCard(c, "perm", null);
       seg.approved = approved;
       // building=true only on a live approval — the historical/restored card omits it.
       this.renderPlanSettled(card, md, approved, approved);
@@ -4447,7 +4531,7 @@ export class ChatView extends ItemView {
     };
 
     // Stop cancels the open card (provider side already unblocked via interrupt).
-    c.pendingPerm = () => finish(false, { behavior: "deny", message: "Stopped." });
+    this.setPendingCard(c, "perm", () => finish(false, { behavior: "deny", message: "Stopped." }));
     this.plugin.emitConvoState(c.id, "needs-input", { reason: "perm" }); // fire-and-forget board hook (no-op when off; can't throw)
 
     const actions = card.createDiv({ cls: "mva-plan-actions" });
@@ -4551,7 +4635,7 @@ export class ChatView extends ItemView {
     const finish = () => {
       if (done) return;
       done = true;
-      c.pendingAsk = null;
+      this.setPendingCard(c, "ask", null);
       // Collapse to the same compact summary used when the transcript is restored,
       // so live-resolved and reloaded cards look identical.
       this.renderAskSummary(card, questions, answers);
@@ -4559,13 +4643,13 @@ export class ChatView extends ItemView {
       resolve(answers);
     };
     // Stop (or turn teardown) cancels the card → the tool reports a dismissal.
-    c.pendingAsk = () => {
+    this.setPendingCard(c, "ask", () => {
       if (done) return;
       done = true;
-      c.pendingAsk = null;
+      this.setPendingCard(c, "ask", null);
       this.closeCard(ctx); // cancelled (Stop / teardown) → release the slot
       reject(new Error("cancelled"));
-    };
+    });
     this.plugin.emitConvoState(c.id, "needs-input", { reason: "ask" }); // fire-and-forget board hook (no-op when off; can't throw)
 
     const selections = questions.map(() => new Set<string>());
@@ -4886,6 +4970,25 @@ export class ChatView extends ItemView {
       c.tailSurfaceEl?.remove();
       c.tailSurfaceEl = null;
     }
+    // Both directions. `refreshAgentIndicators` above happens to repaint the
+    // strip too, but relying on that is exactly the incidental coupling that
+    // left the pulse stale: streaming is a fact the strip renders, so
+    // `setStreaming` owns repainting it. The second pass compares signatures
+    // and writes no DOM.
+    this.refreshTabs();
+  }
+
+  /** The single mutation point for a conversation's open-card cancel handles.
+   *  `needsInput` is a fact the strip renders, so every set AND every clear has
+   *  to repaint — and there are nine assignment sites across the permission,
+   *  plan and ask cards plus the turn teardown, far too many to sprinkle
+   *  repaints over. Routing them through here means a future card cannot forget.
+   *  The two construction sites (`makeConvo`, `restore`) stay literal: a
+   *  conversation being built has no tab to repaint yet. */
+  private setPendingCard(c: Convo, kind: "perm" | "ask", cancel: (() => void) | null): void {
+    if (kind === "perm") c.pendingPerm = cancel;
+    else c.pendingAsk = cancel;
+    this.refreshTabs();
   }
 
   /** Terminal live-task rows linger this long before eviction, so a
@@ -5004,7 +5107,7 @@ export class ChatView extends ItemView {
    *  spinner come from the core `summarizeLiveTasks` projection, so terminal
    *  (fading) rows still count until evicted by `liveRemove`. */
   private refreshAgentIndicators(): void {
-    this.renderTabs();
+    this.refreshTabs(); // the count is a rendered fact: a state transition
     const chip = this.agentChipEl;
     if (!chip) return;
     chip.empty();
@@ -5991,9 +6094,9 @@ export class ChatView extends ItemView {
       // turns (both are null once answered) and idempotent (done-guarded).
       const endedWithPendingInteraction = !!c.pendingPerm || !!c.pendingAsk || ctx.openCards > 0;
       c.pendingPerm?.();
-      c.pendingPerm = null;
+      this.setPendingCard(c, "perm", null);
       c.pendingAsk?.();
-      c.pendingAsk = null;
+      this.setPendingCard(c, "ask", null);
       c.currentCtx = null; // this turn is over — late ask_user calls reject cleanly
       // Confirm a user-initiated stop — ALWAYS, even mid-work. A turn that had
       // already streamed text/tool cards used to end with zero feedback when
@@ -6024,6 +6127,11 @@ export class ChatView extends ItemView {
         });
       }
       c.updatedAt = Date.now();
+      // A turn that finished somewhere you were not looking is the one fact the
+      // strip cannot recover later: the transcript keeps the answer, but not
+      // that you never saw it arrive. Cleared the moment the tab is focused.
+      if (c !== this.active) c.unread = true;
+      this.refreshTabs();
       // Two-stage session recovery (Claude-Code-style resume). The pure reducer
       // decides the session action + flags from the turn's state so this ladder,
       // the error-render footers, and recoveryFooter can never drift apart. A
