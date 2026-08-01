@@ -277,6 +277,43 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-tab-x:hover {
   background: var(--background-modifier-border);
 }
+/* Overflow counter — the strip admitting what it is not showing. Shaped like the
+   `+` (same height, radius and muted weight) because it is the same kind of
+   thing: tail chrome, not a tab. It must never read as a tab, or the count would
+   look like one more of the things it is counting. */
+.mva-tab-overflow {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 4px 6px 4px 8px;
+  border-radius: var(--mva-r2);
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+  transition: background var(--mva-t), color var(--mva-t);
+}
+.mva-tab-overflow.is-hidden {
+  display: none;
+}
+.mva-tab-overflow:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-tab-overflow-ico {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+}
+.mva-tab-overflow-ico .svg-icon {
+  width: 12px;
+  height: 12px;
+}
 .mva-tab-add {
   display: inline-flex;
   align-items: center;

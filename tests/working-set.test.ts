@@ -6,6 +6,7 @@ import {
   toTabCandidate,
   tabSignature,
   tabAriaLabel,
+  retiredFromStrip,
 } from "../src/core/working-set";
 import type { TabFacts } from "../src/core/working-set";
 
@@ -319,5 +320,57 @@ describe("tabSignature", () => {
     // Fields are joined, so a value bleeding into its neighbour would make two
     // different tabs share a signature.
     expect(tabSignature(facts({ title: "a|b" }))).not.toBe(tabSignature(facts({ title: "a", placeholder: true })));
+  });
+});
+
+describe("retiredFromStrip", () => {
+  type Conv = Parameters<typeof retiredFromStrip>[0][number];
+  const conv = (id: string, over: Partial<Conv> = {}): Conv => ({
+    id,
+    retiredAt: 1000,
+    messages: ["hi"],
+    ...over,
+  });
+
+  it("counts a chat that left the strip and is still retrievable", () => {
+    expect(retiredFromStrip([conv("a")], []).map((c) => c.id)).toEqual(["a"]);
+  });
+
+  it("ignores a chat that was never in the strip", () => {
+    // No retiredAt: an old history entry that was never a tab must not inflate
+    // the number — that would turn the counter into "everything you ever wrote".
+    expect(retiredFromStrip([conv("a", { retiredAt: undefined })], [])).toEqual([]);
+  });
+
+  it("ignores a chat that is currently an open tab", () => {
+    // Reopening un-retires, but the number must be right in the window before
+    // that too: a tab on screen is not hidden.
+    expect(retiredFromStrip([conv("a"), conv("b")], ["b"]).map((c) => c.id)).toEqual(["a"]);
+  });
+
+  it("ignores archived chats — a different exit with a different destination", () => {
+    expect(retiredFromStrip([conv("a", { archived: true })], [])).toEqual([]);
+  });
+
+  it("counts a chat whose archived flag is explicitly false", () => {
+    expect(retiredFromStrip([conv("a", { archived: false })], []).map((c) => c.id)).toEqual(["a"]);
+  });
+
+  it("ignores empty husks — the history does not list them", () => {
+    // A "New chat" with nothing in it can be retired by the cap, but it has no
+    // card in the history, so counting it promises something clicking cannot
+    // deliver. This is the case the counter's contract exists for.
+    expect(retiredFromStrip([conv("a", { messages: [] })], [])).toEqual([]);
+  });
+
+  it("counts every exit path alike once each is stamped", () => {
+    // The cap, both archive gestures and the manual x all stamp retiredAt; the
+    // filter reads the stamp, not the gesture, so they cannot disagree.
+    const all = [conv("cap"), conv("x", { retiredAt: 2000 }), conv("open"), conv("husk", { messages: [] })];
+    expect(retiredFromStrip(all, ["open"]).map((c) => c.id)).toEqual(["cap", "x"]);
+  });
+
+  it("accepts any iterable of open ids, including a Set", () => {
+    expect(retiredFromStrip([conv("a"), conv("b")], new Set(["a"])).map((c) => c.id)).toEqual(["b"]);
   });
 });

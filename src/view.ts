@@ -85,7 +85,15 @@ import {
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { partitionConvos } from "./core/persistence";
 import { planRetention, pinnedIdsOf, retentionBudgetBytes, visibleSelection } from "./core/retention";
-import { planWorkingSet, stripCap, toTabCandidate, deriveTabState, tabSignature, tabAriaLabel } from "./core/working-set";
+import {
+  planWorkingSet,
+  stripCap,
+  toTabCandidate,
+  deriveTabState,
+  tabSignature,
+  tabAriaLabel,
+  retiredFromStrip,
+} from "./core/working-set";
 import type { TabVM } from "./core/working-set";
 import { reconcileList } from "./ui/keyed-reconcile";
 import type { CardModel } from "./ui/keyed-reconcile";
@@ -444,10 +452,16 @@ export class ChatView extends ItemView {
    *  `reconcileList`, which removes anything it did not put there — nothing
    *  else may be appended here. */
   private tabsEl!: HTMLElement;
-  /** Trailing strip controls (the `+` button, and later the overflow counter).
-   *  A sibling of `tabsEl` precisely because they are not models: living among
+  /** Trailing strip controls (the overflow counter and the `+` button). A
+   *  sibling of `tabsEl` precisely because they are not models: living among
    *  the tabs, they would be unkeyed children and get reconciled away. */
   private tabsTailEl!: HTMLElement;
+  /** "N chats left the strip" — built once, like the `+`; only its numeral is
+   *  state, and `renderTabs` owns that. */
+  private tabsOverflowEl!: HTMLElement;
+  /** Last count painted into `tabsOverflowEl`. Same ethic as the tab signature:
+   *  repaint on a real change, not on every render. -1 = never painted. */
+  private overflowPainted = -1;
   private listWrap!: HTMLElement;
   /** Pinned "N agents running" chip above the composer, reflecting ONLY the chat
    *  currently open (its own subagents + background tasks). Always visible while
@@ -548,6 +562,15 @@ export class ChatView extends ItemView {
     this.tabsRowEl = root.createDiv({ cls: "mva-tabstrip" });
     this.tabsEl = this.tabsRowEl.createDiv({ cls: "mva-tabs" });
     this.tabsTailEl = this.tabsRowEl.createDiv({ cls: "mva-tabs-tail" });
+    // The counter goes BEFORE the `+`: it is the continuation of the tab list
+    // ("…and N more that left"), so it belongs against the tabs, while the `+`
+    // is the action that grows the list and stays at the far edge.
+    this.tabsOverflowEl = this.tabsTailEl.createDiv({ cls: "mva-tab-overflow is-hidden" });
+    // The node is new and empty, so the memo has to be: `onOpen` can run again on
+    // the same view (the root is emptied above), and a memo surviving the node it
+    // describes would leave the counter blank until the number happened to move.
+    this.overflowPainted = -1;
+    this.clickable(this.tabsOverflowEl, () => this.toggleGallery());
     const addTab = this.tabsTailEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
     setIcon(addTab, "plus");
     this.clickable(addTab, () => this.newConversation());
@@ -1599,10 +1622,19 @@ export class ChatView extends ItemView {
     if (!this.tabsEl) return;
     const ids = this.openTabs.filter((id) => this.convos.some((c) => c.id === id));
     this.openTabs = ids;
+    // Counted before the early return below, because what it reports — chats
+    // that LEFT the strip — is exactly the state that outlives having no tabs
+    // left to show. `this.convos` and not `allConvos()`: the active convo is
+    // always in `openTabs`, so the filter excludes it either way, and `convos`
+    // is the set that already exists before `restore()` assigns `active`.
+    const retired = retiredFromStrip(this.convos, this.openTabs).length;
+    this.renderOverflow(retired);
     // A lone empty tab needs no bar — keep the chrome minimal. The whole row
     // hides, tail included: the `+` used to live inside `tabsEl` and disappear
-    // with it.
-    this.tabsRowEl.toggleClass("is-hidden", ids.length <= 1);
+    // with it. Unless the counter has something to admit: closing tabs is
+    // precisely what makes that number grow, so hiding the row on the way down
+    // to one tab would hide the only thing on screen saying the rest exist.
+    this.tabsRowEl.toggleClass("is-hidden", ids.length <= 1 && retired === 0);
     if (ids.length <= 1) {
       reconcileList(this.tabsEl, []); // drop the lone tab, as the old empty() did
       return;
@@ -1645,6 +1677,35 @@ export class ChatView extends ItemView {
     reconcileList(this.tabsEl, models);
   }
 
+  /**
+   * Paint the overflow counter: how many chats left the strip and can be got
+   * back. Rendered only when there are any — a zero would be chrome reporting
+   * nothing.
+   *
+   * It opens the whole history for now. Plan 3 adds the "Ritirate di recente"
+   * group and points this straight at it; until then the destination is wider
+   * than the group, but the NUMBER is already exactly the group's size — that
+   * is the seam, and it is on the destination side, never on the count.
+   */
+  private renderOverflow(n: number): void {
+    if (this.overflowPainted === n) return;
+    this.overflowPainted = n;
+    const el = this.tabsOverflowEl;
+    el.empty();
+    el.toggleClass("is-hidden", n === 0);
+    if (n === 0) {
+      // Also drop the label: an aria-label on a display:none node is invisible
+      // to sighted users and still stale to everyone else.
+      el.removeAttribute("aria-label");
+      return;
+    }
+    el.setAttr("aria-label", `${n} chat ritirat${n === 1 ? "a" : "e"} — apri la cronologia`);
+    el.createSpan({ cls: "mva-tab-overflow-n", text: String(n) });
+    // A noun with a direction, not a state: the chevron says "there is more that
+    // way", which is the whole message.
+    setIcon(el.createSpan({ cls: "mva-tab-overflow-ico" }), "chevron-right");
+  }
+
   /** Build one tab, DETACHED: `reconcileList` owns insertion and ordering, so
    *  creating this under `tabsEl` would duplicate the node and corrupt the
    *  order. Every fact it paints must appear in the caller's `tabSignature`
@@ -1685,9 +1746,7 @@ export class ChatView extends ItemView {
       titleEl.setText(title);
     }
 
-    // Pinned is a noun, so it gets an icon (states never do). Nothing assigns
-    // `Convo.pinned` yet — the affordance and its mutation site land together
-    // in the pin task; this is the paint waiting for them.
+    // Pinned is a noun, so it gets an icon (states never do).
     if (pinned) setIcon(tab.createSpan({ cls: "mva-tab-pin" }), "pin");
 
     // Per-tab agent count: how many subagents/background tasks THIS chat is
@@ -1715,13 +1774,63 @@ export class ChatView extends ItemView {
       this.closeTab(c);
     });
     this.clickable(tab, () => this.switchTo(c));
+    // Right-click is where a tab's own properties live, and pinning is the only
+    // one it has. Wired per node like the × above: the listener dies with the
+    // tab the reconciler discards, so nothing has to unregister it, and the
+    // convo it acts on is the closure's, never a lookup back from the target.
+    tab.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      const menu = new Menu();
+      menu.addItem((i) =>
+        i
+          .setTitle(pinned ? "Unpin tab" : "Pin tab")
+          .setIcon(pinned ? "pin-off" : "pin")
+          .onClick(() => this.togglePin(c))
+      );
+      menu.showAtMouseEvent(e);
+    });
     return tab;
   }
 
-  /** Close a tab (the conversation stays in history; reopen from the gallery). */
+  /**
+   * The ONLY site that assigns `Convo.pinned` — the affordance and its mutation
+   * point are one change on purpose: a painted pin nothing can set is a state
+   * that never appears and never repaints.
+   *
+   * Pinning is the user's answer to "stop retiring this one": `planWorkingSet`
+   * excludes pinned tabs from the cap's count AND from its retire candidates.
+   * `pinned` is part of `tabSignature`, so `refreshTabs` repaints exactly this
+   * tab; `persist` writes it (`toConvoData` keeps it when true), so it survives
+   * a reload.
+   *
+   * Deliberately does NOT run `applyWorkingSet`. Un-pinning does put a tab back
+   * inside the budget, but retiring "only ever happens as a consequence of the
+   * user opening something, never while they are away" (core/working-set) —
+   * running the cap from here would make a menu click on one tab tear away a
+   * different one. The cap catches up on the next switch.
+   */
+  private togglePin(c: Convo): void {
+    c.pinned = c.pinned !== true;
+    this.refreshTabs();
+    this.persist();
+  }
+
+  /**
+   * Close a tab: it leaves the strip, the conversation stays in the history.
+   *
+   * Stamps `retiredAt`, so "left the strip" means one thing whichever way you
+   * left it — the cap (`applyWorkingSet`), both archive gestures, and this ×.
+   * Without it the overflow counter would silently skip every hand-closed tab
+   * while claiming to count what the history holds, and by every user-visible
+   * measure a hand-closed tab has left the strip exactly as hard as a retired
+   * one. Retiring is not deleting: nothing here touches the conversation.
+   */
   private closeTab(c: Convo): void {
     const idx = this.openTabs.indexOf(c.id);
     if (idx === -1) return;
+    // After the guard, like `setConvoArchived`: a chat that was never a tab must
+    // not claim to have left one.
+    c.retiredAt = Date.now();
     this.openTabs.splice(idx, 1);
     this.dropSession(c); // free the live session; resumable from history
     if (c === this.active) {
@@ -1799,6 +1908,41 @@ export class ChatView extends ItemView {
   }
   cmdCloseTab(): void {
     this.closeTab(this.active);
+  }
+  /**
+   * Retire the focused tab. Identical to `cmdCloseTab` by construction: since
+   * `closeTab` stamps `retiredAt`, closing IS retiring, and two gestures that do
+   * the same thing must not drift into doing almost the same thing.
+   *
+   * It earns its own palette entry on the name alone — "Close" reads destructive
+   * to anyone who has not read `closeTab`, and this one states the guarantee the
+   * gesture always carried. Pinned tabs go too: the pin defends against the cap,
+   * which is automatic, not against a command the user just ran.
+   */
+  cmdRetireTab(): void {
+    this.closeTab(this.active);
+  }
+  /** Move focus one tab along the strip, wrapping at both ends. Goes through
+   *  `switchTo` like a click, so it can run the cap — and like a click it can
+   *  never cost you the tab you just landed on (the active tab is exempt) nor a
+   *  pinned one; at or under the cap it retires nothing at all. */
+  cmdCycleTab(delta: number): void {
+    const ids = this.openTabs;
+    if (ids.length < 2) return;
+    const at = ids.indexOf(this.active.id);
+    // `openTabs` always contains the active id; if it somehow does not, start
+    // from the head rather than doing nothing.
+    const from = at === -1 ? 0 : at;
+    const next = ids[(((from + delta) % ids.length) + ids.length) % ids.length];
+    const target = this.convos.find((x) => x.id === next);
+    if (target) this.switchTo(target);
+  }
+  cmdTogglePin(): void {
+    const c = this.active;
+    this.togglePin(c);
+    // The pin shows in the strip, and the strip hides at a single tab — a
+    // command with no visible target has to say what it did.
+    new Notice(c.pinned ? "Tab pinned — the strip cap will leave it alone." : "Tab unpinned.");
   }
   cmdForkConversation(): void {
     this.forkConversation(this.active);
@@ -1961,8 +2105,10 @@ export class ChatView extends ItemView {
       // resuming a turn un-archives it, see setStreaming).
       const idx = this.openTabs.indexOf(c.id);
       if (idx !== -1) {
-        // Inside the guard: `retiredAt` means "left the strip", so a chat that
-        // was never a tab must not claim to have left one.
+        // Stamped here because this path does not go through `closeTab` (which
+        // owns the stamp for every other exit). Inside the guard: `retiredAt`
+        // means "left the strip", so a chat that was never a tab must not claim
+        // to have left one.
         c.retiredAt = Date.now();
         this.openTabs.splice(idx, 1);
         if (c === this.active) {
@@ -2014,10 +2160,9 @@ export class ChatView extends ItemView {
     // closeTab frees the session, switches active if needed, and persists (→ the
     // archive store). For a convo that isn't an open tab, persist directly.
     if (this.openTabs.includes(c.id)) {
-      // Stamped here, not in closeTab: the two archive gestures (this x and the
-      // board's archive toggle, setConvoArchived) must agree on what "left the
-      // strip" means, or a counter over `retiredAt` sees only half the archives.
-      c.retiredAt = Date.now();
+      // `closeTab` stamps `retiredAt` itself now, so this gesture and the board's
+      // archive toggle (setConvoArchived, which does not route through closeTab
+      // and keeps its own stamp) still agree on what "left the strip" means.
       this.closeTab(c);
     } else this.persist();
     return true;

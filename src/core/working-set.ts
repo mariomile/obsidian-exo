@@ -136,6 +136,60 @@ export function toTabCandidate(c: TabCandidateSource): TabCandidate {
 }
 
 // ---------------------------------------------------------------------------
+// Overflow counter
+// ---------------------------------------------------------------------------
+
+/** The slice of a conversation the overflow counter reads. Structural, same
+ *  discipline as `TabCandidateSource`: the real `Convo` satisfies it as-is, and
+ *  this file never learns what a message or a DOM node is. */
+export interface RetiredCandidateSource {
+  id: string;
+  /** When it last left the strip. Absent = never was a tab, or still is one. */
+  retiredAt?: number;
+  archived?: boolean;
+  /** Only `.length` is read: a conversation with no messages is a husk the
+   *  history does not list and the next persist drops (see `serializeSplit`),
+   *  so counting one would promise a card that does not exist. */
+  messages: readonly unknown[];
+}
+
+/**
+ * The conversations that left the strip and are retrievable from the history.
+ *
+ * This IS the counter's contract, and the reason it returns the list rather than
+ * a number: the count the strip shows has to be the size of the set clicking it
+ * opens — a number that does not match what it shows is worse than no number —
+ * so the count and the future "Ritirate di recente" group are one filter, not
+ * two implementations that agree today.
+ *
+ * Four conditions, each load-bearing:
+ * - `retiredAt` set — it was a tab and left. Every exit stamps it: the cap, both
+ *   archive gestures, and the manual x (see `closeTab`). "Left the strip" has to
+ *   mean one thing however you left, or the number is a subset of itself.
+ * - not archived — archiving is a different exit with a different destination
+ *   (the separate archive store, surfaced by the board's "Show archived").
+ * - has messages — see `messages` above.
+ * - not an open tab — reopening un-retires (`switchTo` clears `retiredAt`), but
+ *   this also covers the window before that: a tab on screen is not "hidden".
+ *
+ * No time window, deliberately: the count must equal what its destination
+ * shows, and today that destination is the whole history. When Plan 3 adds the
+ * "Ritirate di recente" group, the window belongs HERE and to that group at the
+ * same time — a window on only one of the two is how the two numbers stop
+ * matching. Until then the count grows with the history, which is honest but
+ * says less and less about the strip.
+ */
+export function retiredFromStrip<T extends RetiredCandidateSource>(
+  convos: readonly T[],
+  openIds: Iterable<string>,
+): T[] {
+  const open = new Set(openIds);
+  return convos.filter(
+    (c) => !!c.retiredAt && c.archived !== true && c.messages.length > 0 && !open.has(c.id),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Tab state
 // ---------------------------------------------------------------------------
 

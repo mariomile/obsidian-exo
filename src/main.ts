@@ -503,6 +503,22 @@ export default class ExoPlugin extends Plugin {
       name: "Fork conversation into new tab",
       callback: withView((v) => v.cmdForkConversation()),
     });
+    // Strip navigation. No `hotkeys:` on any of them: this plugin already
+    // registers ~27 commands and Obsidian ships its own bindings, so assigning
+    // defaults here is asking for a conflict the user did not choose. They bind
+    // what they use.
+    this.addCommand({ id: "next-tab", name: "Next tab", callback: withView((v) => v.cmdCycleTab(1)) });
+    this.addCommand({ id: "prev-tab", name: "Previous tab", callback: withView((v) => v.cmdCycleTab(-1)) });
+    this.addCommand({
+      id: "toggle-pin-tab",
+      name: "Pin or unpin current tab",
+      callback: withView((v) => v.cmdTogglePin()),
+    });
+    this.addCommand({
+      id: "retire-tab",
+      name: "Retire current tab (keeps it in history)",
+      callback: withView((v) => v.cmdRetireTab()),
+    });
     this.addCommand({
       id: "compact",
       name: "Compact conversation (free up context)",
