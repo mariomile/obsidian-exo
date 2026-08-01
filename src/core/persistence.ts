@@ -1,7 +1,8 @@
 /**
- * Persistence trim planner — extracted verbatim from `view.ts`'s `serialize()`.
+ * Persistence trim planner — extracted verbatim from `view.ts`'s `serialize()`,
+ * and since retired: see the `@deprecated` note on `planPersistedConvos`.
  *
- * The production behaviour this pins: eviction is recency-based, not
+ * The historical behaviour it pins: eviction is recency-based, not
  * array/creation order. A conversation with an OLD position but a recent
  * `updatedAt` must survive while a newer-but-empty husk is dropped. Pinned
  * conversations (active + open tabs) are always kept, even with 0 messages, so
@@ -46,6 +47,11 @@ function tryParseArray(raw: string | null): unknown[] | null {
   }
 }
 
+/**
+ * @deprecated Superseded by `planRetention` (src/core/retention.ts), which never
+ * deletes: it returns the full set plus advisory cleanup candidates. Kept only
+ * so the historical eviction contract stays under test — no production caller.
+ */
 export function planPersistedConvos<
   T extends { id: string; messages: unknown[]; updatedAt?: number },
 >(all: T[], activeId: string, openTabIds: string[], max: number): T[] {
@@ -71,8 +77,8 @@ export function planPersistedConvos<
 
 /**
  * Split conversations into the live set (persisted to `conversations.json` and
- * subject to `planPersistedConvos` trimming) and the archived set (persisted to
- * the separate, never-trimmed archive store). Keeping this pure lets the
+ * subject to the retention planner's budget) and the archived set (persisted to
+ * the separate, never-budgeted archive store). Keeping this pure lets the
  * partition — the round-trip contract's foundation — be unit-tested without the
  * Obsidian view. Original order is preserved within each side.
  */

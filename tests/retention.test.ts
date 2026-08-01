@@ -89,7 +89,7 @@ describe("planRetention", () => {
   });
 });
 
-import { pinnedIdsOf } from "../src/core/retention";
+import { pinnedIdsOf, retentionBudgetBytes } from "../src/core/retention";
 import { partitionConvos } from "../src/core/persistence";
 
 describe("pinnedIdsOf", () => {
@@ -111,6 +111,47 @@ describe("pinnedIdsOf", () => {
     // Guard against a truthy legacy value ever silently protecting a convo.
     const all = [{ id: "a", pinned: 1 as unknown as boolean }, { id: "b", pinned: true }];
     expect(pinnedIdsOf(all)).toEqual(["b"]);
+  });
+});
+
+import { planPersistedConvos } from "../src/core/persistence";
+
+describe("migrazione dal planner vecchio (characterization)", () => {
+  it("il vecchio planner cancellava oltre il cap; il nuovo non cancella mai", () => {
+    // 40 convos, cap 30 -> il vecchio ne buttava 10 in silenzio.
+    const all = Array.from({ length: 40 }, (_, i) => convo(`c${i}`, 2, i));
+
+    const old = planPersistedConvos(all, "c0", [], 30);
+    expect(old.length).toBe(30); // comportamento storico: perdita silenziosa
+
+    const now = planRetention(all, opts({ activeId: "c0", budgetBytes: 1000 }));
+    expect(now.keep.length).toBe(40); // nessuna perdita
+    expect(now.candidates.length).toBeGreaterThan(0); // solo proposte
+  });
+});
+
+describe("retentionBudgetBytes", () => {
+  const FALLBACK = 50;
+
+  it("converts a valid megabyte setting to bytes", () => {
+    expect(retentionBudgetBytes(50, FALLBACK)).toBe(50 * 1024 * 1024);
+    expect(retentionBudgetBytes(0.5, FALLBACK)).toBe(0.5 * 1024 * 1024);
+  });
+
+  it("falls back to the shipped default for values that would propose deleting everything", () => {
+    // data.json is hand-editable, so the settings-panel guard is not the only
+    // path in. A budget of 0 or a negative makes every unprotected conversation
+    // a cleanup candidate — the wrong failure mode for this plan.
+    for (const bad of [0, -1, -1000]) {
+      expect(retentionBudgetBytes(bad, FALLBACK)).toBe(FALLBACK * 1024 * 1024);
+    }
+  });
+
+  it("falls back for non-numeric, NaN, Infinity and missing values", () => {
+    const expected = FALLBACK * 1024 * 1024;
+    for (const bad of [NaN, Infinity, -Infinity, "50", null, undefined, {}]) {
+      expect(retentionBudgetBytes(bad, FALLBACK)).toBe(expected);
+    }
   });
 });
 

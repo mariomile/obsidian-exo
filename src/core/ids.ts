@@ -4,7 +4,7 @@
  *
  * The production bug this pins: the id counter must seed from the highest
  * numeric id suffix present, NOT the conversation count. Ids climb past the
- * count after deletions and MAX_CONVOS trimming, so a count-based seed produces
+ * count after deletions and history trimming, so a count-based seed produces
  * colliding ids (the real incident: five conversations all sharing id "c31").
  */
 

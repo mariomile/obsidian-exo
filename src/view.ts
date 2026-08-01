@@ -83,7 +83,9 @@ import {
   type PersistedMessage,
 } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
-import { planPersistedConvos, partitionConvos } from "./core/persistence";
+import { partitionConvos } from "./core/persistence";
+import { planRetention, pinnedIdsOf, retentionBudgetBytes } from "./core/retention";
+import { DEFAULT_SETTINGS } from "./settings";
 import {
   buildRecap,
   isRecoverableSessionError,
@@ -149,7 +151,6 @@ export const VIEW_TYPE = "exo-view";
 /** Custom Obsidian icon id for the Exo brand mark (registered in main.ts). */
 export const EXO_ICON = "exo-star";
 
-const MAX_CONVOS = 30;
 const MAX_PERSIST_OUTPUT = 2000;
 const MAX_CHECKPOINT_FILE = 64_000; // don't persist a rewind snapshot larger than this (bloat guard)
 
@@ -408,6 +409,9 @@ export class ChatView extends ItemView {
   private active!: Convo;
   /** Ids of conversations shown in the tab bar (ordered). Subset of `convos`. */
   private openTabs: string[] = [];
+  /** Ids proposed for cleanup by the last persist (over-budget). Advisory:
+   *  nothing is ever deleted without explicit confirmation. Runtime-only. */
+  private retentionCandidateIds: string[] = [];
 
   private tabsEl!: HTMLElement;
   private listWrap!: HTMLElement;
@@ -1148,7 +1152,7 @@ export class ChatView extends ItemView {
     const wantDom = new Set([...(this.plugin.settings.openTabIds ?? []), this.plugin.settings.activeTabId]);
     // First pass: seed the id counter from the highest numeric id suffix present,
     // NOT the conversation count — ids climb past the count after deletions and
-    // MAX_CONVOS trimming, so a count-based seed produces colliding ids.
+    // history trimming, so a count-based seed produces colliding ids.
     convoSeed = Math.max(convoSeed, maxIdSuffix(Array.isArray(raw) ? raw.map((d) => d?.id) : []));
     // Second pass: build convos, reassigning any duplicate id to a fresh unique one
     // so distinct conversations never collide in id-keyed lookups. First occurrence
@@ -1265,17 +1269,33 @@ export class ChatView extends ItemView {
     return this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
   }
 
-  /** Split the conversation set into the live payload (empty husks dropped unless
-   *  pinned, then recency-trimmed for conversations.json) and the archived payload
-   *  (untrimmed, for the separate store — never evicted). One partition, one
-   *  `saveActive`: the two payloads are a single consistent snapshot with no
-   *  ordering coupling. See core/persistence for the full contract. */
+  /** Split the conversation set into the live payload (for conversations.json)
+   *  and the archived payload (for the separate store). Neither side is trimmed:
+   *  over-budget live conversations become advisory cleanup candidates, never
+   *  deletions — only empty, unprotected "New chat" husks are dropped. One
+   *  partition, one `saveActive`: the two payloads are a single consistent
+   *  snapshot with no ordering coupling. See core/retention for the contract. */
   private serializeSplit(): { live: ConvoData[]; archived: ConvoData[] } {
     this.saveActive();
-    const { live, archived } = partitionConvos(this.allConvos());
-    const kept = planPersistedConvos(live, this.active.id, this.openTabs, MAX_CONVOS);
+    const all = this.allConvos();
+    const { live, archived } = partitionConvos(all);
+    // Serialize FIRST, then plan: the planner's cost model is the on-disk
+    // weight, so it must see the same shape the store will hold.
+    const liveData = live.map((c) => this.toConvoData(c));
+    const plan = planRetention(liveData, {
+      activeId: this.active.id,
+      pinnedIds: pinnedIdsOf(all),
+      // Clamped, not trusted: data.json is hand-editable and a 0/negative/
+      // non-numeric budget would propose every conversation for cleanup.
+      budgetBytes: retentionBudgetBytes(
+        this.plugin.settings.retentionBudgetMb,
+        DEFAULT_SETTINGS.retentionBudgetMb
+      ),
+      sizeOf: (d) => JSON.stringify(d).length,
+    });
+    this.retentionCandidateIds = plan.candidates.map((d) => d.id);
     return {
-      live: kept.map((c) => this.toConvoData(c)),
+      live: plan.keep,
       archived: archived.map((c) => this.toConvoData(c)),
     };
   }

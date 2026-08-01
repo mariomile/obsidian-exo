@@ -74,3 +74,20 @@ export function planRetention<
 export function pinnedIdsOf<T extends { id: string; pinned?: boolean }>(all: T[]): string[] {
   return all.filter((c) => c.pinned === true).map((c) => c.id);
 }
+
+/**
+ * The `budgetBytes` input to `planRetention`, from the megabyte setting.
+ *
+ * The settings panel guards its own input, but `data.json` is a plain file the
+ * user can hand-edit, so that guard is not the only path into this value. A
+ * budget of 0, a negative, or a non-number makes `totalBytes <= budgetBytes`
+ * false for any non-empty store, which turns EVERY unprotected conversation
+ * into a cleanup candidate — the exact failure mode this plan exists to
+ * prevent. Anything that isn't a finite positive number falls back to the
+ * shipped default instead of being trusted. Deliberately not a coercion:
+ * a garbage value means "setting unusable", not "guess what was meant".
+ */
+export function retentionBudgetBytes(mb: unknown, fallbackMb: number): number {
+  const usable = typeof mb === "number" && Number.isFinite(mb) && mb > 0;
+  return (usable ? mb : fallbackMb) * 1024 * 1024;
+}
