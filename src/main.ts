@@ -1595,7 +1595,19 @@ export default class ExoPlugin extends Plugin {
    */
   private setupAgentTriggers(): void {
     const driver = new AgentTriggerDriver({
-      agents: () => (this.settings.agentsEnabled && this.agentStore.isLoaded() ? this.agentStore.list() : []),
+      agents: () => {
+        if (!this.settings.agentsEnabled) return [];
+        // A cold store used to make every event vanish silently: the driver saw
+        // an empty list, concluded nobody was listening, and dropped the event
+        // before it even scheduled. Kick the load instead — this event is still
+        // lost, but the next one lands, rather than the feature staying dead
+        // until something else happened to warm the registry.
+        if (!this.agentStore.isLoaded()) {
+          void this.agentsReady();
+          return [];
+        }
+        return this.agentStore.list();
+      },
       memoryRoot: () => this.paths.root,
       readNote: makeNoteReader(this.app),
       dispatch: (run) => void this.dispatchTriggeredRun(run),

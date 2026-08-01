@@ -363,7 +363,15 @@ export class MVASettingTab extends PluginSettingTab {
   }
 
   /** A boolean toggle row — the repeated shape across the tabs. */
-  private toggleSetting(el: HTMLElement, name: string, desc: string, key: keyof MVASettings): void {
+  private toggleSetting(
+    el: HTMLElement,
+    name: string,
+    desc: string,
+    key: keyof MVASettings,
+    /** Run after the flag is saved — for flags that need to take effect now
+     *  rather than at the next plugin load. */
+    onAfter?: (value: boolean) => void | Promise<void>
+  ): void {
     new Setting(el)
       .setName(name)
       .setDesc(desc)
@@ -371,6 +379,7 @@ export class MVASettingTab extends PluginSettingTab {
         t.setValue(this.plugin.settings[key] as boolean).onChange(async (v) => {
           (this.plugin.settings[key] as boolean) = v;
           await this.plugin.saveSettings();
+          await onAfter?.(v);
         })
       );
   }
@@ -1107,7 +1116,17 @@ export class MVASettingTab extends PluginSettingTab {
       el,
       "Enable named agents",
       "Turns on the agent registry: `@agent` in the composer binds a turn to a specific subagent, `/as <agent>` binds the whole conversation, and agents with a schedule trigger can run unattended. Definitions come from `.claude/agents/*.md` (the prompt, shared with the CLI) plus a contract file per agent under your memory root (triggers, autonomy tier, write scope). Off by default; each agent is separately disabled until you turn it on. Claude only.",
-      "agentsEnabled"
+      "agentsEnabled",
+      // Warm the registry the moment the flag flips. Without this the store
+      // stays unloaded until some other consumer happens to ask for it, so
+      // turning agents on and immediately creating a note in a watched folder
+      // did nothing at all — the trigger driver sees an empty agent list and
+      // drops the event before it even schedules.
+      async (on) => {
+        this.plugin.invalidateAgents();
+        if (on) await this.plugin.agentsReady();
+        await this.plugin.refreshAgentsUI();
+      }
     );
 
     new Setting(el).setName("Orchestration Board").setHeading();
