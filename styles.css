@@ -5135,6 +5135,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-auto-x:hover { color: var(--text-muted); }
 .mva-auto-x svg { width: 14px; height: 14px; }
+/* Playbook schedule badge (clock + cadence) on the Playbooks tab. */
+.mva-hub-sched { display: inline-flex; align-items: center; gap: 4px; }
+.mva-hub-sched-icon { display: inline-flex; }
+.mva-hub-sched-icon svg { width: 11px; height: 11px; }
 /* Unknown-playbook marker inside the picker chip (replaces the old text glyph). */
 .mva-auto-chip-warn { display: inline-flex; margin-left: 4px; color: var(--text-warning, var(--text-muted)); }
 .mva-auto-chip-warn svg { width: 12px; height: 12px; }

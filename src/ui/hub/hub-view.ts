@@ -1,9 +1,12 @@
 import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import type ExoPlugin from "../../main";
 import type { HubTabContext } from "./shared";
+import { renderOverviewTab } from "./tab-overview";
 import { renderMcpTab } from "./tab-mcp";
 import { renderSkillsTab } from "./tab-skills";
+import { renderPlaybooksTab } from "./tab-playbooks";
 import { renderAutomationsTab } from "./tab-automations";
+import { renderMemoryTab } from "./tab-memory";
 
 /** The view-type STRING is workspace-persistent (saved verbatim in
  *  workspace.json) — it stays "exo-connections" forever even though the pane
@@ -12,7 +15,7 @@ export const HUB_VIEW_TYPE = "exo-connections";
 /** Registered via addIcon() in main.ts (Huge Icons puzzle-piece). */
 export const HUB_ICON = "hi-puzzle";
 
-export type HubTab = "mcp" | "skills" | "automations";
+export type HubTab = "overview" | "skills" | "mcp" | "playbooks" | "automations" | "memory";
 
 interface TabDef {
   id: HubTab;
@@ -21,9 +24,12 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
-  { id: "mcp", label: "MCP", render: renderMcpTab },
+  { id: "overview", label: "Overview", render: renderOverviewTab },
   { id: "skills", label: "Skills", render: renderSkillsTab },
+  { id: "mcp", label: "MCP", render: renderMcpTab },
+  { id: "playbooks", label: "Playbooks", render: renderPlaybooksTab },
   { id: "automations", label: "Automations", render: renderAutomationsTab },
+  { id: "memory", label: "Memory", render: renderMemoryTab },
 ];
 
 /**
@@ -32,7 +38,7 @@ const TABS: TabDef[] = [
  * this shell owns navigation, refresh, and the shared HubTabContext.
  */
 export class HubView extends ItemView {
-  private tab: HubTab = "mcp";
+  private tab: HubTab = "overview";
   private listEl: HTMLElement | null = null;
   /** Last tab actually painted — a tab SWITCH empties the host first (tabs mix
    *  keyed-reconcile and full-render strategies; stale unkeyed children from

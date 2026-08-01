@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   currentSlotStart,
   formatDueIn,
+  playbookScheduleLabel,
   isDue,
   nextDueAt,
   nextAutomation,
@@ -168,5 +169,19 @@ describe("formatDueIn", () => {
     expect(formatDueIn(H - 1)).toBe("in 59m");
     expect(formatDueIn(3 * H + 30 * M)).toBe("in 3h");
     expect(formatDueIn(2 * D + 5 * H)).toBe("in 2d");
+  });
+});
+
+describe("playbookScheduleLabel", () => {
+  const autos: AutomationConfig[] = [
+    { name: "Morning Brief", cadence: { kind: "daily", hour: 8 }, enabled: true, write: false },
+    { name: "paused one", cadence: { kind: "hourly" }, enabled: false, write: false },
+  ];
+  it("matches enabled automations case-insensitively", () => {
+    expect(playbookScheduleLabel("morning brief", autos)).toBe("daily 08:00");
+  });
+  it("ignores disabled automations and unknown names", () => {
+    expect(playbookScheduleLabel("paused one", autos)).toBeNull();
+    expect(playbookScheduleLabel("nope", autos)).toBeNull();
   });
 });

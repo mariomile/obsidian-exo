@@ -146,6 +146,15 @@ export function cadenceLabel(c: Cadence): string {
   return c.kind === "daily" ? `daily ${hh}` : `weekly ${DAYS[c.day] ?? "?"} ${hh}`;
 }
 
+/** Cadence label for the automation scheduling a given playbook (first enabled
+ *  match by case-insensitive name), or null when the playbook is unscheduled.
+ *  This — not the legacy `scheduledRuns` text — is the source of truth for the
+ *  Playbooks tab's schedule badge. */
+export function playbookScheduleLabel(name: string, automations: AutomationConfig[]): string | null {
+  const a = automations.find((x) => x.enabled && x.name.toLowerCase() === name.toLowerCase());
+  return a ? cadenceLabel(a.cadence) : null;
+}
+
 /** "due now" / "in 5m" / "in 3h" / "in 2d" — the meta-line countdown. */
 export function formatDueIn(ms: number): string {
   if (ms <= 60_000) return "due now";
