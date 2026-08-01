@@ -607,27 +607,35 @@ export class Composer {
     const out: AcItem[] = [];
     // Subagents first — reference a vault agent by @mention.
     const [{ agents }, descs] = await Promise.all([this.loadSlash(), this.loadDescs()]);
-    const bindable = this.host.plugin.settings.agentsEnabled;
-    for (const a of agents) {
-      if (!matchesWords(a, words)) continue;
-      out.push({
-        label: a,
-        desc: descs.agents.get(a),
-        detail: bindable ? "agent" : "subagent",
-        icon: "bot",
-        insert: `@${a} `,
-        // With agents on, picking one is a real binding: the next send carries an
-        // explicit delegation instruction instead of relying on the model to
-        // notice the `@name` in the prose.
-        ...(bindable
-          ? {
-              onSelect: () => {
-                this.pendingAgent = a;
-                this.refreshAgentChip();
-              },
-            }
-          : {}),
-      });
+    // With agents on, the registry is the source of truth — one entry per agent.
+    // The raw lists below cannot be deduped: the vault scan yields the FILENAME
+    // (`ghostwriter`) and the CLI roster yields the INVOCABLE ID
+    // (`Ghostwriter`), so the same agent appears twice under exact-match dedup.
+    // The registry already reconciles the two.
+    const plugin = this.host.plugin;
+    if (plugin.settings.agentsEnabled && (await plugin.agentsReady())) {
+      for (const { brain } of plugin.agentStore.list()) {
+        if (!matchesWords(`${brain.name} ${brain.slug}`, words)) continue;
+        out.push({
+          label: brain.name,
+          desc: brain.description,
+          detail: "agent",
+          icon: "bot",
+          insert: `@${brain.slug} `,
+          // Picking one is a real binding: the next send carries an explicit
+          // delegation instruction instead of relying on the model to notice
+          // the `@name` in the prose.
+          onSelect: () => {
+            this.pendingAgent = brain.slug;
+            this.refreshAgentChip();
+          },
+        });
+      }
+    } else {
+      for (const a of agents) {
+        if (!matchesWords(a, words)) continue;
+        out.push({ label: a, desc: descs.agents.get(a), detail: "subagent", icon: "bot", insert: `@${a} ` });
+      }
     }
     for (const f of this.app.vault.getAllLoadedFiles()) {
       if (!f.path || f.path === "/") continue;
