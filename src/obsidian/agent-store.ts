@@ -22,7 +22,6 @@ import {
   reconcileInvocable,
   resolveAgent,
   serializeAgentSidecar,
-  defaultContract,
   type AgentBrain,
   type AgentContract,
   type AgentDef,
@@ -38,6 +37,7 @@ import {
   sortRuns,
   type AgentRunRecord,
 } from "../core/agent-ledger";
+import { seededContract } from "../core/agent-seeds";
 import { listAgentBrains } from "../core/capability-desc";
 import type { ExoPaths } from "../core/paths";
 import { WriteQueue } from "../core/write-queue";
@@ -232,7 +232,9 @@ export class AgentStore {
       for (const agent of missing) {
         const path = this.sidecarPath(agent.brain.slug);
         if (await vault.exists(path)) continue; // raced, or a conflict we skipped
-        await vault.write(path, serializeAgentSidecar(defaultContract(agent.brain.slug), agent.brain, today));
+        // A recognised agent gets a plausible starting contract instead of a
+        // blank one — still disabled, so this suggests rather than activates.
+        await vault.write(path, serializeAgentSidecar(seededContract(agent.brain.slug), agent.brain, today));
         written.push(path);
       }
       return written;

@@ -156,10 +156,22 @@ describe("AgentStore.scaffoldMissing", () => {
     const written = await store.scaffoldMissing("2026-08-01");
     expect(written.sort()).toEqual(["_system/agents/a.md", "_system/agents/b.md"]);
 
+    // "Inert" means it cannot act on its own — disabled, nothing writable, not
+    // the `act` tier. Seeded triggers are suggestions inside a disabled file.
     const { contract } = parseAgentSidecar(vault.files["_system/agents/a.md"], "a");
     expect(contract.enabled).toBe(false);
-    expect(contract.triggers).toEqual([]);
     expect(contract.scope.write).toEqual([]);
+    expect(contract.autonomy).not.toBe("act");
+  });
+
+  it("scaffolds a recognised agent with its seeded triggers, still disabled", async () => {
+    ({ store, vault } = makeStore({}, [brainFile("inbox-triager")]));
+    await store.refresh();
+    await store.scaffoldMissing("2026-08-01");
+
+    const { contract } = parseAgentSidecar(vault.files["_system/agents/inbox-triager.md"], "inbox-triager");
+    expect(contract.enabled).toBe(false);
+    expect(contract.triggers.some((t) => t.on === "vault-event")).toBe(true);
   });
 
   it("is idempotent — a second pass writes nothing", async () => {

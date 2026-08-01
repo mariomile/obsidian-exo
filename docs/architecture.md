@@ -65,6 +65,31 @@ Three distinct memories, deliberately separated:
 
 The context ring in the toolbar reads real `usage` events from the stream; clicking it sends a guided `/compact`. Token pressure is managed where it actually lives — in the CLI session — not simulated in the UI.
 
+## Named agents
+
+An agent is two files with two owners: the **brain** (`.claude/agents/<slug>.md`
+— CLI-native, portable across Claude Code / Cowork / Codex, never written by
+Exo) and the **contract** (`<memoryRoot>/agents/<slug>.md` — triggers, autonomy
+tier, scope globs, `can_call`). The split is forced by fact: `.claude/` is
+gitignored and does not sync to mobile, so trigger config kept there would be
+neither versioned nor visible on a phone.
+
+Principle 1 does the work here. Binding a turn to an agent (`@agent`, `/as`)
+emits an explicit `Agent({ subagent_type })` delegation as a provider-only
+rider — Exo does not run the agent, it stops being ambiguous about which one the
+engine should. Consequently there is no per-agent `SessionOpts` field and no
+`sessionSigOf()` entry to keep in sync.
+
+Autonomy is the part Exo genuinely adds: schedule triggers ride the existing
+30-minute heartbeat, and event triggers (`vault-event`, `tag`, `note-mention`)
+are the plugin's only filesystem listeners. They are debounced, exclude
+tool-owned trees (which is also what stops an agent re-triggering itself on its
+own report), and start **disarmed** — Obsidian replays `create` for every file
+while indexing. Runs execute through the headless profile, so checkpoint,
+restore and the review queue come for free. Every run lands in an append-only
+monthly ledger; `invoke_agent` lets one agent hand work to another under a
+deny-by-default allowlist and a depth cap. Design: `docs/specs/2026-08-01-agents-design.md`.
+
 ## Headless mode
 
 Not everything needs a chat. `headless.ts` runs playbooks through the **same adapter layer** as the chat, but in a bounded, non-interactive profile: read-only vault tools auto-allowed, every mutating tool auto-denied, a per-step idle timeout instead of interactive cards, and multi-step playbooks (`>>>`) running sequentially in one session. Same engine, same events — different permission posture.
