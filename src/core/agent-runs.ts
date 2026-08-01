@@ -88,6 +88,12 @@ export interface GateInput {
   budgetAvailable: boolean;
   /** Manual runs bypass cooldown and schedule slots — a human asked. */
   manual?: boolean;
+  /**
+   * A run delegated by another agent. Exempt from the concurrency cap: the
+   * caller is blocked awaiting the tool result, so a nested run adds depth, not
+   * parallelism. Depth is bounded separately by `gateAgentInvoke`.
+   */
+  nested?: boolean;
 }
 
 /**
@@ -103,7 +109,7 @@ export function gateAgentRun(input: GateInput): RunGate {
   if (input.inFlightKeys.has(runKey)) {
     return { ok: false, reason: "duplicate", detail: `${agent.brain.name} already has this run queued` };
   }
-  if (input.running >= input.maxConcurrent) {
+  if (!input.nested && input.running >= input.maxConcurrent) {
     return {
       ok: false,
       reason: "concurrency",
@@ -119,6 +125,58 @@ export function gateAgentRun(input: GateInput): RunGate {
       const left = Math.ceil((agent.contract.cooldownMs - elapsed) / 60_000);
       return { ok: false, reason: "cooldown", detail: `${agent.brain.name} is cooling down (${left}m left)` };
     }
+  }
+  return { ok: true };
+}
+
+/* --------------------------- agent → agent --------------------------- */
+
+/**
+ * Max delegation depth. 2 means an agent may call an agent, and that one may
+ * not call further — matching the existing spawn-depth directive for subagents,
+ * and keeping a runaway chain arithmetically impossible rather than merely
+ * unlikely.
+ */
+export const MAX_AGENT_DEPTH = 2;
+
+export type InvokeRefusal = "unknown" | "self" | "not-allowed" | "depth" | "disabled";
+
+export type InvokeGate = { ok: true } | { ok: false; reason: InvokeRefusal; detail: string };
+
+/**
+ * May `caller` hand work to `callee`?
+ *
+ * `caller` is `"exo"` when a human is driving — a person may invoke any agent,
+ * which is why the allowlist only binds agent-to-agent calls. Between agents
+ * the allowlist is deny-by-default: an empty `can_call` means this agent
+ * delegates to nobody.
+ */
+export function gateAgentInvoke(
+  caller: string,
+  callee: AgentDef | null,
+  callerAgent: AgentDef | null,
+  depth: number,
+  maxDepth = MAX_AGENT_DEPTH
+): InvokeGate {
+  if (!callee) return { ok: false, reason: "unknown", detail: "no such agent" };
+  if (caller === callee.brain.slug) {
+    return { ok: false, reason: "self", detail: `${callee.brain.name} cannot invoke itself` };
+  }
+  if (depth >= maxDepth) {
+    return { ok: false, reason: "depth", detail: `delegation depth ${maxDepth} reached` };
+  }
+  if (caller !== "exo") {
+    if (!callerAgent) return { ok: false, reason: "unknown", detail: `unknown caller "${caller}"` };
+    if (!callerAgent.contract.canCall.includes(callee.brain.slug)) {
+      return {
+        ok: false,
+        reason: "not-allowed",
+        detail: `${callerAgent.brain.name} may not invoke ${callee.brain.name} — add it to can_call`,
+      };
+    }
+  }
+  if (!callee.contract.enabled && caller !== "exo") {
+    return { ok: false, reason: "disabled", detail: `${callee.brain.name} is disabled` };
   }
   return { ok: true };
 }
@@ -147,15 +205,25 @@ export function agentRunName(agent: AgentDef, reason: string): string {
  * own definition — Exo never restates the agent's job, because the job lives in
  * the brain file the CLI already loads.
  */
-export function buildAgentRunPrompt(agent: AgentDef, reason: string): string {
+export function buildAgentRunPrompt(
+  agent: AgentDef,
+  reason: string,
+  memory?: { path: string; excerpt: string },
+  /** A specific task, when this run was delegated rather than scheduled. */
+  task?: { from: string; text: string }
+): string {
   const { brain, contract } = agent;
   // `null` marks a line that dropped out conditionally; "" is a deliberate blank.
   const lines: (string | null)[] = [
     `<agent-run trigger="${reason}">`,
-    `This is an unattended, scheduled run of the "${brain.name}" agent. No human is watching; there is nobody to ask.`,
-    `Delegate the work to that subagent: Agent({ subagent_type: "${brain.invocable}", prompt: <the standing task below> }).`,
+    task
+      ? `This is a run of the "${brain.name}" agent, delegated by ${task.from}. No human is watching; there is nobody to ask.`
+      : `This is an unattended, scheduled run of the "${brain.name}" agent. No human is watching; there is nobody to ask.`,
+    `Delegate the work to that subagent: Agent({ subagent_type: "${brain.invocable}", prompt: <the task below> }).`,
     "",
-    "Standing task: do this agent's regular job as defined in its own agent file. If nothing needs doing right now, say so in one line and stop — an empty run is a good outcome, not a failure to be filled with busywork.",
+    task
+      ? `Task from ${task.from}: ${task.text.trim()}\n\nDo that specific task, not this agent's standing job. If it turns out to be unnecessary or impossible, say so in one line and stop.`
+      : "Standing task: do this agent's regular job as defined in its own agent file. If nothing needs doing right now, say so in one line and stop — an empty run is a good outcome, not a failure to be filled with busywork.",
     "",
     contract.scope.read.length ? `Read scope: ${contract.scope.read.join(", ")}.` : null,
     writeModeFor(contract.autonomy)
@@ -166,6 +234,13 @@ export function buildAgentRunPrompt(agent: AgentDef, reason: string): string {
         ? "Autonomy tier `propose`: this run is READ-ONLY. Describe precisely what you would change (file, and what edit) and stop. Do not write."
         : "Autonomy tier `notify`: this run is READ-ONLY. Report findings only.",
     "",
+    // Memory is what makes runs compound instead of merely repeat: the agent
+    // starts from what it already worked out rather than from zero every time.
+    memory?.excerpt ? `What you learned in earlier runs:\n${memory.excerpt}` : null,
+    memory
+      ? `If this run taught you something durable — a preference, a recurring shape, a mistake worth not repeating — append ONE line to \`${memory.path}\` under "## Learnings". Nothing else goes in that file, and routine run detail does not belong there.`
+      : null,
+    memory ? "" : null,
     "Close with a short summary a human can scan in ten seconds.",
     "</agent-run>",
   ];

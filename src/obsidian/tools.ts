@@ -57,6 +57,8 @@ interface ExoAutomationsHost {
   /** Resolves false when named agents are disabled in settings. */
   agentsReady(): Promise<boolean>;
   agentStore: { list(): AgentDef[]; orphans(): string[] };
+  /** Delegate to another agent; resolves to a human-readable result or refusal. */
+  invokeAgentFromAgent(target: string, task: string): Promise<string>;
 }
 
 function getExo(app: App): ExoAutomationsHost | null {
@@ -1095,6 +1097,20 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     }
   );
 
+  const invokeAgent = tool(
+    "invoke_agent",
+    "Hand a specific task to another named agent and wait for its result. Use when the work belongs to a different agent's domain (research, CRM, content) rather than doing it yourself. The call is refused unless the calling agent lists the target in its `can_call`, and delegation depth is capped — so a refusal is a configuration answer, not something to retry or work around.",
+    {
+      agent: z.string().describe("Slug or name of the agent to invoke."),
+      task: z.string().describe("The specific task, written as an instruction. Not the agent's standing job."),
+    },
+    async ({ agent, task }) => {
+      const exo = getExo(app);
+      if (!exo) return ok("Exo plugin not reachable.");
+      return ok(await exo.invokeAgentFromAgent(agent, task));
+    }
+  );
+
   const listAutomations = tool(
     "list_automations",
     "List Exo's automations (scheduled playbook runs): cadence, on/paused, read-only vs write mode, last/next run — plus available playbooks and recent write runs with their review state and run ids. Use it before managing automations or when Mario asks what runs automatically.",
@@ -1244,7 +1260,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     listAnnotations, listSonarActions, askUser, listLoops,
     createNote, appendToNote, updateFrontmatter, addLinks, linkMentions, ignoreMentionTool, openNote,
     editNote, insertAtCursor, renameNote, resolveAnnotation, runSonarAction,
-    listAgents,
+    listAgents, invokeAgent,
     listAutomations, savePlaybook, manageAutomation, reviewAutomationRun,
     ...(memoryRead ? [recall] : []),
     ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),

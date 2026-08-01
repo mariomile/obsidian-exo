@@ -28,6 +28,16 @@ import {
   type AgentDef,
   type AgentSource,
 } from "../core/agents";
+import {
+  agentMemoryExcerpt,
+  agentMemoryPath,
+  initialAgentMemory,
+  ledgerFileName,
+  parseAgentLedger,
+  serializeAgentRun,
+  sortRuns,
+  type AgentRunRecord,
+} from "../core/agent-ledger";
 import { listAgentBrains } from "../core/capability-desc";
 import type { ExoPaths } from "../core/paths";
 import { WriteQueue } from "../core/write-queue";
@@ -250,6 +260,71 @@ export class AgentStore {
 
   sidecarPath(slug: string): string {
     return `${this.deps.paths.agents}/${slug}.md`;
+  }
+
+  /* ------------------------ run ledger + memory ----------------------- */
+
+  ledgerPath(at: number): string {
+    return `${this.deps.paths.agentRuns}/${ledgerFileName(at)}`;
+  }
+
+  memoryPath(slug: string): string {
+    return agentMemoryPath(this.deps.paths.agentMemory, slug);
+  }
+
+  /**
+   * Append one run to the month's ledger.
+   *
+   * Append-only and serialized on the shared queue: the ledger is evidence, so
+   * a concurrent run must never rewrite another's block. A failure here is
+   * swallowed — losing a ledger line is bad, but failing the run that already
+   * did its work would be worse.
+   */
+  async appendRun(record: AgentRunRecord): Promise<void> {
+    const { vault, paths, queue } = this.deps;
+    const path = this.ledgerPath(record.startedAt);
+    await queue
+      .enqueue(async () => {
+        await vault.ensureFolder(paths.agentRuns);
+        const existing = (await vault.exists(path)) ? await vault.read(path) : "";
+        await vault.write(path, existing + (existing && !existing.endsWith("\n") ? "\n" : "") + serializeAgentRun(record));
+      })
+      .catch((err) => {
+        console.warn("[Exo] agent ledger append failed:", err);
+      });
+  }
+
+  /** Runs recorded in the ledger file covering `at` (default: now), newest first. */
+  async readRuns(at = Date.now()): Promise<AgentRunRecord[]> {
+    const path = this.ledgerPath(at);
+    try {
+      if (!(await this.deps.vault.exists(path))) return [];
+      return sortRuns(parseAgentLedger(await this.deps.vault.read(path)));
+    } catch {
+      return [];
+    }
+  }
+
+  /** An agent's memory, creating the file on first use. Returns the excerpt that
+   *  rides into a run prompt, plus the path the agent may append to. */
+  async loadMemory(agent: AgentDef, today = ""): Promise<{ path: string; excerpt: string }> {
+    const { vault, paths, queue } = this.deps;
+    const path = this.memoryPath(agent.brain.slug);
+    try {
+      if (!(await vault.exists(path))) {
+        await queue.enqueue(async () => {
+          await vault.ensureFolder(paths.agentMemory);
+          if (!(await vault.exists(path))) {
+            await vault.write(path, initialAgentMemory(agent.brain.name, agent.brain.slug, today));
+          }
+        });
+        return { path, excerpt: "" };
+      }
+      return { path, excerpt: agentMemoryExcerpt(await vault.read(path)) };
+    } catch {
+      // No memory is a degraded run, not a failed one.
+      return { path, excerpt: "" };
+    }
   }
 
   /* --------------------------- subscription -------------------------- */

@@ -4,6 +4,8 @@ import {
   agentTriggerRunKey,
   dueScheduledAgentRuns,
   gateAgentRun,
+  gateAgentInvoke,
+  MAX_AGENT_DEPTH,
   writeModeFor,
   agentRunName,
   buildAgentRunPrompt,
@@ -146,6 +148,121 @@ describe("gateAgentRun", () => {
     const g = gateAgentRun({ ...base, agent: agent("a", { cooldownMs: 60 * 60_000 }), lastRunAt: base.now });
     expect(g.ok).toBe(false);
     if (!g.ok) expect(g.detail).toMatch(/cooling down/);
+  });
+});
+
+describe("gateAgentInvoke", () => {
+  const strategy = agent("strategy", { canCall: ["research"] });
+  const research = agent("research");
+  const crm = agent("crm");
+
+  it("a human (exo) may invoke any agent, allowlist or not", () => {
+    expect(gateAgentInvoke("exo", research, null, 0)).toEqual({ ok: true });
+    expect(gateAgentInvoke("exo", crm, null, 0)).toEqual({ ok: true });
+  });
+
+  it("an agent may invoke only what its can_call lists", () => {
+    expect(gateAgentInvoke("strategy", research, strategy, 0)).toEqual({ ok: true });
+    expect(gateAgentInvoke("strategy", crm, strategy, 0)).toMatchObject({ ok: false, reason: "not-allowed" });
+  });
+
+  it("deny-by-default: an empty can_call delegates to nobody", () => {
+    expect(gateAgentInvoke("research", crm, research, 0)).toMatchObject({ ok: false, reason: "not-allowed" });
+  });
+
+  it("refuses self-invocation", () => {
+    expect(gateAgentInvoke("research", research, research, 0)).toMatchObject({ ok: false, reason: "self" });
+  });
+
+  it("refuses an unknown target or an unknown caller", () => {
+    expect(gateAgentInvoke("exo", null, null, 0)).toMatchObject({ ok: false, reason: "unknown" });
+    expect(gateAgentInvoke("ghost", research, null, 0)).toMatchObject({ ok: false, reason: "unknown" });
+  });
+
+  it("caps the delegation depth", () => {
+    expect(gateAgentInvoke("strategy", research, strategy, 1)).toEqual({ ok: true });
+    expect(gateAgentInvoke("strategy", research, strategy, MAX_AGENT_DEPTH)).toMatchObject({
+      ok: false,
+      reason: "depth",
+    });
+  });
+
+  it("depth is checked before the allowlist, so a runaway chain stops regardless of config", () => {
+    expect(gateAgentInvoke("strategy", crm, strategy, MAX_AGENT_DEPTH)).toMatchObject({ reason: "depth" });
+  });
+
+  it("an agent cannot wake a disabled agent, but a human can", () => {
+    const off = agent("off", { enabled: false });
+    const caller = agent("caller", { canCall: ["off"] });
+    expect(gateAgentInvoke("caller", off, caller, 0)).toMatchObject({ ok: false, reason: "disabled" });
+    expect(gateAgentInvoke("exo", off, null, 0)).toEqual({ ok: true });
+  });
+});
+
+describe("gateAgentRun — nested runs", () => {
+  const base = {
+    lastRunAt: 0,
+    now: at(2026, 8, 1, 9),
+    running: 1,
+    maxConcurrent: 1,
+    inFlightKeys: new Set<string>(),
+    runKey: "k",
+    budgetAvailable: true,
+  };
+
+  it("a nested run is exempt from the concurrency cap (its caller is blocked)", () => {
+    expect(gateAgentRun({ ...base, agent: agent("a"), nested: true })).toEqual({ ok: true });
+    expect(gateAgentRun({ ...base, agent: agent("a") })).toMatchObject({ reason: "concurrency" });
+  });
+
+  it("but is still bound by budget and dedupe", () => {
+    expect(gateAgentRun({ ...base, agent: agent("a"), nested: true, budgetAvailable: false })).toMatchObject({
+      reason: "budget",
+    });
+    expect(
+      gateAgentRun({ ...base, agent: agent("a"), nested: true, inFlightKeys: new Set(["k"]) })
+    ).toMatchObject({ reason: "duplicate" });
+  });
+});
+
+describe("buildAgentRunPrompt — delegated runs", () => {
+  it("states the caller and the specific task, replacing the standing job", () => {
+    const p = buildAgentRunPrompt(agent("research"), "invoked by strategy", undefined, {
+      from: "strategy",
+      text: "  find prior art on agent marketplaces  ",
+    });
+    expect(p).toContain("delegated by strategy");
+    expect(p).toContain("Task from strategy: find prior art on agent marketplaces");
+    expect(p).toContain("not this agent's standing job");
+    expect(p).not.toContain("Standing task:");
+  });
+
+  it("keeps the standing-job wording when there is no delegated task", () => {
+    const p = buildAgentRunPrompt(agent("research"), "daily 08:00");
+    expect(p).toContain("Standing task:");
+    expect(p).not.toContain("Task from");
+  });
+});
+
+describe("buildAgentRunPrompt — memory", () => {
+  it("injects prior learnings and points at the memory file", () => {
+    const p = buildAgentRunPrompt(agent("a"), "hourly", {
+      path: "_system/memory/agents/a.md",
+      excerpt: "- prefers short posts",
+    });
+    expect(p).toContain("What you learned in earlier runs");
+    expect(p).toContain("prefers short posts");
+    expect(p).toContain("_system/memory/agents/a.md");
+  });
+
+  it("says nothing about memory when there is none", () => {
+    expect(buildAgentRunPrompt(agent("a"), "hourly")).not.toContain("earlier runs");
+  });
+
+  it("still points at the file when memory is empty, so the first learning has a home", () => {
+    const p = buildAgentRunPrompt(agent("a"), "hourly", { path: "m.md", excerpt: "" });
+    expect(p).not.toContain("What you learned in earlier runs");
+    expect(p).toContain("append ONE line to `m.md`");
   });
 });
 
