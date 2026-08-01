@@ -497,7 +497,16 @@ export default class ExoPlugin extends Plugin {
       name: "New session (clear current tab)",
       callback: withView((v) => v.cmdNewSession()),
     });
-    this.addCommand({ id: "close-tab", name: "Close current tab", callback: withView((v) => v.cmdCloseTab()) });
+    // One entry, named for the guarantee: closing a tab retires it (it keeps
+    // everything and comes back from the history), so "Close" was understating
+    // and a second "Retire" entry would be a duplicate the user could bind to a
+    // different hotkey. The id stays `close-tab` — Obsidian stores hotkeys by
+    // id, so renaming it would silently drop any binding already in use.
+    this.addCommand({
+      id: "close-tab",
+      name: "Retire current tab (keeps it in history)",
+      callback: withView((v) => v.cmdCloseTab()),
+    });
     this.addCommand({
       id: "fork-conversation",
       name: "Fork conversation into new tab",
@@ -513,11 +522,6 @@ export default class ExoPlugin extends Plugin {
       id: "toggle-pin-tab",
       name: "Pin or unpin current tab",
       callback: withView((v) => v.cmdTogglePin()),
-    });
-    this.addCommand({
-      id: "retire-tab",
-      name: "Retire current tab (keeps it in history)",
-      callback: withView((v) => v.cmdRetireTab()),
     });
     this.addCommand({
       id: "compact",

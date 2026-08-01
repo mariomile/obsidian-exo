@@ -1622,19 +1622,18 @@ export class ChatView extends ItemView {
     if (!this.tabsEl) return;
     const ids = this.openTabs.filter((id) => this.convos.some((c) => c.id === id));
     this.openTabs = ids;
-    // Counted before the early return below, because what it reports — chats
-    // that LEFT the strip — is exactly the state that outlives having no tabs
-    // left to show. `this.convos` and not `allConvos()`: the active convo is
-    // always in `openTabs`, so the filter excludes it either way, and `convos`
-    // is the set that already exists before `restore()` assigns `active`.
-    const retired = retiredFromStrip(this.convos, this.openTabs).length;
-    this.renderOverflow(retired);
+    // Painted before the early return below so the numeral is already right
+    // whenever the row comes back, rather than lagging a render behind it.
+    // `this.convos` and not `allConvos()`: the active convo is always in
+    // `openTabs`, so the filter excludes it either way, and `convos` is the set
+    // that already exists before `restore()` assigns `active`.
+    this.renderOverflow(retiredFromStrip(this.convos, this.openTabs).length);
     // A lone empty tab needs no bar — keep the chrome minimal. The whole row
     // hides, tail included: the `+` used to live inside `tabsEl` and disappear
-    // with it. Unless the counter has something to admit: closing tabs is
-    // precisely what makes that number grow, so hiding the row on the way down
-    // to one tab would hide the only thing on screen saying the rest exist.
-    this.tabsRowEl.toggleClass("is-hidden", ids.length <= 1 && retired === 0);
+    // with it. The counter does NOT keep the row alive: it is an affordance OF
+    // the strip, and with one chat open there is no strip and nothing it is
+    // hiding — a count there would just duplicate the header's History icon.
+    this.tabsRowEl.toggleClass("is-hidden", ids.length <= 1);
     if (ids.length <= 1) {
       reconcileList(this.tabsEl, []); // drop the lone tab, as the old empty() did
       return;
@@ -1906,20 +1905,12 @@ export class ChatView extends ItemView {
   cmdNewSession(): void {
     this.newSessionInTab();
   }
+  /** Retire the focused tab: it leaves the strip and stays in the history. The
+   *  ONE command behind that gesture — closing IS retiring since `closeTab`
+   *  stamps `retiredAt`, and shipping a second entry under the other name would
+   *  be two bindable hotkeys for one action. Pinned tabs go too: the pin defends
+   *  against the cap, which is automatic, not against a command just run. */
   cmdCloseTab(): void {
-    this.closeTab(this.active);
-  }
-  /**
-   * Retire the focused tab. Identical to `cmdCloseTab` by construction: since
-   * `closeTab` stamps `retiredAt`, closing IS retiring, and two gestures that do
-   * the same thing must not drift into doing almost the same thing.
-   *
-   * It earns its own palette entry on the name alone — "Close" reads destructive
-   * to anyone who has not read `closeTab`, and this one states the guarantee the
-   * gesture always carried. Pinned tabs go too: the pin defends against the cap,
-   * which is automatic, not against a command the user just ran.
-   */
-  cmdRetireTab(): void {
     this.closeTab(this.active);
   }
   /** Move focus one tab along the strip, wrapping at both ends. Goes through
@@ -2127,10 +2118,16 @@ export class ChatView extends ItemView {
             this.switchTo(fresh);
           }
         }
-        this.renderTabs();
         this.persistTabs();
       }
     }
+    // Repaint on EVERY path, not just the one that changed the tab set. The
+    // overflow counter is the first strip-rendered fact that depends on
+    // conversations which are NOT tabs, so archiving a chat with no tab — and
+    // un-archiving anything — now changes what the strip says. Left inside the
+    // branch, the strip would keep announcing a set it no longer opens until
+    // some unrelated repaint happened along.
+    this.renderTabs();
     this.persist();
     return true;
   }
@@ -2164,7 +2161,13 @@ export class ChatView extends ItemView {
       // archive toggle (setConvoArchived, which does not route through closeTab
       // and keeps its own stamp) still agree on what "left the strip" means.
       this.closeTab(c);
-    } else this.persist();
+    } else {
+      // Same obligation as setConvoArchived above: `archived` is a fact the
+      // strip now reads through the counter, even for a chat that has no tab,
+      // so this branch owes a repaint it never used to.
+      this.renderTabs();
+      this.persist();
+    }
     return true;
   }
 

@@ -172,12 +172,19 @@ export interface RetiredCandidateSource {
  * - not an open tab — reopening un-retires (`switchTo` clears `retiredAt`), but
  *   this also covers the window before that: a tab on screen is not "hidden".
  *
- * No time window, deliberately: the count must equal what its destination
- * shows, and today that destination is the whole history. When Plan 3 adds the
- * "Ritirate di recente" group, the window belongs HERE and to that group at the
- * same time — a window on only one of the two is how the two numbers stop
- * matching. Until then the count grows with the history, which is honest but
- * says less and less about the strip.
+ * NO TIME WINDOW YET, and that is a known cost, not an oversight. `retiredAt`
+ * never expires, so in normal use this number only grows: after a few weeks it
+ * reports the size of the history rather than what the strip is hiding. It is
+ * left windowless on purpose because the count must equal what its destination
+ * shows, and today that destination is the whole history.
+ *
+ * TO THE NEXT IMPLEMENTER: the window and the "Ritirate di recente" group are
+ * ONE change. Whoever adds the group adds the window here in the same commit —
+ * windowing the group but not this filter (or the reverse) is precisely how the
+ * number and the set it opens stop matching, which is the one failure this
+ * function exists to prevent. The strip's own defence against the growth in the
+ * meantime is that the row hides at one tab, so the number is only ever on
+ * screen while there is a strip for it to describe.
  */
 export function retiredFromStrip<T extends RetiredCandidateSource>(
   convos: readonly T[],
