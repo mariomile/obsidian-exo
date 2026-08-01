@@ -96,9 +96,9 @@ export interface TabCandidateSource {
   /** Cancel handles for an open permission / ask card — non-null means blocked. */
   pendingPerm: unknown;
   pendingAsk: unknown;
-  /** The stashed composer draft, if any. `text` is "" on a pristine composer, so
-   *  presence of the object is not evidence of unsent content. */
-  draft?: { text: string; images: readonly unknown[]; attached: readonly string[] };
+  /** The stashed composer draft, if any. Only the two fields the SEND path
+   *  clears are read — see `toTabCandidate` on why `attached` is not one. */
+  draft?: { text: string; images: readonly unknown[] };
   queue: readonly unknown[];
 }
 
@@ -111,6 +111,15 @@ export interface TabCandidateSource {
  * `lastActiveAt` falls back to `updatedAt` (then 0) so conversations restored
  * from a store written before the field existed sort by their last turn instead
  * of all tying at 0 and retiring in arbitrary order.
+ *
+ * `hasDraft` reads ONLY text and images, deliberately not `draft.attached`. An
+ * exemption has to be able to end, and that one cannot: sending clears the input
+ * text and the pending images, but never `manualAttached` — the attached-context
+ * selection is sticky by design, and the user only drops it by clicking the x on
+ * a context card. Counting it would mean that attaching a note to a chat once
+ * exempts that chat from the cap for the rest of its life, with nothing on
+ * screen explaining why the strip is over budget. That is the "cap is inert"
+ * failure this whole file exists to prevent.
  */
 export function toTabCandidate(c: TabCandidateSource): TabCandidate {
   return {
@@ -120,10 +129,8 @@ export function toTabCandidate(c: TabCandidateSource): TabCandidate {
     pinned: c.pinned === true,
     streaming: c.streaming,
     needsInput: c.pendingPerm != null || c.pendingAsk != null,
-    // "Unsent content" is text, attachments OR manually attached context — each
-    // of the three is something the user put there and has not sent yet.
-    hasDraft:
-      !!c.draft && (c.draft.text.trim().length > 0 || c.draft.images.length > 0 || c.draft.attached.length > 0),
+    // "Unsent content" is text or images: exactly what a send consumes.
+    hasDraft: !!c.draft && (c.draft.text.trim().length > 0 || c.draft.images.length > 0),
     hasQueue: c.queue.length > 0,
   };
 }

@@ -1486,13 +1486,19 @@ export class ChatView extends ItemView {
     if (plan.retire.length === 0) return;
 
     const now = Date.now();
+    const retired = new Set(plan.retire);
     for (const id of plan.retire) {
       const c = byId.get(id);
       if (!c) continue;
       c.retiredAt = now; // never 0: toConvoData drops a falsy value
       this.dropSession(c); // free the live session; resumable from the history
     }
-    this.openTabs = plan.visible;
+    // Remove exactly what was retired, rather than assigning `plan.visible`:
+    // the plan is built from resolvable ids only, so assigning it would ALSO
+    // purge orphan ids — but only on the turns where something retires. That
+    // half-time cleanup is worse than none. `renderTabs` already purges orphans
+    // unconditionally, so it stays the single owner of that.
+    this.openTabs = this.openTabs.filter((id) => !retired.has(id));
     this.renderTabs();
     this.persistTabs();
     this.persist(); // `retiredAt` lives in the conversation store, not in settings
@@ -1840,9 +1846,11 @@ export class ChatView extends ItemView {
       // "Archived" and "open in the working set" are contradictory states. Leave
       // the strip when archived; reopening from the history brings it back (and
       // resuming a turn un-archives it, see setStreaming).
-      c.retiredAt = Date.now();
       const idx = this.openTabs.indexOf(c.id);
       if (idx !== -1) {
+        // Inside the guard: `retiredAt` means "left the strip", so a chat that
+        // was never a tab must not claim to have left one.
+        c.retiredAt = Date.now();
         this.openTabs.splice(idx, 1);
         if (c === this.active) {
           const nextId = this.openTabs[idx] ?? this.openTabs[idx - 1] ?? this.openTabs[this.openTabs.length - 1];
@@ -1892,8 +1900,13 @@ export class ChatView extends ItemView {
     c.archived = true;
     // closeTab frees the session, switches active if needed, and persists (→ the
     // archive store). For a convo that isn't an open tab, persist directly.
-    if (this.openTabs.includes(c.id)) this.closeTab(c);
-    else this.persist();
+    if (this.openTabs.includes(c.id)) {
+      // Stamped here, not in closeTab: the two archive gestures (this x and the
+      // board's archive toggle, setConvoArchived) must agree on what "left the
+      // strip" means, or a counter over `retiredAt` sees only half the archives.
+      c.retiredAt = Date.now();
+      this.closeTab(c);
+    } else this.persist();
     return true;
   }
 

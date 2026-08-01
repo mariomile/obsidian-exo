@@ -129,10 +129,18 @@ describe("toTabCandidate", () => {
     expect(toTabCandidate(convo({ draft: draft({ text: "   \n" }) })).hasDraft).toBe(false);
   });
 
-  it("counts text, images and attached context as unsent content", () => {
+  it("counts text and images as unsent content", () => {
     expect(toTabCandidate(convo({ draft: draft({ text: "wip" }) })).hasDraft).toBe(true);
     expect(toTabCandidate(convo({ draft: draft({ images: [{}] }) })).hasDraft).toBe(true);
-    expect(toTabCandidate(convo({ draft: draft({ attached: ["Note.md"] }) })).hasDraft).toBe(true);
+  });
+
+  it("does not count attached context, which a send never clears", () => {
+    // manualAttached is a sticky selection: sending clears the text and the
+    // images but leaves it, so counting it would exempt a chat from the cap
+    // permanently after a single attach — the cap would be quietly inert.
+    expect(toTabCandidate(convo({ draft: draft({ attached: ["Note.md"] }) })).hasDraft).toBe(false);
+    // ... but it must not suppress a real draft sitting alongside it.
+    expect(toTabCandidate(convo({ draft: draft({ attached: ["Note.md"], text: "wip" }) })).hasDraft).toBe(true);
   });
 
   it("reports a non-empty queue", () => {
