@@ -119,11 +119,12 @@ Create a `.obsidian-plugin-dir` file containing the absolute path to your vault'
 - `src/providers/` — `ProviderAdapter` interface + `claude.ts` (Agent SDK) and `codex.ts` (CLI) adapters, normalized into a single `AgentEvent` stream.
 - `src/cli.ts` — robust CLI path resolution (Obsidian doesn't inherit the shell PATH).
 - `src/ui/tools.ts` — tool metadata + detail/diff rendering.
+- `src/ui/hub/` — the Capabilities hub: a view shell plus one renderer per tab (overview, skills, mcp, playbooks, automations, memory). Pure halves in `src/core/hub-sections.ts` and `src/core/capability-scan.ts`.
 - `src/core/agent*.ts` — named agents: registry and turn binding, run gates, event-trigger matching, run ledger and per-agent memory, seed contracts. Pure and unit-tested; the Obsidian halves are `src/obsidian/agent-store.ts`, `src/obsidian/agent-triggers.ts` and `src/ui/agents-view.ts`. See `docs/specs/2026-08-01-agents-design.md`.
 
 ## Status
 
-Implemented: text + reasoning streaming, agentic tools with permission gating (Claude), Codex backend with tool cards, theme-aware transparent UI, context chips + multi-note attach, persistent conversation history, parallel conversations with a message queue + stop, `/` and `@` palettes, effort + permission selectors, the **Capabilities** panel, and the full Obsidian-native layer (graph tools, configurable-root memory read/write, graph UI). Codex tool-event parsing is best-effort (the CLI event schema is version-sensitive); per-action Codex approvals (`codex proto`) are not yet wired — Codex relies on its sandbox. The Obsidian-native tools and memory writes are **Claude-only** (Codex has no in-process MCP equivalent).
+Implemented: text + reasoning streaming, agentic tools with permission gating, persistent Claude and Codex sessions, Codex tool cards/Stop/steer/native compact, theme-aware transparent UI, context chips + multi-note attach, persistent conversation history, parallel conversations with a message queue + stop, `/` and `@` palettes, effort + permission selectors, the **Capabilities hub** (skills, MCP, playbooks, automations, memory in one pane), and the full Obsidian-native layer (graph tools, configurable-root memory read/write, graph UI). Codex reaches Obsidian-native tools through Exo's loopback MCP bridge.
 
 ## Try it
 

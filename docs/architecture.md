@@ -65,6 +65,34 @@ Three distinct memories, deliberately separated:
 
 The context ring in the toolbar reads real `usage` events from the stream; clicking it sends a guided `/compact`. Token pressure is managed where it actually lives — in the CLI session — not simulated in the UI.
 
+## The Capabilities hub
+
+One pane (`src/ui/hub/`, view type `exo-connections` — the string is
+workspace-persistent and never changes) holds everything the agent can do and
+the machinery around it. Six tabs, each a self-contained renderer receiving a
+`HubTabContext { app, plugin, rerender, base }`:
+
+| Tab | What it manages |
+|---|---|
+| Overview | session + system status, Exo Queue actions |
+| Skills | skill marketplace (import/remove) + Commands, Sub-agents, Hooks, Tools |
+| MCP | add / edit / enable / disable / remove / reconnect / re-auth |
+| Playbooks | custom prompts, schedule badge, read-only Run now |
+| Automations | scheduled runs, Daily Pulse, restorable write runs |
+| Memory | dream pass, store, open-loops, vault-memory files |
+
+Two rules keep it coherent. **Rows with inline actions, never cards with
+click-through** — seeing a thing and acting on it are the same gesture.
+**Live caps first, disk scan as fallback**: the CLI's `system/init` snapshot is
+the truth about what a session loaded; the filesystem scanners in
+`core/capability-scan.ts` cover the gap before the first spawn and on Codex.
+
+The chat keeps only a slim **session card** (`ui/session-card.ts`) — a glance at
+provider/model/effort plus the live counts, with one button into the hub. Both
+surfaces re-render when a new caps snapshot lands (`plugin.refreshHub()`).
+Pure logic lives in `core/hub-sections.ts` (partitioning) and
+`core/actions-hub.ts` (view models), both unit-tested without a DOM.
+
 ## Named agents
 
 An agent is two files with two owners: the **brain** (`.claude/agents/<slug>.md`
