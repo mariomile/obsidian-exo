@@ -218,29 +218,46 @@ describe("deriveTabState", () => {
 });
 
 describe("tabAriaLabel", () => {
+  const quiet = { agents: 0, pinned: false };
+
   it("says nothing extra when the tab is idle", () => {
     // The mark draws nothing; the label adds nothing. Absence on both channels.
-    expect(tabAriaLabel("Vault refactor", { state: "idle", needsInput: false })).toBe("Vault refactor");
+    expect(tabAriaLabel("Vault refactor", { state: "idle", needsInput: false }, quiet)).toBe("Vault refactor");
   });
 
   it("reports both channels when a streaming turn is blocked on the user", () => {
-    expect(tabAriaLabel("Vault refactor", { state: "streaming", needsInput: true, reason: "perm" })).toBe(
-      "Vault refactor, running, waiting for permission"
-    );
+    expect(
+      tabAriaLabel("Vault refactor", { state: "streaming", needsInput: true, reason: "perm" }, quiet)
+    ).toBe("Vault refactor, running, waiting for permission");
   });
 
   it("distinguishes the two needs-input reasons", () => {
-    expect(tabAriaLabel("Vault refactor", { state: "idle", needsInput: true, reason: "ask" })).toBe(
+    expect(tabAriaLabel("Vault refactor", { state: "idle", needsInput: true, reason: "ask" }, quiet)).toBe(
       "Vault refactor, waiting for your answer"
     );
   });
 
   it("gives every non-idle state words of its own", () => {
     const said = (["streaming", "unread", "stopped", "error"] as const).map((state) =>
-      tabAriaLabel("T", { state, needsInput: false })
+      tabAriaLabel("T", { state, needsInput: false }, quiet)
     );
     expect(new Set(said).size).toBe(said.length);
     expect(said.every((s) => s.startsWith("T, "))).toBe(true);
+  });
+
+  it("carries the pin and the agent count, which the explicit label would otherwise hide", () => {
+    // An explicit aria-label REPLACES name-from-content, so the pin icon's and
+    // the badge's own labels stop being announced: whatever the tab shows and
+    // this string omits becomes sighted-only.
+    expect(
+      tabAriaLabel("Vault refactor", { state: "streaming", needsInput: false }, { agents: 2, pinned: true })
+    ).toBe("Vault refactor, pinned, running, 2 agents");
+  });
+
+  it("keeps the agent count singular at one", () => {
+    expect(tabAriaLabel("T", { state: "idle", needsInput: false }, { agents: 1, pinned: false })).toBe(
+      "T, 1 agent"
+    );
   });
 });
 
@@ -253,8 +270,6 @@ describe("tabSignature", () => {
     agents: 0,
     pinned: false,
     active: false,
-    mixedProviders: false,
-    provider: "claude",
     ...over,
   });
 
@@ -263,8 +278,9 @@ describe("tabSignature", () => {
   });
 
   // One case per field: an omitted field is a state change that silently fails
-  // to repaint, so every rendered fact gets its own pin here.
-  const variants: [string, Partial<TabFacts>][] = [
+  // to repaint, so every rendered fact gets its own pin here. Kept exhaustive
+  // by the coverage test right below.
+  const variants: [keyof TabFacts, Partial<TabFacts>][] = [
     ["title", { title: "Something else" }],
     ["placeholder", { placeholder: true }],
     ["state", { state: "streaming" }],
@@ -272,15 +288,20 @@ describe("tabSignature", () => {
     ["agents", { agents: 1 }],
     ["pinned", { pinned: true }],
     ["active", { active: true }],
-    // The strip turning mixed is what makes every mark start painting its brand
-    // colour, so it has to move every tab's signature, not just the new tab's.
-    ["mixedProviders", { mixedProviders: true }],
   ];
   for (const [name, over] of variants) {
     it(`changes when ${name} changes`, () => {
       expect(tabSignature(facts(over))).not.toBe(tabSignature(facts()));
     });
   }
+
+  it("pins every field of TabFacts", () => {
+    // A field added later with no variant above would be a fact that can change
+    // without changing the string — the silently-stale tab this whole shape
+    // exists to prevent. `reason` has its own two cases below.
+    const covered = new Set<string>([...variants.map(([k]) => k), "reason"]);
+    expect(Object.keys(facts()).filter((k) => !covered.has(k))).toEqual([]);
+  });
 
   it("distinguishes the two needs-input reasons", () => {
     expect(tabSignature(facts({ needsInput: true, reason: "perm" }))).not.toBe(
@@ -292,17 +313,6 @@ describe("tabSignature", () => {
     // Otherwise a stale reason would keep the signature different from the
     // freshly-unblocked one and repaint forever.
     expect(tabSignature(facts({ needsInput: false, reason: "perm" }))).toBe(tabSignature(facts()));
-  });
-
-  it("tracks the provider only while the strip is mixed", () => {
-    // The two halves that must move together: the brand colour is painted only
-    // on a mixed strip, so the field must move only on a mixed strip. A painted
-    // fact missing from the signature is a state change that silently fails to
-    // repaint; an unpainted fact inside it is a repaint nobody needed.
-    expect(tabSignature(facts({ mixedProviders: true, provider: "codex" }))).not.toBe(
-      tabSignature(facts({ mixedProviders: true }))
-    );
-    expect(tabSignature(facts({ provider: "codex" }))).toBe(tabSignature(facts()));
   });
 
   it("does not collide across field boundaries", () => {

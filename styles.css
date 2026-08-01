@@ -181,16 +181,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-weight: 500;
 }
 /* Status mark — one 6px slot, four states, zero pictograms. Absence of a mark
-   IS the idle state: nothing to know, nothing drawn. `--mva-tab-brand` is set
-   inline only when the strip holds more than one provider; every state rule
-   below outranks it, so the brand colour fills the slot only while no state
-   needs it. */
+   IS the idle state: nothing to know, nothing drawn. The slot carries state and
+   nothing else: the provider colour is deliberately NOT painted here, because a
+   filled brand dot and a filled `unread` dot differ only in hue — and with a
+   user-configurable accent they can be the same hue. */
 .mva-tab-mark {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: var(--mva-tab-brand, transparent);
+  background: transparent;
 }
 /* Motion = happening now. Rationed to one moving element per tab (the agents
    spinner goes static while streaming), because motion is the strongest signal
@@ -222,6 +222,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-tab.is-blocked .mva-tab-mark {
   background: var(--interactive-accent);
+}
+/* On the title element, not by inheritance: `.mva-tab-title.is-placeholder`
+   sets `--text-faint` at (0,2,0) and would out-specify the colour the rule
+   above sets on the tab. An untitled chat is exactly where the first permission
+   prompt of a session lands, so that is the common case, not the edge one. */
+.mva-tab.is-blocked .mva-tab-title {
+  color: var(--text-normal);
 }
 .mva-tab-title {
   overflow: hidden;
@@ -3829,6 +3836,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
     background: none;
     -webkit-text-fill-color: currentColor;
     color: var(--text-muted);
+  }
+  /* Motion is the ONLY channel `streaming` has in the tab strip, and the
+     blanket above ends the pulse after a single 0.001ms cycle — leaving a
+     static muted dot that differs from `unread` by hue alone, on a
+     user-configurable accent. So give the state a non-moving FORM instead:
+     filled and ringed, against `unread`'s plain fill and `stopped`/`error`'s
+     plain outline. Same specificity as the base rule (0,2,0), later in the
+     file, so it wins on source order and needs no `!important`. */
+  .mva-tab-mark.is-streaming {
+    background: var(--text-muted);
+    box-shadow: 0 0 0 1px var(--text-faint);
   }
 }
 

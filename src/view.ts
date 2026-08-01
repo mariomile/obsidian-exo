@@ -1608,18 +1608,10 @@ export class ChatView extends ItemView {
       return;
     }
 
-    const open: Convo[] = [];
+    const models: CardModel[] = [];
     for (const id of ids) {
       const c = this.convos.find((x) => x.id === id);
-      if (c) open.push(c);
-    }
-    // The brand colour earns the mark's slot only when there is something to
-    // tell apart. Seven tabs on one provider means seven identical dots: zero
-    // bits, spent on the one slot the state needs.
-    const mixedProviders = new Set(open.map((c) => c.provider)).size > 1;
-
-    const models: CardModel[] = [];
-    for (const c of open) {
+      if (!c) continue;
       const vm = deriveTabState({
         streaming: c.streaming,
         pendingPerm: c.pendingPerm != null,
@@ -1629,6 +1621,7 @@ export class ChatView extends ItemView {
         poisoned: !!c.resumeRisky,
       });
       const agents = this.agentCount(c);
+      const pinned = c.pinned === true;
       const isActive = c === this.active;
       // Untitled and empty renders as the placeholder, which the title string
       // alone cannot express: "New chat" with a first message in it is a plain
@@ -1643,12 +1636,10 @@ export class ChatView extends ItemView {
           needsInput: vm.needsInput,
           reason: vm.reason,
           agents,
-          pinned: c.pinned === true,
+          pinned,
           active: isActive,
-          mixedProviders,
-          provider: c.provider,
         }),
-        build: () => this.buildTab(c, vm, agents, isActive, placeholder, mixedProviders),
+        build: () => this.buildTab(c, vm, agents, isActive, placeholder, pinned),
       });
     }
     reconcileList(this.tabsEl, models);
@@ -1664,7 +1655,7 @@ export class ChatView extends ItemView {
     agents: number,
     isActive: boolean,
     placeholder: boolean,
-    mixedProviders: boolean
+    pinned: boolean
   ): HTMLElement {
     const tab = createDiv({ cls: "mva-tab" + (isActive ? " is-active" : "") });
     const title = placeholder ? "New chat" : c.title || "New chat";
@@ -1675,18 +1666,16 @@ export class ChatView extends ItemView {
     // streaming — which one slot could not express.
     tab.toggleClass("is-blocked", vm.needsInput);
     // The colour and the shape say all of this to a sighted user; the label
-    // says it to everyone else.
-    tab.setAttr("aria-label", tabAriaLabel(title, vm));
+    // says it to everyone else. It has to carry everything the tab shows,
+    // including the badge and the pin: setting it here REPLACES
+    // name-from-content, so their own labels stop being announced.
+    tab.setAttr("aria-label", tabAriaLabel(title, vm, { agents, pinned }));
 
-    // One 6px slot, four states, zero pictograms. `idle` deliberately adds no
-    // class: nothing is drawn, because there is nothing to know.
+    // One 6px slot, four states, zero pictograms — and nothing else: the
+    // provider colour deliberately does NOT live here. `idle` adds no class:
+    // nothing is drawn, because there is nothing to know.
     const mark = tab.createSpan({ cls: "mva-tab-mark" });
     if (vm.state !== "idle") mark.addClass(`is-${vm.state}`);
-    // Custom property, not `background` directly: an inline background would
-    // outrank every state rule and refill the hollow stopped/error mark, which
-    // is the one thing that keeps those two off the "filled" channel. As a
-    // fallback value it colours the mark only where no state has claimed it.
-    if (mixedProviders) mark.style.setProperty("--mva-tab-brand", ADAPTERS[c.provider].brandColor);
 
     const titleEl = tab.createSpan({ cls: "mva-tab-title" + (placeholder ? " is-placeholder" : "") });
     if (placeholder) {
@@ -1699,10 +1688,7 @@ export class ChatView extends ItemView {
     // Pinned is a noun, so it gets an icon (states never do). Nothing assigns
     // `Convo.pinned` yet — the affordance and its mutation site land together
     // in the pin task; this is the paint waiting for them.
-    if (c.pinned === true) {
-      const pin = tab.createSpan({ cls: "mva-tab-pin", attr: { "aria-label": "Pinned" } });
-      setIcon(pin, "pin");
-    }
+    if (pinned) setIcon(tab.createSpan({ cls: "mva-tab-pin" }), "pin");
 
     // Per-tab agent count: how many subagents/background tasks THIS chat is
     // running right now — local to its own tab, so a busy background chat is

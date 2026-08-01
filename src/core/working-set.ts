@@ -214,14 +214,26 @@ const STATE_WORDS: Record<TabState, string> = {
  * Both channels are reported when both are on — "running, waiting for
  * permission" — for the same reason `state` and `needsInput` are separate
  * fields: one tab, two facts, and picking a winner would drop one of them.
+ *
+ * It also has to carry `pinned` and `agents`. An explicit label REPLACES
+ * name-from-content, so the pin icon's own label and the agent badge's own
+ * label stop being announced the moment this attribute exists: anything the tab
+ * shows and this string omits is a fact only sighted users get.
  */
-export function tabAriaLabel(title: string, vm: TabVM): string {
+export function tabAriaLabel(
+  title: string,
+  vm: TabVM,
+  extra: { agents: number; pinned: boolean },
+): string {
   const parts = [title];
+  if (extra.pinned) parts.push("pinned");
   const word = STATE_WORDS[vm.state];
   if (word) parts.push(word);
   if (vm.needsInput) {
     parts.push(vm.reason === "ask" ? "waiting for your answer" : "waiting for permission");
   }
+  // Last: it is context, not the thing you have to act on.
+  if (extra.agents > 0) parts.push(`${extra.agents} agent${extra.agents > 1 ? "s" : ""}`);
   return parts.join(", ");
 }
 
@@ -251,18 +263,15 @@ export interface TabFacts {
   agents: number;
   pinned: boolean;
   active: boolean;
-  /** More than one provider is open in the strip. A property of the STRIP, not
-   *  of this tab, but it decides whether this tab paints its brand colour — so
-   *  it is a rendered fact and belongs here. */
-  mixedProviders: boolean;
-  /** Drives the mark's brand colour. Read ONLY while `mixedProviders`. */
-  provider: string;
+  // No `provider` here. The mark is a pure state channel: reusing its one slot
+  // for provider identity is the same collision this vocabulary exists to
+  // avoid — a filled brand dot and a filled `unread` dot differ only in hue,
+  // and `--interactive-accent` is user-configurable. Nothing on the tab paints
+  // the provider, so nothing here tracks it.
 }
 
-/** Serialize a tab's rendered facts. Pure and total over what is *painted*: the
- *  one conditional field, `provider`, is conditional on exactly the condition
- *  that decides whether it reaches the screen, so a value that changes visibly
- *  always changes the string — and a value that changes invisibly never does. */
+/** Serialize a tab's rendered facts. Pure and total: no field is conditional,
+ *  so a value that changes always changes the string. */
 export function tabSignature(f: TabFacts): string {
   return [
     f.title,
@@ -274,11 +283,5 @@ export function tabSignature(f: TabFacts): string {
     String(f.agents),
     f.pinned ? "pin" : "",
     f.active ? "act" : "",
-    // On a single-provider strip the brand colour is never applied — every mark
-    // would be the same colour, so the channel carries zero bits and yields the
-    // slot to the state. Omitting it here is the other half of that: an unpainted
-    // provider change must not force a repaint, and the moment the strip becomes
-    // mixed EVERY tab's signature moves, so every mark picks up its colour.
-    f.mixedProviders ? f.provider : "",
   ].join("|");
 }
