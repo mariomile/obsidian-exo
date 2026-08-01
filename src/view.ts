@@ -84,7 +84,7 @@ import {
 } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { partitionConvos } from "./core/persistence";
-import { planRetention, pinnedIdsOf, retentionBudgetBytes } from "./core/retention";
+import { planRetention, pinnedIdsOf, retentionBudgetBytes, visibleSelection } from "./core/retention";
 import { DEFAULT_SETTINGS } from "./settings";
 import {
   buildRecap,
@@ -415,6 +415,13 @@ export class ChatView extends ItemView {
   /** Ids selezionati nella cronologia per un'azione bulk. Runtime-only, azzerato
    *  a ogni apertura della gallery. */
   private gallerySelection = new Set<string>();
+  /** Memo behind `convoSizeOf`, keyed by conversation id and invalidated by
+   *  `updatedAt`. Runtime-only; an entry dies with its conversation. */
+  private convoSizeCache = new Map<string, { updatedAt: number | undefined; bytes: number }>();
+  /** Disarms the bulk bar's pending delete (timer + outside-click listener).
+   *  Set while a bar is armed, so rebuilding or closing the gallery can never
+   *  strand the document-level listener. */
+  private bulkDisarm: (() => void) | null = null;
 
   private tabsEl!: HTMLElement;
   private listWrap!: HTMLElement;
@@ -1253,7 +1260,9 @@ export class ChatView extends ItemView {
       usage: c.usage,
       researchMode: c.researchMode,
       ...(c.archived ? { archived: true } : {}),
-      ...(c.pinned ? { pinned: true } : {}),
+      // Strict `=== true`, matching the two sites that READ it (`pinnedIdsOf`
+      // and `restore`): one rule for pinning, stated the same way everywhere.
+      ...(c.pinned === true ? { pinned: true } : {}),
       ...(c.retiredAt ? { retiredAt: c.retiredAt } : {}),
       ...(c.boardStatus ? { boardStatus: c.boardStatus } : {}),
       messages: c.messages.map((message) =>
@@ -1277,15 +1286,38 @@ export class ChatView extends ItemView {
    *  over-budget live conversations become advisory cleanup candidates, never
    *  deletions — only empty, unprotected "New chat" husks are dropped. One
    *  partition, one `saveActive`: the two payloads are a single consistent
-   *  snapshot with no ordering coupling. See core/retention for the contract. */
+   *  snapshot with no ordering coupling. See core/retention for the contract.
+   *
+   *  ONE deliberate loss, recorded here because nothing else in the tree records
+   *  it: an EMPTY conversation that is neither active nor pinned is dropped even
+   *  when it is currently a tab in the strip, so an empty non-active tab is
+   *  garbage-collected on reload (`restore()` then filters its now-dangling id
+   *  out of `openTabIds`). The old planner protected `[activeId, ...openTabIds]`
+   *  precisely to stop that. Removing the tab set from the protection rule is
+   *  the point of this plan — while it was in there, CLOSING a tab is what made
+   *  a conversation deletable — so the protection is not coming back. Nothing
+   *  the user wrote is lost: a husk holds zero messages. Recreating those tab
+   *  placeholders belongs to the strip, not to the retention policy: Plan 2. */
   private serializeSplit(): { live: ConvoData[]; archived: ConvoData[] } {
     this.saveActive();
+    const { live, archived } = this.recomputeRetention();
+    return {
+      live: live.map((c) => this.toConvoData(c)),
+      archived: archived.map((c) => this.toConvoData(c)),
+    };
+  }
+
+  /** Run the retention policy over the current set and refresh the advisory
+   *  candidate list. Split out of `serializeSplit` because the plan used to
+   *  exist only as a side effect of persisting: `restore()` never persists, so
+   *  after every reload the proposal was empty and the gallery banner stayed
+   *  dead until the user happened to send a message. The gallery now computes it
+   *  on open. Returns the partition so the persist path plans and partitions
+   *  once, not twice. */
+  private recomputeRetention(): { live: Convo[]; archived: Convo[] } {
     const all = this.allConvos();
     const { live, archived } = partitionConvos(all);
-    // Serialize FIRST, then plan: the planner's cost model is the on-disk
-    // weight, so it must see the same shape the store will hold.
-    const liveData = live.map((c) => this.toConvoData(c));
-    const plan = planRetention(liveData, {
+    const plan = planRetention(live, {
       activeId: this.active.id,
       pinnedIds: pinnedIdsOf(all),
       // Clamped, not trusted: data.json is hand-editable and a 0/negative/
@@ -1294,13 +1326,38 @@ export class ChatView extends ItemView {
         this.plugin.settings.retentionBudgetMb,
         DEFAULT_SETTINGS.retentionBudgetMb
       ),
-      sizeOf: (d) => JSON.stringify(d).length,
+      sizeOf: (c) => this.convoSizeOf(c),
     });
-    this.retentionCandidateIds = plan.candidates.map((d) => d.id);
-    return {
-      live: plan.keep,
-      archived: archived.map((c) => this.toConvoData(c)),
-    };
+    this.retentionCandidateIds = plan.candidates.map((c) => c.id);
+    return { live: plan.keep, archived };
+  }
+
+  /** Weight of one conversation AS THE STORE WILL HOLD IT — hence the trip
+   *  through `toConvoData`, which is what actually lands on disk — memoized per
+   *  conversation and invalidated by `updatedAt`.
+   *
+   *  The memo is not an optimization detail, it is what keeps the cost bounded:
+   *  `persist()` forces a flush every PERSIST_MAX_WAIT_MS during a stream, and
+   *  the planner measures each kept conversation and again each candidate. Left
+   *  unmemoized that is several full serializations of the entire store, on the
+   *  main thread, every few seconds — and unlike the count cap this replaced,
+   *  the byte budget only proposes, so nothing bounds how large the store gets.
+   *  A streaming conversation is never cached: it grows between `updatedAt`
+   *  bumps, so a cached weight would be stale exactly while it is moving.
+   *
+   *  The figure counts UTF-16 code units, not bytes, so a store full of
+   *  non-ASCII text weighs more on disk than the setting labelled "MB" implies.
+   *  Deliberate: this feeds a proposal the user confirms, not a hard limit, and
+   *  an exact byte count means a second encoding pass per conversation. Same
+   *  reasoning for title-only edits (`aiTitle`), which do not move `updatedAt`
+   *  and so are not re-measured until the next real change — a few characters. */
+  private convoSizeOf(c: Convo): number {
+    if (c.streaming) return JSON.stringify(this.toConvoData(c)).length;
+    const hit = this.convoSizeCache.get(c.id);
+    if (hit && hit.updatedAt === c.updatedAt) return hit.bytes;
+    const bytes = JSON.stringify(this.toConvoData(c)).length;
+    this.convoSizeCache.set(c.id, { updatedAt: c.updatedAt, bytes });
+    return bytes;
   }
 
   /** Schedule a debounced write. Callers fire this freely; the actual
@@ -1867,6 +1924,10 @@ export class ChatView extends ItemView {
   }
 
   private hideGallery(): void {
+    // The bulk bar's armed state owns a document-level listener; the bar is about
+    // to be removed with its container, so drop it here or it outlives the DOM.
+    this.bulkDisarm?.();
+    this.bulkDisarm = null;
     this.galleryEl?.remove();
     this.galleryEl = null;
     this.listEl.show();
@@ -1928,6 +1989,12 @@ export class ChatView extends ItemView {
     this.rebuildOutline(); // drop the outline rail while the gallery is up
     wrap.createDiv({ cls: "mva-gallery-title", text: "Conversations" });
 
+    // Plan on OPEN, not only on persist: the candidate list is runtime state and
+    // restore() never persists, so a freshly reloaded plugin would show no
+    // banner however far over budget the store is. Cheap on reopen — convoSizeOf
+    // is memoized, so this re-measures only what actually changed.
+    this.recomputeRetention();
+
     // Retention proposal (R3): over budget we SHOW, we never delete. The banner
     // is inert until the user acts on it — it only preselects the candidates.
     if (this.retentionCandidateIds.length > 0) {
@@ -1968,11 +2035,15 @@ export class ChatView extends ItemView {
       grid.empty();
       const ql = q.toLowerCase().trim();
       const matches = ql ? sorted.filter((c) => this.convoMatches(c, ql)) : sorted;
-      if (matches.length === 0) {
+      if (matches.length !== 0) {
+        for (const c of matches) this.renderCard(grid, c, doneConvoIds);
+      } else {
         grid.createDiv({ cls: "mva-empty-sub", text: "No matching conversations." });
-        return;
       }
-      for (const c of matches) this.renderCard(grid, c, doneConvoIds);
+      // Filtering changes which cards exist, and the bulk bar counts only cards
+      // the user can see — so the bar has to be recomputed with the grid, not
+      // just when the selection itself changes.
+      this.renderBulkBar();
     };
     search.addEventListener("input", () => renderGrid(search.value));
     renderGrid("");
@@ -1990,7 +2061,7 @@ export class ChatView extends ItemView {
     const isOpen = this.openTabs.includes(c.id);
     if (isActive) card.addClass("is-active");
     if (isOpen) card.addClass("is-open");
-    if (this.gallerySelection.has(c.id)) card.addClass("is-selected");
+    this.setCardSelected(card, this.gallerySelection.has(c.id));
     this.addCardDelete(card, grid, c);
     const head = card.createDiv({ cls: "mva-card-head" });
     const dot = head.createSpan({ cls: "mva-dot" });
@@ -2040,7 +2111,7 @@ export class ChatView extends ItemView {
       if (mod.metaKey || mod.ctrlKey || this.gallerySelection.size > 0) {
         if (this.gallerySelection.has(c.id)) this.gallerySelection.delete(c.id);
         else this.gallerySelection.add(c.id);
-        card.toggleClass("is-selected", this.gallerySelection.has(c.id));
+        this.setCardSelected(card, this.gallerySelection.has(c.id));
         this.renderBulkBar();
         return;
       }
@@ -2115,6 +2186,11 @@ export class ChatView extends ItemView {
     // This card may have been part of a pending bulk selection: drop it so the
     // bulk bar never announces more conversations than it can actually delete.
     if (this.gallerySelection.delete(c.id)) this.renderBulkBar();
+    // ...and out of the retention proposal, which the banner's "Seleziona" reads
+    // straight into a selection. Left in, a dangling id would make the bar
+    // over-report and the delete under-deliver.
+    this.retentionCandidateIds = this.retentionCandidateIds.filter((id) => id !== c.id);
+    this.convoSizeCache.delete(c.id);
     if (!grid.querySelector(".mva-card")) {
       grid.createDiv({ cls: "mva-empty-sub", text: "No conversations yet." });
     }
@@ -2123,8 +2199,38 @@ export class ChatView extends ItemView {
 
   /* ------------------------ gallery bulk selection ---------------------- */
 
+  /** Paint selection state on a card. The class and `aria-pressed` move together
+   *  so selection is never visible to sighted users only: `clickable()` gives
+   *  every card `role="button"`, and a button with no `aria-pressed` announces
+   *  no state at all. */
+  private setCardSelected(card: HTMLElement, selected: boolean): void {
+    card.toggleClass("is-selected", selected);
+    card.setAttr("aria-pressed", String(selected));
+  }
+
+  /** Ids of the cards the grid is currently painting — i.e. what the user can
+   *  actually see, after the search box has had its say. */
+  private visibleCardIds(): Set<string> {
+    const ids = new Set<string>();
+    this.galleryEl?.querySelectorAll<HTMLElement>(".mva-card").forEach((el) => {
+      const id = el.dataset.convoId;
+      if (id) ids.add(id);
+    });
+    return ids;
+  }
+
+  /** The selection, restricted to what is on screen. Every consumer — the bar's
+   *  count, the armed label, the delete itself — goes through this, so the
+   *  number the user confirms and the set that is deleted are the same set by
+   *  construction. See `visibleSelection` in core/retention for why. */
+  private effectiveSelection(): string[] {
+    return visibleSelection(this.gallerySelection, this.visibleCardIds());
+  }
+
   /** Preselect the retention candidates so the user can review and confirm in
-   *  one action. Selecting is not deleting: the bulk bar still asks. */
+   *  one action. Selecting is not deleting: the bulk bar still asks. Under an
+   *  active search the bar counts only the candidates actually on screen — the
+   *  selection keeps the rest, and they come back when the filter clears. */
   private selectCandidates(): void {
     this.gallerySelection = new Set(this.retentionCandidateIds);
     this.refreshSelectionUI();
@@ -2137,31 +2243,58 @@ export class ChatView extends ItemView {
   private refreshSelectionUI(): void {
     this.galleryEl?.querySelectorAll<HTMLElement>(".mva-card").forEach((el) => {
       const id = el.dataset.convoId;
-      el.toggleClass("is-selected", !!id && this.gallerySelection.has(id));
+      this.setCardSelected(el, !!id && this.gallerySelection.has(id));
     });
     this.renderBulkBar();
   }
 
-  /** The bulk action bar — visible only while something is selected. Rebuilt on
-   *  every selection change, which also disarms a pending delete: growing the
-   *  selection can never inherit a confirmation the user gave for a smaller one. */
+  /** The bulk action bar — visible only while something on screen is selected.
+   *  Rebuilt on every selection change AND on every grid re-render, which also
+   *  disarms a pending delete: neither growing the selection nor changing the
+   *  filter can inherit a confirmation the user gave for a different set. */
   private renderBulkBar(): void {
+    // Always drop the previous bar's arm state first — it owns a timer and a
+    // document-level listener that must not outlive the element.
+    this.bulkDisarm?.();
+    this.bulkDisarm = null;
     const wrap = this.galleryEl;
     if (!wrap) return;
     wrap.querySelector(".mva-gallery-bulk")?.remove();
-    const n = this.gallerySelection.size;
+    const n = this.effectiveSelection().length;
     if (n === 0) return;
     const bar = wrap.createDiv({ cls: "mva-gallery-bulk" });
     bar.createSpan({ text: `${n} selezionat${n === 1 ? "a" : "e"}` });
     const del = bar.createSpan({ cls: "mva-gallery-bulk-del", text: "Elimina" });
+    // Same arm/disarm shape as the per-card trash (addCardDelete): a 3s timer
+    // plus a capturing outside-click. The N-conversation control must not be
+    // guarded more weakly than the one-conversation one, which is what a bare
+    // closure flag — armed until the bar happens to be rebuilt — amounted to.
     let armed = false;
+    let disarmTimer: number | null = null;
+    const outside = (ev: MouseEvent) => {
+      if (ev.target !== del && !del.contains(ev.target as Node)) disarm();
+    };
+    const disarm = () => {
+      armed = false;
+      del.removeClass("is-armed");
+      del.setText("Elimina");
+      if (disarmTimer) {
+        window.clearTimeout(disarmTimer);
+        disarmTimer = null;
+      }
+      document.removeEventListener("click", outside, true);
+    };
+    this.bulkDisarm = disarm;
     this.clickable(del, () => {
       if (!armed) {
         armed = true;
         del.addClass("is-armed");
         del.setText(`Elimina ${n} definitivamente`);
+        disarmTimer = window.setTimeout(disarm, 3000);
+        document.addEventListener("click", outside, true);
         return;
       }
+      disarm();
       this.deleteSelected();
     });
     const cancel = bar.createSpan({ cls: "mva-gallery-bulk-cancel", text: "Annulla" });
@@ -2172,9 +2305,13 @@ export class ChatView extends ItemView {
   }
 
   /** Permanently drop every selected conversation. The only deletion path that
-   *  this plan adds — and it is always user-confirmed (armed twice). */
+   *  this plan adds — and it is always user-confirmed (armed twice).
+   *
+   *  Deletes the VISIBLE selection, never the raw set: the count the user just
+   *  confirmed came from the same call, so the blast radius can never exceed
+   *  what the confirmation showed. */
   private deleteSelected(): void {
-    const ids = new Set(this.gallerySelection);
+    const ids = this.effectiveSelection();
     const removed: string[] = [];
     for (const id of ids) {
       const c = this.convos.find((x) => x.id === id);
@@ -2184,8 +2321,12 @@ export class ChatView extends ItemView {
       if (tabIdx !== -1) this.openTabs.splice(tabIdx, 1);
       const idx = this.convos.indexOf(c);
       if (idx !== -1) this.convos.splice(idx, 1);
+      this.convoSizeCache.delete(id);
       removed.push(id);
     }
+    // Clear the WHOLE selection, not just what was deleted: any id that was
+    // selected but filtered out of view was never confirmed, so it must not
+    // survive as a live selection into whatever the user does next.
     this.gallerySelection.clear();
     // Only what actually went away leaves the candidate list: a skipped active
     // chat is still over budget and must still be proposed next time.
@@ -2196,7 +2337,17 @@ export class ChatView extends ItemView {
     this.renderTabs();
     this.hideGallery();
     void this.showGallery();
-    new Notice(`${removed.length} conversazioni eliminate.`);
+    // Il caso zero non è un "0 eliminate": succede quando la selezione conteneva
+    // solo la chat attiva, che il ciclo salta. Dirlo, invece di riportare un
+    // numero che sembra un errore.
+    const n = removed.length;
+    new Notice(
+      n === 0
+        ? "Nessuna conversazione eliminata: la chat attiva non si elimina da qui."
+        : n === 1
+          ? "1 conversazione eliminata."
+          : `${n} conversazioni eliminate.`
+    );
   }
 
   /** Point `active` at another conversation without leaving the gallery overlay:
@@ -2449,10 +2600,14 @@ export class ChatView extends ItemView {
         if (!this.convos.includes(c)) return; // conversation removed meanwhile
         c.title = title;
         this.renderTabs();
-        if (this.galleryEl) {
-          // Rebuild the open gallery so its card shows the refreshed title.
+        // Rebuild the open gallery so its card shows the refreshed title — but
+        // NOT while a bulk selection is in progress: showGallery() clears the
+        // selection, so a title landing in the background would silently undo
+        // the user's in-progress multi-select. A stale card title is the lesser
+        // surprise, and the next gallery open fixes it.
+        if (this.galleryEl && this.gallerySelection.size === 0) {
           this.hideGallery();
-          this.showGallery();
+          void this.showGallery();
         }
         this.persist();
       })

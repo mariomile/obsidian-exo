@@ -76,6 +76,27 @@ export function pinnedIdsOf<T extends { id: string; pinned?: boolean }>(all: T[]
 }
 
 /**
+ * The part of a bulk selection the user can actually see, given the ids the
+ * gallery grid is currently painting.
+ *
+ * The gallery's search box filters the grid, but the selection is a plain id set
+ * that survives filtering. Without this intersection the confirmation ("N
+ * selezionate", "Elimina N definitivamente") counts ids that are off screen,
+ * so the blast radius of the delete can exceed what the user was shown. Both the
+ * bulk bar's count and the delete itself read this, which is what makes the two
+ * numbers the same one: the deleted set is always a subset of the displayed set.
+ *
+ * Pure, and here rather than in the view, so that property stays under test.
+ * Selection order is preserved.
+ */
+export function visibleSelection(
+  selection: Iterable<string>,
+  visibleIds: ReadonlySet<string>
+): string[] {
+  return [...selection].filter((id) => visibleIds.has(id));
+}
+
+/**
  * The `budgetBytes` input to `planRetention`, from the megabyte setting.
  *
  * The settings panel guards its own input, but `data.json` is a plain file the

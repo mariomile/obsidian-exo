@@ -76,9 +76,12 @@ export function planPersistedConvos<
 }
 
 /**
- * Split conversations into the live set (persisted to `conversations.json` and
- * subject to the retention planner's budget) and the archived set (persisted to
- * the separate, never-budgeted archive store). Keeping this pure lets the
+ * Split conversations into the live set (persisted to `conversations.json`, the
+ * set the retention planner measures) and the archived set (persisted to the
+ * separate, unmeasured archive store). "Measures" is the whole relationship:
+ * the budget is advisory, so being on the live side never means being trimmed —
+ * an over-budget live set produces cleanup candidates the user confirms, and
+ * `planRetention` never shrinks `keep`. Keeping this pure lets the
  * partition — the round-trip contract's foundation — be unit-tested without the
  * Obsidian view. Original order is preserved within each side.
  */

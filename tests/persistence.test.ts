@@ -13,7 +13,15 @@ const convo = (id: string, msgCount: number, updatedAt?: number): C => ({
   updatedAt,
 });
 
-describe("planPersistedConvos", () => {
+/**
+ * NOT a production contract. `planPersistedConvos` is deprecated and has no
+ * caller: production retention is `planRetention` (src/core/retention.ts), which
+ * never shrinks what it keeps. These cases pin the HISTORICAL planner — the one
+ * that returned a reduced set whose difference was then deleted from disk — so
+ * that the behaviour this branch removed stays legible, and so "recreates the
+ * incident" below reads as the bug it was, not as a rule still in force.
+ */
+describe("planPersistedConvos (deprecated planner — historical behaviour only)", () => {
   it("recreates the incident: an OLD convo with recent updatedAt survives while a NEWER empty husk is dropped", () => {
     // 35 real convos + 10 empty husks = 45 entries, max 30 → real eviction runs
     // (35 > 30). c0 sits at the FRONT of the array but was touched most recently;

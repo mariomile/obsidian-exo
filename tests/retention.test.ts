@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { planRetention } from "../src/core/retention";
+import {
+  planRetention,
+  pinnedIdsOf,
+  retentionBudgetBytes,
+  visibleSelection,
+} from "../src/core/retention";
+import { partitionConvos, planPersistedConvos } from "../src/core/persistence";
 
 type C = { id: string; messages: unknown[]; updatedAt?: number };
 
@@ -87,10 +93,70 @@ describe("planRetention", () => {
     const plan = planRetention(all, opts());
     expect(plan.totalBytes).toBe(200);
   });
+
+  it("handles an empty store without proposing anything", () => {
+    // 0 <= budget, so this exits on the within-budget path. Guards against an
+    // empty history ever producing a banner with nothing behind it.
+    const plan = planRetention([] as C[], opts());
+    expect(plan.keep).toEqual([]);
+    expect(plan.candidates).toEqual([]);
+    expect(plan.totalBytes).toBe(0);
+  });
+
+  it("keeps everything even at budgetBytes 0 — the worst case still deletes nothing", () => {
+    // `retentionBudgetBytes` normally stops a 0 from reaching here, but the
+    // planner is the last line: a 0 budget makes EVERY unprotected conversation
+    // a candidate, and that must still be a proposal, never a trim.
+    const all = [convo("active", 2, 1), convo("a", 2, 10), convo("b", 2, 20)];
+    const plan = planRetention(all, opts({ activeId: "active", budgetBytes: 0 }));
+    expect(plan.keep.map((c) => c.id)).toEqual(["active", "a", "b"]);
+    expect(plan.candidates.map((c) => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("keeps everything at a negative budget too, and never proposes the protected ones", () => {
+    const all = [convo("active", 2, 1), convo("pinned", 2, 2), convo("old", 2, 3)];
+    const plan = planRetention(
+      all,
+      opts({ activeId: "active", pinnedIds: ["pinned"], budgetBytes: -1000 })
+    );
+    expect(plan.keep.length).toBe(3);
+    expect(plan.candidates.map((c) => c.id)).toEqual(["old"]);
+  });
+
+  it("proposes nothing when a 0 budget store holds only protected conversations", () => {
+    // Over budget with no unprotected convo to offer: candidates must be empty
+    // rather than falling back to something protected.
+    const all = [convo("active", 2, 1), convo("pinned", 2, 2)];
+    const plan = planRetention(
+      all,
+      opts({ activeId: "active", pinnedIds: ["pinned"], budgetBytes: 0 })
+    );
+    expect(plan.keep.length).toBe(2);
+    expect(plan.candidates).toEqual([]);
+  });
 });
 
-import { pinnedIdsOf, retentionBudgetBytes } from "../src/core/retention";
-import { partitionConvos } from "../src/core/persistence";
+describe("visibleSelection", () => {
+  it("drops selected ids that are not on screen", () => {
+    // The gallery's search box filters the grid but not the selection set. What
+    // the confirmation counts must be what the delete removes.
+    expect(visibleSelection(["a", "b", "c"], new Set(["b"]))).toEqual(["b"]);
+  });
+
+  it("is empty when nothing selected is visible", () => {
+    expect(visibleSelection(["a", "b"], new Set(["z"]))).toEqual([]);
+    expect(visibleSelection([], new Set(["a"]))).toEqual([]);
+  });
+
+  it("never returns an id that was not selected", () => {
+    // Blast radius can only shrink, never grow: visible-but-unselected stays out.
+    expect(visibleSelection(["a"], new Set(["a", "b", "c"]))).toEqual(["a"]);
+  });
+
+  it("preserves selection order", () => {
+    expect(visibleSelection(["c", "a", "b"], new Set(["a", "b", "c"]))).toEqual(["c", "a", "b"]);
+  });
+});
 
 describe("pinnedIdsOf", () => {
   it("returns only the ids of conversations flagged pinned", () => {
@@ -113,8 +179,6 @@ describe("pinnedIdsOf", () => {
     expect(pinnedIdsOf(all)).toEqual(["b"]);
   });
 });
-
-import { planPersistedConvos } from "../src/core/persistence";
 
 describe("migrazione dal planner vecchio (characterization)", () => {
   it("il vecchio planner cancellava oltre il cap; il nuovo non cancella mai", () => {

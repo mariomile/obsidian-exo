@@ -60,7 +60,7 @@ Three distinct memories, deliberately separated:
 | Store | Owner | Contents | Survives |
 |---|---|---|---|
 | `~/.claude/projects/*.jsonl` | CLI | the model's real context (every message, tool call, result) | everything — this is what `resume` reattaches |
-| `conversations.json` | Exo | the UI transcript (rendered messages, tool cards, checkpoints), recency-evicted at 30 conversations | plugin reloads |
+| `conversations.json` | Exo | the UI transcript (rendered messages, tool cards, checkpoints); kept whole — a byte budget only *proposes* the oldest unpinned conversations for cleanup, and the user confirms | plugin reloads |
 | `data.json` | Exo | settings, open tabs, active tab | plugin reloads |
 
 The context ring in the toolbar reads real `usage` events from the stream; clicking it sends a guided `/compact`. Token pressure is managed where it actually lives — in the CLI session — not simulated in the UI.
