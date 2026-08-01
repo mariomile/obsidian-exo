@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { planWorkingSet, deriveTabState, stripCap, toTabCandidate, tabSignature } from "../src/core/working-set";
+import {
+  planWorkingSet,
+  deriveTabState,
+  stripCap,
+  toTabCandidate,
+  tabSignature,
+  tabAriaLabel,
+} from "../src/core/working-set";
 import type { TabFacts } from "../src/core/working-set";
 
 type Cand = Parameters<typeof planWorkingSet>[0][number];
@@ -210,6 +217,33 @@ describe("deriveTabState", () => {
   });
 });
 
+describe("tabAriaLabel", () => {
+  it("says nothing extra when the tab is idle", () => {
+    // The mark draws nothing; the label adds nothing. Absence on both channels.
+    expect(tabAriaLabel("Vault refactor", { state: "idle", needsInput: false })).toBe("Vault refactor");
+  });
+
+  it("reports both channels when a streaming turn is blocked on the user", () => {
+    expect(tabAriaLabel("Vault refactor", { state: "streaming", needsInput: true, reason: "perm" })).toBe(
+      "Vault refactor, running, waiting for permission"
+    );
+  });
+
+  it("distinguishes the two needs-input reasons", () => {
+    expect(tabAriaLabel("Vault refactor", { state: "idle", needsInput: true, reason: "ask" })).toBe(
+      "Vault refactor, waiting for your answer"
+    );
+  });
+
+  it("gives every non-idle state words of its own", () => {
+    const said = (["streaming", "unread", "stopped", "error"] as const).map((state) =>
+      tabAriaLabel("T", { state, needsInput: false })
+    );
+    expect(new Set(said).size).toBe(said.length);
+    expect(said.every((s) => s.startsWith("T, "))).toBe(true);
+  });
+});
+
 describe("tabSignature", () => {
   const facts = (over: Partial<TabFacts> = {}): TabFacts => ({
     title: "Refactor the parser",
@@ -219,6 +253,7 @@ describe("tabSignature", () => {
     agents: 0,
     pinned: false,
     active: false,
+    mixedProviders: false,
     provider: "claude",
     ...over,
   });
@@ -237,7 +272,9 @@ describe("tabSignature", () => {
     ["agents", { agents: 1 }],
     ["pinned", { pinned: true }],
     ["active", { active: true }],
-    ["provider", { provider: "codex" }],
+    // The strip turning mixed is what makes every mark start painting its brand
+    // colour, so it has to move every tab's signature, not just the new tab's.
+    ["mixedProviders", { mixedProviders: true }],
   ];
   for (const [name, over] of variants) {
     it(`changes when ${name} changes`, () => {
@@ -255,6 +292,17 @@ describe("tabSignature", () => {
     // Otherwise a stale reason would keep the signature different from the
     // freshly-unblocked one and repaint forever.
     expect(tabSignature(facts({ needsInput: false, reason: "perm" }))).toBe(tabSignature(facts()));
+  });
+
+  it("tracks the provider only while the strip is mixed", () => {
+    // The two halves that must move together: the brand colour is painted only
+    // on a mixed strip, so the field must move only on a mixed strip. A painted
+    // fact missing from the signature is a state change that silently fails to
+    // repaint; an unpainted fact inside it is a repaint nobody needed.
+    expect(tabSignature(facts({ mixedProviders: true, provider: "codex" }))).not.toBe(
+      tabSignature(facts({ mixedProviders: true }))
+    );
+    expect(tabSignature(facts({ provider: "codex" }))).toBe(tabSignature(facts()));
   });
 
   it("does not collide across field boundaries", () => {

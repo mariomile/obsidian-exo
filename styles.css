@@ -180,14 +180,48 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-tab.is-active .mva-tab-title {
   font-weight: 500;
 }
-.mva-tab-dot {
+/* Status mark — one 6px slot, four states, zero pictograms. Absence of a mark
+   IS the idle state: nothing to know, nothing drawn. `--mva-tab-brand` is set
+   inline only when the strip holds more than one provider; every state rule
+   below outranks it, so the brand colour fills the slot only while no state
+   needs it. */
+.mva-tab-mark {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
+  background: var(--mva-tab-brand, transparent);
 }
-.mva-tab.is-streaming .mva-tab-dot {
+/* Motion = happening now. Rationed to one moving element per tab (the agents
+   spinner goes static while streaming), because motion is the strongest signal
+   a UI has and two of them compete instead of informing. */
+.mva-tab-mark.is-streaming {
+  background: var(--text-muted);
   animation: mva-pulse 1.1s ease-in-out infinite;
+}
+/* Fill = finished, unseen. */
+.mva-tab-mark.is-unread {
+  background: var(--interactive-accent);
+}
+/* Outline = ended badly. Hollow reads as "spent" against the filled states. */
+.mva-tab-mark.is-stopped,
+.mva-tab-mark.is-error {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-faint);
+}
+/* Weight and area = blocked on you. This is the only state that breaks out of
+   the 6px slot, because it is the only one where the work is stopped and you
+   are the reason. Escalating inside the mark would put it on the same plane as
+   the others; it is not on the same plane. Placed after `.is-active` on
+   purpose: same specificity, and when a tab is both, the ring should report
+   the thing you have to act on. */
+.mva-tab.is-blocked {
+  color: var(--text-normal);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+}
+.mva-tab.is-blocked .mva-tab-mark {
+  background: var(--interactive-accent);
 }
 .mva-tab-title {
   overflow: hidden;
@@ -207,6 +241,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 12px;
   height: 12px;
   flex-shrink: 0;
+}
+/* Pinned is a noun, so it gets an icon — the states never do. Faint: it is a
+   property of the tab, not news about it. */
+.mva-tab-pin {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+.mva-tab-pin .svg-icon {
+  width: 11px;
+  height: 11px;
 }
 .mva-tab-x {
   display: inline-flex;
@@ -268,6 +313,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-tab-agents-icon .svg-icon {
   width: 11px;
   height: 11px;
+}
+/* The spinner turns only when nothing else on this tab is moving. While the tab
+   is streaming the mark owns the motion and the count is a static numeral —
+   one moving element per tab, or they compete instead of informing. */
+.mva-tab-agents-icon.is-spinning .svg-icon {
   animation: mva-spin 1.1s linear infinite;
 }
 

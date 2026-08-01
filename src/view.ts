@@ -85,7 +85,7 @@ import {
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { partitionConvos } from "./core/persistence";
 import { planRetention, pinnedIdsOf, retentionBudgetBytes, visibleSelection } from "./core/retention";
-import { planWorkingSet, stripCap, toTabCandidate, deriveTabState, tabSignature } from "./core/working-set";
+import { planWorkingSet, stripCap, toTabCandidate, deriveTabState, tabSignature, tabAriaLabel } from "./core/working-set";
 import type { TabVM } from "./core/working-set";
 import { reconcileList } from "./ui/keyed-reconcile";
 import type { CardModel } from "./ui/keyed-reconcile";
@@ -1608,10 +1608,18 @@ export class ChatView extends ItemView {
       return;
     }
 
-    const models: CardModel[] = [];
+    const open: Convo[] = [];
     for (const id of ids) {
       const c = this.convos.find((x) => x.id === id);
-      if (!c) continue;
+      if (c) open.push(c);
+    }
+    // The brand colour earns the mark's slot only when there is something to
+    // tell apart. Seven tabs on one provider means seven identical dots: zero
+    // bits, spent on the one slot the state needs.
+    const mixedProviders = new Set(open.map((c) => c.provider)).size > 1;
+
+    const models: CardModel[] = [];
+    for (const c of open) {
       const vm = deriveTabState({
         streaming: c.streaming,
         pendingPerm: c.pendingPerm != null,
@@ -1637,9 +1645,10 @@ export class ChatView extends ItemView {
           agents,
           pinned: c.pinned === true,
           active: isActive,
+          mixedProviders,
           provider: c.provider,
         }),
-        build: () => this.buildTab(c, vm, agents, isActive, placeholder),
+        build: () => this.buildTab(c, vm, agents, isActive, placeholder, mixedProviders),
       });
     }
     reconcileList(this.tabsEl, models);
@@ -1649,18 +1658,50 @@ export class ChatView extends ItemView {
    *  creating this under `tabsEl` would duplicate the node and corrupt the
    *  order. Every fact it paints must appear in the caller's `tabSignature`
    *  call, or changing that fact will not repaint. */
-  private buildTab(c: Convo, vm: TabVM, agents: number, isActive: boolean, placeholder: boolean): HTMLElement {
+  private buildTab(
+    c: Convo,
+    vm: TabVM,
+    agents: number,
+    isActive: boolean,
+    placeholder: boolean,
+    mixedProviders: boolean
+  ): HTMLElement {
     const tab = createDiv({ cls: "mva-tab" + (isActive ? " is-active" : "") });
-    const dot = tab.createSpan({ cls: "mva-tab-dot" });
-    dot.style.background = ADAPTERS[c.provider].brandColor;
-    if (vm.state === "streaming") tab.addClass("is-streaming");
+    const title = placeholder ? "New chat" : c.title || "New chat";
+    // "Blocked on you" rides the TAB, not the mark: it is the only state where
+    // the work is stopped AND the user is the reason, so it earns the whole
+    // tab's weight instead of a share of the 6px slot. It also has to coexist
+    // with a streaming mark — a turn waiting on a permission prompt is still
+    // streaming — which one slot could not express.
+    tab.toggleClass("is-blocked", vm.needsInput);
+    // The colour and the shape say all of this to a sighted user; the label
+    // says it to everyone else.
+    tab.setAttr("aria-label", tabAriaLabel(title, vm));
+
+    // One 6px slot, four states, zero pictograms. `idle` deliberately adds no
+    // class: nothing is drawn, because there is nothing to know.
+    const mark = tab.createSpan({ cls: "mva-tab-mark" });
+    if (vm.state !== "idle") mark.addClass(`is-${vm.state}`);
+    // Custom property, not `background` directly: an inline background would
+    // outrank every state rule and refill the hollow stopped/error mark, which
+    // is the one thing that keeps those two off the "filled" channel. As a
+    // fallback value it colours the mark only where no state has claimed it.
+    if (mixedProviders) mark.style.setProperty("--mva-tab-brand", ADAPTERS[c.provider].brandColor);
 
     const titleEl = tab.createSpan({ cls: "mva-tab-title" + (placeholder ? " is-placeholder" : "") });
     if (placeholder) {
       setIcon(titleEl, "pencil");
       titleEl.append("New chat");
     } else {
-      titleEl.setText(c.title || "New chat");
+      titleEl.setText(title);
+    }
+
+    // Pinned is a noun, so it gets an icon (states never do). Nothing assigns
+    // `Convo.pinned` yet — the affordance and its mutation site land together
+    // in the pin task; this is the paint waiting for them.
+    if (c.pinned === true) {
+      const pin = tab.createSpan({ cls: "mva-tab-pin", attr: { "aria-label": "Pinned" } });
+      setIcon(pin, "pin");
     }
 
     // Per-tab agent count: how many subagents/background tasks THIS chat is
@@ -1671,7 +1712,13 @@ export class ChatView extends ItemView {
         cls: "mva-tab-agents",
         attr: { "aria-label": `${agents} agent${agents > 1 ? "s" : ""} running` },
       });
-      setIcon(badge.createSpan({ cls: "mva-tab-agents-icon" }), "loader");
+      // Motion budget: one moving element per tab. While the tab is streaming
+      // the mark carries the motion and this stays a static numeral — two
+      // animations on one tab compete for attention instead of informing.
+      const icon = badge.createSpan({
+        cls: "mva-tab-agents-icon" + (vm.state === "streaming" ? "" : " is-spinning"),
+      });
+      setIcon(icon, "loader");
       badge.createSpan({ text: String(agents) });
     }
 
