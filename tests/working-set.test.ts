@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planWorkingSet, deriveTabState } from "../src/core/working-set";
+import { planWorkingSet, deriveTabState, stripCap, toTabCandidate } from "../src/core/working-set";
 
 type Cand = Parameters<typeof planWorkingSet>[0][number];
 
@@ -77,6 +77,80 @@ describe("planWorkingSet", () => {
     const plan = planWorkingSet(tabs, { activeId: "z", cap: 3 });
     expect(plan.retire).toEqual(["a"]);
     expect(plan.visible).toEqual(["z", "m", "q"]);
+  });
+});
+
+describe("retire bookkeeping", () => {
+  it("a retired tab carries a retiredAt timestamp and leaves the visible set", () => {
+    // Contract the view must honour: retiring writes a timestamp (never 0 —
+    // toConvoData drops a falsy retiredAt) and removes the id from the strip.
+    const tabs = [tab("keep", 90), tab("old", 10), tab("active", 99)];
+    const plan = planWorkingSet(tabs, { activeId: "active", cap: 2 });
+    expect(plan.retire).toEqual(["old"]);
+    expect(plan.visible).not.toContain("old");
+    expect(plan.visible).toEqual(["keep", "active"]);
+  });
+});
+
+describe("toTabCandidate", () => {
+  type Source = Parameters<typeof toTabCandidate>[0];
+  const convo = (over: Partial<Source> = {}): Source => ({
+    id: "c1",
+    streaming: false,
+    pendingPerm: null,
+    pendingAsk: null,
+    queue: [],
+    ...over,
+  });
+  const draft = (over = {}) => ({ text: "", images: [], attached: [], excludeActiveNote: false, ...over });
+
+  it("prefers lastActiveAt, falls back to updatedAt, then 0", () => {
+    // The fallback is what keeps pre-field conversations from all tying at 0.
+    expect(toTabCandidate(convo({ lastActiveAt: 7, updatedAt: 3 })).lastActiveAt).toBe(7);
+    expect(toTabCandidate(convo({ updatedAt: 3 })).lastActiveAt).toBe(3);
+    expect(toTabCandidate(convo()).lastActiveAt).toBe(0);
+  });
+
+  it("reads pinned strictly, like every other site", () => {
+    expect(toTabCandidate(convo({ pinned: true })).pinned).toBe(true);
+    expect(toTabCandidate(convo()).pinned).toBe(false);
+  });
+
+  it("treats an open permission or ask card as needsInput", () => {
+    expect(toTabCandidate(convo()).needsInput).toBe(false);
+    expect(toTabCandidate(convo({ pendingPerm: () => {} })).needsInput).toBe(true);
+    expect(toTabCandidate(convo({ pendingAsk: () => {} })).needsInput).toBe(true);
+  });
+
+  it("does not call a pristine composer a draft", () => {
+    // getDraft() always returns an object, so presence is not evidence: an empty
+    // composer that counted as a draft would exempt every tab from the cap.
+    expect(toTabCandidate(convo({ draft: draft() })).hasDraft).toBe(false);
+    expect(toTabCandidate(convo({ draft: draft({ text: "   \n" }) })).hasDraft).toBe(false);
+  });
+
+  it("counts text, images and attached context as unsent content", () => {
+    expect(toTabCandidate(convo({ draft: draft({ text: "wip" }) })).hasDraft).toBe(true);
+    expect(toTabCandidate(convo({ draft: draft({ images: [{}] }) })).hasDraft).toBe(true);
+    expect(toTabCandidate(convo({ draft: draft({ attached: ["Note.md"] }) })).hasDraft).toBe(true);
+  });
+
+  it("reports a non-empty queue", () => {
+    expect(toTabCandidate(convo()).hasQueue).toBe(false);
+    expect(toTabCandidate(convo({ queue: [{ text: "next" }] })).hasQueue).toBe(true);
+  });
+});
+
+describe("stripCap", () => {
+  it("passes a usable cap through, floored", () => {
+    expect(stripCap(6, 6)).toBe(6);
+    expect(stripCap(3.7, 6)).toBe(3);
+  });
+
+  it("falls back on a hand-edited data.json rather than emptying the strip", () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "8", null, undefined]) {
+      expect(stripCap(bad, 6)).toBe(6);
+    }
   });
 });
 

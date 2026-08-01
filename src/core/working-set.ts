@@ -76,6 +76,58 @@ export function planWorkingSet(
   };
 }
 
+/** Clamp the configured cap. Mirrors `retentionBudgetBytes` in retention.ts:
+ *  settings come from a hand-editable data.json, and a 0 / negative / NaN cap
+ *  would retire every non-exempt tab in the strip in one go. */
+export function stripCap(cap: unknown, fallback: number): number {
+  const usable = typeof cap === "number" && Number.isFinite(cap) && cap > 0;
+  return Math.floor(usable ? (cap as number) : fallback);
+}
+
+/** The slice of a live conversation the strip's decision reads. Structural on
+ *  purpose: the real `Convo` carries DOM and sessions, and this file stays free
+ *  of both — it only needs to satisfy this shape. */
+export interface TabCandidateSource {
+  id: string;
+  lastActiveAt?: number;
+  updatedAt?: number;
+  pinned?: boolean;
+  streaming: boolean;
+  /** Cancel handles for an open permission / ask card — non-null means blocked. */
+  pendingPerm: unknown;
+  pendingAsk: unknown;
+  /** The stashed composer draft, if any. `text` is "" on a pristine composer, so
+   *  presence of the object is not evidence of unsent content. */
+  draft?: { text: string; images: readonly unknown[]; attached: readonly string[] };
+  queue: readonly unknown[];
+}
+
+/**
+ * Project a conversation onto the retire decision's inputs. Lives here, next to
+ * the policy, because this mapping is where a wrong field silently disables an
+ * exemption — and an exemption that fails open costs the user their place in a
+ * tab that still had work in it.
+ *
+ * `lastActiveAt` falls back to `updatedAt` (then 0) so conversations restored
+ * from a store written before the field existed sort by their last turn instead
+ * of all tying at 0 and retiring in arbitrary order.
+ */
+export function toTabCandidate(c: TabCandidateSource): TabCandidate {
+  return {
+    id: c.id,
+    lastActiveAt: c.lastActiveAt ?? c.updatedAt ?? 0,
+    // Strict `=== true`, matching every other site that reads `pinned`.
+    pinned: c.pinned === true,
+    streaming: c.streaming,
+    needsInput: c.pendingPerm != null || c.pendingAsk != null,
+    // "Unsent content" is text, attachments OR manually attached context — each
+    // of the three is something the user put there and has not sent yet.
+    hasDraft:
+      !!c.draft && (c.draft.text.trim().length > 0 || c.draft.images.length > 0 || c.draft.attached.length > 0),
+    hasQueue: c.queue.length > 0,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tab state
 // ---------------------------------------------------------------------------

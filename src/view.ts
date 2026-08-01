@@ -85,6 +85,7 @@ import {
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { partitionConvos } from "./core/persistence";
 import { planRetention, pinnedIdsOf, retentionBudgetBytes, visibleSelection } from "./core/retention";
+import { planWorkingSet, stripCap, toTabCandidate } from "./core/working-set";
 import { DEFAULT_SETTINGS } from "./settings";
 import {
   buildRecap,
@@ -185,6 +186,9 @@ interface ConvoData {
    *  history's "Ritirate di recente" group. Absent = never been in the strip,
    *  or still in it. Persisted. */
   retiredAt?: number;
+  /** When this conversation was last the focused tab. The strip's LRU key.
+   *  Persisted so the retire order survives a reload. */
+  lastActiveAt?: number;
   /** Manually-assigned Session-Cockpit column (persisted). Absent = default. */
   boardStatus?: SessionLane;
   messages: PersistedMessage[];
@@ -210,6 +214,9 @@ export interface Convo {
    *  history's "Ritirate di recente" group. Absent = never been in the strip,
    *  or still in it. Persisted. */
   retiredAt?: number;
+  /** When this conversation was last the focused tab. The strip's LRU key.
+   *  Persisted so the retire order survives a reload. */
+  lastActiveAt?: number;
   /** Manually-assigned Session-Cockpit column (persisted). When set and the chat
    *  is idle, its card sits here instead of the default review lane; running /
    *  needs-input still auto-override. */
@@ -1187,6 +1194,7 @@ export class ChatView extends ItemView {
         archived: d.archived === true,
         pinned: d.pinned === true,
         retiredAt: d.retiredAt,
+        lastActiveAt: d.lastActiveAt,
         boardStatus: d.boardStatus,
         provider,
         model,
@@ -1264,6 +1272,7 @@ export class ChatView extends ItemView {
       // and `restore`): one rule for pinning, stated the same way everywhere.
       ...(c.pinned === true ? { pinned: true } : {}),
       ...(c.retiredAt ? { retiredAt: c.retiredAt } : {}),
+      ...(c.lastActiveAt ? { lastActiveAt: c.lastActiveAt } : {}),
       ...(c.boardStatus ? { boardStatus: c.boardStatus } : {}),
       messages: c.messages.map((message) =>
         persistMessage(message, {
@@ -1452,6 +1461,43 @@ export class ChatView extends ItemView {
     this.persist();
   }
 
+  /** Enforce the strip's soft cap. Called after anything that adds a tab or
+   *  changes which one is focused. Retiring removes from the strip and stamps
+   *  `retiredAt`; the conversation itself is untouched and stays in the history
+   *  (see core/retention: being an open tab no longer affects survival).
+   *
+   *  Self-contained on purpose: when it changes anything it re-renders the strip
+   *  and persists both halves of the change (the tab set in settings, `retiredAt`
+   *  in the conversation store), so no caller has to remember to. */
+  private applyWorkingSet(): void {
+    const byId = new Map(this.allConvos().map((c) => [c.id, c]));
+    const candidates = this.openTabs
+      .map((id) => byId.get(id))
+      .filter((c): c is Convo => !!c)
+      .map((c) => toTabCandidate(c));
+
+    const plan = planWorkingSet(candidates, {
+      activeId: this.active.id,
+      // Clamped, not trusted — same reasoning as `retentionBudgetBytes` above:
+      // data.json is hand-editable and a 0/negative/non-numeric cap would retire
+      // every non-exempt tab in the strip at once.
+      cap: stripCap(this.plugin.settings.stripMaxTabs, DEFAULT_SETTINGS.stripMaxTabs),
+    });
+    if (plan.retire.length === 0) return;
+
+    const now = Date.now();
+    for (const id of plan.retire) {
+      const c = byId.get(id);
+      if (!c) continue;
+      c.retiredAt = now; // never 0: toConvoData drops a falsy value
+      this.dropSession(c); // free the live session; resumable from the history
+    }
+    this.openTabs = plan.visible;
+    this.renderTabs();
+    this.persistTabs();
+    this.persist(); // `retiredAt` lives in the conversation store, not in settings
+  }
+
   private switchTo(c: Convo): void {
     if (c === this.active) return;
     if (this.capsEl) this.hideCapabilities();
@@ -1459,6 +1505,11 @@ export class ChatView extends ItemView {
     this.active.draft = this.composer.getDraft();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.active = c;
+    // The LRU key. Set before applyWorkingSet runs below, so the tab you just
+    // opened is the freshest one and can never be the one that retires.
+    c.lastActiveAt = Date.now();
+    // Coming back from the history un-retires: it is in the strip again.
+    c.retiredAt = undefined;
     if (!this.openTabs.includes(c.id)) this.openTabs.push(c.id);
     this.provider = c.provider;
     this.model = c.model;
@@ -1480,6 +1531,7 @@ export class ChatView extends ItemView {
     this.composer.setLastRateLimit((c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null);
     this.composer.updateRateBadge();
     this.renderTabs();
+    this.applyWorkingSet();
     this.persistTabs();
     this.scrollConvo(c);
     this.renderTailSurfacing(c);
@@ -1784,6 +1836,34 @@ export class ChatView extends ItemView {
       (this.active?.id === convoId ? this.active : undefined);
     if (!c) return false;
     c.archived = archived;
+    if (archived) {
+      // "Archived" and "open in the working set" are contradictory states. Leave
+      // the strip when archived; reopening from the history brings it back (and
+      // resuming a turn un-archives it, see setStreaming).
+      c.retiredAt = Date.now();
+      const idx = this.openTabs.indexOf(c.id);
+      if (idx !== -1) {
+        this.openTabs.splice(idx, 1);
+        if (c === this.active) {
+          const nextId = this.openTabs[idx] ?? this.openTabs[idx - 1] ?? this.openTabs[this.openTabs.length - 1];
+          const next = nextId ? this.convos.find((x) => x.id === nextId) : undefined;
+          // switchTo re-renders and re-persists the strip itself (and runs the
+          // cap over the now-smaller set). It cannot re-enter here: `c` is
+          // already out of openTabs, and nothing in switchTo archives.
+          if (next) this.switchTo(next);
+          else {
+            // Archiving the last tab would otherwise leave an empty strip with
+            // the archived chat still on screen. Same fallback as closeTab.
+            const fresh = this.makeConvo();
+            this.convos.push(fresh);
+            this.openTabs.push(fresh.id);
+            this.switchTo(fresh);
+          }
+        }
+        this.renderTabs();
+        this.persistTabs();
+      }
+    }
     this.persist();
     return true;
   }
@@ -2358,6 +2438,11 @@ export class ChatView extends ItemView {
     this.active = next;
     this.provider = next.provider;
     this.model = next.model;
+    // Same two facts switchTo records: this is now the focused tab (LRU key) and
+    // it is back in the strip. The cap itself is left to the next switchTo —
+    // retiring a tab out from under an open gallery overlay would be invisible.
+    next.lastActiveAt = Date.now();
+    next.retiredAt = undefined;
     if (!this.openTabs.includes(next.id)) this.openTabs.push(next.id);
     if (next.messages.length && next.listEl.childElementCount === 0) this.renderConvoDom(next);
     next.listEl.hide(); // gallery is on top; reveal happens on hideGallery/switchTo

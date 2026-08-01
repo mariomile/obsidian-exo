@@ -218,6 +218,9 @@ export interface MVASettings {
   /** Soft ceiling for conversations.json, in megabytes. Exceeding it proposes a
    *  cleanup in the history — it never deletes anything on its own. */
   retentionBudgetMb: number;
+  /** Soft cap on NON-pinned tabs in the chat strip. Opening one more retires the
+   *  least-recently-active unpinned tab. Retiring never deletes. */
+  stripMaxTabs: number;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -303,6 +306,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   orchestrationEnabled: false,
   orchestrationMaxConcurrent: 2,
   retentionBudgetMb: 50,
+  stripMaxTabs: 6,
   connectionsInlineUnderline: true,
   connectionsStemming: true,
 };
@@ -1134,6 +1138,22 @@ export class MVASettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             const n = Number.parseInt(v, 10);
             if (Number.isFinite(n) && n > 0) s.retentionBudgetMb = n;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(el)
+      .setName("Tab strip size")
+      .setDesc(
+        "How many unpinned chats stay in the strip. Opening one more retires the least recently used — it stays in the history, nothing is deleted."
+      )
+      .addText((t) => {
+        const s = this.plugin.settings;
+        t.setPlaceholder("6")
+          .setValue(String(s.stripMaxTabs))
+          .onChange(async (v) => {
+            const n = Number.parseInt(v, 10);
+            if (Number.isFinite(n) && n > 0) s.stripMaxTabs = n;
             await this.plugin.saveSettings();
           });
       });
