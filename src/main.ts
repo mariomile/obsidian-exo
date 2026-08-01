@@ -1577,6 +1577,14 @@ export default class ExoPlugin extends Plugin {
     this.agentRefresh = null;
   }
 
+  /** Re-render any open Agents pane. No-op when none is open. */
+  async refreshAgentsUI(): Promise<void> {
+    for (const leaf of this.app.workspace.getLeavesOfType(AGENTS_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof AgentsView) await view.refresh();
+    }
+  }
+
   /**
    * Wire vault events to the agent trigger driver.
    *
@@ -1615,6 +1623,20 @@ export default class ExoPlugin extends Plugin {
         if (file instanceof TFile) driver.notify(file.path, "rename");
       })
     );
+
+    // Contract files are meant to be edited by hand — that is the whole point of
+    // keeping them in the vault. Without this, an edit would sit in a file the
+    // cached registry never re-reads, and the agent would keep its old triggers
+    // until the plugin reloaded.
+    const watchContracts = (path: string) => {
+      if (!path.endsWith(".md") || !path.startsWith(`${this.paths.agents}/`)) return;
+      this.invalidateAgents();
+      void this.refreshAgentsUI();
+    };
+    this.registerEvent(this.app.vault.on("modify", (file) => watchContracts(file.path)));
+    this.registerEvent(this.app.vault.on("create", (file) => watchContracts(file.path)));
+    this.registerEvent(this.app.vault.on("delete", (file) => watchContracts(file.path)));
+    this.registerEvent(this.app.vault.on("rename", (file) => watchContracts(file.path)));
 
     this.app.workspace.onLayoutReady(() => {
       // Warm the registry so the first real event has agents to match against,
