@@ -11,7 +11,7 @@ import { handoffPrefix } from "./core/handoff";
 import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { CockpitView, COCKPIT_VIEW_TYPE, COCKPIT_ICON } from "./ui/cockpit-view";
 import { AgentsView, AGENTS_VIEW_TYPE } from "./ui/agents-view";
-import { ConnectionsView, CONNECTIONS_VIEW_TYPE, CONNECTIONS_ICON } from "./ui/connections-view";
+import { HubView, HUB_VIEW_TYPE, HUB_ICON, type HubTab } from "./ui/hub/hub-view";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
 import { resolveCli, cliDiagnostics, updateClaudeCli } from "./cli";
@@ -421,7 +421,7 @@ export default class ExoPlugin extends Plugin {
 
     // Connections marketplace icon — Huge Icons puzzle piece.
     addIcon(
-      CONNECTIONS_ICON,
+      HUB_ICON,
       '<g transform="scale(4.166667)" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.5">' +
         '<path d="M12.828 6.001a3 3 0 1 0-5.658 0c-2.285.008-3.504.09-4.292.878S2.008 8.886 2 11.17a3 3 0 1 1 0 5.66c.008 2.284.09 3.503.878 4.291s2.007.87 4.291.878a3 3 0 1 1 5.66 0c2.284-.008 3.503-.09 4.291-.878s.87-2.007.878-4.292a3 3 0 1 0 0-5.658c-.008-2.285-.09-3.504-.878-4.292c-.788-.789-2.007-.87-4.292-.878Z"/>' +
         '</g>',
@@ -443,7 +443,7 @@ export default class ExoPlugin extends Plugin {
     // and never starts the driver (see BoardView.onOpen).
     this.registerView(BOARD_VIEW_TYPE, (leaf) => new BoardView(leaf, this));
     this.registerView(COCKPIT_VIEW_TYPE, (leaf) => new CockpitView(leaf, this));
-    this.registerView(CONNECTIONS_VIEW_TYPE, (leaf) => new ConnectionsView(leaf, this));
+    this.registerView(HUB_VIEW_TYPE, (leaf) => new HubView(leaf, this));
     this.registerView(AGENTS_VIEW_TYPE, (leaf) => new AgentsView(leaf, this));
 
     // In-note AI: a floating toolbar over the selection (Edit / Continue / Ask
@@ -902,14 +902,20 @@ export default class ExoPlugin extends Plugin {
     workspace.revealLeaf(leaf);
   }
 
-  async activateConnections(): Promise<void> {
+  /** Open the Capabilities hub, optionally deep-linking to a tab. */
+  async activateHub(tab?: HubTab): Promise<void> {
     const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(CONNECTIONS_VIEW_TYPE)[0] ?? null;
+    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(HUB_VIEW_TYPE)[0] ?? null;
     if (!leaf) {
       leaf = workspace.getLeaf(true);
-      await leaf.setViewState({ type: CONNECTIONS_VIEW_TYPE, active: true });
+      await leaf.setViewState({ type: HUB_VIEW_TYPE, active: true });
     }
     workspace.revealLeaf(leaf);
+    if (tab && leaf.view instanceof HubView) leaf.view.showTab(tab);
+  }
+
+  async activateConnections(): Promise<void> {
+    await this.activateHub();
   }
 
   async activateAgents(): Promise<void> {
