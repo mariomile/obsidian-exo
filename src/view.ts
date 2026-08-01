@@ -1042,7 +1042,7 @@ export class ChatView extends ItemView {
     apps.onclick = (e) => {
       const menu = new Menu();
       menu.addItem((i) => i.setTitle("Cockpit").setIcon("hi-dashboard-speed").onClick(() => void this.plugin.openCockpit()));
-      menu.addItem((i) => i.setTitle("Connections").setIcon("hi-puzzle").onClick(() => void this.plugin.activateConnections()));
+      menu.addItem((i) => i.setTitle("Capabilities").setIcon("hi-puzzle").onClick(() => void this.plugin.activateHub()));
       if (this.plugin.settings.orchestrationEnabled) {
         menu.addItem((i) => i.setTitle("Orchestration board").setIcon("hi-workflow").onClick(() => void this.plugin.activateBoard()));
       }

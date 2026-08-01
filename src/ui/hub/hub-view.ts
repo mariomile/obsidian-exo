@@ -51,7 +51,7 @@ export class HubView extends ItemView {
   }
 
   getViewType(): string { return HUB_VIEW_TYPE; }
-  getDisplayText(): string { return "Connections"; }
+  getDisplayText(): string { return "Capabilities"; }
   getIcon(): string { return HUB_ICON; }
 
   async onOpen(): Promise<void> {

@@ -5135,6 +5135,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-auto-x:hover { color: var(--text-muted); }
 .mva-auto-x svg { width: 14px; height: 14px; }
+/* Chip sections (Commands / Sub-agents / Hooks / Tools) on the Skills tab —
+   reuse the .mva-caps-chip vocabulary inside a grouped section. */
+.mva-hub-chipsec { display: flex; flex-direction: column; gap: 6px; }
+.mva-hub-chipsec .mva-caps-body { padding: 2px 2px 10px; }
 /* Playbook schedule badge (clock + cadence) on the Playbooks tab. */
 .mva-hub-sched { display: inline-flex; align-items: center; gap: 4px; }
 .mva-hub-sched-icon { display: inline-flex; }
