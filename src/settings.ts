@@ -215,6 +215,11 @@ export interface MVASettings {
   orchestrationEnabled: boolean;
   /** Max number of Orchestration Board tasks the driver runs concurrently. */
   orchestrationMaxConcurrent: number;
+  /** Named-agent master flag, default OFF. Gates the registry, the `@agent`
+   *  binding in the composer, the `/as` command and scheduled agent runs.
+   *  Discovering agents never grants them autonomy — each agent is additionally
+   *  disabled in its own contract until turned on. */
+  agentsEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -299,6 +304,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   vaultAutoCommitIntervalMinutes: 15,
   orchestrationEnabled: false,
   orchestrationMaxConcurrent: 2,
+  agentsEnabled: false,
   connectionsInlineUnderline: true,
   connectionsStemming: true,
 };
@@ -1094,6 +1100,14 @@ export class MVASettingTab extends PluginSettingTab {
       "Native-first",
       "Disable the built-in file tools (Read/Grep/Glob/LS/Edit/Write) so vault work goes only through the Obsidian-native tools. Bash stays available (gated). Claude only.",
       "nativeFirst"
+    );
+
+    new Setting(el).setName("Agents").setHeading();
+    this.toggleSetting(
+      el,
+      "Enable named agents",
+      "Turns on the agent registry: `@agent` in the composer binds a turn to a specific subagent, `/as <agent>` binds the whole conversation, and agents with a schedule trigger can run unattended. Definitions come from `.claude/agents/*.md` (the prompt, shared with the CLI) plus a contract file per agent under your memory root (triggers, autonomy tier, write scope). Off by default; each agent is separately disabled until you turn it on. Claude only.",
+      "agentsEnabled"
     );
 
     new Setting(el).setName("Orchestration Board").setHeading();

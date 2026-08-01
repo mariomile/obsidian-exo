@@ -1247,6 +1247,44 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 14px;
 }
 
+/* Bound-agent chip — hidden unless a `@agent` pick or `/as` binding is live.
+   Carries its label (unlike the icon-only Research toggle) because "which
+   agent" is the whole point; a pending one-turn binding reads dashed so it is
+   visibly temporary. */
+.mva-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 160px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--mva-r1);
+  color: var(--mva-brand, var(--interactive-accent));
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 9%, transparent);
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t), border-color var(--mva-t);
+}
+.mva-agent-chip:hover {
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 16%, transparent);
+}
+.mva-agent-chip.is-pending {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 45%, transparent);
+}
+.mva-agent-chip-icon {
+  display: inline-flex;
+}
+.mva-agent-chip-icon .svg-icon {
+  width: 13px;
+  height: 13px;
+}
+.mva-agent-chip-label {
+  overflow: hidden;
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .mva-sel-pop {
   position: absolute;
   left: 0;

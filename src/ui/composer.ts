@@ -93,6 +93,8 @@ export interface ComposerHost {
   resumeGoalLoop(c: Convo): void;
   togglePlanMode(): void;
   toggleResearchMode(): void;
+  /** Drop the active conversation's `/as` binding (the chip's click target). */
+  clearBoundAgent(): void;
   onProviderChange(next: ProviderId, explicitModel?: string): void;
   allModelChoices(): { id: string; label: string; provider: ProviderId }[];
   persistModel(): void;
@@ -137,6 +139,10 @@ export class Composer {
   private refreshEffortChip: () => void = () => {};
   private refreshPermChipFn: () => void = () => {};
   private refreshResearchChip: () => void = () => {};
+  private refreshAgentChipFn: () => void = () => {};
+  /** Agent slug picked from the `@` menu, binding the NEXT send only. Consumed
+   *  by `takePendingAgent()`; a `/as` binding lives on the Convo instead. */
+  private pendingAgent: string | null = null;
   private contextEl!: HTMLElement;
   private excludeActiveNote = false;
   private manualAttached: string[] = [];
@@ -220,6 +226,18 @@ export class Composer {
   }
   refreshResearch(): void {
     this.refreshResearchChip();
+  }
+
+  refreshAgentChip(): void {
+    this.refreshAgentChipFn();
+  }
+
+  /** Read and clear the one-turn `@agent` binding. */
+  takePendingAgent(): string | null {
+    const slug = this.pendingAgent;
+    this.pendingAgent = null;
+    this.refreshAgentChip();
+    return slug;
   }
 
   /** Render (or hide) the goal pill from the conversation's goal state. */
@@ -589,9 +607,27 @@ export class Composer {
     const out: AcItem[] = [];
     // Subagents first — reference a vault agent by @mention.
     const [{ agents }, descs] = await Promise.all([this.loadSlash(), this.loadDescs()]);
+    const bindable = this.host.plugin.settings.agentsEnabled;
     for (const a of agents) {
       if (!matchesWords(a, words)) continue;
-      out.push({ label: a, desc: descs.agents.get(a), detail: "subagent", icon: "bot", insert: `@${a} ` });
+      out.push({
+        label: a,
+        desc: descs.agents.get(a),
+        detail: bindable ? "agent" : "subagent",
+        icon: "bot",
+        insert: `@${a} `,
+        // With agents on, picking one is a real binding: the next send carries an
+        // explicit delegation instruction instead of relying on the model to
+        // notice the `@name` in the prose.
+        ...(bindable
+          ? {
+              onSelect: () => {
+                this.pendingAgent = a;
+                this.refreshAgentChip();
+              },
+            }
+          : {}),
+      });
     }
     for (const f of this.app.vault.getAllLoadedFiles()) {
       if (!f.path || f.path === "/") continue;
@@ -645,6 +681,7 @@ export class Composer {
     this.buildEffortSelect(tb);
     this.buildPermissionSelect(tb);
     this.buildResearchToggle(tb);
+    this.buildAgentChip(tb);
 
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
     // Context usage as a compact circular counter (donut ring). Hover for the
@@ -689,6 +726,48 @@ export class Composer {
     };
     clickable(chip, () => this.host.toggleResearchMode());
     this.refreshResearchChip = refresh;
+    refresh();
+  }
+
+  /**
+   * Bound-agent chip — hidden until an agent is bound, so the toolbar stays
+   * unchanged for anyone not using agents.
+   *
+   * Two bindings share one chip because they are the same idea at two
+   * durations: a `@agent` pick binds the next send (shown as pending), `/as`
+   * binds the tab. Clicking clears whichever is active.
+   */
+  private buildAgentChip(tb: HTMLElement): void {
+    const chip = tb.createDiv({
+      cls: "mva-agent-chip",
+      attr: { role: "button", tabindex: "0", "aria-label": "Bound agent" },
+    });
+    const refresh = () => {
+      const bound = this.host.active?.agent ?? null;
+      const slug = this.pendingAgent ?? bound;
+      chip.empty();
+      if (!slug) {
+        chip.hide();
+        return;
+      }
+      chip.show();
+      chip.toggleClass("is-pending", this.pendingAgent !== null);
+      const icon = chip.createSpan({ cls: "mva-agent-chip-icon" });
+      setIcon(icon, "bot");
+      chip.createSpan({ cls: "mva-agent-chip-label", text: slug });
+      setTooltip(
+        chip,
+        this.pendingAgent
+          ? `Next message goes to ${slug} — click to cancel`
+          : `This chat is bound to ${slug} — click to unbind (or type /as off)`
+      );
+    };
+    clickable(chip, () => {
+      if (this.pendingAgent) this.pendingAgent = null;
+      else if (this.host.active) this.host.clearBoundAgent();
+      refresh();
+    });
+    this.refreshAgentChipFn = refresh;
     refresh();
   }
 

@@ -63,6 +63,16 @@ import {
   type Unsubscribe,
 } from "./core/convo-state";
 import { TaskStore, adaptAppToTaskVault } from "./obsidian/task-store";
+import { AgentStore, createAgentStore } from "./obsidian/agent-store";
+import type { AgentDef } from "./core/agents";
+import {
+  agentLastRunKey,
+  agentRunName,
+  buildAgentRunPrompt,
+  dueScheduledAgentRuns,
+  gateAgentRun,
+  writeModeFor,
+} from "./core/agent-runs";
 import { makeTolerantSetMaxListeners, isTolerantShim } from "./core/node-interop";
 import {
   ProposalStore,
@@ -237,6 +247,15 @@ export default class ExoPlugin extends Plugin {
    * and mutate tasks ONLY through this instance.
    */
   taskStore!: TaskStore;
+  /** Serialized writes to the agent contract sidecars (`paths.agents`). */
+  private readonly agentWriteQueue = new WriteQueue();
+  /**
+   * THE ONE agent registry — joins CLI-native brains (`.claude/agents/*.md`)
+   * with Exo contract sidecars. Constructed in `onload()`; refreshed lazily via
+   * `agentsReady()` so a disabled feature costs nothing at boot.
+   */
+  agentStore!: AgentStore;
+  private agentRefresh: Promise<void> | null = null;
   proposalStore!: ProposalStore;
   workflowSignalStore!: WorkflowSignalStore;
   private proposalAcceptanceDeps!: ProposalAcceptanceDeps;
@@ -314,6 +333,12 @@ export default class ExoPlugin extends Plugin {
     // it can never race the lower-level `createBacklogTask` call in
     // `src/view.ts`/`src/obsidian/tools.ts`, which enqueues on the same queue.
     this.taskStore = new TaskStore(adaptAppToTaskVault(this.app), this.tasksWriteQueue, this.paths.tasks);
+    this.agentStore = createAgentStore(
+      this.app,
+      this.paths,
+      this.agentWriteQueue,
+      () => this.lastSessionCaps?.agents ?? []
+    );
 
     const proposalRoot = this.manifest.dir;
     const adapter = this.app.vault.adapter;
@@ -640,6 +665,15 @@ export default class ExoPlugin extends Plugin {
       id: "automations",
       name: "Automations…",
       callback: () => this.openAutomationsModal(),
+    });
+    this.addCommand({
+      id: "run-agent",
+      name: "Run agent…",
+      checkCallback: (checking) => {
+        if (!this.settings.agentsEnabled) return false;
+        if (!checking) void this.promptRunAgent();
+        return true;
+      },
     });
     this.addCommand({
       id: "open-daily-pulse",
@@ -1484,6 +1518,35 @@ export default class ExoPlugin extends Plugin {
    *  literal — the vault's structure lives in one place (core/paths.ts). */
   get paths(): ExoPaths {
     return exoPaths(this.settings.memoryRoot);
+  }
+
+  /**
+   * Ensure the agent registry is loaded, once. Returns false when the feature is
+   * off, so callers can bail without touching the store.
+   *
+   * Loading is lazy and shared: the first caller (composer `@`, `/as`, or the
+   * scheduler) pays the scan, everyone else awaits the same promise. Scaffolding
+   * missing contract sidecars happens here too — writing an inert, disabled file
+   * per discovered brain, which is what makes the agents visible in the vault
+   * without granting any of them autonomy.
+   */
+  async agentsReady(): Promise<boolean> {
+    if (!this.settings.agentsEnabled) return false;
+    if (!this.agentRefresh) {
+      this.agentRefresh = (async () => {
+        await this.agentStore.refresh();
+        const written = await this.agentStore.scaffoldMissing(new Date().toISOString().slice(0, 10));
+        if (written.length) await this.agentStore.refresh();
+      })().catch(() => undefined);
+    }
+    await this.agentRefresh;
+    return true;
+  }
+
+  /** Drop the cached registry so the next consumer rescans (settings changed,
+   *  a contract was edited by hand, a new agent file appeared). */
+  invalidateAgents(): void {
+    this.agentRefresh = null;
   }
 
   /** Vault setup — create every memory-layer path Exo reads/writes that's
@@ -2545,9 +2608,125 @@ export default class ExoPlugin extends Plugin {
           console.warn(`[Exo] automation "${p.name}" failed:`, err);
         }
       }
+      await this.checkScheduledAgents();
     } finally {
       this.scheduledRunsBusy = false;
     }
+  }
+
+  /* ------------------------------ agent runs ----------------------------- */
+
+  /** Estimated output tokens of one unattended agent run — the budget gate's
+   *  input, mirroring PROPOSAL_TOKEN_ESTIMATE for the proposal pass. */
+  private static readonly AGENT_RUN_TOKEN_ESTIMATE = 4000;
+  /** Agent runs are sequential today (one CLI process at a time), so the cap is
+   *  1; the gate is written against a number so raising it is a one-line change. */
+  private static readonly AGENT_MAX_CONCURRENT = 1;
+  /** Run keys currently queued or executing — the dedupe set for `gateAgentRun`. */
+  private readonly agentRunsInFlight = new Set<string>();
+
+  /**
+   * Fire any scheduled agents that are due. Runs inside `checkScheduledRuns`'s
+   * busy guard, on the SAME 30-minute heartbeat as automations — deliberately no
+   * second timer, so there is one place where unattended work can start.
+   */
+  private async checkScheduledAgents(): Promise<void> {
+    if (!(await this.agentsReady())) return;
+    const due = dueScheduledAgentRuns(this.agentStore.list(), this.settings.scheduledLastRun, Date.now());
+    for (const run of due) {
+      const gate = gateAgentRun({
+        agent: run.agent,
+        lastRunAt: this.settings.scheduledLastRun[agentLastRunKey(run.agent.brain.slug)] ?? 0,
+        now: Date.now(),
+        running: this.agentRunsInFlight.size,
+        maxConcurrent: ExoPlugin.AGENT_MAX_CONCURRENT,
+        inFlightKeys: this.agentRunsInFlight,
+        runKey: run.runKey,
+        budgetAvailable: this.checkBackgroundBudget(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE),
+      });
+      if (!gate.ok) {
+        // Refusals are logged, never silent: a skipped run reads as "nothing to
+        // do" otherwise, which is exactly the failure mode that hides a stuck
+        // cooldown or an exhausted budget.
+        console.info(`[Exo] agent run skipped (${gate.reason}): ${gate.detail}`);
+        continue;
+      }
+      await this.runAgent(run.agent, run.reason, run.runKey);
+    }
+  }
+
+  /**
+   * Execute one agent run through the headless profile — the same bounded
+   * executor automations use, so read-only auto-allow, snapshot-before-write,
+   * the per-step watchdog and Restore all come for free.
+   *
+   * Stamping both cursors on success (and only on success) is what makes
+   * catch-up correct: a failed run stays due and retries on the next heartbeat.
+   */
+  async runAgent(agent: AgentDef, reason: string, runKey?: string): Promise<boolean> {
+    const key = runKey ?? `${agentLastRunKey(agent.brain.slug)}::manual`;
+    if (this.agentRunsInFlight.has(key)) return false;
+    this.agentRunsInFlight.add(key);
+    const name = agentRunName(agent, reason);
+    const startedAt = Date.now();
+    const write = writeModeFor(agent.contract.autonomy);
+    try {
+      new Notice(`${agent.brain.name} — running (${reason})…`);
+      const result = await runHeadlessPlaybook(this.app, this.settings, buildAgentRunPrompt(agent, reason), { write });
+      const path = await writeReport(this.app, name, result, this.paths.reports);
+      // Write runs join the existing review/restore queue rather than a parallel
+      // one, so a bad agent write is rolled back the same way as a bad playbook.
+      if (write) await this.recordAutomationRun(name, startedAt, result, path);
+      if (result.ok) {
+        const now = Date.now();
+        this.settings.scheduledLastRun[key] = now;
+        this.settings.scheduledLastRun[agentLastRunKey(agent.brain.slug)] = now;
+        await this.saveSettings();
+      }
+      this.recordBackgroundSpend(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE);
+      new Notice(result.ok ? `${agent.brain.name} done → ${path}` : `${agent.brain.name} failed (report: ${path})`);
+      return result.ok;
+    } catch (err) {
+      console.warn(`[Exo] agent "${agent.brain.slug}" run failed:`, err);
+      new Notice(`${agent.brain.name} — run failed.`);
+      return false;
+    } finally {
+      this.agentRunsInFlight.delete(key);
+    }
+  }
+
+  /** "Run agent…" — pick an agent and run it now. A manual run bypasses the
+   *  cooldown and the enabled flag (a human asked for it) but still respects
+   *  concurrency and the background budget. */
+  private async promptRunAgent(): Promise<void> {
+    if (!(await this.agentsReady())) {
+      new Notice("Named agents are off — enable them in Exo settings.");
+      return;
+    }
+    const agents = this.agentStore.list();
+    if (!agents.length) {
+      new Notice("No agents found. Agent prompts live in `.claude/agents/*.md`.");
+      return;
+    }
+    new AgentPicker(this.app, agents, (agent) => {
+      const runKey = `${agentLastRunKey(agent.brain.slug)}::manual`;
+      const gate = gateAgentRun({
+        agent,
+        lastRunAt: this.settings.scheduledLastRun[agentLastRunKey(agent.brain.slug)] ?? 0,
+        now: Date.now(),
+        running: this.agentRunsInFlight.size,
+        maxConcurrent: ExoPlugin.AGENT_MAX_CONCURRENT,
+        inFlightKeys: this.agentRunsInFlight,
+        runKey,
+        budgetAvailable: this.checkBackgroundBudget(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE),
+        manual: true,
+      });
+      if (!gate.ok) {
+        new Notice(`Can't run now — ${gate.detail}.`);
+        return;
+      }
+      void this.runAgent(agent, "manual", runKey);
+    }).open();
   }
 
   /* --------------------------- automation runs --------------------------- */
@@ -2634,6 +2813,29 @@ export default class ExoPlugin extends Plugin {
 }
 
 /* --------------------------- playbook picker --------------------------- */
+/** Picker for "Run agent…". Shows the tier and triggers next to each name so the
+ *  consequence of picking one is visible before the run starts. */
+class AgentPicker extends FuzzySuggestModal<AgentDef> {
+  constructor(
+    app: import("obsidian").App,
+    private agents: AgentDef[],
+    private onPick: (a: AgentDef) => void
+  ) {
+    super(app);
+    this.setPlaceholder("Run an agent now…");
+  }
+  getItems(): AgentDef[] {
+    return this.agents;
+  }
+  getItemText(a: AgentDef): string {
+    const tier = writeModeFor(a.contract.autonomy) ? "writes" : "read-only";
+    return `${a.brain.name} — ${tier}${a.contract.enabled ? "" : " · disabled"}`;
+  }
+  onChooseItem(a: AgentDef): void {
+    this.onPick(a);
+  }
+}
+
 class PlaybookPicker extends FuzzySuggestModal<{ name: string; prompt: string }> {
   constructor(
     app: import("obsidian").App,

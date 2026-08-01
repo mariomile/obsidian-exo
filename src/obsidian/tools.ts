@@ -36,6 +36,7 @@ import {
   type AutomationConfig,
   type AutomationRunRecord,
 } from "../core/automations";
+import { triggerLabel, type AgentDef } from "../core/agents";
 
 type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -53,6 +54,9 @@ interface ExoAutomationsHost {
   restoreAutomationRun(id: string): Promise<string[]>;
   markAutomationRunReviewed(id: string): Promise<void>;
   runPlaybook(name: string, prompt: string, opts?: { write?: boolean }): Promise<boolean>;
+  /** Resolves false when named agents are disabled in settings. */
+  agentsReady(): Promise<boolean>;
+  agentStore: { list(): AgentDef[]; orphans(): string[] };
 }
 
 function getExo(app: App): ExoAutomationsHost | null {
@@ -1062,6 +1066,35 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
   // the Automations panel, so "metti in pausa il digest" works as a sentence.
   // All four resolve the live exo plugin instance at call time (never cached).
 
+  // Named agents. Read-only by design in this milestone: the model can see who
+  // exists and what each one is allowed to do, but binding a turn to an agent
+  // stays a human action in the composer (`@agent` / `/as`).
+  const listAgents = tool(
+    "list_agents",
+    "List Exo's named agents: what each one does, whether it is enabled, its autonomy tier (notify/propose/act), its read/write scope and its triggers. Use it when Mario asks which agents exist, before suggesting he delegate something, or to check what an agent is allowed to touch.",
+    {},
+    async () => {
+      const exo = getExo(app);
+      if (!exo) return ok("Exo plugin not reachable.");
+      if (!(await exo.agentsReady())) return ok("Named agents are disabled in Exo settings.");
+      const agents = exo.agentStore.list();
+      if (!agents.length) return ok("No agents found. Agent prompts live in `.claude/agents/*.md`.");
+      const lines = agents.map(({ brain, contract }) => {
+        const triggers = contract.triggers.map(triggerLabel).join(", ") || "manual only";
+        const scope = contract.scope.write.length ? `writes ${contract.scope.write.join(", ")}` : "no write scope";
+        return [
+          `- ${brain.name} (@${brain.slug}) — ${contract.enabled ? "enabled" : "disabled"} · ${contract.autonomy} · ${scope} · ${triggers}`,
+          brain.description ? `    ${brain.description}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+      });
+      const orphans = exo.agentStore.orphans();
+      if (orphans.length) lines.push("", `Contracts with no prompt file: ${orphans.join(", ")}`);
+      return ok(lines.join("\n"));
+    }
+  );
+
   const listAutomations = tool(
     "list_automations",
     "List Exo's automations (scheduled playbook runs): cadence, on/paused, read-only vs write mode, last/next run — plus available playbooks and recent write runs with their review state and run ids. Use it before managing automations or when Mario asks what runs automatically.",
@@ -1211,6 +1244,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     listAnnotations, listSonarActions, askUser, listLoops,
     createNote, appendToNote, updateFrontmatter, addLinks, linkMentions, ignoreMentionTool, openNote,
     editNote, insertAtCursor, renameNote, resolveAnnotation, runSonarAction,
+    listAgents,
     listAutomations, savePlaybook, manageAutomation, reviewAutomationRun,
     ...(memoryRead ? [recall] : []),
     ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
@@ -1278,6 +1312,7 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__recall",
   "mcp__obsidian__list_loops",
   "mcp__obsidian__list_automations",
+  "mcp__obsidian__list_agents",
 ]);
 
 /** Memory-write tool names (gated separately by the memoryWrite setting). */

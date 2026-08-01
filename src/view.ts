@@ -116,6 +116,12 @@ import {
   toggleResearchMode as nextResearchMode,
   type ResearchModeState,
 } from "./core/research";
+import {
+  buildAgentBindingOutbound,
+  parseAgentCommand,
+  type AgentCommandResult,
+  type AgentDef,
+} from "./core/agents";
 
 export type { AskQuestion } from "./core/model";
 
@@ -174,6 +180,8 @@ interface ConvoData {
   updatedAt?: number;
   usage?: ContextUsage;
   researchMode?: ResearchModeState;
+  /** Slug of the agent this conversation is bound to via `/as` (persisted). */
+  agent?: string;
   /** True for chats the user archived (persisted to the separate archive store,
    *  never evicted). Absent/false for live chats. */
   archived?: boolean;
@@ -223,6 +231,8 @@ export interface Convo {
     sendPrefix?: string;
     isRecoveryRetry?: boolean;
     researchMode?: ResearchModeState;
+    /** Agent slug bound to this queued message (`@agent` picked before send). */
+    agent?: string;
   }[];
   pendingEl: HTMLElement | null; // container for queued-message chips
   /** The in-flight assistant turn of THIS conversation (null when idle) — the
@@ -248,6 +258,11 @@ export interface Convo {
   pendingSendPrefix?: string;
   /** Persisted per-conversation Research Mode; never shared across tabs. */
   researchMode: ResearchModeState;
+  /** Slug of the agent this whole conversation is bound to (`/as <agent>`).
+   *  Persisted. Deliberately does NOT alter `SessionOpts`: the binding is a
+   *  provider-only rider that routes the turn to the engine's own subagent, so
+   *  it can never desync `sessionSigOf()` or force a session respawn. */
+  agent?: string;
   /** True once an AI-title generation has been fired for this conversation —
    *  one-shot guard so the Haiku title call runs at most once (after the first
    *  assistant turn). Runtime-only (never persisted). */
@@ -540,6 +555,7 @@ export class ChatView extends ItemView {
     );
     await this.restore();
     this.composer.refreshResearch();
+    this.composer.refreshAgentChip();
     this.composer.refreshContext();
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
@@ -681,6 +697,7 @@ export class ChatView extends ItemView {
       send: () => this.send(),
       stop: (source) => this.stop(source),
       submitWorkflow: (c, steps) => this.submitWorkflow(c, steps),
+      clearBoundAgent: () => this.clearBoundAgent(),
       compactActive: (instructions) => this.compactActive(instructions),
       handleGoalCommand: (c, text) => this.handleGoalCommand(c, text),
       resumeGoalLoop: (c) => this.resumeGoalLoop(c),
@@ -1164,6 +1181,7 @@ export class ChatView extends ItemView {
         updatedAt: d.updatedAt,
         usage: d.usage,
         researchMode: normalizeResearchModeState(d.researchMode),
+        agent: typeof d.agent === "string" && d.agent ? d.agent : undefined,
         messages: d.messages.map((m) => revivePersistedMessage(m)),
         session: null,
         sessionSig: "",
@@ -1229,6 +1247,7 @@ export class ChatView extends ItemView {
       updatedAt: c.updatedAt,
       usage: c.usage,
       researchMode: c.researchMode,
+      ...(c.agent ? { agent: c.agent } : {}),
       ...(c.archived ? { archived: true } : {}),
       ...(c.boardStatus ? { boardStatus: c.boardStatus } : {}),
       messages: c.messages.map((message) =>
@@ -1378,6 +1397,7 @@ export class ChatView extends ItemView {
     this.composer.updateUsage(c.usage ?? null);
     this.composer.setDraft(c.draft);
     this.composer.refreshResearch();
+    this.composer.refreshAgentChip();
     // Reflect the newly-active convo's session quota (if any) on the badge.
     this.composer.setLastRateLimit((c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null);
     this.composer.updateRateBadge();
@@ -1504,6 +1524,7 @@ export class ChatView extends ItemView {
     c.allow.clear();
     c.queue = [];
     c.researchMode = initialResearchModeState();
+    c.agent = undefined;
     c.title = "New chat";
     c.updatedAt = Date.now();
     c.listEl.empty();
@@ -4723,6 +4744,17 @@ export class ChatView extends ItemView {
       this.handleGoalCommand(c, hoisted);
       return;
     }
+    // `/as <agent>` binds the whole conversation to a named agent (client-side,
+    // like /compact and /goal — the CLI has no such command).
+    const agentCommand = parseAgentCommand(text);
+    if (agentCommand) {
+      this.composer.setInputValue("");
+      this.composer.autoGrow();
+      void this.applyAgentCommand(c, agentCommand);
+      return;
+    }
+    // A `@agent` pick in the composer binds THIS turn only; `/as` binds the tab.
+    const agentForTurn = this.composer.takePendingAgent() ?? undefined;
     const researchCommand = parseResearchCommand(text, c.researchMode, Date.now());
     let researchModeForTurn: ResearchModeState | undefined;
     if (researchCommand?.kind === "invalid") {
@@ -4783,15 +4815,72 @@ export class ChatView extends ItemView {
           researchMode: researchModeForTurn ?? (
             c.researchMode.enabled ? { ...c.researchMode } : undefined
           ),
+          agent: agentForTurn,
         });
         this.renderQueue(c);
       }
     } else {
-      const turnOpts = handoff || researchModeForTurn
-        ? { sendPrefix: handoff, researchMode: researchModeForTurn }
+      const turnOpts = handoff || researchModeForTurn || agentForTurn
+        ? { sendPrefix: handoff, researchMode: researchModeForTurn, agent: agentForTurn }
         : undefined;
       void this.runTurn(c, text, images, turnOpts);
     }
+  }
+
+  /**
+   * Apply `/as <agent>` — bind or clear this conversation's agent.
+   *
+   * Binding is provider-only: it changes what rides the outbound turn, never
+   * `SessionOpts`. That is why it needs no `sessionSigOf()` entry and can never
+   * force a session respawn mid-conversation.
+   */
+  private async applyAgentCommand(c: Convo, cmd: AgentCommandResult): Promise<void> {
+    if (cmd.kind === "invalid") {
+      new Notice(cmd.message);
+      this.composer.focusInput();
+      return;
+    }
+    if (cmd.kind === "clear") {
+      c.agent = undefined;
+      this.composer.refreshAgentChip();
+      this.persist();
+      new Notice("Agent binding cleared");
+      return;
+    }
+    if (!(await this.plugin.agentsReady())) {
+      new Notice("Named agents are off — enable them in Exo settings.");
+      return;
+    }
+    const found = this.plugin.agentStore.resolve(cmd.query);
+    if (!found) {
+      new Notice(`No agent named "${cmd.query}".`);
+      this.composer.focusInput();
+      return;
+    }
+    c.agent = found.brain.slug;
+    this.composer.refreshAgentChip();
+    this.persist();
+    new Notice(`Bound to ${found.brain.name} — every turn in this chat routes to it.`);
+    this.composer.focusInput();
+  }
+
+  /** Drop the active conversation's `/as` binding (composer chip click). */
+  clearBoundAgent(): void {
+    const c = this.active;
+    if (!c.agent) return;
+    c.agent = undefined;
+    this.composer.refreshAgentChip();
+    this.persist();
+  }
+
+  /** Resolve the agent a turn is bound to (per-turn `@` pick wins over `/as`).
+   *  Returns null whenever the feature is off or the slug no longer resolves —
+   *  a renamed or deleted agent degrades to a normal turn, never an error. */
+  private async resolveTurnAgent(c: Convo, perTurn?: string): Promise<AgentDef | null> {
+    const slug = perTurn ?? c.agent;
+    if (!slug) return null;
+    if (!(await this.plugin.agentsReady())) return null;
+    return this.plugin.agentStore.resolve(slug);
   }
 
   /** Client-side `/goal` handler (built-in parity). Setting a goal is Claude-only;
@@ -4931,9 +5020,14 @@ export class ChatView extends ItemView {
       isRecoveryRetry?: boolean;
       reuseUserTurn?: boolean;
       researchMode?: ResearchModeState;
+      /** Agent slug bound to THIS turn (a `@agent` pick), overriding `c.agent`. */
+      agent?: string;
     }
   ): Promise<void> {
     const researchMode = opts?.researchMode ?? c.researchMode;
+    // Resolved before the session work below so a missing/renamed agent simply
+    // yields null and the turn proceeds as normal chat.
+    const boundAgent = await this.resolveTurnAgent(c, opts?.agent);
     const sendText = this.hoistOutbound(text);
     // Active-context assembly (2026-07-30): attached-note paths AND the ambient
     // selection the chip is showing — both read from the same composer state the
@@ -5471,7 +5565,11 @@ export class ChatView extends ItemView {
       const compactPrefix = c.pendingSendPrefix;
       if (compactPrefix) c.pendingSendPrefix = undefined;
       const researchMessage = buildResearchOutbound(researchMode, message);
-      const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, recallBlock, researchMessage].filter(Boolean).join("\n\n");
+      // The agent binding wraps LAST so its instruction sits closest to the
+      // user's text — and, like Research Mode, it never touches the visible or
+      // persisted bubble.
+      const agentMessage = boundAgent ? buildAgentBindingOutbound(boundAgent, researchMessage) : researchMessage;
+      const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, recallBlock, agentMessage].filter(Boolean).join("\n\n");
       await session.send(outbound, onEvent, imgs);
       // `session.send` can resolve cleanly even after a user Stop/Esc — the
       // adapter swallows the abort rather than throwing or emitting an
@@ -5711,11 +5809,12 @@ export class ChatView extends ItemView {
         const next = c.queue.shift()!;
         this.renderQueue(c);
         const retryOpts =
-          next.isRecoveryRetry || next.sendPrefix || next.researchMode
+          next.isRecoveryRetry || next.sendPrefix || next.researchMode || next.agent
             ? {
                 sendPrefix: next.sendPrefix,
                 isRecoveryRetry: next.isRecoveryRetry,
                 researchMode: next.researchMode,
+                agent: next.agent,
               }
             : undefined;
         void this.runTurn(c, next.text, next.images, retryOpts);

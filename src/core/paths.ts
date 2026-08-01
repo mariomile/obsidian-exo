@@ -37,6 +37,14 @@ export interface ExoPaths {
   reports: string;
   review: string;
   mentions: string;
+  /** Agent contracts — one `<slug>.md` sidecar per agent. The agent's prompt
+   *  lives in `.claude/agents/`; this folder holds only triggers/scope/autonomy,
+   *  because `.claude/` is gitignored and does not sync to mobile. */
+  agents: string;
+  /** Append-only run ledger, one file per month. */
+  agentRuns: string;
+  /** Per-agent compounding memory — a scope under vault memory, not a new store. */
+  agentMemory: string;
   openLoops: string;
   knownFalse: string;
   sessionLog: string;
@@ -68,6 +76,9 @@ export function exoPaths(root: string): ExoPaths {
     reports: `${r}/reports`,
     review: `${r}/review.md`,
     mentions: `${r}/mentions`,
+    agents: `${r}/agents`,
+    agentRuns: `${r}/agents/runs`,
+    agentMemory: `${memory}/agents`,
     openLoops: `${memory}/open-loops.md`,
     knownFalse: `${memory}/known-false.md`,
     sessionLog: `${memory}/session-log.md`,

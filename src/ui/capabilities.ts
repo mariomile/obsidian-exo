@@ -8,6 +8,7 @@ import { parseLoopsFile, type LoopEntry } from "../core/open-loops";
 import { exoPaths } from "../core/paths";
 import type { SkillDir } from "../core/connections-scan";
 import { codexSkillNames } from "../core/capability-desc";
+import { parseAgentBrain } from "../core/agents";
 import {
   memoryStats,
   memoryActions,
@@ -20,6 +21,9 @@ interface NamedItem {
   name: string;
   desc?: string;
 }
+
+/** Descriptions are clamped for the panel's single-line rows. */
+const DESC_CLAMP = 110;
 
 const BUILTIN_TOOLS = [
   "Read", "Write", "Edit", "MultiEdit", "Bash", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "Agent", "TodoWrite",
@@ -52,16 +56,15 @@ async function scanNames(dir: string): Promise<{ folders: string[]; mds: string[
   return out;
 }
 
-/** Read `name:` / `description:` from a markdown file's frontmatter. */
+/** Read `name:` / `description:` from a markdown file's frontmatter.
+ *  Parsing is delegated to `parseAgentBrain` — the one agent-frontmatter reader
+ *  shared with the registry and the composer's `@` index. */
 async function readAgentMeta(file: string): Promise<NamedItem | null> {
   try {
     const raw = (await readFile(file, "utf8")).slice(0, 1500);
-    const m = raw.match(/^---\n([\s\S]*?)\n---/);
-    const fm = m ? m[1] : raw;
-    const name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "");
-    const desc = fm.match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "");
     const base = file.split("/").pop()!.replace(/\.md$/, "");
-    return { name: name || base, desc: desc?.slice(0, 110) };
+    const brain = parseAgentBrain(raw, base, "user", file);
+    return { name: brain.name, desc: brain.description?.slice(0, DESC_CLAMP) };
   } catch {
     return null;
   }
@@ -137,17 +140,14 @@ export async function gatherFromVault(app: App, sub: string): Promise<NamedItem[
       if (!f.endsWith(".md")) continue;
       const base = f.split("/").pop()!.replace(/\.md$/, "");
       if (sub === "agents") {
-        let desc: string | undefined;
-        let name = base;
+        let item: NamedItem = { name: base };
         try {
-          const raw = (await app.vault.adapter.read(f)).slice(0, 1500);
-          const fm = raw.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
-          name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") || base;
-          desc = fm.match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "")?.slice(0, 110);
+          const brain = parseAgentBrain((await app.vault.adapter.read(f)).slice(0, 1500), base, "vault", f);
+          item = { name: brain.name, desc: brain.description?.slice(0, DESC_CLAMP) };
         } catch {
-          /* ignore */
+          /* unreadable — fall back to the filename */
         }
-        items.push({ name, desc });
+        items.push(item);
       } else items.push({ name: base });
     }
   } catch {
