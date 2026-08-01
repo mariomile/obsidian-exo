@@ -5135,6 +5135,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-auto-x:hover { color: var(--text-muted); }
 .mva-auto-x svg { width: 14px; height: 14px; }
+/* Slim in-chat session card (replaced the full Capabilities overlay, 0.30). */
+.mva-session-card { display: flex; flex-direction: column; gap: 10px; max-width: 560px; }
+.mva-session-counts { padding-top: 2px; border-top: 1px solid var(--background-modifier-border); }
+.mva-session-foot { display: flex; justify-content: flex-end; padding-top: 2px; }
 /* Chip sections (Commands / Sub-agents / Hooks / Tools) on the Skills tab —
    reuse the .mva-caps-chip vocabulary inside a grouped section. */
 .mva-hub-chipsec { display: flex; flex-direction: column; gap: 6px; }

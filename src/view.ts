@@ -48,7 +48,7 @@ import { readBootContext } from "./obsidian/memory";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
-import { renderCapabilitiesPanel } from "./ui/capabilities";
+import { renderSessionCard } from "./ui/session-card";
 import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
 import { assembleContext, formatContextDebug } from "./core/context-assembly";
@@ -1873,27 +1873,15 @@ export class ChatView extends ItemView {
     this.listEl.hide();
     const wrap = this.listHost.createDiv({ cls: "mva-gallery-wrap" });
     this.capsEl = wrap;
-    this.rebuildOutline(); // drop the outline rail while capabilities is up
-    void renderCapabilitiesPanel(wrap, this.app, this.plugin.settings, {
+    this.rebuildOutline(); // drop the outline rail while the session card is up
+    renderSessionCard(wrap, this.plugin.settings, {
       provider: this.provider,
       model: this.model,
       caps: this.sessionCaps ?? this.plugin.lastSessionCaps,
-      onInsert: (text) => {
+      onOpenHub: () => {
         this.hideCapabilities();
-        const el = this.composer.getInputEl();
-        el.value += (el.value && !el.value.endsWith(" ") ? " " : "") + text;
-        el.focus();
+        void this.plugin.activateHub();
       },
-      onOpenNote: (p) => {
-        this.hideCapabilities();
-        this.openNote(p);
-      },
-      runCommand: (id) =>
-        (this.app as unknown as { commands: { executeCommandById(id: string): boolean } }).commands.executeCommandById(id),
-      openSettings: () => this.openSettings(),
-      dreamSnapshotPresent: () => this.plugin.loadDreamSnapshot().then((s) => !!s),
-      lastAutoCommitEpoch: () => this.plugin.lastAutoCommitEpoch(),
-      queuePending: () => this.plugin.countQueuePending(),
     });
   }
 
