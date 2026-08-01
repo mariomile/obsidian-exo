@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDailyPulse,
+  dailyPulseMetaLabel,
   type DailyPulseInput,
+  type DailyPulseReviewState,
   type DailyPulseSection,
 } from "../src/core/daily-pulse";
 
@@ -211,5 +213,28 @@ describe("buildDailyPulse", () => {
       title: "Background AI",
       detail: "Background AI paused",
     });
+  });
+});
+
+describe("dailyPulseMetaLabel", () => {
+  const state = (overrides: Partial<DailyPulseReviewState> = {}): DailyPulseReviewState => ({
+    status: "ready",
+    itemCount: 0,
+    lastSuccessAt: 0,
+    lastReviewedAt: 0,
+    warnings: [],
+    retryable: false,
+    ...overrides,
+  });
+  it("reports retry on error regardless of items", () => {
+    expect(dailyPulseMetaLabel(state({ status: "error", itemCount: 3 }))).toBe("retry available");
+  });
+  it("counts items to review when a newer success is unreviewed", () => {
+    expect(dailyPulseMetaLabel(state({ itemCount: 1, lastSuccessAt: 10 }))).toBe("1 item to review");
+    expect(dailyPulseMetaLabel(state({ itemCount: 4, lastSuccessAt: 10 }))).toBe("4 items to review");
+  });
+  it("reports reviewed / not generated for the quiet states", () => {
+    expect(dailyPulseMetaLabel(state({ itemCount: 2, lastSuccessAt: 10, lastReviewedAt: 20 }))).toBe("reviewed");
+    expect(dailyPulseMetaLabel(state())).toBe("not generated");
   });
 });

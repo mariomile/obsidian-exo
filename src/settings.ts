@@ -973,7 +973,7 @@ export class MVASettingTab extends PluginSettingTab {
       )
       .addButton((b) => {
         b.setButtonText(`Manage… (${s.automations.length})`).onClick(() => {
-          this.plugin.openAutomationsModal();
+          void this.plugin.activateHub("automations");
         });
       });
 

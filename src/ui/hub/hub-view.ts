@@ -3,6 +3,7 @@ import type ExoPlugin from "../../main";
 import type { HubTabContext } from "./shared";
 import { renderMcpTab } from "./tab-mcp";
 import { renderSkillsTab } from "./tab-skills";
+import { renderAutomationsTab } from "./tab-automations";
 
 /** The view-type STRING is workspace-persistent (saved verbatim in
  *  workspace.json) — it stays "exo-connections" forever even though the pane
@@ -11,7 +12,7 @@ export const HUB_VIEW_TYPE = "exo-connections";
 /** Registered via addIcon() in main.ts (Huge Icons puzzle-piece). */
 export const HUB_ICON = "hi-puzzle";
 
-export type HubTab = "mcp" | "skills";
+export type HubTab = "mcp" | "skills" | "automations";
 
 interface TabDef {
   id: HubTab;
@@ -22,6 +23,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: "mcp", label: "MCP", render: renderMcpTab },
   { id: "skills", label: "Skills", render: renderSkillsTab },
+  { id: "automations", label: "Automations", render: renderAutomationsTab },
 ];
 
 /**
@@ -32,6 +34,11 @@ const TABS: TabDef[] = [
 export class HubView extends ItemView {
   private tab: HubTab = "mcp";
   private listEl: HTMLElement | null = null;
+  /** Last tab actually painted — a tab SWITCH empties the host first (tabs mix
+   *  keyed-reconcile and full-render strategies; stale unkeyed children from
+   *  another tab must not survive), while a same-tab refresh keeps the DOM for
+   *  reconcileList to diff. */
+  private renderedTab: HubTab | null = null;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);
@@ -91,6 +98,10 @@ export class HubView extends ItemView {
     this.contentEl.querySelectorAll<HTMLElement>(".mva-conn-tabs .mva-pill").forEach((p) =>
       p.toggleClass("is-active", p.getAttr("data-tab") === this.tab)
     );
+    if (this.renderedTab !== this.tab) {
+      this.listEl.empty();
+      this.renderedTab = this.tab;
+    }
     const def = TABS.find((t) => t.id === this.tab) ?? TABS[0];
     await def.render(this.listEl, this.ctx());
   }

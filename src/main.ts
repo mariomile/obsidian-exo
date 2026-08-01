@@ -43,7 +43,6 @@ import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
 import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessResult } from "./headless";
 import { automationLastRunKey, migrateScheduledRuns, isDue, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
-import { AutomationsModal } from "./ui/automations-modal";
 import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle } from "./core/title";
@@ -672,7 +671,7 @@ export default class ExoPlugin extends Plugin {
     this.addCommand({
       id: "automations",
       name: "Automations…",
-      callback: () => this.openAutomationsModal(),
+      callback: () => void this.activateHub("automations"),
     });
     this.addCommand({
       id: "open-agents",
@@ -2664,7 +2663,7 @@ export default class ExoPlugin extends Plugin {
         await this.openProposalsModal();
         return;
       case "automation":
-        this.openAutomationsModal();
+        void this.activateHub("automations");
         return;
       case "note":
         if (params.path) await this.app.workspace.openLinkText(params.path, "", "tab");
@@ -3023,10 +3022,6 @@ export default class ExoPlugin extends Plugin {
     await this.saveAutomationRuns(records);
   }
 
-  /** Open the Automations manager (settings button, Cockpit tile, command). */
-  openAutomationsModal(): void {
-    new AutomationsModal(this.app, this).open();
-  }
 }
 
 /* --------------------------- playbook picker --------------------------- */

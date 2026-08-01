@@ -146,6 +146,15 @@ export function cadenceLabel(c: Cadence): string {
   return c.kind === "daily" ? `daily ${hh}` : `weekly ${DAYS[c.day] ?? "?"} ${hh}`;
 }
 
+/** "due now" / "in 5m" / "in 3h" / "in 2d" — the meta-line countdown. */
+export function formatDueIn(ms: number): string {
+  if (ms <= 60_000) return "due now";
+  const HOUR = 3_600_000;
+  if (ms < HOUR) return `in ${Math.floor(ms / 60_000)}m`;
+  if (ms < 24 * HOUR) return `in ${Math.floor(ms / HOUR)}h`;
+  return `in ${Math.floor(ms / (24 * HOUR))}d`;
+}
+
 /* ----------------------------- migration ----------------------------- */
 
 /** Convert the legacy `scheduledRuns` textarea ("Name | daily" / "Name | weekly",

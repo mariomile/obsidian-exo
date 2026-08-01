@@ -5090,10 +5090,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-ll-preview { white-space: pre-wrap; color: var(--text-faint); background: var(--background-secondary);
   border-radius: var(--radius-s); padding: 6px 8px; max-height: 140px; overflow-y: auto; }
 
-/* --------------------------- automations modal --------------------------- */
+/* --------------------------- automations tab ---------------------------- */
 /* Same form recipe as the prompt-vars/task modals: quiet labels, chip+popover
-   selects, .mva-btn buttons. Only layout deltas live here. */
-.mva-auto-modal .modal-content { min-width: 460px; }
+   selects, .mva-btn buttons. Only layout deltas live here. Hosted in the
+   Capabilities hub pane (was a modal until 0.30). */
 .mva-auto-sub {
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
@@ -5135,6 +5135,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-auto-x:hover { color: var(--text-muted); }
 .mva-auto-x svg { width: 14px; height: 14px; }
+/* Unknown-playbook marker inside the picker chip (replaces the old text glyph). */
+.mva-auto-chip-warn { display: inline-flex; margin-left: 4px; color: var(--text-warning, var(--text-muted)); }
+.mva-auto-chip-warn svg { width: 12px; height: 12px; }
 .mva-auto-foot { margin: 10px 0 4px; }
 .mva-auto-popfield {
   display: flex;

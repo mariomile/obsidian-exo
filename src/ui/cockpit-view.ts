@@ -293,7 +293,7 @@ export class CockpitView extends ItemView {
       clickable(row, () => {
         if (it.kind === "pulse") void this.plugin.openDailyPulse();
         else if (it.kind === "answer") void this.app.workspace.openLinkText(it.target, "", "tab");
-        else if (it.kind === "runs") this.plugin.openAutomationsModal();
+        else if (it.kind === "runs") void this.plugin.activateHub("automations");
         else if (it.kind === "blocked" || it.kind === "streaming") {
           void this.plugin.openConvo(it.target);
         }
