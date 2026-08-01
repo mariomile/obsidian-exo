@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, symlink, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { gatherOtherProjectSkills } from "../src/ui/capabilities";
+import { gatherOtherProjectSkills } from "../src/core/capability-scan";
 
 /**
  * Regression: ~/.claude/skills is mostly symlinks (→ ~/.agents/skills). A

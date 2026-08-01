@@ -21,7 +21,7 @@ import {
   gatherFromVault,
   gatherOtherProjectSkills,
   gatherCodexSkills,
-} from "./capabilities";
+} from "../core/capability-scan";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 
 export const CONNECTIONS_VIEW_TYPE = "exo-connections";
