@@ -71,6 +71,14 @@ export class HubView extends ItemView {
     refresh.onclick = () => void this.render();
 
     this.listEl = root.createDiv({ cls: "mva-conn-list" });
+    // The pane outlives what it reports on: the 30-min scheduler moves
+    // scheduledLastRun, sessions connect and drop MCP servers. Re-render when
+    // the leaf comes back into focus so a long-open hub is never stale.
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (leaf === this.leaf) void this.render();
+      })
+    );
     await this.render();
   }
 

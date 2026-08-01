@@ -934,6 +934,7 @@ export class ChatView extends ItemView {
         this.hideCapabilities();
         this.showCapabilities(); // live panel refresh if it's open
       }
+      this.plugin.refreshHub(); // the hub pane tracks the same live snapshot
       // Release any reconnect (Connections pane) waiter parked on the next caps.
       if (this.capsWaiters.length) {
         const waiters = this.capsWaiters;
