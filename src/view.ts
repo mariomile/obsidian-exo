@@ -412,6 +412,9 @@ export class ChatView extends ItemView {
   /** Ids proposed for cleanup by the last persist (over-budget). Advisory:
    *  nothing is ever deleted without explicit confirmation. Runtime-only. */
   private retentionCandidateIds: string[] = [];
+  /** Ids selezionati nella cronologia per un'azione bulk. Runtime-only, azzerato
+   *  a ogni apertura della gallery. */
+  private gallerySelection = new Set<string>();
 
   private tabsEl!: HTMLElement;
   private listWrap!: HTMLElement;
@@ -1916,6 +1919,7 @@ export class ChatView extends ItemView {
 
   private async showGallery(): Promise<void> {
     this.saveActive();
+    this.gallerySelection.clear();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.listEl.hide();
     this.composer.getComposerEl().hide();
@@ -1923,6 +1927,19 @@ export class ChatView extends ItemView {
     this.galleryEl = wrap;
     this.rebuildOutline(); // drop the outline rail while the gallery is up
     wrap.createDiv({ cls: "mva-gallery-title", text: "Conversations" });
+
+    // Retention proposal (R3): over budget we SHOW, we never delete. The banner
+    // is inert until the user acts on it — it only preselects the candidates.
+    if (this.retentionCandidateIds.length > 0) {
+      const banner = wrap.createDiv({ cls: "mva-gallery-retention" });
+      const n = this.retentionCandidateIds.length;
+      banner.createSpan({
+        cls: "mva-gallery-retention-text",
+        text: `La cronologia ha superato il budget. ${n} conversazion${n === 1 ? "e" : "i"} tra le più vecchie possono essere eliminate.`,
+      });
+      const act = banner.createSpan({ cls: "mva-gallery-retention-act", text: "Seleziona" });
+      this.clickable(act, () => this.selectCandidates());
+    }
 
     const sorted = [...this.convos]
       .filter((c) => c.messages.length > 0 || c === this.active)
@@ -1963,6 +1980,9 @@ export class ChatView extends ItemView {
 
   private renderCard(grid: HTMLElement, c: Convo, doneConvoIds: Set<string>): void {
     const card = grid.createDiv({ cls: "mva-card" });
+    // Cards carry their id in the DOM: the bulk bar needs a DOM-to-id mapping
+    // that survives the grid re-render the search box triggers.
+    card.dataset.convoId = c.id;
     // A conversation is "active" when it's the focused tab, and "open" when it's
     // any of the tabs currently in the tab strip. Both get a visible marker so the
     // gallery mirrors what's open above it.
@@ -1970,6 +1990,7 @@ export class ChatView extends ItemView {
     const isOpen = this.openTabs.includes(c.id);
     if (isActive) card.addClass("is-active");
     if (isOpen) card.addClass("is-open");
+    if (this.gallerySelection.has(c.id)) card.addClass("is-selected");
     this.addCardDelete(card, grid, c);
     const head = card.createDiv({ cls: "mva-card-head" });
     const dot = head.createSpan({ cls: "mva-dot" });
@@ -2011,7 +2032,18 @@ export class ChatView extends ItemView {
     meta.createSpan({ text: `${count} message${count === 1 ? "" : "s"}` });
     if (c.updatedAt) meta.createSpan({ text: this.formatDate(c.updatedAt) });
 
-    this.clickable(card, () => {
+    this.clickable(card, (e) => {
+      // Cmd/Ctrl-click toggles selection; a plain click still opens the chat.
+      // Once anything is selected, a plain click toggles too — otherwise the
+      // first stray click would blow away a multi-selection.
+      const mod = e as MouseEvent | KeyboardEvent;
+      if (mod.metaKey || mod.ctrlKey || this.gallerySelection.size > 0) {
+        if (this.gallerySelection.has(c.id)) this.gallerySelection.delete(c.id);
+        else this.gallerySelection.add(c.id);
+        card.toggleClass("is-selected", this.gallerySelection.has(c.id));
+        this.renderBulkBar();
+        return;
+      }
       this.hideGallery();
       this.switchTo(c);
     });
@@ -2080,10 +2112,91 @@ export class ChatView extends ItemView {
     }
 
     card.remove();
+    // This card may have been part of a pending bulk selection: drop it so the
+    // bulk bar never announces more conversations than it can actually delete.
+    if (this.gallerySelection.delete(c.id)) this.renderBulkBar();
     if (!grid.querySelector(".mva-card")) {
       grid.createDiv({ cls: "mva-empty-sub", text: "No conversations yet." });
     }
     this.persist();
+  }
+
+  /* ------------------------ gallery bulk selection ---------------------- */
+
+  /** Preselect the retention candidates so the user can review and confirm in
+   *  one action. Selecting is not deleting: the bulk bar still asks. */
+  private selectCandidates(): void {
+    this.gallerySelection = new Set(this.retentionCandidateIds);
+    this.refreshSelectionUI();
+  }
+
+  /** Paint the current selection onto the cards already on screen and refresh
+   *  the bulk bar. Cards render their own `is-selected` from `gallerySelection`,
+   *  so changing the selection in bulk needs no gallery teardown: the search
+   *  box, the scroll position and the card DOM all survive. */
+  private refreshSelectionUI(): void {
+    this.galleryEl?.querySelectorAll<HTMLElement>(".mva-card").forEach((el) => {
+      const id = el.dataset.convoId;
+      el.toggleClass("is-selected", !!id && this.gallerySelection.has(id));
+    });
+    this.renderBulkBar();
+  }
+
+  /** The bulk action bar — visible only while something is selected. Rebuilt on
+   *  every selection change, which also disarms a pending delete: growing the
+   *  selection can never inherit a confirmation the user gave for a smaller one. */
+  private renderBulkBar(): void {
+    const wrap = this.galleryEl;
+    if (!wrap) return;
+    wrap.querySelector(".mva-gallery-bulk")?.remove();
+    const n = this.gallerySelection.size;
+    if (n === 0) return;
+    const bar = wrap.createDiv({ cls: "mva-gallery-bulk" });
+    bar.createSpan({ text: `${n} selezionat${n === 1 ? "a" : "e"}` });
+    const del = bar.createSpan({ cls: "mva-gallery-bulk-del", text: "Elimina" });
+    let armed = false;
+    this.clickable(del, () => {
+      if (!armed) {
+        armed = true;
+        del.addClass("is-armed");
+        del.setText(`Elimina ${n} definitivamente`);
+        return;
+      }
+      this.deleteSelected();
+    });
+    const cancel = bar.createSpan({ cls: "mva-gallery-bulk-cancel", text: "Annulla" });
+    this.clickable(cancel, () => {
+      this.gallerySelection.clear();
+      this.refreshSelectionUI();
+    });
+  }
+
+  /** Permanently drop every selected conversation. The only deletion path that
+   *  this plan adds — and it is always user-confirmed (armed twice). */
+  private deleteSelected(): void {
+    const ids = new Set(this.gallerySelection);
+    const removed: string[] = [];
+    for (const id of ids) {
+      const c = this.convos.find((x) => x.id === id);
+      if (!c || c === this.active) continue; // never delete the focused chat
+      this.dropSession(c);
+      const tabIdx = this.openTabs.indexOf(c.id);
+      if (tabIdx !== -1) this.openTabs.splice(tabIdx, 1);
+      const idx = this.convos.indexOf(c);
+      if (idx !== -1) this.convos.splice(idx, 1);
+      removed.push(id);
+    }
+    this.gallerySelection.clear();
+    // Only what actually went away leaves the candidate list: a skipped active
+    // chat is still over budget and must still be proposed next time.
+    const gone = new Set(removed);
+    this.retentionCandidateIds = this.retentionCandidateIds.filter((id) => !gone.has(id));
+    this.persistTabs();
+    this.persist();
+    this.renderTabs();
+    this.hideGallery();
+    void this.showGallery();
+    new Notice(`${removed.length} conversazioni eliminate.`);
   }
 
   /** Point `active` at another conversation without leaving the gallery overlay:
