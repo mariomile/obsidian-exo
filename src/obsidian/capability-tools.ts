@@ -37,6 +37,7 @@ import {
   gatherCodexSkills,
 } from "../core/capability-scan";
 import { automationLastRunKey, cadenceLabel, formatDueIn, nextDueAt } from "../core/automations";
+import { mcpDocPath, isSafeDocName, summarizeMcpDoc, hasMcpDocContent } from "../core/mcp-docs";
 import { ok, err, getExo, vaultBasePath, type ExoToolHost } from "./tool-kit";
 
 const MCP_PATH = ".mcp.json";
@@ -110,7 +111,25 @@ async function gatherSkills(app: App, exo: ExoToolHost | null): Promise<Discover
 
 /* ------------------------------ formatting ------------------------------ */
 
-function mcpReport(items: DiscoveryItem[], ourNames: Set<string>): string[] {
+/** Read each server's notes — what it's for, scope, what to avoid. Absent or
+ *  never-filled notes are simply omitted. */
+async function readMcpDocs(app: App, names: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  await Promise.all(
+    names.map(async (name) => {
+      if (!isSafeDocName(name)) return;
+      try {
+        const raw = await app.vault.adapter.read(mcpDocPath(name));
+        if (hasMcpDocContent(raw)) out.set(name, summarizeMcpDoc(raw));
+      } catch {
+        /* no notes for this server */
+      }
+    })
+  );
+  return out;
+}
+
+function mcpReport(items: DiscoveryItem[], ourNames: Set<string>, docs: Map<string, string>): string[] {
   const s = mcpSections(items);
   const lines: string[] = ["MCP servers:"];
   if (!items.length) return [...lines, "  (none — add one with manage_mcp_server)"];
@@ -120,7 +139,8 @@ function mcpReport(items: DiscoveryItem[], ourNames: Set<string>): string[] {
     for (const it of list) {
       const status = !it.status || it.status === "connected" ? "active" : it.status;
       const owned = ourNames.has(it.name) ? " · vault-owned (editable)" : "";
-      lines.push(`    - ${it.name} [${status}] ${it.desc ?? ""}${owned}`.trimEnd());
+      const noted = docs.has(it.name) ? " · has notes" : "";
+      lines.push(`    - ${it.name} [${status}] ${it.desc ?? ""}${owned}${noted}`.trimEnd());
     }
     if (note) lines.push(`      ${note}`);
   };
@@ -165,15 +185,27 @@ function automationReport(exo: ExoToolHost, now: number): string[] {
 export function buildCapabilityTools(app: App) {
   const listCapabilities = tool(
     "list_capabilities",
-    "Show what Exo currently has wired up: MCP servers (with live connection status), skills (in-vault, importable from other projects/Codex, or already global), automations and playbooks. Use it before changing anything with manage_mcp_server or manage_skill, and whenever Mario asks what Exo can do or why a tool isn't available.",
-    { kind: z.enum(["all", "mcp", "skills", "automations"]).optional() },
+    "Show what Exo currently has wired up: MCP servers (with live connection status and the notes describing what each is for), skills (in-vault, importable from other projects/Codex, or already global), automations and playbooks. Use it before changing anything with manage_mcp_server or manage_skill, before using an MCP server you haven't used in this conversation (its notes say what it's for and what to avoid), and whenever Mario asks what Exo can do or why a tool isn't available.",
+    {
+      kind: z.enum(["all", "mcp", "skills", "automations"]).optional(),
+      /** Notes can be long; pull them only when they matter. */
+      with_notes: z.boolean().optional(),
+    },
     async (args) => {
       const exo = getExo(app);
       const kind = args.kind ?? "all";
       const out: string[] = [];
       if (kind === "all" || kind === "mcp") {
         const { items, ourNames } = await gatherMcp(app, exo);
-        out.push(...mcpReport(items, ourNames));
+        const docs = await readMcpDocs(app, items.map((i) => i.name));
+        out.push(...mcpReport(items, ourNames, docs));
+        if (args.with_notes) {
+          for (const [name, body] of docs) {
+            out.push("", `--- notes for ${name} ---`, body);
+          }
+        } else if (docs.size) {
+          out.push("", `Notes available for: ${[...docs.keys()].join(", ")} — call again with with_notes: true to read them.`);
+        }
       }
       if (kind === "all" || kind === "skills") {
         if (out.length) out.push("");

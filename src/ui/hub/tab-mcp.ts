@@ -12,6 +12,7 @@ import {
 import { connectMcp, disconnectMcp, setMcpEnabled } from "../../core/connections-install";
 import { parseMcpJson, summarizeServer } from "../../core/mcp-config";
 import { mcpSections } from "../../core/hub-sections";
+import { MCP_DOCS_DIR, mcpDocPath, mcpDocTemplate, isSafeDocName, hasMcpDocContent } from "../../core/mcp-docs";
 import { resolveCli, mcpLogin } from "../../cli";
 import { McpServerModal } from "../mcp-server-modal";
 import { reconcileList, type CardModel } from "../keyed-reconcile";
@@ -92,8 +93,27 @@ export async function gatherMcp(ctx: HubTabContext): Promise<{ items: DiscoveryI
   return { items: [...vaultItems, ...mcpFromConfig, ...live], ourNames };
 }
 
+/** Which servers already carry a filled-in doc note — drives the Docs button's
+ *  label so "write one" and "read it" don't look the same. */
+async function gatherDocumented(ctx: HubTabContext, names: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  await Promise.all(
+    names.map(async (name) => {
+      if (!isSafeDocName(name)) return;
+      try {
+        const raw = await ctx.app.vault.adapter.read(mcpDocPath(name));
+        if (hasMcpDocContent(raw)) out.add(name);
+      } catch {
+        /* no doc yet */
+      }
+    })
+  );
+  return out;
+}
+
 export async function renderMcpTab(host: HTMLElement, ctx: HubTabContext): Promise<void> {
   const { items, ourNames } = await gatherMcp(ctx);
+  const documented = await gatherDocumented(ctx, items.map((i) => i.name));
   const sections = mcpSections(items);
 
   const models: CardModel[] = [];
@@ -107,8 +127,8 @@ export async function renderMcpTab(host: HTMLElement, ctx: HubTabContext): Promi
     models.push({ key: `sec:${label}`, sig: `${list.length}`, build: () => buildGroupHeader(label, list.length) });
     for (const it of list) models.push({
       key: `mcp:${it.name}`,
-      sig: `${it.state}:${it.status ?? ""}:${ourNames.has(it.name)}:${it.desc ?? ""}`,
-      build: () => buildMcpRow(it, ourNames, ctx),
+      sig: `${it.state}:${it.status ?? ""}:${ourNames.has(it.name)}:${documented.has(it.name)}:${it.desc ?? ""}`,
+      build: () => buildMcpRow(it, ourNames, documented, ctx),
     });
   };
   section("Connected", sections.connected);
@@ -134,7 +154,7 @@ function buildAddMcp(ctx: HubTabContext): HTMLElement {
   return row;
 }
 
-function buildMcpRow(it: DiscoveryItem, ourNames: Set<string>, ctx: HubTabContext): HTMLElement {
+function buildMcpRow(it: DiscoveryItem, ourNames: Set<string>, documented: Set<string>, ctx: HubTabContext): HTMLElement {
   const { row, right } = buildRowScaffold(it.name, it.origin, it.desc);
   row.toggleClass("is-muted", it.state === "have");
 
@@ -156,6 +176,15 @@ function buildMcpRow(it: DiscoveryItem, ourNames: Set<string>, ctx: HubTabContex
       const b = right.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Re-auth" });
       b.onclick = () => void doReauth(ctx, it, b);
     }
+    // Notes are useful for ANY connected server, including inherited ones —
+    // knowing what a server is for is independent of who owns its config.
+    if (isSafeDocName(it.name)) {
+      const has = documented.has(it.name);
+      const docs = right.createEl("button", { cls: "mva-btn", text: has ? "Notes" : "Add notes" });
+      docs.toggleClass("is-muted", !has);
+      docs.setAttr("title", has ? "Open this server's notes" : "Describe what this server is for, so the agent knows when to use it");
+      docs.onclick = () => void openDocs(ctx, it);
+    }
     // Full lifecycle only for servers WE wrote into .mcp.json — inherited /
     // live-only / connector servers are configured at their own source.
     if (ourNames.has(it.name)) {
@@ -174,6 +203,24 @@ function buildMcpRow(it: DiscoveryItem, ourNames: Set<string>, ctx: HubTabContex
     btn.onclick = () => void doImport(ctx, it, btn);
   }
   return row;
+}
+
+/** Open a server's notes, seeding the template on first use. The note is plain
+ *  vault markdown — the user edits it like any other, and the agent pulls it
+ *  through `list_capabilities` when it needs to know what the server is for. */
+async function openDocs(ctx: HubTabContext, it: DiscoveryItem): Promise<void> {
+  const path = mcpDocPath(it.name);
+  const adapter = ctx.app.vault.adapter;
+  try {
+    if (!(await adapter.exists(path))) {
+      if (!(await adapter.exists(MCP_DOCS_DIR))) await adapter.mkdir(MCP_DOCS_DIR);
+      await adapter.write(path, mcpDocTemplate(it.name, it.desc ?? ""));
+    }
+    await ctx.app.workspace.openLinkText(path, "", "tab");
+    ctx.rerender();
+  } catch (e) {
+    new Notice(`Could not open the notes: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 async function doImport(ctx: HubTabContext, it: DiscoveryItem, btn: HTMLButtonElement): Promise<void> {

@@ -80,6 +80,27 @@ describe("list_capabilities", () => {
     const out = text(await toolHandler(app, "list_capabilities")({ kind: "mcp" }, {}));
     expect(out).toContain("MCP servers:");
   });
+
+  it("flags servers with notes and only inlines them when asked", async () => {
+    const { app, files } = fakeApp(base, JSON.stringify({ mcpServers: { notion: { command: "npx" } } }));
+    files.set(".claude/mcp/notion.md", "# notion\n\n## Scope\n- Read the roadmap DB\n");
+
+    const brief = text(await toolHandler(app, "list_capabilities")({ kind: "mcp" }, {}));
+    expect(brief).toContain("has notes");
+    expect(brief).toContain("with_notes: true");
+    expect(brief).not.toContain("roadmap DB");
+
+    const full = text(await toolHandler(app, "list_capabilities")({ kind: "mcp", with_notes: true }, {}));
+    expect(full).toContain("--- notes for notion ---");
+    expect(full).toContain("Read the roadmap DB");
+  });
+
+  it("ignores a never-filled template — an empty note is not documentation", async () => {
+    const { app, files } = fakeApp(base, JSON.stringify({ mcpServers: { notion: { command: "npx" } } }));
+    files.set(".claude/mcp/notion.md", "# notion\n\n## Scope\n\n<!-- fill me -->\n-\n");
+    const out = text(await toolHandler(app, "list_capabilities")({ kind: "mcp" }, {}));
+    expect(out).not.toContain("has notes");
+  });
 });
 
 describe("manage_mcp_server", () => {
