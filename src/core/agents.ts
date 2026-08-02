@@ -597,7 +597,10 @@ export function buildAgentBindingOutbound(def: AgentDef, visibleText: string): s
   const lines = [
     "<agent-binding>",
     `The user explicitly addressed the "${brain.name}" agent.`,
-    `Delegate this request to that subagent: Agent({ subagent_type: "${brain.invocable}", prompt: <the user's request> }).`,
+    // Wait for it: the Agent tool backgrounds by default, and a bound turn that
+    // answers "I've started it" instead of answering the question is worse than
+    // not having bound at all.
+    `Delegate this request to that subagent and WAIT for its result: Agent({ subagent_type: "${brain.invocable}", prompt: <the user's request>, run_in_background: false }).`,
     brain.description ? `Its remit: ${brain.description}` : "",
     contract.scope.read.length ? `It reads: ${contract.scope.read.join(", ")}.` : "",
     contract.scope.write.length

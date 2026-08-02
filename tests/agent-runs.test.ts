@@ -501,3 +501,20 @@ describe("agentRunName", () => {
     expect(agentRunName(agent("librarian"), "daily 08:00")).toBe("LIBRARIAN (daily 08:00)");
   });
 });
+
+describe("delegation must be synchronous", () => {
+  // The Agent tool backgrounds by default. Without run_in_background:false a run
+  // spawns the subagent, waits for nothing, and reports "it has started" — a
+  // 25s run that changes nothing. Observed live before this was pinned.
+  it("an unattended run waits for its subagent", () => {
+    const p = buildAgentRunPrompt(agent("a"), "daily 08:00");
+    expect(p).toContain("run_in_background: false");
+    expect(p).toMatch(/WAIT for it/);
+    expect(p).toMatch(/Do not report that you started it/);
+  });
+
+  it("a delegated run waits too", () => {
+    const p = buildAgentRunPrompt(agent("a"), "invoked by exo", undefined, { from: "exo", text: "do X" });
+    expect(p).toContain("run_in_background: false");
+  });
+});

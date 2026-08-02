@@ -2953,7 +2953,14 @@ export default class ExoPlugin extends Plugin {
           : false;
       // Write runs join the existing review/restore queue rather than a parallel
       // one, so a bad agent write is rolled back the same way as a bad playbook.
-      const restoreId = write ? await this.recordAutomationRun(name, startedAt, result, path) : null;
+      // Only a run that actually wrote earns a restore record. An `act` agent
+      // that decided nothing needed doing would otherwise leave a Restore
+      // button that restores nothing — an affordance promising a rollback it
+      // has no work to perform.
+      const restoreId =
+        write && result.writes.length > 0
+          ? await this.recordAutomationRun(name, startedAt, result, path)
+          : null;
       // The ledger records every run, successful or not — a failed run that
       // leaves no trace is how a quietly broken agent stays invisible.
       await this.agentStore.appendRun({

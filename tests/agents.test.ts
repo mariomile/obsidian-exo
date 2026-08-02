@@ -461,3 +461,12 @@ describe("parseAgentCommand", () => {
     expect(parseAgentCommand("tell me /as a joke")).toBeNull();
   });
 });
+
+describe("buildAgentBindingOutbound — synchronous delegation", () => {
+  it("waits for the subagent instead of backgrounding it", () => {
+    const def = mergeAgents([brain("gw", { name: "GW", invocable: "GW" })], [])[0];
+    const out = buildAgentBindingOutbound(def, "write it");
+    expect(out).toContain("run_in_background: false");
+    expect(out).toMatch(/WAIT for its result/);
+  });
+});

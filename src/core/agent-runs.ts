@@ -354,7 +354,12 @@ export function buildAgentRunPrompt(
     task
       ? `This is a run of the "${brain.name}" agent, delegated by ${task.from}. No human is watching; there is nobody to ask.`
       : `This is an unattended, scheduled run of the "${brain.name}" agent. No human is watching; there is nobody to ask.`,
-    `Delegate the work to that subagent: Agent({ subagent_type: "${brain.invocable}", prompt: <the task below> }).`,
+    // `run_in_background: false` is load-bearing: the Agent tool backgrounds by
+    // default, so without it this session spawns the subagent, sees no result,
+    // and cheerfully reports that the work "has started" — a run that takes 25s
+    // and changes nothing.
+    `Delegate the work to that subagent, and WAIT for it: Agent({ subagent_type: "${brain.invocable}", prompt: <the task below>, run_in_background: false }).`,
+    "Do not report that you started it. Report what it actually did, in its words — your reply IS the record of this run, and there is no later turn in which to come back with the result.",
     "",
     task
       ? `Task from ${task.from}: ${task.text.trim()}\n\nDo that specific task, not this agent's standing job. If it turns out to be unnecessary or impossible, say so in one line and stop.`

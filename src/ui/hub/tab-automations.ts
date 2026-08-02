@@ -80,13 +80,17 @@ async function renderAgents(host: HTMLElement, ctx: HubTabContext): Promise<void
   const agents = ctx.plugin.agentStore
     .list()
     .filter((a) => a.brain.source === "vault" || a.brain.source === "user")
-    .filter((a) => a.contract.triggers.length > 0);
+    // Only genuinely unattended triggers. `note-mention` fires because a human
+    // typed the agent's name — that is invocation, not automation, and listing
+    // it here buried the two real automations under fifteen rows of agents that
+    // never run on their own.
+    .filter((a) => a.contract.triggers.some((t) => t.on !== "note-mention"));
   if (!agents.length) return;
 
   host.createDiv({ cls: "mva-auto-h", text: "Agents" });
   host.createDiv({
     cls: "mva-auto-sub",
-    text: "Agents with a trigger. Their instructions live in .claude/agents/; when and what they may touch lives in the contract file the pane links to.",
+    text: "Agents that run unattended. Their instructions live in .claude/agents/; when they fire and what they may touch lives in the contract file behind the gear.",
   });
 
   for (const a of agents) {
@@ -110,6 +114,26 @@ async function renderAgents(host: HTMLElement, ctx: HubTabContext): Promise<void
       a.contract.output === "journal" ? "logs to daily note" : a.contract.output === "silent" ? "no report" : "reports",
     ];
     main.createDiv({ cls: "mva-auto-meta", text: bits.join(" — ") });
+
+    row.createDiv({ cls: "mva-auto-spacer" });
+
+    // Parity with a playbook row: an automation you cannot trigger by hand is
+    // one you cannot test without waiting for its trigger.
+    const run = row.createEl("button", { cls: "mva-btn", text: "Run now" });
+    run.onclick = () => {
+      run.setAttr("disabled", "true");
+      run.setText("Running…");
+      void ctx.plugin
+        .invokeAgentFromAgent(a.brain.slug, "Do your standing job.")
+        .then((msg) => new Notice(msg))
+        .finally(() => {
+          // The pane outlives the run — the row may be gone if the user moved on.
+          if (!row.isConnected) return;
+          run.removeAttribute("disabled");
+          run.setText("Run now");
+          ctx.rerender();
+        });
+    };
 
     const open = row.createDiv({ cls: "mva-ag-action", attr: { "aria-label": "Open contract" } });
     setIcon(open, "settings-2");
