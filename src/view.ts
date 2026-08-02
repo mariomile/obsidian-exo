@@ -606,7 +606,7 @@ export class ChatView extends ItemView {
     // the same view (the root is emptied above), and a memo surviving the node it
     // describes would leave the counter blank until the number happened to move.
     this.overflowPainted = -1;
-    this.clickable(this.tabsOverflowEl, () => this.toggleGallery());
+    this.clickable(this.tabsOverflowEl, () => this.toggleGallery("retired"));
     const addTab = this.tabsTailEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
     setIcon(addTab, "plus");
     this.clickable(addTab, () => this.newConversation());
@@ -2339,11 +2339,11 @@ export class ChatView extends ItemView {
     sendBtn.toggleClass("is-streaming", on);
   }
 
-  private toggleGallery(): void {
+  private toggleGallery(preset?: HistoryFilter): void {
     if (this.galleryEl) this.hideGallery();
     else {
       if (this.capsEl) this.hideCapabilities();
-      void this.showGallery();
+      void this.showGallery(preset);
     }
   }
 
@@ -2390,10 +2390,11 @@ export class ChatView extends ItemView {
     });
   }
 
-  private async showGallery(): Promise<void> {
+  private async showGallery(preset?: HistoryFilter): Promise<void> {
     this.saveActive();
     this.gallerySelection.clear();
     this.historyFilters.clear();
+    if (preset) this.historyFilters.add(preset);
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.listEl.hide();
     this.composer.getComposerEl().hide();
