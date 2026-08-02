@@ -7,6 +7,7 @@ import {
   tabSignature,
   tabAriaLabel,
   retiredFromStrip,
+  countSurvivingRetirees,
 } from "../src/core/working-set";
 import type { TabFacts } from "../src/core/working-set";
 
@@ -385,5 +386,28 @@ describe("retiredFromStrip", () => {
 
   it("accepts any iterable of open ids, including a Set", () => {
     expect(retiredFromStrip([conv("a"), conv("b")], new Set(["a"])).map((c) => c.id)).toEqual(["b"]);
+  });
+});
+
+describe("countSurvivingRetirees", () => {
+  const withMessages = (n: number) => ({ messages: n > 0 ? ["hi"] : [] });
+
+  it("counts nothing when the whole batch is empty husks", () => {
+    // Four blank tabs opened and never typed in, then the cap fires: none of
+    // them get a card in the history, so a notice built on this count must
+    // stay silent rather than announce "4 chat ritirate" for zero destinations.
+    expect(countSurvivingRetirees([withMessages(0), withMessages(0), withMessages(0), withMessages(0)])).toBe(0);
+  });
+
+  it("counts only the retirees that actually have content", () => {
+    // Mixed batch: two real chats and two blank husks retire together. Only
+    // the two with messages will be retrievable from the history afterwards.
+    expect(
+      countSurvivingRetirees([withMessages(1), withMessages(0), withMessages(2), withMessages(0)]),
+    ).toBe(2);
+  });
+
+  it("counts every retiree when none are empty", () => {
+    expect(countSurvivingRetirees([withMessages(1), withMessages(3)])).toBe(2);
   });
 });

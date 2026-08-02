@@ -93,6 +93,7 @@ import {
   tabSignature,
   tabAriaLabel,
   retiredFromStrip,
+  countSurvivingRetirees,
 } from "./core/working-set";
 import type { TabVM } from "./core/working-set";
 import { reconcileList } from "./ui/keyed-reconcile";
@@ -1550,10 +1551,12 @@ export class ChatView extends ItemView {
 
     const now = Date.now();
     const retired = new Set(plan.retire);
+    const retiredConvos: Convo[] = [];
     for (const id of plan.retire) {
       const c = byId.get(id);
       if (!c) continue;
       c.retiredAt = now; // never 0: toConvoData drops a falsy value
+      retiredConvos.push(c);
       this.dropSession(c); // free the live session; resumable from the history
     }
     // Remove exactly what was retired, rather than assigning `plan.visible`:
@@ -1572,9 +1575,17 @@ export class ChatView extends ItemView {
     // steady-state wave is one tab. The wording is load-bearing too: retiring is
     // not deleting (see core/retention), and the one thing the user must not
     // conclude from a strip that just emptied is that they lost the chats.
-    if (plan.retire.length >= ChatView.RETIRE_NOTICE_MIN) {
+    //
+    // The threshold and the number both read `countSurvivingRetirees`, not
+    // `plan.retire.length`: an empty "New chat" husk retires like everything
+    // else here but has no card in the history after the next persist (see
+    // `retention.ts` and `retiredFromStrip`), so counting it would put a number
+    // on the Notice that nothing behind it matches — and a batch of nothing but
+    // husks must stay silent, not announce zero.
+    const survivingCount = countSurvivingRetirees(retiredConvos);
+    if (survivingCount >= ChatView.RETIRE_NOTICE_MIN) {
       new Notice(
-        `${plan.retire.length} chat ritirate dalla strip — sono nella cronologia, nulla è stato eliminato.`
+        `${survivingCount} chat ritirate dalla strip — sono nella cronologia, nulla è stato eliminato.`
       );
     }
     this.renderTabs();

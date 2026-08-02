@@ -215,6 +215,30 @@ export function retiredFromStrip<T extends RetiredCandidateSource>(
   );
 }
 
+/** Subset a batch-retire notice needs: whether the conversation has content. */
+export interface RetireNoticeCandidate {
+  messages: readonly unknown[];
+}
+
+/**
+ * How many of a just-retired batch will actually be sitting in the history
+ * afterwards, so a "N ritirate" notice can say a number the user can go find.
+ *
+ * An empty "New chat" husk gets `retiredAt` stamped like everything else in
+ * the batch, but `planRetention` drops it on the very next persist (nothing to
+ * protect) and `retiredFromStrip` above excludes it from the overflow counter
+ * for the same reason: it never gets a card in the history. Counting it in a
+ * notice would claim a destination that does not exist for it — the same
+ * mismatch `retiredFromStrip`'s own contract exists to prevent. Same predicate
+ * as `retiredFromStrip`'s `messages.length > 0`, on purpose: both answer "will
+ * this show up in the history", so they must not drift apart.
+ */
+export function countSurvivingRetirees<T extends RetireNoticeCandidate>(
+  retired: readonly T[],
+): number {
+  return retired.filter((c) => c.messages.length > 0).length;
+}
+
 // ---------------------------------------------------------------------------
 // Tab state
 // ---------------------------------------------------------------------------
