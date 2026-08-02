@@ -184,8 +184,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-weight: 500;
 }
 /* Status mark — one 6px slot, five states, zero pictograms. Absence of a mark
-   IS the idle state: nothing to know, nothing drawn. The slot carries state and
-   nothing else: the provider colour is deliberately NOT painted here, because a
+   IS the idle state in WIDE mode: nothing to know, nothing drawn — the title
+   next to it is what says the tab exists. Dense mode takes that carrier away
+   and has to compensate; see `.is-dense … .is-idle` further down. The slot
+   carries state and nothing else: the provider colour is NOT painted here, because a
    filled brand dot and a filled `unread` dot differ only in hue — and with a
    user-configurable accent they can be the same hue. */
 .mva-tab-mark {
@@ -410,6 +412,30 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    tabs were supposed to free and the strip scrolls again. */
 .mva-tabstrip.is-dense .mva-tab {
   padding: 4px 6px;
+}
+/* Idle has to become visible here, and ONLY here.
+   DO NOT delete this to "restore consistency" with the wide-mode rule above.
+   The five-state vocabulary rests on an unstated premise: that something else
+   already says the tab exists, so absence can mean "nothing to report". In wide
+   mode that something is the title. Dense removes it, so the mark inherits a
+   second job — existence, on top of state — and in a grammar where "I am here"
+   and "nothing is happening" are both drawn as nothing, an idle tab renders as
+   an 18px invisible clickable slot. You cannot click what you cannot see.
+   Faint, then, but not absent: visible without becoming a sixth state.
+   Only where the premise actually fails — not on the active tab, which keeps
+   its title and its background, and never over `.is-blocked`, whose accent mark
+   outranks every state and must not lose to a higher-specificity baseline.
+
+   WHY 50% AND NOT MORE. It has to stay under `stopped`, which is the nearest
+   neighbour: same colour (`--text-faint`), but drawn as a 1px ring, and a 1px
+   ring on a 6px disc covers ~55% of it. So a FILLED dot at more than ~55%
+   opacity carries more ink than the state it must stay beneath, however faint
+   it looks in isolation — measured at 60% it did. 50% sits below that ceiling
+   and still well above the theme's own hairline. The other four are untouched:
+   they win on hue (`error`, `unread`), on motion (`streaming`) and on form
+   (`stopped` is hollow where this is filled). */
+.mva-tabstrip.is-dense .mva-tab:not(.is-active):not(.is-blocked) .mva-tab-mark.is-idle {
+  background: color-mix(in srgb, var(--text-faint) 50%, transparent);
 }
 /* The boundary between the pinned block and the rest, drawn once for the whole
    group at 1px instead of an 11px pin on every tab in it. A border on the tab

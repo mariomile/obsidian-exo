@@ -2026,10 +2026,16 @@ export class ChatView extends ItemView {
     tab.setAttr("aria-label", tabAriaLabel(title, vm, { agents, pinned }));
 
     // One 6px slot, five states, zero pictograms — and nothing else: the
-    // provider colour deliberately does NOT live here. `idle` adds no class:
-    // nothing is drawn, because there is nothing to know.
+    // provider colour deliberately does NOT live here.
+    //
+    // The class is stamped for EVERY state, `idle` included. It used to be
+    // omitted, on the reasoning that idle draws nothing and so needs no hook —
+    // but dense mode gives idle something to draw (see the `.is-idle` rule in
+    // styles.css), and a hook the CSS can name beats selecting idle as "none of
+    // the other four": that form has to be extended by hand for every state
+    // added later, and out-specifies the new state's own rule when it is not.
     const mark = tab.createSpan({ cls: "mva-tab-mark" });
-    if (vm.state !== "idle") mark.addClass(`is-${vm.state}`);
+    mark.addClass(`is-${vm.state}`);
 
     if (!bare) {
       const titleEl = tab.createSpan({ cls: "mva-tab-title" + (placeholder ? " is-placeholder" : "") });
