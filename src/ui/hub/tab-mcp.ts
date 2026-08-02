@@ -12,13 +12,13 @@ import {
 } from "../../core/connections-scan";
 import { connectMcp, disconnectMcp, setMcpEnabled } from "../../core/connections-install";
 import { parseMcpJson, summarizeServer } from "../../core/mcp-config";
-import { mcpSections } from "../../core/hub-sections";
+import { mcpSections, matchesQuery } from "../../core/hub-sections";
 import { findToolRule, toolPermissionStatus } from "../../core/permissions";
 import { MCP_DOCS_DIR, mcpDocPath, mcpDocTemplate, isSafeDocName, hasMcpDocContent, summarizeMcpDoc } from "../../core/mcp-docs";
 import { resolveCli, mcpLogin } from "../../cli";
 import { McpServerModal } from "../mcp-server-modal";
 import { reconcileList, type CardModel } from "../keyed-reconcile";
-import { buildAccordionRow, buildGroupHeader, buildRowScaffold, type HubTabContext } from "./shared";
+import { buildAccordionRow, buildGroupHeader, buildRowScaffold, buildSearchBox, type HubTabContext } from "./shared";
 
 /**
  * The MCP tab — control surface AND marketplace over what other tools already
@@ -139,15 +139,20 @@ async function readDocRaw(ctx: HubTabContext, name: string): Promise<string | nu
 }
 
 export async function renderMcpTab(host: HTMLElement, ctx: HubTabContext): Promise<void> {
-  const { items, ourNames } = await gatherMcp(ctx);
+  const { items: allItems, ourNames } = await gatherMcp(ctx);
+  const query = ctx.filterText();
+  const items = allItems.filter((it) => matchesQuery(query, it.name, it.origin, it.desc));
   const documented = await gatherDocumented(ctx, items.map((i) => i.name));
   const sections = mcpSections(items);
 
   const models: CardModel[] = [];
+  models.push({ key: "search", sig: "static", build: () => buildSearchBox(ctx, "Search servers…") });
   // Always-present "Add MCP server" action — the control-surface entry point.
   models.push({ key: "add-mcp", sig: "add", build: () => buildAddMcp(ctx) });
-  if (!items.length) {
+  if (!allItems.length) {
     models.push({ key: "mcp-empty", sig: "empty", build: () => createDiv({ cls: "mva-conn-empty", text: "No MCP servers yet — add one above." }) });
+  } else if (!items.length) {
+    models.push({ key: "mcp-no-match", sig: query, build: () => createDiv({ cls: "mva-conn-empty", text: `No servers match "${query}".` }) });
   }
   const section = async (label: string, list: DiscoveryItem[]) => {
     if (!list.length) return;

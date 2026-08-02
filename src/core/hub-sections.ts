@@ -37,6 +37,15 @@ export interface SkillSections {
   haveCount: number;
 }
 
+/** Case-insensitive substring match against any field — the hub's search
+ *  boxes (MCP, Skills). An empty/whitespace query always matches, so search
+ *  is a no-op until the user actually types something. */
+export function matchesQuery(query: string, ...fields: (string | undefined)[]): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return fields.some((f) => f?.toLowerCase().includes(q));
+}
+
 export function skillSections(items: DiscoveryItem[]): SkillSections {
   const vault = items.filter((s) => s.state === "active");
   const importable = items.filter((s) => s.state === "importable");

@@ -53,6 +53,9 @@ export class HubView extends ItemView {
    *  "skills:vault" starts open: it's the user's own skills, the ones most
    *  worth seeing without a click; every other accordion starts closed. */
   private expandedKeys = new Set<string>(["skills:vault"]);
+  /** The search box's text — one filter shared by MCP/Skills, cleared on tab
+   *  switch so a leftover query never silently hides the next tab's rows. */
+  private filter = "";
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);
@@ -92,6 +95,7 @@ export class HubView extends ItemView {
 
   /** Switch to a tab (also the deep-link entry point via activateHub). */
   showTab(tab: HubTab): void {
+    if (tab !== this.tab) this.filter = "";
     this.tab = tab;
     void this.render();
   }
@@ -115,6 +119,11 @@ export class HubView extends ItemView {
       expanded: (key) => this.expandedKeys.has(key),
       toggleExpanded: (key) => {
         if (!this.expandedKeys.delete(key)) this.expandedKeys.add(key);
+        void this.render();
+      },
+      filterText: () => this.filter,
+      setFilterText: (text) => {
+        this.filter = text;
         void this.render();
       },
     };

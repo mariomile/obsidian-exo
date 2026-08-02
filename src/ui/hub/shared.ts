@@ -18,6 +18,11 @@ export interface HubTabContext {
    *  reconcileList rebuilds a row when it's toggled. */
   expanded: (key: string) => boolean;
   toggleExpanded: (key: string) => void;
+  /** The search box's current text, shared by MCP/Skills — one filter per
+   *  hub, cleared on tab switch so a stale query never hides the next tab's
+   *  content. */
+  filterText: () => string;
+  setFilterText: (text: string) => void;
 }
 
 /** Uppercase section header, with an optional count pill (list sections only —
@@ -37,10 +42,13 @@ function chevron(open: boolean): HTMLElement {
 
 /** A group header that collapses/expands the rows under it — the member rows
  *  are simply omitted from the model list for a render pass while closed, so
- *  callers gate on `ctx.expanded(key)` themselves before building them. */
-export function buildAccordionGroupHeader(ctx: HubTabContext, key: string, label: string, count?: number): HTMLElement {
+ *  callers gate on `ctx.expanded(key)` themselves before building them.
+ *  `forceOpen` overrides the displayed (open) state without touching the
+ *  underlying toggle — a live search auto-opens matching groups without
+ *  discarding the user's manual expand/collapse choices for when it clears. */
+export function buildAccordionGroupHeader(ctx: HubTabContext, key: string, label: string, count?: number, forceOpen?: boolean): HTMLElement {
   const h = buildGroupHeader(label, count);
-  h.insertBefore(chevron(ctx.expanded(key)), h.firstChild);
+  h.insertBefore(chevron(forceOpen ?? ctx.expanded(key)), h.firstChild);
   h.addClass("is-clickable");
   clickable(h, () => ctx.toggleExpanded(key));
   return h;
@@ -100,6 +108,28 @@ export function runCommand(ctx: HubTabContext, id: string): void {
  *  close first, unlike the old in-chat overlay). */
 export function openNote(ctx: HubTabContext, path: string): void {
   void ctx.app.workspace.openLinkText(path, "", "tab");
+}
+
+/** A stable-keyed search box for a tab's row list. The DOM node it builds is
+ *  never rebuilt while its `sig` stays constant (see the tab's model array —
+ *  give this a fixed sig like "search"), so the browser's own uncontrolled
+ *  `<input>` behavior keeps focus and cursor position across re-renders; the
+ *  debounce just delays how often typing triggers a data refetch. */
+export function buildSearchBox(ctx: HubTabContext, placeholder: string): HTMLElement {
+  const wrap = createDiv({ cls: "mva-hub-search" });
+  const icon = wrap.createSpan({ cls: "mva-hub-search-icon" });
+  setIcon(icon, "search");
+  const input = wrap.createEl("input", {
+    cls: "mva-hub-search-input",
+    attr: { type: "text", placeholder, value: ctx.filterText() },
+  });
+  let timer: number | undefined;
+  input.oninput = () => {
+    window.clearTimeout(timer);
+    const value = input.value;
+    timer = window.setTimeout(() => ctx.setFilterText(value), 150);
+  };
+  return wrap;
 }
 
 /** Deep-link to the Exo settings tab. */

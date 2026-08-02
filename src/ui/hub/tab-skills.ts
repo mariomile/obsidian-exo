@@ -16,9 +16,9 @@ import {
   mergeByName,
   type NamedItem,
 } from "../../core/capability-scan";
-import { skillSections } from "../../core/hub-sections";
+import { skillSections, matchesQuery } from "../../core/hub-sections";
 import { reconcileList, type CardModel } from "../keyed-reconcile";
-import { buildAccordionGroupHeader, buildGroupHeader, buildRowScaffold, type HubTabContext } from "./shared";
+import { buildAccordionGroupHeader, buildGroupHeader, buildRowScaffold, buildSearchBox, type HubTabContext } from "./shared";
 
 /**
  * The Skills tab — everything the agent knows how to do. Vault-installed
@@ -51,43 +51,55 @@ export async function gatherSkills(ctx: HubTabContext): Promise<DiscoveryItem[]>
 export async function renderSkillsTab(host: HTMLElement, ctx: HubTabContext): Promise<void> {
   const skills = await gatherSkills(ctx);
   const { vault, groups, haveCount } = skillSections(skills);
+  const query = ctx.filterText();
+  const searching = query.trim().length > 0;
 
   const models: CardModel[] = [];
+  models.push({ key: "search", sig: "static", build: () => buildSearchBox(ctx, "Search skills…") });
 
   // "In this vault" — the user's own skills, open by default (HubView seeds
   // this key into expandedKeys). Importable groups below start closed: with
   // dozens of project origins, a flat list was the whole point of this
-  // accordion — nothing to navigate if it opens pre-expanded anyway.
+  // accordion — nothing to navigate if it opens pre-expanded anyway. A live
+  // search overrides both: matching groups auto-open (VSCode's tree-search
+  // idiom) and empty ones disappear; clearing the query restores whatever the
+  // user had manually set, since search never touches ctx.expanded itself.
   const vaultKey = "skills:vault";
-  const vaultOpen = ctx.expanded(vaultKey);
-  models.push({
-    key: "hdr:vault",
-    sig: `${vault.length}:${vaultOpen}`,
-    build: () => buildAccordionGroupHeader(ctx, vaultKey, "In this vault", vault.length),
-  });
-  if (vaultOpen) {
-    if (!vault.length) {
-      models.push({ key: "vault-empty", sig: "empty", build: () => createDiv({ cls: "mva-conn-empty", text: "No skills installed in this vault yet." }) });
+  const searchingVault = searching && vault.length > 0;
+  const shownVault = searchingVault ? vault.filter((it) => matchesQuery(query, it.name, it.desc)) : vault;
+  if (!searchingVault || shownVault.length) {
+    const vaultOpen = searchingVault ? true : ctx.expanded(vaultKey);
+    models.push({
+      key: "hdr:vault",
+      sig: `${shownVault.length}:${vaultOpen}`,
+      build: () => buildAccordionGroupHeader(ctx, vaultKey, "In this vault", shownVault.length, searchingVault ? true : undefined),
+    });
+    if (vaultOpen) {
+      if (!shownVault.length) {
+        models.push({ key: "vault-empty", sig: "empty", build: () => createDiv({ cls: "mva-conn-empty", text: "No skills installed in this vault yet." }) });
+      }
+      for (const it of shownVault) models.push({ key: `skill:${it.name}`, sig: "active", build: () => buildSkillRow(it, ctx) });
     }
-    for (const it of vault) models.push({ key: `skill:${it.name}`, sig: "active", build: () => buildSkillRow(it, ctx) });
   }
 
   for (const group of groups) {
+    const shownItems = searching ? group.items.filter((it) => matchesQuery(query, it.name, it.desc)) : group.items;
+    if (searching && !shownItems.length) continue; // no match anywhere in this origin — hide it entirely
     const key = `skills:origin:${group.origin}`;
-    const isOpen = ctx.expanded(key);
+    const isOpen = searching ? true : ctx.expanded(key);
     models.push({
       key: `hdr:${group.origin}`,
-      sig: `${group.items.length}:${isOpen}`,
-      build: () => buildAccordionGroupHeader(ctx, key, group.origin, group.items.length),
+      sig: `${shownItems.length}:${isOpen}`,
+      build: () => buildAccordionGroupHeader(ctx, key, group.origin, shownItems.length, searching ? true : undefined),
     });
     if (isOpen) {
-      for (const it of group.items) models.push({ key: `skill:${it.name}`, sig: "importable", build: () => buildSkillRow(it, ctx) });
+      for (const it of shownItems) models.push({ key: `skill:${it.name}`, sig: "importable", build: () => buildSkillRow(it, ctx) });
     }
   }
   if (!vault.length && !groups.length && !haveCount) {
     models.push({ key: "skills-empty", sig: "empty", build: () => createDiv({ cls: "mva-conn-empty", text: "No skills found anywhere Exo looks." }) });
   }
-  if (haveCount) {
+  if (haveCount && !searching) {
     models.push({ key: "have-summary", sig: `${haveCount}`, build: () => {
       const s = createDiv({ cls: "mva-conn-have-summary" });
       s.setText(`${haveCount} skills already in Exo — not shown`);

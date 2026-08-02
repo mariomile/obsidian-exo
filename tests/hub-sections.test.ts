@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mcpSections, skillSections } from "../src/core/hub-sections";
+import { mcpSections, skillSections, matchesQuery } from "../src/core/hub-sections";
 import type { DiscoveryItem } from "../src/core/connections-scan";
 
 const mcp = (name: string, state: DiscoveryItem["state"], status?: string, origin = "vault"): DiscoveryItem => ({
@@ -64,5 +64,22 @@ describe("skillSections", () => {
     expect(s.vault).toEqual([]);
     expect(s.groups).toEqual([]);
     expect(s.haveCount).toBe(0);
+  });
+});
+
+describe("matchesQuery", () => {
+  it("matches with no query at all — search is a no-op until typed", () => {
+    expect(matchesQuery("", "notion")).toBe(true);
+    expect(matchesQuery("   ", "notion")).toBe(true);
+  });
+  it("matches case-insensitively against any given field", () => {
+    expect(matchesQuery("NOT", "notion", undefined)).toBe(true);
+    expect(matchesQuery("global", undefined, "claude-global")).toBe(true);
+  });
+  it("does not match when no field contains the query", () => {
+    expect(matchesQuery("zzz", "notion", "vault")).toBe(false);
+  });
+  it("tolerates undefined fields", () => {
+    expect(matchesQuery("x", undefined, undefined)).toBe(false);
   });
 });
