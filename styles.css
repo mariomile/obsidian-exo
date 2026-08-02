@@ -1473,6 +1473,19 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-ag-run-open:hover {
   text-decoration: underline;
 }
+/* Quiet until armed — restore overwrites current file content, so the second
+   click is the one that reads as consequential. */
+.mva-ag-run-restore {
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.mva-ag-run-restore:hover {
+  color: var(--text-normal);
+}
+.mva-ag-run-restore.is-armed {
+  color: var(--text-error, var(--text-accent));
+  font-weight: 600;
+}
 
 .mva-ag-empty {
   padding: 28px 4px;

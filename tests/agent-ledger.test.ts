@@ -61,6 +61,27 @@ describe("serialize → parse round trip", () => {
     expect(back.writes).toEqual([]);
   });
 
+  it("round-trips the restore id that backs the pane's Restore button", () => {
+    const original = record({ restoreId: "m3k2p-a7b9c1" });
+    const [back] = parseAgentLedger(serializeAgentRun(original));
+    expect(back.restoreId).toBe("m3k2p-a7b9c1");
+  });
+
+  it("omits the restore id for a read-only run — nothing to restore", () => {
+    const original = record({ restoreId: undefined, writes: [] });
+    const out = serializeAgentRun(original);
+    expect(out).not.toContain("- restore:");
+    expect(parseAgentLedger(out)[0].restoreId).toBeUndefined();
+  });
+
+  it("stays readable by an older parser (unknown key is just skipped)", () => {
+    // The field is additive: a ledger written with it must still parse if the
+    // key is dropped, and vice versa.
+    const withId = serializeAgentRun(record({ restoreId: "x-1" }));
+    const stripped = withId.split("\n").filter((l) => !l.startsWith("- restore:")).join("\n");
+    expect(parseAgentLedger(stripped)[0].slug).toBe("ghostwriter");
+  });
+
   it("round-trips a run with no report", () => {
     const original = record({ report: undefined });
     const [back] = parseAgentLedger(serializeAgentRun(original));

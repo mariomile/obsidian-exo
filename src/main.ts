@@ -2856,7 +2856,7 @@ export default class ExoPlugin extends Plugin {
       const path = await writeReport(this.app, name, result, this.paths.reports);
       // Write runs join the existing review/restore queue rather than a parallel
       // one, so a bad agent write is rolled back the same way as a bad playbook.
-      if (write) await this.recordAutomationRun(name, startedAt, result, path);
+      const restoreId = write ? await this.recordAutomationRun(name, startedAt, result, path) : null;
       const proposed = await this.collectAgentProposals(agent, result.output, startedAt);
       // The ledger records every run, successful or not — a failed run that
       // leaves no trace is how a quietly broken agent stays invisible.
@@ -2870,6 +2870,7 @@ export default class ExoPlugin extends Plugin {
         trigger: reason,
         tier: agent.contract.autonomy,
         report: path,
+        ...(restoreId ? { restoreId } : {}),
         writes: result.writes,
         by,
       });
@@ -3049,7 +3050,7 @@ export default class ExoPlugin extends Plugin {
     startedAt: number,
     result: HeadlessResult,
     reportPath: string
-  ): Promise<void> {
+  ): Promise<string | null> {
     try {
       const checkpoint = [...result.checkpoint.entries()].filter(
         ([, v]) => v === null || v.length <= MAX_AUTOMATION_SNAPSHOT
@@ -3064,8 +3065,10 @@ export default class ExoPlugin extends Plugin {
         checkpoint,
       };
       await this.saveAutomationRuns(pruneRuns([rec, ...(await this.loadAutomationRuns())], 20));
+      return rec.id;
     } catch (err) {
       console.warn("[Exo] couldn't persist the automation run record:", err);
+      return null;
     }
   }
 

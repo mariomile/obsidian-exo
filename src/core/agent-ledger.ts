@@ -31,6 +31,14 @@ export interface AgentRunRecord {
   /** Vault paths the run wrote. */
   writes: string[];
   /**
+   * Id of the checkpoint record backing "Restore" for this run, when it wrote.
+   *
+   * Stored rather than derived: the checkpoint id embeds `startedAt` but also a
+   * random suffix, so correlating the two records by timestamp would be a guess.
+   * Absent for read-only runs, which have nothing to restore.
+   */
+  restoreId?: string;
+  /**
    * Who asked. `exo` for a trigger or a human; an agent slug when this run was
    * delegated by another agent — the attribution chain that makes agent↔agent
    * work auditable instead of anonymous.
@@ -66,6 +74,7 @@ export function serializeAgentRun(r: AgentRunRecord): string {
     `- duration: ${Math.max(0, Math.round(r.durationMs / 1000))}s`,
     `- by: ${r.by}`,
     ...(r.report ? [`- report: ${r.report}`] : []),
+    ...(r.restoreId ? [`- restore: ${r.restoreId}`] : []),
     `- writes: ${r.writes.length ? r.writes.join(", ") : "(none)"}`,
     "",
     ...(r.summary ? [esc(r.summary), ""] : []),
@@ -125,6 +134,7 @@ export function parseAgentLedger(raw: string): AgentRunRecord[] {
       trigger: parseField(body, "trigger") ?? "unknown",
       tier: parseField(body, "tier") ?? "propose",
       report: parseField(body, "report"),
+      ...(parseField(body, "restore") ? { restoreId: parseField(body, "restore") } : {}),
       writes,
       by: parseField(body, "by") ?? "exo",
       ...(summary ? { summary } : {}),

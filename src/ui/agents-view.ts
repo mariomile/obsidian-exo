@@ -220,6 +220,32 @@ export class AgentsView extends ItemView {
         const openReport = line.createSpan({ cls: "mva-ag-run-open", text: "report" });
         clickable(openReport, () => void this.app.workspace.openLinkText(run.report!, "", "tab"));
       }
+      // Restore lives here, next to the run that did the writing — it existed
+      // before, but only inside the Automations modal, which is not where anyone
+      // looks after reading "3 writes" on an agent's run.
+      if (run.restoreId && run.writes.length) {
+        const restore = line.createSpan({ cls: "mva-ag-run-restore", text: "restore" });
+        // Two-step, matching the touched-notes revert: an agent write is
+        // reversible, but reversing it overwrites whatever is there NOW, which
+        // may include edits made since. One click should not do that.
+        let armed = false;
+        clickable(restore, () => {
+          if (!armed) {
+            armed = true;
+            restore.setText("confirm?");
+            restore.addClass("is-armed");
+            window.setTimeout(() => {
+              if (!armed) return;
+              armed = false;
+              restore.setText("restore");
+              restore.removeClass("is-armed");
+            }, 4000);
+            return;
+          }
+          armed = false;
+          void this.restore(run);
+        });
+      }
     }
   }
 
@@ -233,6 +259,14 @@ export class AgentsView extends ItemView {
     if (next && !agent.contract.triggers.length) {
       new Notice(`${agent.brain.name} is on, but has no triggers — it will only run when you ask.`);
     }
+    await this.refresh();
+  }
+
+  /** Roll a write run back to its pre-run snapshot. `restoreAutomationRun`
+   *  reports the outcome itself, so this only has to refresh afterwards. */
+  private async restore(run: AgentRunRecord): Promise<void> {
+    if (!run.restoreId) return;
+    await this.plugin.restoreAutomationRun(run.restoreId);
     await this.refresh();
   }
 
