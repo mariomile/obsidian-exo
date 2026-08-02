@@ -93,6 +93,7 @@ import {
   tabAriaLabel,
   retiredFromStrip,
   countSurvivingRetirees,
+  pinnedFirst,
 } from "./core/working-set";
 import type { TabVM } from "./core/working-set";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
@@ -1713,7 +1714,8 @@ export class ChatView extends ItemView {
   private renderTabs(): void {
     if (!this.tabsEl) return;
     const ids = this.openTabs.filter((id) => this.convos.some((c) => c.id === id));
-    this.openTabs = ids;
+    this.openTabs = ids; // cleanup only: this is also planWorkingSet's LRU input,
+    // so it must stay in true (unsorted) order — never the display order below.
     // Painted before the early return below so the numeral is already right
     // whenever the row comes back, rather than lagging a render behind it.
     // `this.convos` and not `allConvos()`: the active convo is always in
@@ -1731,8 +1733,11 @@ export class ChatView extends ItemView {
       return;
     }
 
+    // Display order only: pinned tabs sort to the left so they sit at a stable,
+    // always-visible edge. `ids` (this.openTabs) stays unsorted — see above.
+    const shown = pinnedFirst(ids, (id) => this.convos.find((c) => c.id === id)?.pinned === true);
     const models: CardModel[] = [];
-    for (const id of ids) {
+    for (const id of shown) {
       const c = this.convos.find((x) => x.id === id);
       if (!c) continue;
       const vm = deriveTabState({
@@ -2025,7 +2030,9 @@ export class ChatView extends ItemView {
    *  never cost you the tab you just landed on (the active tab is exempt) nor a
    *  pinned one; at or under the cap it retires nothing at all. */
   cmdCycleTab(delta: number): void {
-    const ids = this.openTabs;
+    // Same pinned-first order the strip renders (see `renderTabs`), so
+    // next/previous walks the row the user is actually looking at.
+    const ids = pinnedFirst(this.openTabs, (id) => this.convos.find((c) => c.id === id)?.pinned === true);
     if (ids.length < 2) return;
     const at = ids.indexOf(this.active.id);
     // `openTabs` always contains the active id; if it somehow does not, start

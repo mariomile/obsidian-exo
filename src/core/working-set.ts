@@ -95,6 +95,22 @@ export function planWorkingSet(
   };
 }
 
+/**
+ * Pinned tab ids first, everything else after, each group keeping its relative
+ * order. Pinning is how the user says "keep this reachable", so a pinned tab
+ * belongs at a stable, predictable edge rather than wherever it happened to sit.
+ *
+ * Stable within each group on purpose: pinning one tab must not reshuffle the
+ * others among themselves, and unpinning returns a tab to its place in the rest
+ * rather than stranding it at the front.
+ */
+export function pinnedFirst(ids: readonly string[], isPinned: (id: string) => boolean): string[] {
+  const pinned: string[] = [];
+  const rest: string[] = [];
+  for (const id of ids) (isPinned(id) ? pinned : rest).push(id);
+  return [...pinned, ...rest];
+}
+
 /** Clamp the configured cap. Mirrors `retentionBudgetBytes` in retention.ts:
  *  settings come from a hand-editable data.json, and a 0 / negative / NaN cap
  *  would retire every non-exempt tab in the strip in one go. */

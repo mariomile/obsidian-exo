@@ -8,6 +8,7 @@ import {
   tabAriaLabel,
   retiredFromStrip,
   countSurvivingRetirees,
+  pinnedFirst,
 } from "../src/core/working-set";
 import type { TabFacts } from "../src/core/working-set";
 
@@ -413,6 +414,48 @@ describe("countSurvivingRetirees", () => {
 
   it("counts every retiree when none are empty", () => {
     expect(countSurvivingRetirees([withMessages(1), withMessages(3)])).toBe(2);
+  });
+});
+
+describe("pinnedFirst", () => {
+  const pinnedSet = (ids: readonly string[]) => (id: string) => ids.includes(id);
+
+  it("moves pinned ids to the front, keeping unpinned after", () => {
+    const ids = ["a", "b", "c", "d", "e", "f"];
+    const isPinned = pinnedSet(["c", "e"]);
+    expect(pinnedFirst(ids, isPinned)).toEqual(["c", "e", "a", "b", "d", "f"]);
+  });
+
+  it("preserves relative order within each group", () => {
+    // Pinned "d" and "b" keep b-before-d; unpinned a/c/e keep their own order.
+    const ids = ["a", "b", "c", "d", "e"];
+    const isPinned = pinnedSet(["b", "d"]);
+    const result = pinnedFirst(ids, isPinned);
+    expect(result).toEqual(["b", "d", "a", "c", "e"]);
+  });
+
+  it("is the identity when every tab is pinned", () => {
+    const ids = ["x", "y", "z"];
+    expect(pinnedFirst(ids, () => true)).toEqual(["x", "y", "z"]);
+  });
+
+  it("is the identity when no tab is pinned", () => {
+    const ids = ["x", "y", "z"];
+    expect(pinnedFirst(ids, () => false)).toEqual(["x", "y", "z"]);
+  });
+
+  it("returns an empty list for an empty input", () => {
+    expect(pinnedFirst([], () => true)).toEqual([]);
+  });
+
+  it("unpinning returns a tab to its original relative position among the unpinned", () => {
+    // "c" was pinned (front); once unpinned it should reappear in its original
+    // slot relative to the other unpinned ids, not stranded at either edge.
+    const ids = ["a", "b", "c", "d", "e"];
+    const pinnedBefore = pinnedSet(["c"]);
+    expect(pinnedFirst(ids, pinnedBefore)).toEqual(["c", "a", "b", "d", "e"]);
+    const pinnedAfter = pinnedSet([]); // c unpinned
+    expect(pinnedFirst(ids, pinnedAfter)).toEqual(["a", "b", "c", "d", "e"]);
   });
 });
 
