@@ -10,6 +10,7 @@
 import { activeLoops, dueLoops, type LoopEntry } from "./open-loops";
 import { exoPaths, LEGACY_MEMORY_ROOT } from "./paths";
 import { formatAge } from "./actions-hub";
+import { normalizeUtilization } from "./rate-limit";
 import type { TaskEntry, TaskStatus } from "./tasks";
 
 export interface CockpitAction {
@@ -192,7 +193,8 @@ export function healthRows(h: HealthInput): CockpitRow[] {
 export function quotaValue(rate: { status: string; utilization?: number } | null | undefined): string | null {
   if (!rate) return null;
   if (rate.status === "rejected") return "limit reached";
-  return typeof rate.utilization === "number" ? `${Math.round(rate.utilization)}% used` : null;
+  const pct = normalizeUtilization(rate.utilization);
+  return typeof pct === "number" ? `${pct}% used` : null;
 }
 
 /** Epoch ms of the queue's `exo-answered: YYYY-MM-DD HH:mm` stamp (local time,

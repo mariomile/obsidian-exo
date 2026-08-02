@@ -1,9 +1,10 @@
 /**
- * Pure logic for the Claude-plan quota badge (Trust Pack). The SDK emits
- * `rate_limit_event` messages carrying an `SDKRateLimitInfo` — but only for
- * claude.ai subscription sessions (API-key users never get one, so the badge
- * simply never appears). This module normalizes the raw shape and decides the
- * badge's visibility/level so `view.ts` stays free of arithmetic.
+ * Pure logic for the native plan/account quota badge (Trust Pack). Claude's
+ * SDK emits `rate_limit_event` messages carrying an `SDKRateLimitInfo` — but
+ * only for claude.ai subscription sessions (API-key users never get one, so
+ * the badge simply never appears). Codex exposes the same normalized shape via
+ * app-server account/rateLimits/read. This module normalizes the raw shape and
+ * decides the badge's visibility/level so `view.ts` stays free of arithmetic.
  *
  * Two defensive normalizations, both verified against a real event captured
  * during the spike (`{status:"allowed_warning", resetsAt:1783191600,
@@ -50,6 +51,23 @@ export function formatClock(epochMs: number): string {
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
+}
+
+/** Human reset copy for native quota rows. Uses a relative countdown while the
+ *  reset is near, then falls back to a local weekday/time like the provider UIs. */
+export function formatResetRelative(resetsAt?: number, now = Date.now()): string {
+  const resetMs = normalizeResetEpochMs(resetsAt);
+  if (!resetMs) return "Reset time unavailable";
+  const minutes = Math.ceil((resetMs - now) / 60_000);
+  if (minutes <= 0) return "Resets now";
+  if (minutes < 60) return `Resets in ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remaining = minutes % 60;
+  if (hours < 24) return `Resets in ${hours} hr${remaining ? ` ${remaining} min` : ""}`;
+  const d = new Date(resetMs);
+  const day = d.toLocaleDateString(undefined, { weekday: "short" });
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `Resets ${day} ${time}`;
 }
 
 export interface BadgeState {

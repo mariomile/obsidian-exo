@@ -17,6 +17,7 @@ import type {
   PermissionMode,
   ProviderId,
   RateLimitInfo,
+  RateLimitWindow,
   SessionCaps,
 } from "../providers/types";
 import { basename as noteBasename } from "../obsidian/graph";
@@ -27,6 +28,8 @@ import type { Convo } from "../view";
 import {
   badgeState,
   formatClock,
+  formatResetRelative,
+  normalizeUtilization,
   normalizeResetEpochMs,
   windowLabel,
 } from "../core/rate-limit";
@@ -48,10 +51,10 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
   return btoa(binary);
 }
 
-/** Abbreviate a token count with k/M suffixes: 68000 → "68k", 1_500_000 → "1.5M". */
+/** Abbreviate a token count with k/M suffixes: 68000 → "68k", 711300 → "711.3k". */
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
-  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1000) return `${Number((n / 1000).toFixed(1))}k`;
   return String(n);
 }
 
@@ -98,6 +101,7 @@ export interface ComposerHost {
   onProviderChange(next: ProviderId, explicitModel?: string): void;
   allModelChoices(): { id: string; label: string; provider: ProviderId }[];
   persistModel(): void;
+  persist(): void;
   openNote(path: string): void;
   openArtifact(path: string): void;
 }
@@ -119,6 +123,9 @@ const INPUT_CAP_EXPANDED = 520;
 
 export class Composer {
   private usageEl: HTMLElement | null = null;
+  private contextPopoverEl: HTMLElement | null = null;
+  private contextPopoverIsOpen: () => boolean = () => false;
+  private closeContextPopover: () => void = () => {};
   private lastUsage: ContextUsage | null = null;
   private rateBadgeEl: HTMLElement | null = null;
   private lastRateLimit: RateLimitInfo | null = null;
@@ -222,6 +229,7 @@ export class Composer {
   }
   setLastRateLimit(info: RateLimitInfo | null): void {
     this.lastRateLimit = info;
+    this.refreshContextPopover();
   }
   resetSlashCache(): void {
     this.slashCache = null;
@@ -700,14 +708,42 @@ export class Composer {
     this.buildAgentChip(tb);
 
     tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
-    // Context usage as a compact circular counter (donut ring). Hover for the
-    // detailed breakdown, click to compact. See updateUsage for the fill logic.
-    this.usageEl = tb.createDiv({ cls: "mva-ctx-ring" });
-    clickable(this.usageEl, () => this.host.compactActive());
+    // Context usage as a compact circular counter (donut ring). Click opens the
+    // detailed breakdown, including the active model's real context limit.
+    const contextWrap = tb.createDiv({ cls: "mva-ctx-control" });
+    this.usageEl = contextWrap.createDiv({
+      cls: "mva-ctx-ring",
+      attr: { "aria-label": "Context window", "aria-haspopup": "dialog", "aria-expanded": "false" },
+    });
+    const contextPop = contextWrap.createDiv({
+      cls: "mva-ctx-pop",
+      attr: { role: "dialog", "aria-label": "Context window details" },
+    });
+    contextPop.hide();
+    this.contextPopoverEl = contextPop;
+    const popover = openablePopover({
+      anchor: this.usageEl,
+      pop: contextPop,
+      wrap: contextWrap,
+      onOpen: () => {
+        this.renderContextPopover(contextPop);
+        void this.host.active.session?.refreshRateLimits?.();
+        this.usageEl?.setAttribute("aria-expanded", "true");
+      },
+      onClose: () => this.usageEl?.setAttribute("aria-expanded", "false"),
+    });
+    this.contextPopoverIsOpen = popover.isOpen;
+    this.closeContextPopover = popover.close;
+    clickable(this.usageEl, (e) => {
+      e.stopPropagation();
+      popover.toggle();
+    });
+    this.host.register(() => popover.close());
     this.updateUsage(null);
 
-    // Claude-plan quota badge — a quiet dot+percent that only appears when the
-    // plan is nearing (≥80% / warning) or over its limit. Sits beside the ring.
+    // Native plan/account quota badge — a quiet dot+percent that only appears
+    // when any provider quota is nearing (≥80% / warning) or over its limit.
+    // Detailed windows live in the context popover beside the ring.
     this.rateBadgeEl = tb.createDiv({ cls: "mva-rate-badge" });
     this.rateBadgeEl.hide();
     this.updateRateBadge();
@@ -965,11 +1001,19 @@ export class Composer {
       this.host.onProviderChange(found.provider, v);
       return;
     }
+    const changed = this.host.model !== v;
     this.host.model = v;
     this.host.persistModel();
-    // Re-render the statusline's model label immediately — no new usage event
-    // fires just from a model switch, so refresh with cached data.
-    this.updateUsage(this.lastUsage);
+    if (changed) {
+      // A model switch creates a new provider session on the next send. Never
+      // carry the previous model's context occupancy or limit into that session.
+      this.host.active.usage = undefined;
+      this.host.persist();
+      this.updateUsage(null);
+    } else {
+      // Re-picking the current model should leave the live counter untouched.
+      this.updateUsage(this.lastUsage);
+    }
     // Effort options (and the current tier's validity) follow the model —
     // re-sync the whole cascade.
     this.refreshModelChip();
@@ -1093,10 +1137,11 @@ export class Composer {
       ring.addClass("is-empty");
       ring.style.setProperty("--pct", "0");
       ring.style.setProperty("--ring-color", "var(--interactive-accent)");
-      const tip = "Context usage appears after the first reply";
+      const tip = "Context usage appears after the first reply · click for details";
       setTooltip(ring, tip);
       ring.setAttribute("aria-label", tip);
       this.hideCompactNudge();
+      this.refreshContextPopover();
       return;
     }
 
@@ -1111,7 +1156,7 @@ export class Composer {
     // Cost lives in the tooltip only (Codex omits it; Claude omits it when the
     // experimental SDK cost API is unavailable) — never a broken/empty footer.
     const costPart = typeof u.costUsd === "number" ? ` · $${u.costUsd.toFixed(2)}` : "";
-    const tip = `Context: ${pct}% — ~${fmtTokens(u.used)} / ${fmtTokens(u.total)} tokens${costPart} · click to compact`;
+    const tip = `Context: ${pct}% — ~${fmtTokens(u.used)} / ${fmtTokens(u.total)} tokens${costPart} · click for details`;
     setTooltip(ring, tip);
     ring.setAttribute("aria-label", tip);
 
@@ -1119,9 +1164,96 @@ export class Composer {
     // ring's caution state), suggest compacting. Shown at most once per convo.
     if (pct >= 75) this.maybeShowCompactNudge();
     else this.hideCompactNudge();
+    this.refreshContextPopover();
   }
 
-  /** Render the Claude-plan quota badge from `lastRateLimit`. Hidden entirely
+  /** Keep an already-open context popover live while usage or the active model changes. */
+  private refreshContextPopover(): void {
+    if (this.contextPopoverEl && this.contextPopoverIsOpen()) this.renderContextPopover(this.contextPopoverEl);
+  }
+
+  /** Render the Claude-like context-window breakdown opened from the footer ring. */
+  private renderContextPopover(pop: HTMLElement): void {
+    pop.empty();
+
+    const head = pop.createDiv({ cls: "mva-ctx-pop-head" });
+    head.createSpan({ cls: "mva-ctx-pop-title", text: "Context window" });
+    head.createSpan({ cls: "mva-ctx-pop-model", text: this.modelLabel(), attr: { title: this.host.model } });
+
+    const u = this.lastUsage;
+    if (!u || !u.total) {
+      pop.createDiv({ cls: "mva-ctx-pop-empty", text: "The model limit will appear after the first reply." });
+    } else {
+      const pct = Math.min(100, Math.round((u.used / u.total) * 100));
+      const risk: RiskLevel = pct >= 90 ? "is-danger" : pct >= 75 ? "is-caution" : "";
+      const color = pct >= 90 ? "var(--color-red)" : pct >= 75 ? "var(--color-orange)" : "var(--interactive-accent)";
+      const value = pop.createDiv({ cls: `mva-ctx-pop-value${risk ? ` ${risk}` : ""}` });
+      value.createSpan({ cls: "mva-ctx-pop-used", text: `~${fmtTokens(u.used)}` });
+      value.createSpan({ cls: "mva-ctx-pop-total", text: `/ ${fmtTokens(u.total)}` });
+      value.createSpan({ cls: "mva-ctx-pop-pct", text: `${pct}%` });
+
+      const track = pop.createDiv({ cls: "mva-ctx-pop-track" });
+      track.createDiv({ cls: "mva-ctx-pop-fill" }).style.cssText = `width:${pct}%;background:${color};`;
+
+      const meta = pop.createDiv({ cls: "mva-ctx-pop-meta" });
+      meta.createSpan({ text: `Model limit: ${fmtTokens(u.total)} tokens` });
+      if (typeof u.costUsd === "number") meta.createSpan({ text: ` · $${u.costUsd.toFixed(2)}` });
+    }
+
+    this.renderQuotaWindows(pop, this.lastRateLimit);
+
+    if (this.host.active.session?.compact) {
+      const action = pop.createEl("button", { cls: "mva-ctx-pop-action", text: "Compact now" });
+      action.onclick = () => {
+        this.closeContextPopover();
+        this.host.compactActive();
+      };
+    }
+  }
+
+  /** Render native account/plan windows separately from the thread context window. */
+  private renderQuotaWindows(pop: HTMLElement, info: RateLimitInfo | null): void {
+    if (!info) return;
+    const windows: RateLimitWindow[] = info.windows?.length
+      ? info.windows
+      : typeof info.utilization === "number"
+        ? [{
+            id: info.windowType ?? "usage",
+            label: windowLabel(info.windowType),
+            utilization: info.utilization,
+            ...(typeof info.resetsAt === "number" ? { resetsAt: info.resetsAt } : {}),
+          }]
+        : [];
+    if (!windows.length) return;
+
+    const section = pop.createDiv({ cls: "mva-ctx-quota" });
+    const head = section.createDiv({ cls: "mva-ctx-quota-head" });
+    head.createSpan({ cls: "mva-ctx-quota-title", text: "Plan usage limits" });
+    if (info.planType) head.createSpan({ cls: "mva-ctx-quota-plan", text: info.planType });
+
+    for (const window of windows) {
+      const row = section.createDiv({ cls: "mva-ctx-quota-row" });
+      const rowHead = row.createDiv({ cls: "mva-ctx-quota-row-head" });
+      rowHead.createSpan({ cls: "mva-ctx-quota-label", text: window.label });
+      const pct = normalizeUtilization(window.utilization);
+      const reset = formatResetRelative(window.resetsAt);
+      rowHead.createSpan({
+        cls: "mva-ctx-quota-meta",
+        text: `${reset}  ${typeof pct === "number" ? `${pct}%` : "—"}`,
+      });
+      const track = row.createDiv({ cls: "mva-ctx-quota-track" });
+      const fill = track.createDiv({ cls: "mva-ctx-quota-fill" });
+      const width = pct ?? 0;
+      const color = pct !== undefined && pct >= 90
+        ? "var(--color-red)"
+        : pct !== undefined && pct >= 80
+          ? "var(--color-orange)"
+          : "var(--interactive-accent)";
+      fill.style.cssText = `width:${width}%;background:${color};`;
+    }
+  }
+
+  /** Render the native plan/account quota badge from `lastRateLimit`. Hidden entirely
    *  when there's no snapshot (API-key sessions, or a plan with headroom) — no
    *  fake states. Visible as a quiet dot+percent at ≥80%/warning (caution) or a
    *  danger "limit" when the plan rejects. Pure thresholding lives in
@@ -1146,8 +1278,12 @@ export class Composer {
     el.createSpan({ cls: "mva-rate-pct", text: state.label });
     el.addClass(state.level === "danger" ? "is-danger" : "is-caution");
     // Tooltip: "Plan usage: N% of the {5-hour|weekly} window — resets HH:MM".
-    const win = windowLabel(info.windowType);
-    const resetMs = normalizeResetEpochMs(info.resetsAt);
+    // Prefer the native row label because Codex may identify the active window
+    // only as `codex:primary` while the row carries the real 5-hour/weekly label.
+    const activeWindow = info.windows?.find((window) => window.id === info.windowType)
+      ?? info.windows?.[0];
+    const win = activeWindow?.label ?? windowLabel(info.windowType);
+    const resetMs = normalizeResetEpochMs(info.resetsAt ?? activeWindow?.resetsAt);
     const parts = [`Plan usage: ${state.label === "limit" ? "over" : state.label} of the ${win} window`];
     if (resetMs) parts.push(`resets ${formatClock(resetMs)}`);
     const tip = parts.join(" — ");

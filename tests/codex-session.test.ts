@@ -397,13 +397,59 @@ describe("CodexSession app-server lifecycle", () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: "tool-call-start", id: "web-1", name: "WebSearch" }));
     expect(events).toContainEqual(expect.objectContaining({ kind: "tool-call-start", id: "dyn-1", name: "dynamic__exo__inspect" }));
     expect(events).toContainEqual({
-      kind: "rate-limit", status: "allowed_warning", utilization: 0.85, resetsAt: 1234, windowType: "five-hour",
+      kind: "rate-limit",
+      status: "allowed_warning",
+      utilization: 0.85,
+      resetsAt: 1234,
+      windowType: "five-hour",
+      windows: [{ id: "codex:primary", label: "5-hour limit", utilization: 85, resetsAt: 1234 }],
     });
     expect(session.rateLimit).toEqual({
-      status: "allowed_warning", utilization: 0.85, resetsAt: 1234, windowType: "five-hour",
+      status: "allowed_warning",
+      utilization: 0.85,
+      resetsAt: 1234,
+      windowType: "five-hour",
+      windows: [{ id: "codex:primary", label: "5-hour limit", utilization: 85, resetsAt: 1234 }],
     });
     child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
     await turn;
+    session.dispose();
+  });
+
+  it("reads the native Codex quota snapshot without inventing missing windows", async () => {
+    const { session, child } = await readySession();
+    const refresh = session.refreshRateLimits();
+    const request = await child.next("account/rateLimits/read");
+    expect(request.params).toEqual({});
+    child.reply(request, {
+      rateLimits: {
+        limitId: "codex",
+        planType: "plus",
+        primary: { usedPercent: 34, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+        secondary: null,
+      },
+      rateLimitsByLimitId: {
+        codex: {
+          primary: { usedPercent: 34, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+          secondary: null,
+        },
+      },
+    });
+    await refresh;
+    expect(session.rateLimit).toEqual({
+      status: "allowed",
+      utilization: 0.34,
+      resetsAt: 1_800_000_000,
+      windowType: "codex:primary",
+      planType: "plus",
+      windows: [{
+        id: "codex:primary",
+        label: "5-hour limit",
+        utilization: 34,
+        resetsAt: 1_800_000_000,
+        windowMinutes: 300,
+      }],
+    });
     session.dispose();
   });
 

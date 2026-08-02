@@ -4,6 +4,7 @@ import {
   normalizeResetEpochMs,
   windowLabel,
   formatClock,
+  formatResetRelative,
   badgeState,
 } from "../src/core/rate-limit";
 
@@ -60,6 +61,26 @@ describe("formatClock", () => {
     expect(formatClock(d.getTime())).toBe("14:30");
     const e = new Date(2026, 5, 9, 3, 5);
     expect(formatClock(e.getTime())).toBe("03:05");
+  });
+});
+
+describe("formatResetRelative", () => {
+  const now = new Date(2026, 0, 1, 12, 0).getTime();
+
+  it("uses a countdown for near resets", () => {
+    expect(formatResetRelative(now + 25 * 60_000, now)).toBe("Resets in 25 min");
+    expect(formatResetRelative(now + 2 * 60 * 60_000 + 10 * 60_000, now)).toBe("Resets in 2 hr 10 min");
+  });
+
+  it("uses a local weekday/time for distant resets", () => {
+    const reset = new Date(2026, 0, 3, 20, 59).getTime();
+    const expected = `Resets ${new Date(reset).toLocaleDateString(undefined, { weekday: "short" })} ${new Date(reset).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+    expect(formatResetRelative(reset, now)).toBe(expected);
+  });
+
+  it("handles missing and elapsed timestamps", () => {
+    expect(formatResetRelative(undefined, now)).toBe("Reset time unavailable");
+    expect(formatResetRelative(now - 1, now)).toBe("Resets now");
   });
 });
 

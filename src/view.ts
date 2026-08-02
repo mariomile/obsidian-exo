@@ -828,6 +828,7 @@ export class ChatView extends ItemView {
       onProviderChange: (next, explicitModel) => this.onProviderChange(next, explicitModel),
       allModelChoices: () => this.allModelChoices(),
       persistModel: () => this.persistModel(),
+      persist: () => this.persist(),
       openNote: (p) => this.openNote(p),
       openArtifact: (p) => this.openArtifact(p),
     });
@@ -1220,6 +1221,7 @@ export class ChatView extends ItemView {
     this.dropSession(this.active);
     this.active.usage = undefined;
     this.composer.updateUsage(null);
+    this.persist();
     this.refreshProviderUI();
     this.composer.refreshPerm();
     // Provider changed (e.g. back to Claude) — warm the new session.
@@ -6438,15 +6440,25 @@ export class ChatView extends ItemView {
           if (c === this.active) this.composer.updateUsage(e.usage);
           break;
         case "rate-limit":
-          // The badge is a single view-level control, so only the active convo's
-          // quota drives it. Late reads (tab switch) come from session.rateLimit.
-          this.plugin.lastRateLimit = { status: e.status, utilization: e.utilization, resetsAt: e.resetsAt, windowType: e.windowType };
+          // The badge/popover are single view-level controls, so only the active
+          // convo's native quota snapshot drives them. Late reads (tab switch)
+          // come from session.rateLimit.
+          this.plugin.lastRateLimit = {
+            status: e.status,
+            utilization: e.utilization,
+            resetsAt: e.resetsAt,
+            windowType: e.windowType,
+            ...(e.windows?.length ? { windows: e.windows } : {}),
+            ...(e.planType ? { planType: e.planType } : {}),
+          };
           if (c === this.active) {
             this.composer.setLastRateLimit({
               status: e.status,
               utilization: e.utilization,
               resetsAt: e.resetsAt,
               windowType: e.windowType,
+              ...(e.windows?.length ? { windows: e.windows } : {}),
+              ...(e.planType ? { planType: e.planType } : {}),
             });
             this.composer.updateRateBadge();
           }

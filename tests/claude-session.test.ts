@@ -8,6 +8,8 @@ function makeFakeQuery() {
   let wake: (() => void) | null = null;
   return {
     interrupt: vi.fn(() => Promise.resolve()),
+    getContextUsage: vi.fn(async (): Promise<unknown> => undefined),
+    usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn(async (): Promise<unknown> => undefined),
     push(msg: unknown) {
       pending.push(msg);
       const w = wake;
@@ -168,6 +170,42 @@ describe("ClaudeSession.lastTurnTokens", () => {
     });
     await second;
     expect(session.lastTurnTokens?.()).toBe(12);
+    session.dispose();
+  });
+});
+
+describe("ClaudeSession native quota windows", () => {
+  beforeEach(() => {
+    fake = makeFakeQuery();
+  });
+
+  test("publishes five-hour, weekly, and model-scoped native windows", async () => {
+    fake.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET.mockResolvedValue({
+      rate_limits_available: true,
+      subscription_type: "max",
+      rate_limits: {
+        five_hour: { utilization: 34, resets_at: "2030-01-01T10:00:00.000Z" },
+        seven_day: { utilization: 48, resets_at: "2030-01-05T20:00:00.000Z" },
+        model_scoped: [{
+          display_name: "Fable",
+          utilization: 11,
+          resets_at: "2030-01-05T20:00:00.000Z",
+        }],
+      },
+    });
+    const session = claudeAdapter.createSession(OPTS);
+    await session.refreshRateLimits?.();
+    expect(session.rateLimit).toMatchObject({
+      status: "allowed",
+      utilization: 0.34,
+      windowType: "five_hour",
+      planType: "max",
+      windows: [
+        { id: "five_hour", label: "5-hour limit", utilization: 0.34 },
+        { id: "seven_day", label: "Weekly · all models", utilization: 0.48 },
+        { id: "model_scoped:Fable", label: "Weekly · Fable", utilization: 0.11 },
+      ],
+    });
     session.dispose();
   });
 });

@@ -1,12 +1,20 @@
-import { query, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query,
+  type Query,
+  type SDKControlGetUsageResponse,
+  type SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent,
   AgentSession,
   ContextUsage,
   ModelOption,
   ProviderAdapter,
+  RateLimitInfo,
+  RateLimitWindow,
   SessionOpts,
 } from "./types";
+import { normalizeUtilization } from "../core/rate-limit";
 
 /** Built-in file tools disabled in "native-first" mode (use Obsidian tools). */
 const NATIVE_FIRST_DISALLOW = ["Read", "Grep", "Glob", "LS", "Edit", "MultiEdit", "Write", "NotebookEdit"];
@@ -18,6 +26,62 @@ const EXO_HOUSE_RULES =
   'Exo renders every file you read, create, or edit as chips below your message. ' +
   'Do NOT restate them as a prose list, a "Files touched"/"File toccati" section, ' +
   'or a details/accordion — it duplicates the native UI.';
+
+function parseClaudeReset(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function claudeWindowLabel(id: string): string {
+  if (id === "five_hour") return "5-hour limit";
+  if (id === "seven_day") return "Weekly · all models";
+  if (id === "seven_day_opus") return "Weekly · Opus";
+  if (id === "seven_day_sonnet") return "Weekly · Sonnet";
+  if (id === "seven_day_overage_included") return "Weekly · overage included";
+  if (id === "overage") return "Overage";
+  return id;
+}
+
+function claudeRateLimitWindows(usage: SDKControlGetUsageResponse): RateLimitWindow[] {
+  const limits = usage.rate_limits;
+  if (!limits) return [];
+  const windows: RateLimitWindow[] = [];
+  const add = (
+    id: string,
+    label: string,
+    value: { utilization: number | null; resets_at: string | null } | null | undefined,
+  ) => {
+    if (!value) return;
+    const resetsAt = parseClaudeReset(value.resets_at);
+    windows.push({
+      id,
+      label,
+      // The SDK /usage contract reports percentages (0-100). Keep the
+      // normalized provider value as a fraction so rate_limit_event and usage
+      // snapshots share one RateLimitInfo convention in Exo.
+      ...(typeof value.utilization === "number" ? { utilization: value.utilization / 100 } : {}),
+      ...(resetsAt !== undefined ? { resetsAt } : {}),
+    });
+  };
+
+  add("five_hour", claudeWindowLabel("five_hour"), limits.five_hour);
+  add("seven_day", claudeWindowLabel("seven_day"), limits.seven_day);
+  add("seven_day_oauth_apps", "Weekly · OAuth apps", limits.seven_day_oauth_apps);
+  add("seven_day_opus", claudeWindowLabel("seven_day_opus"), limits.seven_day_opus);
+  add("seven_day_sonnet", claudeWindowLabel("seven_day_sonnet"), limits.seven_day_sonnet);
+  for (const [index, value] of (limits.model_scoped ?? []).entries()) {
+    const id = `model_scoped:${value.display_name || index}`;
+    add(id, `Weekly · ${value.display_name || "model"}`, value);
+  }
+  return windows;
+}
+
+function quotaStatus(windows: RateLimitWindow[], fallback: RateLimitInfo["status"] = "allowed"): RateLimitInfo["status"] {
+  if (fallback === "rejected") return "rejected";
+  const max = Math.max(...windows.map((window) => normalizeUtilization(window.utilization) ?? 0), 0);
+  return max >= 100 ? "rejected" : max >= 80 ? "allowed_warning" : "allowed";
+}
 
 /**
  * A persistent Claude conversation: one long-lived SDK `query()` driven in
@@ -42,8 +106,8 @@ class ClaudeSession implements AgentSession {
   /** Latest system/init capability snapshot (skills/commands/agents/MCP). */
   caps: import("./types").SessionCaps | null = null;
   onCaps: ((caps: import("./types").SessionCaps) => void) | null = null;
-  /** Latest Claude-plan quota snapshot from `rate_limit_event`. Stored so a late
-   *  reader (tab switch) can render the badge without a fresh event. */
+  /** Latest native Claude plan quota snapshot from `rate_limit_event`. Stored so
+   *  a late reader (tab switch) can render the badge without a fresh event. */
   rateLimit: import("./types").RateLimitInfo | null = null;
   private resolveTurn: (() => void) | null = null;
   private rejectTurn: ((e: unknown) => void) | null = null;
@@ -304,11 +368,24 @@ class ClaudeSession implements AgentSession {
     if (msg.type === "rate_limit_event") {
       const info = msg.rate_limit_info;
       if (info && typeof info.status === "string") {
+        const nextWindow = info.rateLimitType
+          ? {
+              id: info.rateLimitType,
+              label: claudeWindowLabel(info.rateLimitType),
+              ...(typeof info.utilization === "number" ? { utilization: info.utilization } : {}),
+              ...(typeof info.resetsAt === "number" ? { resetsAt: info.resetsAt } : {}),
+            }
+          : null;
+        const windows = nextWindow
+          ? [...(this.rateLimit?.windows ?? []).filter((window) => window.id !== nextWindow.id), nextWindow]
+          : this.rateLimit?.windows;
         this.rateLimit = {
           status: info.status,
           utilization: info.utilization,
           resetsAt: info.resetsAt,
           windowType: info.rateLimitType,
+          ...(windows?.length ? { windows } : {}),
+          ...(this.rateLimit?.planType ? { planType: this.rateLimit.planType } : {}),
         };
         this.onEvent?.({
           kind: "rate-limit",
@@ -316,6 +393,8 @@ class ClaudeSession implements AgentSession {
           utilization: info.utilization,
           resetsAt: info.resetsAt,
           windowType: info.rateLimitType,
+          ...(windows?.length ? { windows } : {}),
+          ...(this.rateLimit.planType ? { planType: this.rateLimit.planType } : {}),
         });
       }
       return;
@@ -547,28 +626,57 @@ class ClaudeSession implements AgentSession {
     return this.lastResultUsage.inputTokens + this.lastResultUsage.outputTokens;
   }
 
+  private publishPlanUsage(usage: SDKControlGetUsageResponse): void {
+    if (!usage.rate_limits_available || !usage.rate_limits) return;
+    const windows = claudeRateLimitWindows(usage);
+    if (!windows.length) return;
+    const primary = windows.find((window) => window.id === "five_hour") ?? windows[0];
+    const info: RateLimitInfo = {
+      status: quotaStatus(windows),
+      utilization: primary?.utilization,
+      resetsAt: primary?.resetsAt,
+      windowType: primary?.id,
+      windows,
+      ...(usage.subscription_type ? { planType: usage.subscription_type } : {}),
+    };
+    this.rateLimit = info;
+    this.onEvent?.({ kind: "rate-limit", ...info });
+  }
+
+  async refreshRateLimits(): Promise<void> {
+    try {
+      const usage = await this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.();
+      if (usage) this.publishPlanUsage(usage);
+    } catch {
+      /* Native plan quotas are best-effort and unavailable for non-subscription sessions. */
+    }
+  }
+
   async contextUsage(): Promise<ContextUsage | null> {
+    let result: ContextUsage | null = null;
     try {
       const u = await this.q.getContextUsage?.();
       if (u && typeof u.totalTokens === "number" && typeof u.maxTokens === "number" && u.maxTokens > 0) {
-        const result: ContextUsage = { used: u.totalTokens, total: u.maxTokens };
-        // Session cost is an experimental SDK control request — best-effort only.
-        // Any failure (older CLI, API-key session without cost data, shape
-        // change) must never block or break the context bar; just omit cost.
-        try {
-          const usage = await this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.();
-          if (typeof usage?.session?.total_cost_usd === "number") {
-            result.costUsd = usage.session.total_cost_usd;
-          }
-        } catch {
-          /* cost unavailable — omit silently */
-        }
-        return result;
+        result = { used: u.totalTokens, total: u.maxTokens };
       }
     } catch {
-      /* not available */
+      /* context usage unavailable */
     }
-    return null;
+
+    // The same native control response powers Claude's /usage panel: cost plus
+    // all plan windows (5-hour, weekly, and model-scoped) when available.
+    try {
+      const usage = await this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.();
+      if (usage) {
+        this.publishPlanUsage(usage);
+        if (result && typeof usage.session?.total_cost_usd === "number") {
+          result.costUsd = usage.session.total_cost_usd;
+        }
+      }
+    } catch {
+      /* cost and native plan quotas unavailable — omit silently */
+    }
+    return result;
   }
 }
 

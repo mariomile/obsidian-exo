@@ -41,7 +41,15 @@ export type AgentEvent =
       entries: import("../core/workflow-progress").WorkflowProgressEntry[];
       status?: string;
     }
-  | { kind: "rate-limit"; status: RateStatus; utilization?: number; resetsAt?: number; windowType?: string }
+  | {
+      kind: "rate-limit";
+      status: RateStatus;
+      utilization?: number;
+      resetsAt?: number;
+      windowType?: string;
+      windows?: RateLimitWindow[];
+      planType?: string;
+    }
   | { kind: "turn-end"; sessionId?: string }
   // Non-fatal, in-band notice from the provider (e.g. Codex's "Exceeded skills
   // context budget" item). Unlike `error` it MUST NOT poison the turn or discard
@@ -51,16 +59,28 @@ export type AgentEvent =
 
 export type RateStatus = "allowed" | "allowed_warning" | "rejected";
 
-/** Latest Claude-plan quota snapshot, derived from the SDK's `rate_limit_event`
- *  (claude.ai subscription sessions only — API-key users never receive one).
- *  `utilization` is passed through as the SDK reports it (a 0-1 fraction in
- *  practice); `core/rate-limit.ts` normalizes it. `resetsAt` is the SDK's raw
- *  epoch (seconds in practice), also normalized downstream. */
+/** One native plan/account quota window. `utilization` accepts the provider's
+ *  native convention (0-1 or 0-100); the UI normalizes it before rendering. */
+export interface RateLimitWindow {
+  id: string;
+  label: string;
+  utilization?: number;
+  /** Provider timestamp: epoch seconds/milliseconds, or epoch milliseconds
+   *  after parsing an ISO timestamp. */
+  resetsAt?: number;
+  windowMinutes?: number;
+}
+
+/** Latest native plan/account quota snapshot. Claude exposes this through its
+ *  `/usage` control response; Codex exposes it through account/rateLimits/read
+ *  and account/rateLimits/updated. API-key/third-party sessions may omit it. */
 export interface RateLimitInfo {
   status: RateStatus;
   utilization?: number;
   resetsAt?: number;
   windowType?: string;
+  windows?: RateLimitWindow[];
+  planType?: string;
 }
 
 export interface ContextUsage {
@@ -182,6 +202,8 @@ export interface AgentSession {
   dispose(): void;
   /** Current context-window usage, if the provider exposes it. */
   contextUsage(): Promise<ContextUsage | null>;
+  /** Refresh native plan/account quota windows, if the provider exposes them. */
+  refreshRateLimits?(): Promise<void>;
   /** W0 cost governance: input_tokens + output_tokens from the most recently
    *  completed turn, if the provider exposes it (synchronous, no control
    *  round-trip, unlike `contextUsage()`). */

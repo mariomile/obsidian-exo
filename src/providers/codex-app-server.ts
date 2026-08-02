@@ -8,9 +8,11 @@ import type {
   ContextUsage,
   ImageAttachment,
   RateLimitInfo,
+  RateLimitWindow,
   SessionCaps,
   SessionOpts,
 } from "./types";
+import { normalizeUtilization } from "../core/rate-limit";
 
 type RpcId = number | string;
 type RpcMessage = {
@@ -100,6 +102,75 @@ function outputText(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function prettyLimitId(id: string): string {
+  const value = id.replace(/^codex[_-]?/i, "").replace(/[_-]+/g, " ").trim();
+  if (!value) return "model";
+  return value.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function codexWindowLabel(limitId: string, window: Record<string, unknown>, root: Record<string, unknown>): string {
+  const minutes = Number(window.windowDurationMins ?? 0);
+  const name = String(root.limitName ?? "").toLowerCase();
+  if (minutes === 300 || name.includes("five-hour") || name.includes("five_hour")) return "5-hour limit";
+  if (minutes === 10080 || name.includes("weekly") || name.includes("seven-day")) {
+    return limitId === "codex" ? "Weekly · all models" : `Weekly · ${prettyLimitId(limitId)}`;
+  }
+  if (minutes > 0) return `${minutes} min limit`;
+  return limitId === "codex" ? "Plan limit" : prettyLimitId(limitId);
+}
+
+function codexRateLimitWindows(payload: unknown, fullSnapshot: boolean): RateLimitWindow[] {
+  const response = record(payload);
+  const root = record(response.rateLimits ?? response);
+  const byLimitId = record(response.rateLimitsByLimitId);
+  const entries = fullSnapshot && Object.keys(byLimitId).length
+    ? Object.entries(byLimitId).map(([id, value]) => [id, record(value)] as const)
+    : [[String(root.limitId ?? "codex"), root] as const];
+  const windows: RateLimitWindow[] = [];
+  for (const [limitId, limits] of entries) {
+    for (const slot of ["primary", "secondary"] as const) {
+      const window = record(limits[slot]);
+      const usedPercent = Number(window.usedPercent);
+      if (!Number.isFinite(usedPercent)) continue;
+      const resetsAt = Number(window.resetsAt);
+      const windowMinutes = Number(window.windowDurationMins);
+      windows.push({
+        id: `${limitId}:${slot}`,
+        label: codexWindowLabel(limitId, window, limits),
+        utilization: usedPercent,
+        ...(Number.isFinite(resetsAt) ? { resetsAt } : {}),
+        ...(Number.isFinite(windowMinutes) && windowMinutes > 0 ? { windowMinutes } : {}),
+      });
+    }
+  }
+  return windows;
+}
+
+function codexRateLimitInfo(payload: unknown, previous: RateLimitInfo | null, fullSnapshot: boolean): RateLimitInfo | null {
+  const response = record(payload);
+  const root = record(response.rateLimits ?? response);
+  const parsed = codexRateLimitWindows(payload, fullSnapshot);
+  if (!parsed.length) return previous;
+
+  const windows = fullSnapshot || !previous?.windows?.length
+    ? parsed
+    : [...new Map([...(previous.windows ?? []), ...parsed].map((window) => [window.id, window])).values()];
+  const primary = windows.find((window) => window.windowMinutes === 300) ?? windows[0];
+  const max = Math.max(...windows.map((window) => normalizeUtilization(window.utilization) ?? 0), 0);
+  const reached = typeof root.rateLimitReachedType === "string" && root.rateLimitReachedType.length > 0;
+  const nativeLimitName = typeof root.limitName === "string" && root.limitName.length > 0
+    ? root.limitName
+    : primary?.id;
+  return {
+    status: reached || max >= 100 ? "rejected" : max >= 80 ? "allowed_warning" : "allowed",
+    utilization: primary?.utilization === undefined ? undefined : primary.utilization / 100,
+    resetsAt: primary?.resetsAt,
+    windowType: nativeLimitName,
+    windows,
+    ...(typeof root.planType === "string" && root.planType ? { planType: root.planType } : previous?.planType ? { planType: previous.planType } : {}),
+  };
 }
 
 function enumOptions(schema: Record<string, unknown>): { label: string }[] {
@@ -214,6 +285,7 @@ export class CodexSession implements AgentSession {
   private turnTokens: number | null = null;
   private autoCompactPending = false;
   private bridgeStopped = false;
+  private rateLimitRefresh: Promise<void> | null = null;
   private ready: Promise<void>;
   private runtime: CodexSessionRuntime;
   private mcpStatuses = new Map<string, string>();
@@ -533,17 +605,11 @@ export class CodexSession implements AgentSession {
       return;
     }
     if (method === "account/rateLimits/updated") {
-      const limits = record(params.rateLimits);
-      const primary = record(limits.primary);
-      const usedPercent = Number(primary.usedPercent ?? 0);
-      const rejected = typeof limits.rateLimitReachedType === "string" && !!limits.rateLimitReachedType;
-      this.rateLimit = {
-        status: rejected ? "rejected" : usedPercent >= 80 ? "allowed_warning" : "allowed",
-        utilization: usedPercent / 100,
-        resetsAt: typeof primary.resetsAt === "number" ? primary.resetsAt : undefined,
-        windowType: typeof limits.limitName === "string" ? limits.limitName : "Codex",
-      };
-      this.onEvent?.({ kind: "rate-limit", ...this.rateLimit });
+      const next = codexRateLimitInfo(params, this.rateLimit, false);
+      if (next) {
+        this.rateLimit = next;
+        this.onEvent?.({ kind: "rate-limit", ...next });
+      }
       return;
     }
     if (method === "thread/compacted") {
@@ -587,6 +653,7 @@ export class CodexSession implements AgentSession {
       this.autoCompactPending = false;
       this.onEvent?.({ kind: "turn-end", sessionId: this.threadId });
       this.finishTurn();
+      void this.refreshRateLimits();
       if (shouldCompact && this.threadId) {
         void this.request("thread/compact/start", { threadId: this.threadId })
           .catch((error) => this.onEvent?.({ kind: "notice", message: `Auto-compact failed: ${String(error)}` }));
@@ -809,6 +876,28 @@ export class CodexSession implements AgentSession {
 
   async contextUsage(): Promise<ContextUsage | null> {
     return this.usage;
+  }
+
+  async refreshRateLimits(): Promise<void> {
+    if (this.rateLimitRefresh) return this.rateLimitRefresh;
+    const refresh = (async () => {
+      try {
+        await this.ready;
+        const response = await this.request("account/rateLimits/read", {});
+        const next = codexRateLimitInfo(response, this.rateLimit, true);
+        if (next) {
+          this.rateLimit = next;
+          this.onEvent?.({ kind: "rate-limit", ...next });
+        }
+      } catch {
+        // Native account quotas are best-effort and unavailable for API-key/local sessions.
+      }
+    })();
+    const tracked = refresh.finally(() => {
+      if (this.rateLimitRefresh === tracked) this.rateLimitRefresh = null;
+    });
+    this.rateLimitRefresh = tracked;
+    return tracked;
   }
 
   lastTurnTokens(): number | null {

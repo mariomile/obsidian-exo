@@ -201,8 +201,8 @@ export default class ExoPlugin extends Plugin {
   private startupIdleHandles: number[] = [];
   private unloaded = false;
 
-  /** Latest Claude-plan quota snapshot (pushed by the chat view) — the Cockpit
-   *  renders it in the System tile. Null for API-key sessions. */
+  /** Latest native plan/account quota snapshot (pushed by the chat view) — the
+   *  Cockpit renders it in the System tile. Null until a provider reports. */
   lastRateLimit: import("./providers/types").RateLimitInfo | null = null;
 
   /**
