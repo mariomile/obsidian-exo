@@ -49,8 +49,10 @@ export class HubView extends ItemView {
   private rendering: Promise<void> | null = null;
   private renderAgain = false;
   /** Accordion open/closed state, keyed by the tab (e.g. "mcp:notion").
-   *  Ephemeral UI state — not a setting, resets when the pane closes. */
-  private expandedKeys = new Set<string>();
+   *  Ephemeral UI state — not a setting, resets when the pane closes.
+   *  "skills:vault" starts open: it's the user's own skills, the ones most
+   *  worth seeing without a click; every other accordion starts closed. */
+  private expandedKeys = new Set<string>(["skills:vault"]);
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);

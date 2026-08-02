@@ -18,7 +18,7 @@ import {
 } from "../../core/capability-scan";
 import { skillSections } from "../../core/hub-sections";
 import { reconcileList, type CardModel } from "../keyed-reconcile";
-import { buildGroupHeader, buildRowScaffold, type HubTabContext } from "./shared";
+import { buildAccordionGroupHeader, buildGroupHeader, buildRowScaffold, type HubTabContext } from "./shared";
 
 /**
  * The Skills tab — everything the agent knows how to do. Vault-installed
@@ -53,18 +53,39 @@ export async function renderSkillsTab(host: HTMLElement, ctx: HubTabContext): Pr
   const { vault, groups, haveCount } = skillSections(skills);
 
   const models: CardModel[] = [];
-  models.push({ key: "hdr:skills", sig: "skills", build: () => buildGroupHeader("Skills") });
-  if (!vault.length && !groups.length) {
-    const text = haveCount
-      ? `No external skills to import — ${haveCount} already in Exo.`
-      : "No external skills to import.";
-    models.push({ key: "skills-empty", sig: text, build: () => createDiv({ cls: "mva-conn-empty", text }) });
+
+  // "In this vault" — the user's own skills, open by default (HubView seeds
+  // this key into expandedKeys). Importable groups below start closed: with
+  // dozens of project origins, a flat list was the whole point of this
+  // accordion — nothing to navigate if it opens pre-expanded anyway.
+  const vaultKey = "skills:vault";
+  const vaultOpen = ctx.expanded(vaultKey);
+  models.push({
+    key: "hdr:vault",
+    sig: `${vault.length}:${vaultOpen}`,
+    build: () => buildAccordionGroupHeader(ctx, vaultKey, "In this vault", vault.length),
+  });
+  if (vaultOpen) {
+    if (!vault.length) {
+      models.push({ key: "vault-empty", sig: "empty", build: () => createDiv({ cls: "mva-conn-empty", text: "No skills installed in this vault yet." }) });
+    }
+    for (const it of vault) models.push({ key: `skill:${it.name}`, sig: "active", build: () => buildSkillRow(it, ctx) });
   }
 
-  for (const it of vault) models.push({ key: `skill:${it.name}`, sig: "active", build: () => buildSkillRow(it, ctx) });
   for (const group of groups) {
-    models.push({ key: `hdr:${group.origin}`, sig: `${group.items.length}`, build: () => buildGroupHeader(group.origin, group.items.length) });
-    for (const it of group.items) models.push({ key: `skill:${it.name}`, sig: "importable", build: () => buildSkillRow(it, ctx) });
+    const key = `skills:origin:${group.origin}`;
+    const isOpen = ctx.expanded(key);
+    models.push({
+      key: `hdr:${group.origin}`,
+      sig: `${group.items.length}:${isOpen}`,
+      build: () => buildAccordionGroupHeader(ctx, key, group.origin, group.items.length),
+    });
+    if (isOpen) {
+      for (const it of group.items) models.push({ key: `skill:${it.name}`, sig: "importable", build: () => buildSkillRow(it, ctx) });
+    }
+  }
+  if (!vault.length && !groups.length && !haveCount) {
+    models.push({ key: "skills-empty", sig: "empty", build: () => createDiv({ cls: "mva-conn-empty", text: "No skills found anywhere Exo looks." }) });
   }
   if (haveCount) {
     models.push({ key: "have-summary", sig: `${haveCount}`, build: () => {
