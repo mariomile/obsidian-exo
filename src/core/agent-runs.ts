@@ -17,6 +17,7 @@ import {
   type Cadence,
 } from "./automations";
 import { triggerLabel, triggerKey, type AgentAutonomy, type AgentDef, type AgentTrigger } from "./agents";
+import { parseProposalCandidates, type ProposalCandidate } from "./proposals";
 
 /** Persistence key for "when did this agent last run at all" (cooldown). */
 export function agentLastRunKey(slug: string): string {
@@ -260,10 +261,41 @@ export function proposalContract(memoryRootHint: string): string {
   ].join("\n");
 }
 
+/**
+ * Salvage the valid entries from a block the kernel rejected wholesale.
+ *
+ * `parseProposalCandidates` is all-or-nothing, which is right for its own
+ * producers but wrong here: observed on the first real run, an agent emitted two
+ * proposals and the second was missing `rationale`, so BOTH were discarded — and
+ * a discarded block is indistinguishable from a run that found nothing.
+ *
+ * Each entry is re-validated through the same kernel validator, one at a time,
+ * so nothing bypasses validation; only the batching changes.
+ */
+export function salvageProposalCandidates(block: string): ProposalCandidate[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(block);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out: ProposalCandidate[] = [];
+  for (const entry of parsed) {
+    const one = parseProposalCandidates(JSON.stringify([entry]));
+    if (one.status === "ok") out.push(...one.value);
+  }
+  return out;
+}
+
 /** Report name for a run — also the automation-run record's name, so agent
  *  runs appear in the existing review/restore queue alongside playbooks. */
 export function agentRunName(agent: AgentDef, reason: string): string {
-  return `${agent.brain.name} (${reason})`;
+  // Event reasons carry a full vault path, which the report writer flattens into
+  // an unreadable filename ("create _inboxAgenti che si chiamano tra loro.md").
+  // The path is already in the ledger; the report name only needs the shape.
+  const short = reason.length > 40 ? `${reason.slice(0, 37).trimEnd()}…` : reason;
+  return `${agent.brain.name} (${short.replace(/\//g, " ")})`;
 }
 
 /**

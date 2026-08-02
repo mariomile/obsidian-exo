@@ -75,6 +75,7 @@ import {
   buildAgentRunPrompt,
   dueScheduledAgentRuns,
   extractProposalBlock,
+  salvageProposalCandidates,
   gateAgentInvoke,
   gateAgentRun,
   writeModeFor,
@@ -2913,11 +2914,18 @@ export default class ExoPlugin extends Plugin {
     const block = extractProposalBlock(output ?? "");
     if (!block) return 0;
 
+    // Whole-block first; on rejection, salvage the valid entries. Observed on
+    // the first real run: two proposals, the second missing `rationale`, and
+    // all-or-nothing threw away both.
     const parsed = parseProposalCandidates(block);
+    const candidates = parsed.status === "ok" ? parsed.value : salvageProposalCandidates(block);
     if (parsed.status !== "ok") {
-      console.info(`[Exo] agent "${agent.brain.slug}" proposal block rejected:`, parsed.errors ?? parsed.status);
-      return 0;
+      console.info(
+        `[Exo] agent "${agent.brain.slug}" proposal block partly invalid — salvaged ${candidates.length}:`,
+        parsed.errors ?? parsed.status
+      );
     }
+    if (!candidates.length) return 0;
 
     const source = {
       convoId: `agent:${agent.brain.slug}`,
@@ -2925,7 +2933,7 @@ export default class ExoPlugin extends Plugin {
       createdAt: startedAt,
     };
     let landed = 0;
-    for (const candidate of parsed.value) {
+    for (const candidate of candidates) {
       try {
         const res = await this.proposalStore.append(candidate, source);
         if (res.status === "appended") landed++;

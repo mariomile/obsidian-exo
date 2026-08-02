@@ -10,6 +10,7 @@ import {
   extractProposalBlock,
   writeModeFor,
   agentRunName,
+  salvageProposalCandidates,
   buildAgentRunPrompt,
 } from "../src/core/agent-runs";
 import { mergeAgents, defaultContract, parseTrigger, type AgentBrain, type AgentContract } from "../src/core/agents";
@@ -236,6 +237,55 @@ describe("extractProposalBlock", () => {
     expect(parsed[0]).toHaveProperty("prompt");
     expect(parsed[0]).toHaveProperty("rationale");
     expect(parsed[0]).not.toHaveProperty("payload");
+  });
+});
+
+describe("salvageProposalCandidates", () => {
+  const good = { kind: "task", title: "Do it", prompt: "the work", rationale: "worth doing" };
+  const alsoGood = { kind: "loop", title: "Chase", note: "no reply", rationale: "a week now" };
+  // The exact shape that broke the first real run: a second entry with no rationale.
+  const noRationale = { kind: "task", title: "Other", prompt: "x" };
+
+  it("keeps the valid entries when one is malformed", () => {
+    const out = salvageProposalCandidates(JSON.stringify([good, noRationale]));
+    expect(out).toHaveLength(1);
+    expect(out[0].title).toBe("Do it");
+  });
+
+  it("keeps a valid entry that comes AFTER the bad one", () => {
+    const out = salvageProposalCandidates(JSON.stringify([noRationale, alsoGood]));
+    expect(out.map((c) => c.kind)).toEqual(["loop"]);
+  });
+
+  it("returns [] for garbage rather than throwing", () => {
+    expect(salvageProposalCandidates("not json")).toEqual([]);
+    expect(salvageProposalCandidates('{"kind":"task"}')).toEqual([]);
+    expect(salvageProposalCandidates("[]")).toEqual([]);
+    expect(salvageProposalCandidates(JSON.stringify([noRationale]))).toEqual([]);
+  });
+
+  it("agrees with the kernel when everything is valid", () => {
+    const raw = JSON.stringify([good, alsoGood]);
+    const whole = parseProposalCandidates(raw);
+    expect(whole.status).toBe("ok");
+    expect(salvageProposalCandidates(raw)).toEqual(whole.status === "ok" ? whole.value : null);
+  });
+});
+
+describe("agentRunName — report filenames", () => {
+  it("strips the slashes an event reason carries, so the report name stays readable", () => {
+    const name = agentRunName(agent("a"), "create _inbox/Some Long Note.md");
+    expect(name).not.toContain("/");
+  });
+
+  it("truncates a long reason", () => {
+    const name = agentRunName(agent("a"), "create _inbox/" + "x".repeat(80) + ".md");
+    expect(name.length).toBeLessThan(60);
+    expect(name).toContain("…");
+  });
+
+  it("leaves a short reason intact", () => {
+    expect(agentRunName(agent("librarian"), "daily 08:00")).toBe("LIBRARIAN (daily 08:00)");
   });
 });
 
