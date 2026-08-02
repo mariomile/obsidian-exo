@@ -18,6 +18,7 @@ type C = {
   archived?: boolean;
   openTabIds: Set<string>;
   messages: unknown[];
+  restarts: boolean;
 };
 
 const convo = (id: string, over: Partial<C> = {}): C => ({
@@ -26,6 +27,7 @@ const convo = (id: string, over: Partial<C> = {}): C => ({
   archived: false,
   openTabIds: new Set(),
   messages: [{}],
+  restarts: false,
   ...over,
 });
 
@@ -106,6 +108,14 @@ describe("matchesFilters", () => {
   it("shortConvo: true when there are fewer than 3 messages", () => {
     expect(matchesFilters(convo("a", { messages: [{}, {}] }), ["shortConvo"], NOW)).toBe(true);
     expect(matchesFilters(convo("b", { messages: [{}, {}, {}] }), ["shortConvo"], NOW)).toBe(false);
+  });
+
+  it("restarts: reads the precomputed fact, it does not re-derive it", () => {
+    // The filesystem answer belongs to the view; this module only forwards it.
+    // A convo the view could not classify arrives as false and is NOT selected —
+    // the chip must never sweep up conversations whose status is unknown.
+    expect(matchesFilters(convo("a", { restarts: true }), ["restarts"], NOW)).toBe(true);
+    expect(matchesFilters(convo("b", { restarts: false }), ["restarts"], NOW)).toBe(false);
   });
 
   it("composes multiple active filters with AND", () => {

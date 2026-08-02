@@ -97,6 +97,8 @@ import {
 import type { TabVM } from "./core/working-set";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
 import type { HistoryFilter, FilterableConvo } from "./core/history";
+import { projectDirName, resumeStatus } from "./core/resume-status";
+import type { ResumeStatus } from "./core/resume-status";
 import { reconcileList } from "./ui/keyed-reconcile";
 import type { CardModel } from "./ui/keyed-reconcile";
 import { DEFAULT_SETTINGS } from "./settings";
@@ -462,6 +464,12 @@ export class ChatView extends ItemView {
    *  same lifetime as `gallerySelection`, so reopening the history is always a
    *  clean slate and never a filter the user forgot they left on. */
   private historyFilters = new Set<HistoryFilter>();
+  /** Session ids the Claude CLI holds for this vault, read once per gallery
+   *  open. `null` means the read failed or the directory is absent — and then
+   *  the UI shows NO resume badge at all, never "everything restarts". The
+   *  distinction is the whole safety property: a false warning on all thirty
+   *  cards at once is worse than the feature not existing. Runtime-only. */
+  private sessionsOnDisk: Set<string> | null = null;
   /** Memo behind `convoSizeOf`, keyed by conversation id and invalidated by
    *  `updatedAt`. Runtime-only; an entry dies with its conversation. */
   private convoSizeCache = new Map<string, { updatedAt: number | undefined; bytes: number }>();
@@ -2383,11 +2391,58 @@ export class ChatView extends ItemView {
     this.bulkDisarm = null;
     this.galleryEl?.remove();
     this.galleryEl = null;
+    // The session-id set is only ever read while the gallery is up, and every
+    // render path sits downstream of a fresh read — so this frees ~800 strings
+    // rather than fixing a bug. Dropping it also keeps the field's meaning
+    // honest: null means "not read", which is exactly true once the history is
+    // closed.
+    this.sessionsOnDisk = null;
     this.listEl.show();
     this.composer.getComposerEl().show();
     this.rebuildOutline();
   }
 
+  /** List the session ids the Claude CLI currently holds for this vault.
+   *  Returns null on ANY failure: a missing, unreadable, or unidentifiable
+   *  directory is an unknown, not a verdict. `resumeStatus` turns that null into
+   *  `unknown` for every conversation, which draws nothing — whereas returning
+   *  an empty Set would be a confident "none of them resume". */
+  private async readSessionsOnDisk(): Promise<Set<string> | null> {
+    try {
+      const base = this.vaultPath();
+      // No base path (mobile, or any non-filesystem adapter) encodes to "" and
+      // would aim at ~/.claude/projects itself: a directory that reads just
+      // fine and holds no .jsonl — a *successful* read meaning "nothing
+      // resumes". Refuse to answer instead of answering wrongly.
+      if (!base) return null;
+      const fs = require("fs") as typeof import("fs");
+      const os = require("os") as typeof import("os");
+      const dir = `${os.homedir()}/.claude/projects/${projectDirName(base)}`;
+      const names = await fs.promises.readdir(dir);
+      return new Set(names.filter((n) => n.endsWith(".jsonl")).map((n) => n.slice(0, -6)));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Resume status of one conversation as the gallery sees it. Single seam, so
+   *  the badge and the "Riparte da capo" chip cannot drift apart: they are the
+   *  same call on the same input, not two expressions that agree today.
+   *
+   *  A Codex conversation always reports `unknown`: its session id is a Codex
+   *  thread under ~/.codex, not a Claude CLI session file, so checking it
+   *  against the Claude project directory would mark every Codex chat
+   *  "restarts" — the exact false alarm this feature exists to avoid.
+   *
+   *  A conversation with no messages reports `unknown` too. It has no session
+   *  because no turn ever ran, so "restarts" is technically true and completely
+   *  uninformative: there is no context to lose. The gallery always shows the
+   *  focused chat even when it is empty, so without this the freshly opened
+   *  "New chat" card would permanently wear a warning about losing nothing. */
+  private resumeStatusOf(c: Convo): ResumeStatus {
+    if (c.messages.length === 0) return "unknown";
+    return resumeStatus(c, c.provider === "claude" ? this.sessionsOnDisk : null);
+  }
 
   /** `preset` accepts one filter or a set of them: a single value is what the
    *  strip counter passes, while the internal rebuild sites hand back the
@@ -2441,6 +2496,15 @@ export class ChatView extends ItemView {
     if (this.galleryEl !== wrap) return; // gallery was closed while we awaited
     const doneConvoIds = new Set(tasks.filter((t) => t.status === "done" && t.convo).map((t) => t.convo!));
 
+    // Which chats still have a CLI session behind them. Read once per open, not
+    // per card: the answer is the same for the whole grid, and the search box
+    // re-runs renderGrid on every keystroke.
+    this.sessionsOnDisk = await this.readSessionsOnDisk();
+    // Second suspension point, second guard — the one above covers only the
+    // await it follows. Without this, closing the history while the directory
+    // read is in flight leaves us building chips and cards into a detached DOM.
+    if (this.galleryEl !== wrap) return; // gallery was closed while we awaited
+
     // Filter chips, multi-select with AND semantics. Declared before `renderGrid`
     // on purpose: the DOM order is banner → chips → search → grid, and the click
     // handlers only dereference `renderGrid`/`search` when the user clicks, long
@@ -2453,6 +2517,7 @@ export class ChatView extends ItemView {
       archived: "Archiviate",
       olderThan30: "Più vecchie di 30 giorni",
       shortConvo: "Meno di 3 messaggi",
+      restarts: "Riparte da capo",
     };
     for (const key of Object.keys(CHIP_LABELS) as HistoryFilter[]) {
       const chip = chipsWrap.createDiv({ cls: "mva-gallery-chip" });
@@ -2503,6 +2568,7 @@ export class ChatView extends ItemView {
           archived: c.archived,
           openTabIds,
           messages: c.messages,
+          restarts: this.resumeStatusOf(c) === "restarts",
         };
         return matchesFilters(asFilterable, active, now) && (!ql || this.convoMatches(c, ql));
       });
@@ -2591,6 +2657,30 @@ export class ChatView extends ItemView {
       badges.createSpan({ cls: "mva-card-status-badge is-done", text: "Done" });
     } else if (c.archived) {
       badges.createSpan({ cls: "mva-card-status-badge is-archived", text: "Archiviata" });
+    }
+    // Only the exception is drawn: a conversation that resumes with its full
+    // context says nothing, exactly like an idle tab draws no mark. `unknown`
+    // draws nothing either — see resumeStatus's contract. Not an `else` on the
+    // block above: a chat can be archived AND no longer resumable, and hiding
+    // the second fact behind the first would lose the one that costs context.
+    if (this.resumeStatusOf(c) === "restarts") {
+      // One word, deliberately. The badge cluster is `flex: 0 0 auto` and never
+      // wraps or compresses, so every character it costs comes straight out of
+      // `.mva-card-title` — and cards are ~180px wide. "Riparte da capo" is
+      // ~105px of a ~152px head, leaving about three characters of title; with
+      // "Archiviata" and "Active" alongside it the demanded width doubles the
+      // space available and `overflow: hidden` clips the Open/Active badge off
+      // the card. "Riparte" is ~45px, in line with "Active", and matches the
+      // one-word badge family. The full sentence lives in title/aria-label, so
+      // the meaning is a hover or a screen reader away, not lost.
+      badges.createSpan({
+        cls: "mva-card-status-badge is-restarts",
+        text: "Riparte",
+        attr: {
+          title: "Riparte da capo: la sessione non è più disponibile",
+          "aria-label": "Riparte da capo: la sessione non è più disponibile",
+        },
+      });
     }
     if (isOpen) {
       badges.createSpan({

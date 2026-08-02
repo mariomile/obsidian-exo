@@ -64,7 +64,7 @@ export function groupByTime<T extends { updatedAt?: number }>(items: T[], now: n
   return order.filter((label) => buckets[label].length > 0).map((label) => ({ label, items: buckets[label] }));
 }
 
-export type HistoryFilter = "open" | "retired" | "archived" | "olderThan30" | "shortConvo";
+export type HistoryFilter = "open" | "retired" | "archived" | "olderThan30" | "shortConvo" | "restarts";
 
 /** Shape `matchesFilters` needs from a conversation. Structural, not `Convo` —
  *  keeps this module ignorant of the view's types. */
@@ -75,6 +75,11 @@ export interface FilterableConvo {
   archived?: boolean;
   openTabIds: ReadonlySet<string>;
   messages: readonly unknown[];
+  /** Precomputed by the caller: writing in this conversation would start from
+   *  nothing. Resolved in the view (it needs the filesystem) and passed in as a
+   *  fact. Required, not optional: an absent field would silently read as "no",
+   *  and the caller that owns the answer must be the one to state it. */
+  restarts: boolean;
 }
 
 const PREDICATES: Record<HistoryFilter, (c: FilterableConvo, now: number) => boolean> = {
@@ -95,6 +100,12 @@ const PREDICATES: Record<HistoryFilter, (c: FilterableConvo, now: number) => boo
   // missing updatedAt. Kept deliberately consistent between the two.
   olderThan30: (c, now) => (c.updatedAt ?? 0) < now - 30 * DAY_MS,
   shortConvo: (c) => c.messages.length < 3,
+  // Precomputed rather than derived here: the answer needs the filesystem (the
+  // CLI's session store), and this module is pure. The view resolves it once per
+  // card per render, with the same call the badge makes, and passes it in — so
+  // the chip selects exactly the set the badge marks, by construction rather
+  // than by two expressions that happen to agree.
+  restarts: (c) => c.restarts,
 };
 
 /** A conversation matches when it satisfies EVERY active filter (AND). No

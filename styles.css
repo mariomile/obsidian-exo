@@ -3288,6 +3288,21 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border: 1px solid var(--background-modifier-border);
   color: var(--text-faint);
 }
+/* A conversation whose CLI session is gone: writing in it starts from nothing.
+   A fact about the chat, not an error — so no error token, no red.
+   DASHED on purpose. This badge shares its row with .is-archived and the two
+   co-occur (an archived chat can also have lost its session), so they must be
+   told apart at a glance. Tint alone would not do it: --text-muted next to
+   --text-faint is one step on the same gray ramp, unreadable as a distinction at
+   9.5px uppercase. The dash is a difference of FORM — it survives any theme,
+   any contrast setting, and reads without the other badge present for
+   comparison. It also carries the meaning: a broken line for a broken thread,
+   the same "provisional / not whole" vocabulary the pending-agent chip and the
+   ghost row already use in this file. */
+.mva-card-status-badge.is-restarts {
+  border: 1px dashed color-mix(in srgb, var(--text-muted) 55%, transparent);
+  color: var(--text-muted);
+}
 .mva-card-preview {
   flex: 1;
   font-size: 12px;
