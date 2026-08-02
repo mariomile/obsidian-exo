@@ -27,19 +27,20 @@ import {
   type Cadence,
 } from "../../core/automations";
 import { dailyPulseMetaLabel, isDailyPulseAutomation } from "../../core/daily-pulse";
-import { triggerLabel, formatDuration, parseDuration } from "../../core/agents";
+import { formatDuration, parseDuration } from "../../core/agents";
+import {
+  describeAgentAutomation,
+  cadenceNote,
+  spellDuration,
+  AUTONOMY_CHOICES,
+  OUTPUT_CHOICES,
+  COOLDOWN_CHOICES,
+} from "../../core/agent-copy";
 
 import { formatAge } from "../../core/actions-hub";
 import type { HubTabContext } from "./shared";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-/** Plain-language names for the output modes — the chip has to say what it does. */
-const OUTPUT_LABELS = {
-  report: "a note per run",
-  journal: "a line in the daily note",
-  silent: "no write-up",
-} as const;
 
 export async function renderAutomationsTab(host: HTMLElement, ctx: HubTabContext): Promise<void> {
   host.empty();
@@ -79,8 +80,12 @@ export async function renderAutomationsTab(host: HTMLElement, ctx: HubTabContext
  * An agent with a trigger IS an automation from the user's side — the only
  * difference is that its instructions live in an agent file instead of a
  * prompt. Keeping them in separate rooms means "what runs without me?" has two
- * answers, which is one too many. Editing stays in the agent's contract file;
- * this is the inventory and the on/off switch.
+ * answers, which is one too many.
+ *
+ * Each row leads with a sentence rather than the contract's own vocabulary:
+ * `act` / `vault-event create _inbox/**` / `15m` is the right language for a
+ * file and the wrong one for a row, because reading it requires knowing the
+ * schema. The chips edit; the sentence explains.
  */
 async function renderAgents(host: HTMLElement, ctx: HubTabContext): Promise<void> {
   host.empty();
@@ -96,10 +101,7 @@ async function renderAgents(host: HTMLElement, ctx: HubTabContext): Promise<void
   if (!agents.length) return;
 
   host.createDiv({ cls: "mva-auto-h", text: "Agents" });
-  host.createDiv({
-    cls: "mva-auto-sub",
-    text: "Agents that run unattended. Their instructions live in .claude/agents/; when they fire and what they may touch lives in the contract file behind the gear.",
-  });
+  host.createDiv({ cls: "mva-auto-sub", text: "These run on their own. Switch one off and nothing happens without you." });
 
   for (const a of agents) {
     const row = host.createDiv({ cls: "mva-auto-row" });
@@ -117,55 +119,42 @@ async function renderAgents(host: HTMLElement, ctx: HubTabContext): Promise<void
     const main = row.createDiv({ cls: "mva-auto-main" });
     main.createDiv({ cls: "mva-auto-name", text: a.brain.name });
 
-    // The three fields worth changing without opening a file. Same chip +
-    // popover recipe as a playbook row, so the two kinds of automation read as
-    // one surface rather than two.
+    // The sentence comes first and carries the whole answer: what fires it,
+    // what it may do, where it says so. The chips below are how you change it —
+    // reading the row must not require operating it.
+    main.createDiv({ cls: "mva-auto-say", text: describeAgentAutomation(a.contract) });
+    main.createDiv({ cls: "mva-auto-meta", text: cadenceNote(a.contract) });
+
     const chips = main.createDiv({ cls: "mva-auto-chips" });
     const patch = (next: Partial<typeof a.contract>) => {
       void ctx.plugin.agentStore
         .saveContract({ ...a.contract, ...next }, new Date().toISOString().slice(0, 10))
         .then(() => ctx.rerender());
     };
+    const labelOf = (list: readonly { value: string; label: string }[], v: string) =>
+      list.find((c) => c.value === v)?.label ?? v;
 
-    chipSelect(chips, a.contract.autonomy, "Autonomy", (pop, close) =>
-      optionRows(
-        pop,
-        [
-          { value: "notify", label: "notify — reads only" },
-          { value: "propose", label: "propose — suggests changes" },
-          { value: "act", label: "act — applies changes" },
-        ],
-        a.contract.autonomy,
-        (v) => {
-          close();
-          patch({ autonomy: v as typeof a.contract.autonomy });
-        }
-      ),
-      // `act` with nothing writable is the one combination that silently does
-      // nothing, so it is worth a warning triangle rather than a discovery.
+    chipSelect(chips, labelOf(AUTONOMY_CHOICES, a.contract.autonomy), "What it may do", (pop, close) =>
+      hintedRows(pop, AUTONOMY_CHOICES, a.contract.autonomy, (v) => {
+        close();
+        patch({ autonomy: v as typeof a.contract.autonomy });
+      }),
+      // Set to make changes with nothing writable is the one combination that
+      // runs and does nothing — worth a warning, not a discovery.
       { warn: a.contract.autonomy === "act" && a.contract.scope.write.length === 0 }
     );
 
-    chipSelect(chips, OUTPUT_LABELS[a.contract.output], "Where it reports", (pop, close) =>
-      optionRows(
-        pop,
-        [
-          { value: "report", label: OUTPUT_LABELS.report },
-          { value: "journal", label: OUTPUT_LABELS.journal },
-          { value: "silent", label: OUTPUT_LABELS.silent },
-        ],
-        a.contract.output,
-        (v) => {
-          close();
-          patch({ output: v as typeof a.contract.output });
-        }
-      )
+    chipSelect(chips, labelOf(OUTPUT_CHOICES, a.contract.output), "What it leaves behind", (pop, close) =>
+      hintedRows(pop, OUTPUT_CHOICES, a.contract.output, (v) => {
+        close();
+        patch({ output: v as typeof a.contract.output });
+      })
     );
 
-    chipSelect(chips, `every ${formatDuration(a.contract.cooldownMs)}`, "Minimum gap between runs", (pop, close) =>
+    chipSelect(chips, `no more than every ${spellDuration(a.contract.cooldownMs)}`, "How often at most", (pop, close) =>
       optionRows(
         pop,
-        ["5m", "15m", "30m", "1h", "2h", "6h", "1d"].map((v) => ({ value: v, label: `every ${v}` })),
+        COOLDOWN_CHOICES.map((v) => ({ value: v, label: `no more than every ${spellDuration(parseDuration(v)!)}` })),
         formatDuration(a.contract.cooldownMs),
         (v) => {
           close();
@@ -173,8 +162,6 @@ async function renderAgents(host: HTMLElement, ctx: HubTabContext): Promise<void
         }
       )
     );
-
-    main.createDiv({ cls: "mva-auto-meta", text: a.contract.triggers.map(triggerLabel).join(" · ") });
 
     row.createDiv({ cls: "mva-auto-spacer" });
 
@@ -469,6 +456,30 @@ function chipSelect(
     e.stopPropagation();
     popover.toggle();
   });
+}
+
+/**
+ * Option rows that carry a second line explaining the choice.
+ *
+ * A label alone makes you pick and then find out. These are consequential
+ * settings — one of them lets an agent edit notes while you are not looking —
+ * so the meaning belongs next to the choice, not in documentation.
+ */
+function hintedRows(
+  pop: HTMLElement,
+  options: readonly { value: string; label: string; hint: string }[],
+  selected: string,
+  onPick: (v: string) => void
+): void {
+  for (const o of options) {
+    const opt = pop.createDiv({ cls: "mva-sel-opt mva-sel-opt-tall", attr: { tabindex: "0" } });
+    const dot = opt.createSpan({ cls: "mva-sel-opt-dot" });
+    if (o.value === selected) setIcon(dot, "check");
+    const text = opt.createDiv({ cls: "mva-sel-opt-text" });
+    text.createDiv({ text: o.label });
+    text.createDiv({ cls: "mva-sel-opt-hint", text: o.hint });
+    clickable(opt, () => onPick(o.value));
+  }
 }
 
 function optionRows(

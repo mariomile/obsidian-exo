@@ -3448,6 +3448,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    inline from updateUsage; ::after punches the center hole (matching the
    inputbox background) so it reads as a ring. Color tracks the same amber/red
    thresholds as the risk chips elsewhere (is-caution / is-danger). */
+.mva-ctx-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
 .mva-ctx-ring {
   --pct: 0;
   --ring-color: var(--interactive-accent);
@@ -3484,18 +3490,166 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-ctx-ring.is-empty {
   background: var(--background-modifier-border);
 }
+.mva-ctx-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 40;
+  width: min(280px, calc(100vw - 24px));
+  padding: 12px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r2);
+  box-shadow: var(--cosmos-pop-shadow, var(--shadow-l));
+}
+.mva-ctx-pop-head,
+.mva-ctx-pop-value {
+  display: flex;
+  align-items: center;
+}
+.mva-ctx-pop-head {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mva-ctx-pop-title {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.mva-ctx-pop-model {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-monospace);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mva-ctx-pop-value {
+  gap: 4px;
+  color: var(--text-normal);
+}
+.mva-ctx-pop-used {
+  font-size: 15px;
+  font-weight: 600;
+}
+.mva-ctx-pop-total,
+.mva-ctx-pop-pct {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.mva-ctx-pop-pct {
+  margin-left: auto;
+}
+.mva-ctx-pop-value.is-caution .mva-ctx-pop-pct {
+  color: var(--color-orange, var(--text-muted));
+}
+.mva-ctx-pop-value.is-danger .mva-ctx-pop-pct {
+  color: var(--color-red, var(--text-muted));
+}
+.mva-ctx-pop-track {
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+  background: var(--background-modifier-border);
+  border-radius: 999px;
+}
+.mva-ctx-pop-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width var(--mva-t), background-color var(--mva-t);
+}
+.mva-ctx-pop-meta,
+.mva-ctx-pop-empty {
+  margin-top: 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.mva-ctx-quota {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.mva-ctx-quota-head,
+.mva-ctx-quota-row-head {
+  display: flex;
+  align-items: center;
+}
+.mva-ctx-quota-head {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mva-ctx-quota-title {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.mva-ctx-quota-plan {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+.mva-ctx-quota-row + .mva-ctx-quota-row {
+  margin-top: 9px;
+}
+.mva-ctx-quota-label,
+.mva-ctx-quota-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mva-ctx-quota-label {
+  color: var(--text-normal);
+  font-size: 11.5px;
+}
+.mva-ctx-quota-meta {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+.mva-ctx-quota-track {
+  height: 5px;
+  margin-top: 5px;
+  overflow: hidden;
+  background: var(--background-modifier-border);
+  border-radius: 999px;
+}
+.mva-ctx-quota-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width var(--mva-t), background var(--mva-t);
+}
+.mva-ctx-pop-action {
+  width: 100%;
+  margin-top: 10px;
+  padding: 5px 8px;
+  color: var(--text-accent);
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r1);
+  box-shadow: none;
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.mva-ctx-pop-action:hover {
+  background: var(--background-modifier-hover);
+}
 @media (prefers-reduced-motion: reduce) {
   .mva-ctx-ring,
-  .mva-ctx-ring::after {
+  .mva-ctx-ring::after,
+  .mva-ctx-pop-fill,
+  .mva-ctx-quota-fill {
     transition: none;
   }
 }
 
 /* --------------------------- quota badge ------------------------------ */
-/* Claude-plan usage badge beside the context ring. Quiet by default (hidden
-   below 80%); a small colored dot + percent when the plan nears its window,
-   escalating to a danger "limit" label when the plan rejects. Theme colors
-   only — orange for caution, red for danger. */
+/* Native plan/account usage badge beside the context ring. Quiet by default
+   (hidden below 80%); a small colored dot + percent when the plan nears its
+   window, escalating to a danger "limit" label when the plan rejects. Theme
+   colors only — orange for caution, red for danger. */
 .mva-rate-badge {
   display: inline-flex;
   align-items: center;
@@ -5843,4 +5997,31 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   flex-wrap: wrap;
   gap: 5px;
   margin-top: 5px;
+}
+
+/* Agent automation rows: the sentence leads, the controls follow. */
+.mva-auto-say {
+  margin-top: 3px;
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+.mva-auto-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+/* Option rows that carry an explanation need room for two lines. */
+.mva-sel-opt-tall {
+  align-items: flex-start;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.mva-sel-opt-text {
+  min-width: 0;
+}
+.mva-sel-opt-hint {
+  margin-top: 1px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
 }
