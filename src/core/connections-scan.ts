@@ -207,6 +207,21 @@ function classifyLiveServer(name: string): { source: SourceId; origin: string; d
   return { source: "claude-global", origin: "sessione", display: name };
 }
 
+/** The `mcp__<segment>__` prefix this item's OWN tools carry in a live
+ *  SessionCaps snapshot (`caps.tools`). For file-backed servers the segment is
+ *  the config key verbatim ("notion" → `mcp__notion__…`). For claude.ai
+ *  connectors the item's `name` is already the display form with the
+ *  "claude.ai " prefix stripped off by {@link classifyLiveServer} — the SDK
+ *  builds tool names from the RAW server name with every non-word run
+ *  collapsed to `_` (observed: "claude.ai Craft" → `claude_ai_Craft`), so the
+ *  prefix has to be rebuilt from the raw name, not guessed from the display
+ *  one. Not a documented SDK contract — reverse-engineered from live data — so
+ *  a mismatch here degrades to "no tools listed", never a wrong permission. */
+export function toolNamePrefix(item: DiscoveryItem): string {
+  const raw = item.source === "claude-connector" ? `claude.ai ${item.name}` : item.name;
+  return `mcp__${raw.replace(/[^A-Za-z0-9_]+/g, "_")}__`;
+}
+
 /** Turn the live session's MCP roster into read-only "active" items for every
  *  server NOT already surfaced from a local config file. This is what makes the
  *  pane show ALL connected MCPs (claude.ai connectors, plugin servers) — not

@@ -7,6 +7,8 @@ import {
   scanSkillDirs,
   assignSkillState,
   scanLiveCaps,
+  toolNamePrefix,
+  type DiscoveryItem,
 } from "../src/core/connections-scan";
 
 describe("normalizeCodexServer", () => {
@@ -144,5 +146,27 @@ describe("scanLiveCaps", () => {
     expect(byName.get("Gmail")).toMatchObject({ origin: "claude.ai", status: "needs-auth" });
     expect(byName.get("claude-mem")).toMatchObject({ source: "plugin", origin: "Plugin" });
     expect(byName.get("obsidian")).toMatchObject({ source: "plugin", origin: "Exo" });
+  });
+});
+
+describe("toolNamePrefix", () => {
+  const item = (over: Partial<DiscoveryItem> = {}): DiscoveryItem => ({
+    kind: "mcp", name: "notion", source: "vault", origin: "vault", state: "active", ...over,
+  });
+
+  it("uses the config key verbatim for file-backed servers", () => {
+    expect(toolNamePrefix(item({ name: "notion", source: "vault" }))).toBe("mcp__notion__");
+    expect(toolNamePrefix(item({ name: "granola", source: "codex" }))).toBe("mcp__granola__");
+  });
+
+  it("rebuilds the raw name for claude.ai connectors — display name alone under-matches", () => {
+    // scanLiveCaps strips "claude.ai " off the raw server name into `display`;
+    // the SDK's tool names are sanitized from the RAW name, not the display one.
+    expect(toolNamePrefix(item({ name: "Craft", source: "claude-connector" }))).toBe("mcp__claude_ai_Craft__");
+    expect(toolNamePrefix(item({ name: "Gmail", source: "claude-connector" }))).toBe("mcp__claude_ai_Gmail__");
+  });
+
+  it("collapses any run of non-word characters to a single underscore", () => {
+    expect(toolNamePrefix(item({ name: "my.weird name!!", source: "vault" }))).toBe("mcp__my_weird_name___");
   });
 });

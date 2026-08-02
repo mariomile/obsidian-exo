@@ -5653,6 +5653,21 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: linear-gradient(to bottom, transparent, var(--background-primary));
   pointer-events: none;
 }
+.mva-hub-conn-line {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.mva-hub-notes-btn { align-self: flex-start; }
+/* Quiet has-notes / has-rule glances on the collapsed row — icon only, the
+   detail lives in the accordion body one click away. */
+.mva-hub-indicator {
+  display: inline-flex;
+  color: var(--text-faint);
+}
+.mva-hub-indicator svg { width: 13px; height: 13px; }
+.mva-hub-indicator.is-deny { color: var(--text-error, var(--text-muted)); }
+.mva-hub-indicator.is-allow { color: var(--text-success, var(--text-muted)); }
 .mva-conn-name { font-weight: 600; }
 .mva-conn-origin {
   font-size: 11px;

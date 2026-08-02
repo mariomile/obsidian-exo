@@ -1,4 +1,4 @@
-import { Notice, setIcon } from "obsidian";
+import { MarkdownRenderer, Notice, setIcon } from "obsidian";
 import { homedir } from "os";
 import { readFile } from "fs/promises";
 import {
@@ -6,18 +6,19 @@ import {
   scanClaudeGlobalMcp,
   assignMcpState,
   scanLiveCaps,
+  toolNamePrefix,
   type ClaudeJson,
   type DiscoveryItem,
 } from "../../core/connections-scan";
 import { connectMcp, disconnectMcp, setMcpEnabled } from "../../core/connections-install";
 import { parseMcpJson, summarizeServer } from "../../core/mcp-config";
 import { mcpSections } from "../../core/hub-sections";
-import { findToolRule } from "../../core/permissions";
-import { MCP_DOCS_DIR, mcpDocPath, mcpDocTemplate, isSafeDocName, hasMcpDocContent } from "../../core/mcp-docs";
+import { findToolRule, toolPermissionStatus } from "../../core/permissions";
+import { MCP_DOCS_DIR, mcpDocPath, mcpDocTemplate, isSafeDocName, hasMcpDocContent, summarizeMcpDoc } from "../../core/mcp-docs";
 import { resolveCli, mcpLogin } from "../../cli";
 import { McpServerModal } from "../mcp-server-modal";
 import { reconcileList, type CardModel } from "../keyed-reconcile";
-import { buildGroupHeader, buildRowScaffold, type HubTabContext } from "./shared";
+import { buildAccordionRow, buildGroupHeader, buildRowScaffold, type HubTabContext } from "./shared";
 
 /**
  * The MCP tab — control surface AND marketplace over what other tools already
@@ -99,8 +100,8 @@ export async function gatherMcp(ctx: HubTabContext): Promise<{ items: DiscoveryI
  *  is the source's tool-name prefix, so only a source-level rule
  *  (`mcp__notion__*`) matches — a rule naming one specific tool doesn't badge
  *  the row, because it doesn't govern the server. */
-function governingRule(ctx: HubTabContext, name: string): { kind: "deny" | "allow"; line: string } | null {
-  const probe = `mcp__${name}__`;
+function governingRule(ctx: HubTabContext, it: DiscoveryItem): { kind: "deny" | "allow"; line: string } | null {
+  const probe = toolNamePrefix(it);
   const s = ctx.plugin.settings;
   const deny = findToolRule(s.permDenyRules ?? "", probe);
   if (deny) return { kind: "deny", line: deny };
@@ -126,6 +127,17 @@ async function gatherDocumented(ctx: HubTabContext, names: string[]): Promise<Se
   return out;
 }
 
+/** The doc note's raw text, for the currently-open + documented rows only —
+ *  reading every server's note on every render would be wasted I/O for rows
+ *  the user never expands. */
+async function readDocRaw(ctx: HubTabContext, name: string): Promise<string | null> {
+  try {
+    return await ctx.app.vault.adapter.read(mcpDocPath(name));
+  } catch {
+    return null;
+  }
+}
+
 export async function renderMcpTab(host: HTMLElement, ctx: HubTabContext): Promise<void> {
   const { items, ourNames } = await gatherMcp(ctx);
   const documented = await gatherDocumented(ctx, items.map((i) => i.name));
@@ -137,19 +149,24 @@ export async function renderMcpTab(host: HTMLElement, ctx: HubTabContext): Promi
   if (!items.length) {
     models.push({ key: "mcp-empty", sig: "empty", build: () => createDiv({ cls: "mva-conn-empty", text: "No MCP servers yet — add one above." }) });
   }
-  const section = (label: string, list: DiscoveryItem[]) => {
+  const section = async (label: string, list: DiscoveryItem[]) => {
     if (!list.length) return;
     models.push({ key: `sec:${label}`, sig: `${list.length}`, build: () => buildGroupHeader(label, list.length) });
-    for (const it of list) models.push({
-      key: `mcp:${it.name}`,
-      sig: `${it.state}:${it.status ?? ""}:${ourNames.has(it.name)}:${documented.has(it.name)}:${governingRule(ctx, it.name)?.line ?? ""}:${it.desc ?? ""}`,
-      build: () => buildMcpRow(it, ourNames, documented, ctx),
-    });
+    for (const it of list) {
+      const key = `mcp:${it.name}`;
+      const isOpen = ctx.expanded(key);
+      const docRaw = isOpen && documented.has(it.name) ? await readDocRaw(ctx, it.name) : null;
+      models.push({
+        key,
+        sig: `${it.state}:${it.status ?? ""}:${ourNames.has(it.name)}:${documented.has(it.name)}:${governingRule(ctx, it)?.line ?? ""}:${isOpen}:${it.desc ?? ""}`,
+        build: () => buildMcpAccordion(it, ourNames, documented, ctx, docRaw),
+      });
+    }
   };
-  section("Connected", sections.connected);
-  section("Disabled", sections.disabled);
-  section("Importable", sections.importable);
-  section("Inherited", sections.inherited);
+  await section("Connected", sections.connected);
+  await section("Disabled", sections.disabled);
+  await section("Importable", sections.importable);
+  await section("Inherited", sections.inherited);
   reconcileList(host, models);
 }
 
@@ -169,6 +186,10 @@ function buildAddMcp(ctx: HubTabContext): HTMLElement {
   return row;
 }
 
+/** The collapsed row: status, recovery actions, quiet has-notes/has-rule
+ *  indicators, and the vault-owned lifecycle buttons. Full detail (config,
+ *  per-tool permissions, rendered notes) lives in the accordion body —
+ *  wrapped around this by {@link buildMcpAccordion}. */
 function buildMcpRow(it: DiscoveryItem, ourNames: Set<string>, documented: Set<string>, ctx: HubTabContext): HTMLElement {
   const { row, right } = buildRowScaffold(it.name, it.origin, it.desc);
   row.toggleClass("is-muted", it.state === "have");
@@ -191,25 +212,20 @@ function buildMcpRow(it: DiscoveryItem, ourNames: Set<string>, documented: Set<s
       const b = right.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Re-auth" });
       b.onclick = () => void doReauth(ctx, it, b);
     }
-    // Notes are useful for ANY connected server, including inherited ones —
-    // knowing what a server is for is independent of who owns its config.
-    if (isSafeDocName(it.name)) {
-      const has = documented.has(it.name);
-      const docs = right.createEl("button", { cls: "mva-btn", text: has ? "Notes" : "Add notes" });
-      docs.toggleClass("is-muted", !has);
-      docs.setAttr("title", has ? "Open this server's notes" : "Describe what this server is for, so the agent knows when to use it");
-      docs.onclick = () => void openDocs(ctx, it);
+    // Quiet indicators only — a colour-and-icon glance at whether this server
+    // has notes or a standing rule, not the detail itself (that's the
+    // accordion body, one click away). Weakening a permission stays a
+    // deliberate act in settings, never a click here.
+    if (documented.has(it.name)) {
+      const ind = right.createSpan({ cls: "mva-hub-indicator", attr: { "aria-label": "Has notes" } });
+      setIcon(ind, "file-text");
+      ind.setAttr("title", "Has notes — expand for details");
     }
-    // Standing permission rules covering this source, if any — visibility only.
-    // Weakening a permission stays a deliberate act in settings, never a click
-    // here; the row's job is to make an existing blanket rule impossible to
-    // forget about.
-    const gov = governingRule(ctx, it.name);
+    const gov = governingRule(ctx, it);
     if (gov) {
-      const badge = right.createSpan({ cls: `mva-conn-state mva-hub-rule is-${gov.kind}` });
-      setIcon(badge.createSpan({ cls: "mva-hub-rule-icon" }), gov.kind === "deny" ? "shield-ban" : "shield-check");
-      badge.createSpan({ text: gov.kind === "deny" ? "denied by rule" : "auto-allowed" });
-      badge.setAttr("title", `Matches the ${gov.kind === "deny" ? "deny" : "always-allow"} rule: ${gov.line}`);
+      const ind = right.createSpan({ cls: `mva-hub-indicator is-${gov.kind}`, attr: { "aria-label": gov.kind === "deny" ? "Denied by rule" : "Auto-allowed by rule" } });
+      setIcon(ind, gov.kind === "deny" ? "shield-ban" : "shield-check");
+      ind.setAttr("title", `Matches the ${gov.kind === "deny" ? "deny" : "always-allow"} rule: ${gov.line} — expand for details`);
     }
     // Full lifecycle only for servers WE wrote into .mcp.json — inherited /
     // live-only / connector servers are configured at their own source.
@@ -229,6 +245,65 @@ function buildMcpRow(it: DiscoveryItem, ourNames: Set<string>, documented: Set<s
     btn.onclick = () => void doImport(ctx, it, btn);
   }
   return row;
+}
+
+/** The full row: collapsed header (above) wrapped in accordion behavior, body
+ *  built lazily only when open (see {@link buildMcpBody}). */
+function buildMcpAccordion(it: DiscoveryItem, ourNames: Set<string>, documented: Set<string>, ctx: HubTabContext, docRaw: string | null): HTMLElement {
+  const header = buildMcpRow(it, ourNames, documented, ctx);
+  return buildAccordionRow(ctx, `mcp:${it.name}`, header, () => buildMcpBody(it, ctx, docRaw));
+}
+
+/** Connection / Permissions / Documentation — the Craft-style detail. Read
+ *  only throughout: this is where you SEE what governs a server, not where
+ *  you change it (Edit/Enable/Remove stay on the header; permission rules
+ *  stay in settings). */
+function buildMcpBody(it: DiscoveryItem, ctx: HubTabContext, docRaw: string | null): HTMLElement {
+  const body = createDiv({ cls: "mva-hub-accordion-body" });
+
+  body.createDiv({ cls: "mva-hub-accordion-section-label", text: "Connection" });
+  if (it.config) {
+    body.createDiv({ cls: "mva-hub-conn-line", text: summarizeServer(it.config) });
+  } else {
+    body.createDiv({ cls: "mva-conn-empty", text: "Managed at its own source — no local config to show." });
+  }
+
+  body.createDiv({ cls: "mva-hub-accordion-section-label", text: "Permissions" });
+  const caps = ctx.plugin.lastSessionCaps;
+  const prefix = toolNamePrefix(it);
+  const toolNames = caps?.tools?.filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length)).sort() ?? null;
+  if (!toolNames) {
+    body.createDiv({ cls: "mva-conn-empty", text: "Tool list appears after this server connects." });
+  } else if (!toolNames.length) {
+    body.createDiv({ cls: "mva-conn-empty", text: "This server exposes no tools." });
+  } else {
+    const s = ctx.plugin.settings;
+    for (const short of toolNames) {
+      const status = toolPermissionStatus(`${prefix}${short}`, s.permAllowRules ?? "", s.permDenyRules ?? "");
+      const permRow = body.createDiv({ cls: "mva-hub-perm-row" });
+      permRow.createSpan({ cls: "mva-hub-perm-name", text: short });
+      const cssState = status === "auto-allowed" ? "allowed" : status;
+      const label = status === "auto-allowed" ? "auto-allowed" : status === "denied" ? "denied" : "asks each time";
+      permRow.createSpan({ cls: `mva-hub-perm-status is-${cssState}`, text: label });
+    }
+  }
+
+  body.createDiv({ cls: "mva-hub-accordion-section-label", text: "Documentation" });
+  if (!isSafeDocName(it.name)) {
+    body.createDiv({ cls: "mva-conn-empty", text: "Notes aren't available for this server's name." });
+  } else {
+    if (docRaw) {
+      const preview = body.createDiv({ cls: "mva-hub-doc-preview markdown-rendered" });
+      void MarkdownRenderer.render(ctx.app, summarizeMcpDoc(docRaw), preview, "", ctx.plugin);
+      preview.createDiv({ cls: "mva-hub-doc-fade" });
+    } else {
+      body.createDiv({ cls: "mva-conn-empty", text: "No notes yet — describe what this server is for, so the agent knows when to use it." });
+    }
+    const notesBtn = body.createEl("button", { cls: "mva-btn mva-hub-notes-btn", text: docRaw ? "Edit notes" : "Add notes" });
+    notesBtn.onclick = () => void openDocs(ctx, it);
+  }
+
+  return body;
 }
 
 /** Open a server's notes, seeding the template on first use. The note is plain
