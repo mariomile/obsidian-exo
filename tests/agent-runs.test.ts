@@ -8,6 +8,8 @@ import {
   MAX_AGENT_DEPTH,
   AGENT_PROPOSAL_FENCE,
   extractProposalBlock,
+  isEmptyRun,
+  NOTHING_TO_REPORT,
   writeModeFor,
   agentRunName,
   salvageProposalCandidates,
@@ -237,6 +239,38 @@ describe("extractProposalBlock", () => {
     expect(parsed[0]).toHaveProperty("prompt");
     expect(parsed[0]).toHaveProperty("rationale");
     expect(parsed[0]).not.toHaveProperty("payload");
+  });
+});
+
+describe("isEmptyRun", () => {
+  it("recognises the sentinel on its own, with surrounding whitespace or punctuation", () => {
+    expect(isEmptyRun(NOTHING_TO_REPORT)).toBe(true);
+    expect(isEmptyRun(`\n  ${NOTHING_TO_REPORT}  \n`)).toBe(true);
+    expect(isEmptyRun(`${NOTHING_TO_REPORT}.`)).toBe(true);
+  });
+
+  it("does NOT suppress a run that merely mentions the phrase while reporting", () => {
+    expect(isEmptyRun(`Found 2 items. I was told to say ${NOTHING_TO_REPORT} if empty, but it is not.`)).toBe(false);
+  });
+
+  it("treats a forgotten sentinel as substantive — an extra file beats a lost finding", () => {
+    expect(isEmptyRun("Nothing needed doing today.")).toBe(false);
+    expect(isEmptyRun("")).toBe(false);
+  });
+
+  it("ignores a sentinel that only appears inside a code fence", () => {
+    expect(isEmptyRun("```\n" + NOTHING_TO_REPORT + "\n```")).toBe(false);
+  });
+});
+
+describe("buildAgentRunPrompt — the empty-run contract", () => {
+  it("teaches the sentinel on a standing run", () => {
+    expect(buildAgentRunPrompt(agent("a"), "daily 08:00")).toContain(NOTHING_TO_REPORT);
+  });
+
+  it("teaches it on a delegated run too", () => {
+    const p = buildAgentRunPrompt(agent("a"), "invoked by exo", undefined, { from: "exo", text: "check X" });
+    expect(p).toContain(NOTHING_TO_REPORT);
   });
 });
 

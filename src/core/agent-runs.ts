@@ -206,6 +206,38 @@ export function writeModeFor(autonomy: AgentAutonomy): boolean {
   return autonomy === "act";
 }
 
+/* ---------------------------- empty runs ---------------------------- */
+
+/**
+ * Sentinel a run uses to say "nothing needed doing".
+ *
+ * A scheduled or event-triggered agent runs far more often than it finds
+ * anything, and writing a report note per run turns a quiet vault into a pile
+ * of files saying "no action needed". The ledger already records that the run
+ * happened; a note is only earned when there is something to read.
+ *
+ * Deterministic on purpose — deciding "was this report worth keeping?" from the
+ * prose would be a guess, and guessing wrong either loses findings or keeps the
+ * clutter.
+ */
+export const NOTHING_TO_REPORT = "NOTHING-TO-REPORT";
+
+/**
+ * True when a run explicitly declared it found nothing.
+ *
+ * Requires the sentinel to be essentially the whole reply, so an agent that
+ * merely mentions the phrase while reporting real findings still gets its note.
+ * If the model forgets the sentinel the run is treated as substantive — the
+ * failure mode is an extra file, never a lost finding.
+ */
+export function isEmptyRun(output: string): boolean {
+  const stripped = (output ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[^\w-]+/g, " ")
+    .trim();
+  return stripped === NOTHING_TO_REPORT;
+}
+
 /* ----------------------------- proposals ----------------------------- */
 
 /** Fenced block an unattended run uses to hand structured proposals back. */
@@ -325,7 +357,9 @@ export function buildAgentRunPrompt(
     "",
     task
       ? `Task from ${task.from}: ${task.text.trim()}\n\nDo that specific task, not this agent's standing job. If it turns out to be unnecessary or impossible, say so in one line and stop.`
-      : "Standing task: do this agent's regular job as defined in its own agent file. If nothing needs doing right now, say so in one line and stop — an empty run is a good outcome, not a failure to be filled with busywork.",
+      : "Standing task: do this agent's regular job as defined in its own agent file.",
+    "",
+    `If nothing needs doing right now, reply with exactly \`${NOTHING_TO_REPORT}\` and nothing else — no preamble, no explanation. An empty run is a good outcome, not a failure to be filled with busywork, and that exact reply is what stops a pointless note being written to the vault.`,
     "",
     contract.scope.read.length ? `Read scope: ${contract.scope.read.join(", ")}.` : null,
     writeModeFor(contract.autonomy)

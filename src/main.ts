@@ -75,6 +75,7 @@ import {
   buildAgentRunPrompt,
   dueScheduledAgentRuns,
   extractProposalBlock,
+  isEmptyRun,
   salvageProposalCandidates,
   gateAgentInvoke,
   gateAgentRun,
@@ -2921,11 +2922,19 @@ export default class ExoPlugin extends Plugin {
         buildAgentRunPrompt(agent, reason, memory, task, this.paths.reports),
         { write }
       );
-      const path = await writeReport(this.app, name, result, this.paths.reports);
+      const proposed = await this.collectAgentProposals(agent, result.output, startedAt);
+      // A note is earned, not automatic. An agent watching a folder runs far
+      // more often than it finds anything, and a report per run turns a quiet
+      // vault into a pile of files saying "no action needed". Anything that
+      // actually happened — a write, a proposal, a failure — still gets its
+      // report; only a run that declared itself empty is silent, and the ledger
+      // records it either way.
+      const worthReporting =
+        !result.ok || result.writes.length > 0 || proposed > 0 || !isEmptyRun(result.output);
+      const path = worthReporting ? await writeReport(this.app, name, result, this.paths.reports) : "";
       // Write runs join the existing review/restore queue rather than a parallel
       // one, so a bad agent write is rolled back the same way as a bad playbook.
       const restoreId = write ? await this.recordAutomationRun(name, startedAt, result, path) : null;
-      const proposed = await this.collectAgentProposals(agent, result.output, startedAt);
       // The ledger records every run, successful or not — a failed run that
       // leaves no trace is how a quietly broken agent stays invisible.
       await this.agentStore.appendRun({
@@ -2937,10 +2946,11 @@ export default class ExoPlugin extends Plugin {
         outcome: result.ok ? "ok" : "failed",
         trigger: reason,
         tier: agent.contract.autonomy,
-        report: path,
+        ...(path ? { report: path } : {}),
         ...(restoreId ? { restoreId } : {}),
         writes: result.writes,
         by,
+        ...(worthReporting ? {} : { summary: "Nothing to report." }),
       });
       if (result.ok) {
         const now = Date.now();
@@ -2950,11 +2960,10 @@ export default class ExoPlugin extends Plugin {
       }
       this.recordBackgroundSpend(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE);
       const proposalNote = proposed > 0 ? ` · ${proposed} proposal${proposed === 1 ? "" : "s"} to review` : "";
-      new Notice(
-        result.ok
-          ? `${agent.brain.name} done → ${path}${proposalNote}`
-          : `${agent.brain.name} failed (report: ${path})`
-      );
+      // A silent run gets a silent notice too — a toast per no-op is the same
+      // interruption as a note per no-op.
+      if (!result.ok) new Notice(`${agent.brain.name} failed (report: ${path})`);
+      else if (worthReporting) new Notice(`${agent.brain.name} done → ${path}${proposalNote}`);
       return result.ok;
     } catch (err) {
       console.warn(`[Exo] agent "${agent.brain.slug}" run failed:`, err);
