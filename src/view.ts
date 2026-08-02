@@ -96,6 +96,8 @@ import {
   countSurvivingRetirees,
 } from "./core/working-set";
 import type { TabVM } from "./core/working-set";
+import { groupByTime, matchesFilters } from "./core/history";
+import type { HistoryFilter, FilterableConvo } from "./core/history";
 import { reconcileList } from "./ui/keyed-reconcile";
 import type { CardModel } from "./ui/keyed-reconcile";
 import { DEFAULT_SETTINGS } from "./settings";
@@ -457,6 +459,10 @@ export class ChatView extends ItemView {
   /** Ids selezionati nella cronologia per un'azione bulk. Runtime-only, azzerato
    *  a ogni apertura della gallery. */
   private gallerySelection = new Set<string>();
+  /** Active history filter chips. Runtime-only, cleared on every gallery open —
+   *  same lifetime as `gallerySelection`, so reopening the history is always a
+   *  clean slate and never a filter the user forgot they left on. */
+  private historyFilters = new Set<HistoryFilter>();
   /** Memo behind `convoSizeOf`, keyed by conversation id and invalidated by
    *  `updatedAt`. Runtime-only; an entry dies with its conversation. */
   private convoSizeCache = new Map<string, { updatedAt: number | undefined; bytes: number }>();
@@ -2387,6 +2393,7 @@ export class ChatView extends ItemView {
   private async showGallery(): Promise<void> {
     this.saveActive();
     this.gallerySelection.clear();
+    this.historyFilters.clear();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.listEl.hide();
     this.composer.getComposerEl().hide();
@@ -2430,6 +2437,31 @@ export class ChatView extends ItemView {
     if (this.galleryEl !== wrap) return; // gallery was closed while we awaited
     const doneConvoIds = new Set(tasks.filter((t) => t.status === "done" && t.convo).map((t) => t.convo!));
 
+    // Filter chips, multi-select with AND semantics. Declared before `renderGrid`
+    // on purpose: the DOM order is banner → chips → search → grid, and the click
+    // handlers only dereference `renderGrid`/`search` when the user clicks, long
+    // after both bindings are initialised. Same shape as the search box's own
+    // `input` listener below.
+    const chipsWrap = wrap.createDiv({ cls: "mva-gallery-chips" });
+    const CHIP_LABELS: Record<HistoryFilter, string> = {
+      open: "Aperte",
+      retired: "Ritirate",
+      archived: "Archiviate",
+      olderThan30: "Più vecchie di 30 giorni",
+      shortConvo: "Meno di 3 messaggi",
+    };
+    for (const key of Object.keys(CHIP_LABELS) as HistoryFilter[]) {
+      const chip = chipsWrap.createDiv({ cls: "mva-gallery-chip" });
+      chip.setText(CHIP_LABELS[key]);
+      chip.toggleClass("is-active", this.historyFilters.has(key));
+      this.clickable(chip, () => {
+        if (this.historyFilters.has(key)) this.historyFilters.delete(key);
+        else this.historyFilters.add(key);
+        chip.toggleClass("is-active", this.historyFilters.has(key));
+        renderGrid(search.value);
+      });
+    }
+
     const searchWrap = wrap.createDiv({ cls: "mva-gallery-search-wrap" });
     setIcon(searchWrap.createSpan({ cls: "mva-gallery-search-ico" }), "search");
     const search = searchWrap.createEl("input", {
@@ -2440,10 +2472,43 @@ export class ChatView extends ItemView {
     const renderGrid = (q: string) => {
       grid.empty();
       const ql = q.toLowerCase().trim();
-      const matches = ql ? sorted.filter((c) => this.convoMatches(c, ql)) : sorted;
-      if (matches.length !== 0) {
-        for (const c of matches) this.renderCard(grid, c, doneConvoIds);
-      } else {
+      const active = [...this.historyFilters];
+      const now = Date.now();
+      // Hoisted: the open-tab set is the same for every conversation in this
+      // pass, so building it per card would be one allocation per card for no
+      // difference in result.
+      const openTabIds = new Set(this.openTabs);
+      // Chips restrict, then the text search restricts what is left, then the
+      // grouping applies to the survivors (R5). Order matters only for cost:
+      // the result is the same set either way, and `convoMatches` is the
+      // expensive half, so it runs last.
+      const filtered = sorted.filter((c) => {
+        const asFilterable: FilterableConvo = {
+          id: c.id,
+          updatedAt: c.updatedAt,
+          retiredAt: c.retiredAt,
+          archived: c.archived,
+          openTabIds,
+          messages: c.messages,
+        };
+        return matchesFilters(asFilterable, active, now) && (!ql || this.convoMatches(c, ql));
+      });
+
+      // "Ritirate di recente" pulls from the ALREADY filtered set, and the rest
+      // is the complement of it — so a conversation lands in exactly one group,
+      // never in both its retired group and its time bucket.
+      const retiredGroup = retiredFromStrip(filtered, this.openTabs, now);
+      const retiredIds = new Set(retiredGroup.map((c) => c.id));
+      const rest = filtered.filter((c) => !retiredIds.has(c.id));
+
+      if (retiredGroup.length > 0) {
+        this.renderHistoryGroup(grid, "Ritirate di recente", retiredGroup, doneConvoIds, true);
+      }
+      for (const g of groupByTime(rest, now)) {
+        this.renderHistoryGroup(grid, g.label, g.items, doneConvoIds);
+      }
+
+      if (filtered.length === 0) {
         grid.createDiv({ cls: "mva-empty-sub", text: "No matching conversations." });
       }
       // Filtering changes which cards exist, and the bulk bar counts only cards
@@ -2455,7 +2520,28 @@ export class ChatView extends ItemView {
     renderGrid("");
   }
 
-  private renderCard(grid: HTMLElement, c: Convo, doneConvoIds: Set<string>): void {
+  /** One temporal group: a header row plus its cards. The cards stay DIRECT
+   *  children of the grid — the group header is a sibling, not a wrapper — so
+   *  every existing `.mva-card` consumer (bulk selection, `visibleCardIds`,
+   *  `refreshSelectionUI`) keeps working without knowing groups exist. */
+  private renderHistoryGroup(
+    grid: HTMLElement,
+    label: string,
+    items: Convo[],
+    doneConvoIds: Set<string>,
+    retiredContext = false,
+  ): void {
+    if (items.length === 0) return;
+    grid.createDiv({ cls: "mva-gallery-group-header", text: label });
+    for (const c of items) this.renderCard(grid, c, doneConvoIds, retiredContext);
+  }
+
+  private renderCard(
+    grid: HTMLElement,
+    c: Convo,
+    doneConvoIds: Set<string>,
+    retiredContext = false,
+  ): void {
     const card = grid.createDiv({ cls: "mva-card" });
     // Cards carry their id in the DOM: the bulk bar needs a DOM-to-id mapping
     // that survives the grid re-render the search box triggers.
@@ -2508,6 +2594,11 @@ export class ChatView extends ItemView {
     const count = c.messages.filter((m) => m.role === "user").length;
     meta.createSpan({ text: `${count} message${count === 1 ? "" : "s"}` });
     if (c.updatedAt) meta.createSpan({ text: this.formatDate(c.updatedAt) });
+    // Only inside the retired group: elsewhere the retirement date answers a
+    // question nobody asked, here it explains why the card is in this group.
+    if (retiredContext && c.retiredAt) {
+      meta.createSpan({ text: `ritirata ${this.formatRelative(c.retiredAt)}` });
+    }
 
     this.clickable(card, (e) => {
       // Cmd/Ctrl-click toggles selection; a plain click still opens the chat.
@@ -2838,6 +2929,16 @@ export class ChatView extends ItemView {
     const sameDay = d.toDateString() === now.toDateString();
     if (sameDay) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
     return d.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+  }
+
+  /** "3 giorni fa" style relative time, for the retired-group badge — absolute
+   *  dates (formatDate) answer "when"; this answers "how long has it been
+   *  sitting there", which is what explains why the card is in this group. */
+  private formatRelative(ts: number): string {
+    const days = Math.floor((Date.now() - ts) / 86_400_000);
+    if (days <= 0) return "oggi";
+    if (days === 1) return "ieri";
+    return `${days} giorni fa`;
   }
 
   /* --------------------------- rendering ---------------------------- */

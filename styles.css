@@ -3300,7 +3300,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-card-meta {
   display: flex;
-  gap: 10px;
+  /* Cards can be as narrow as 180px and the retired group adds a fourth item
+     ("ritirata N giorni fa"); wrapping keeps the row readable instead of
+     letting the card's `overflow: hidden` amputate it. */
+  flex-wrap: wrap;
+  gap: 4px 10px;
   font-size: 10.5px;
   color: var(--text-faint);
 }
@@ -3327,6 +3331,45 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-gallery-retention-act:hover {
   text-decoration: underline;
+}
+/* Filter chips — multi-select, AND semantics. Same token language as the
+   retention banner's action span, not a new visual family. */
+.mva-gallery-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 10px;
+}
+.mva-gallery-chip {
+  padding: 4px 10px;
+  border-radius: var(--mva-r2);
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  cursor: pointer;
+  user-select: none;
+}
+.mva-gallery-chip.is-active {
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--interactive-accent) 16%, var(--background-modifier-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+}
+.mva-gallery-group-header {
+  /* The grid is auto-fill columns of cards; a header is a row label, not a card,
+     so it has to span every column or it would sit in the first cell and let a
+     card ride up beside it. */
+  grid-column: 1 / -1;
+  padding: 14px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+}
+/* The first header sits right under the search field, which already carries the
+   gap — a second lead-in would read as a hole. */
+.mva-gallery-group-header:first-child {
+  padding-top: 0;
 }
 .mva-card.is-selected {
   box-shadow: inset 0 0 0 2px var(--interactive-accent);
