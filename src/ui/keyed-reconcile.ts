@@ -23,6 +23,12 @@ export interface CardModel {
 /**
  * Reconcile `list`'s children to match `desired` (order-significant). Nodes are
  * keyed via `data-cardKey`/`data-cardSig`, which this function owns and stamps.
+ *
+ * `list` must contain NOTHING but reconciled children. Unkeyed nodes are not
+ * removed — only children carrying `data-cardKey` are collected — but ordering
+ * is done by child index, so a foreign node occupies an index, gets shuffled by
+ * the `insertBefore` pass, and pushes the models out of the order `desired`
+ * asked for. Static chrome belongs in a sibling container, not in here.
  */
 export function reconcileList(list: HTMLElement, desired: CardModel[]): void {
   const existing = new Map<string, HTMLElement>();

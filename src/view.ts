@@ -198,7 +198,9 @@ interface ConvoData {
    *  or still in it. Persisted. */
   retiredAt?: number;
   /** When this conversation was last the focused tab. The strip's LRU key.
-   *  Persisted so the retire order survives a reload. */
+   *  Persisted so the retire order survives a reload: every site that assigns it
+   *  (`switchTo`, `setActiveSilently`) schedules a conversation-store write, not
+   *  just the settings write that saves the tab set. */
   lastActiveAt?: number;
   /** Manually-assigned Session-Cockpit column (persisted). Absent = default. */
   boardStatus?: SessionLane;
@@ -226,7 +228,9 @@ export interface Convo {
    *  or still in it. Persisted. */
   retiredAt?: number;
   /** When this conversation was last the focused tab. The strip's LRU key.
-   *  Persisted so the retire order survives a reload. */
+   *  Persisted so the retire order survives a reload: every site that assigns it
+   *  (`switchTo`, `setActiveSilently`) schedules a conversation-store write, not
+   *  just the settings write that saves the tab set. */
   lastActiveAt?: number;
   /** Manually-assigned Session-Cockpit column (persisted). When set and the chat
    *  is idle, its card sits here instead of the default review lane; running /
@@ -449,12 +453,16 @@ export class ChatView extends ItemView {
    *  strip still hides the trailing controls along with the tabs. */
   private tabsRowEl!: HTMLElement;
   /** Holds ONLY reconciled tabs. Its children are keyed and owned by
-   *  `reconcileList`, which removes anything it did not put there — nothing
-   *  else may be appended here. */
+   *  `reconcileList`, which positions the desired models by child INDEX —
+   *  nothing else may be appended here. An unkeyed child is not removed (the
+   *  reconciler only collects nodes carrying `data-cardKey`); it survives, takes
+   *  up an index, and the tabs get inserted around it, so the strip's order and
+   *  the model list's order drift apart. */
   private tabsEl!: HTMLElement;
   /** Trailing strip controls (the overflow counter and the `+` button). A
    *  sibling of `tabsEl` precisely because they are not models: living among
-   *  the tabs, they would be unkeyed children and get reconciled away. */
+   *  the tabs, they would be unkeyed children shuffled around by the
+   *  reconciler's index-based positioning. */
   private tabsTailEl!: HTMLElement;
   /** "N chats left the strip" — built once, like the `+`; only its numeral is
    *  state, and `renderTabs` owns that. */
@@ -504,6 +512,12 @@ export class ChatView extends ItemView {
   private persistScheduledAt = 0;
   private static readonly PERSIST_DEBOUNCE_MS = 1500;
   private static readonly PERSIST_MAX_WAIT_MS = 8000;
+  /** How many tabs must retire in ONE wave before `applyWorkingSet` says so.
+   *  Set at 3 because the steady state is 1: the only wave that clears it is the
+   *  first one after the cap ships, when a long-accumulated strip collapses at
+   *  once. Lowering it to 1 would turn the cap into a nag; raising it would let
+   *  the migration pass unannounced, which is the case it exists for. */
+  private static readonly RETIRE_NOTICE_MIN = 3;
   /** Whether the view auto-follows new content to the bottom. False once the
    *  user scrolls up, so streaming no longer yanks them back down. */
   private pinnedToBottom = true;
@@ -1548,6 +1562,21 @@ export class ChatView extends ItemView {
     // half-time cleanup is worse than none. `renderTabs` already purges orphans
     // unconditionally, so it stays the single owner of that.
     this.openTabs = this.openTabs.filter((id) => !retired.has(id));
+    // Silence is right in the steady state: a seventh tab pushing out a sixth is
+    // the cap doing exactly its job, and nagging every time would make the whole
+    // mechanism feel like an interruption. It is wrong exactly ONCE — the first
+    // switch after this ships retires every pre-upgrade tab in a single click
+    // (nothing streams after a cold restore and drafts are not persisted, so no
+    // tab is exempt), and a bulk event on real data must not go unobserved. The
+    // threshold fires on that migration and effectively never again, because a
+    // steady-state wave is one tab. The wording is load-bearing too: retiring is
+    // not deleting (see core/retention), and the one thing the user must not
+    // conclude from a strip that just emptied is that they lost the chats.
+    if (plan.retire.length >= ChatView.RETIRE_NOTICE_MIN) {
+      new Notice(
+        `${plan.retire.length} chat ritirate dalla strip — sono nella cronologia, nulla è stato eliminato.`
+      );
+    }
     this.renderTabs();
     this.persistTabs();
     this.persist(); // `retiredAt` lives in the conversation store, not in settings
@@ -1590,6 +1619,14 @@ export class ChatView extends ItemView {
     this.renderTabs();
     this.applyWorkingSet();
     this.persistTabs();
+    // Both facts recorded above — the LRU key and the cleared `retiredAt` — live
+    // in the CONVERSATION store, which `persistTabs` (settings only) does not
+    // touch, and `applyWorkingSet` persists only on the turns where something
+    // actually retired. Without this a switch followed by a quit loses them, and
+    // the retire order after a reload is whatever the last unrelated write
+    // happened to capture. Debounced and coalesced, so a burst of tab switching
+    // is still one file write.
+    this.persist();
     this.scrollConvo(c);
     this.renderTailSurfacing(c);
     this.rebuildOutline();
@@ -1698,7 +1735,13 @@ export class ChatView extends ItemView {
       el.removeAttribute("aria-label");
       return;
     }
-    el.setAttr("aria-label", `${n} chat ritirat${n === 1 ? "a" : "e"} — apri la cronologia`);
+    // English, like every other accessible name in this row ("Close tab", "New
+    // tab", "N agents running", and the state words in `tabAriaLabel`). An
+    // aria-label is a terse element name and follows the codebase's convention;
+    // Notices are sentences addressed to the user and stay Italian. Mixing the
+    // two INSIDE the strip was the actual defect: the tab announced "running"
+    // and the counter twenty pixels away answered in Italian.
+    el.setAttr("aria-label", `${n} retired chat${n === 1 ? "" : "s"} — open history`);
     el.createSpan({ cls: "mva-tab-overflow-n", text: String(n) });
     // A noun with a direction, not a state: the chevron says "there is more that
     // way", which is the whole message.
@@ -1731,7 +1774,7 @@ export class ChatView extends ItemView {
     // name-from-content, so their own labels stop being announced.
     tab.setAttr("aria-label", tabAriaLabel(title, vm, { agents, pinned }));
 
-    // One 6px slot, four states, zero pictograms — and nothing else: the
+    // One 6px slot, five states, zero pictograms — and nothing else: the
     // provider colour deliberately does NOT live here. `idle` adds no class:
     // nothing is drawn, because there is nothing to know.
     const mark = tab.createSpan({ cls: "mva-tab-mark" });
@@ -1880,6 +1923,14 @@ export class ChatView extends ItemView {
     c.sessionId = undefined;
     c.allow.clear();
     c.queue = [];
+    // Terminal state belongs to the turn that ended, and that turn is gone.
+    // Both feed `deriveTabState` (`stopped`, and `resumeRisky` as `poisoned`),
+    // so leaving them set would paint the stopped ring or the error dot on a tab
+    // whose transcript is empty — a mark reporting an event with nothing left on
+    // screen to explain it. Cleared here rather than trusting the next turn to:
+    // the tab repaints below, and a "New chat" may sit untouched for hours.
+    c.stopped = false;
+    c.resumeRisky = false;
     c.researchMode = initialResearchModeState();
     c.title = "New chat";
     c.updatedAt = Date.now();
@@ -2733,6 +2784,9 @@ export class ChatView extends ItemView {
     this.composer.refreshGoal(next);
     this.renderTabs();
     this.persistTabs();
+    // Same reason as switchTo: `lastActiveAt` and the cleared `retiredAt` are
+    // conversation-store state, and `persistTabs` writes settings only.
+    this.persist();
   }
 
   private convoPreview(c: Convo): string {

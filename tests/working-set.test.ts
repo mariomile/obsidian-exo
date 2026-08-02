@@ -80,6 +80,19 @@ describe("planWorkingSet", () => {
     expect(plan.visible).toHaveLength(6);
   });
 
+  it("keeps a pinned tab even when the cap is actually over", () => {
+    // The test above resolves to overBy = 0 and returns before `isExempt` is
+    // ever evaluated: it pins down the cap FORMULA, not the exemption. Here the
+    // cap is genuinely exceeded (4 non-pinned, cap 3 -> overBy 1) and the pinned
+    // tab is the least-recently-active of all, i.e. the one the LRU would take
+    // first. Pinning is the user's only opt-out from an automatic, silent
+    // behaviour, so it has to be exercised under real pressure.
+    const tabs = [tab("p", 1, { pinned: true }), tab("a", 10), tab("b", 20), tab("c", 30), tab("d", 40)];
+    const plan = planWorkingSet(tabs, { activeId: "d", cap: 3 });
+    expect(plan.retire).toEqual(["a"]);
+    expect(plan.visible).toContain("p");
+  });
+
   it("preserves the input order in visible", () => {
     // The strip must not reshuffle under the user: retiring removes, never sorts.
     const tabs = [tab("z", 90), tab("a", 10), tab("m", 50), tab("q", 80)];

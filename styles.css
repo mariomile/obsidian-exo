@@ -180,7 +180,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-tab.is-active .mva-tab-title {
   font-weight: 500;
 }
-/* Status mark — one 6px slot, four states, zero pictograms. Absence of a mark
+/* Status mark — one 6px slot, five states, zero pictograms. Absence of a mark
    IS the idle state: nothing to know, nothing drawn. The slot carries state and
    nothing else: the provider colour is deliberately NOT painted here, because a
    filled brand dot and a filled `unread` dot differ only in hue — and with a
@@ -203,11 +203,23 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-tab-mark.is-unread {
   background: var(--interactive-accent);
 }
-/* Outline = ended badly. Hollow reads as "spent" against the filled states. */
-.mva-tab-mark.is-stopped,
-.mva-tab-mark.is-error {
+/* Outline = you ended it. Hollow reads as "spent" against the filled states,
+   and the neutral faint ring is the point: stopping is the user's own doing, so
+   it must not borrow the colour of a failure. */
+.mva-tab-mark.is-stopped {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--text-faint);
+}
+/* Fill, in the error hue = it ended badly, and the next send runs the recovery
+   ladder. Two channels, both load-bearing. FORM against `stopped`: filled vs
+   hollow, so the two ends of a turn never read as the same event — they mean
+   opposite things and both surface on a BACKGROUND tab, where the user has no
+   other way to tell them apart. HUE against `unread`: `--text-error` vs the
+   accent, so a finished turn and a failed one differ by more than which fill.
+   Hue alone would not do (the accent is user-configurable and can be red);
+   form alone would not either (a plain fill is already `unread`'s). */
+.mva-tab-mark.is-error {
+  background: var(--text-error);
 }
 /* Weight and area = blocked on you. This is the only state that breaks out of
    the 6px slot, because it is the only one where the work is stopped and you
@@ -220,6 +232,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-weight: 500;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
 }
+/* The mark joins the escalation while blocked. At (0,3,0) this out-specifies
+   every state fill above, so on a blocked tab the mark is accent whatever the
+   state says — which is right: "act on this" outranks how the turn is going.
+   It costs `error` its hue, but only in a combination that does not occur: a
+   blocked tab is a turn still in flight (`streaming`), and both `stop()` and
+   the poison path cancel the pending permission/ask cards before the state can
+   become `stopped` or `error`. */
 .mva-tab.is-blocked .mva-tab-mark {
   background: var(--interactive-accent);
 }
@@ -3878,9 +3897,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
      blanket above ends the pulse after a single 0.001ms cycle — leaving a
      static muted dot that differs from `unread` by hue alone, on a
      user-configurable accent. So give the state a non-moving FORM instead:
-     filled and ringed, against `unread`'s plain fill and `stopped`/`error`'s
-     plain outline. Same specificity as the base rule (0,2,0), later in the
-     file, so it wins on source order and needs no `!important`. */
+     filled AND ringed, which nothing else is — against `unread`'s plain accent
+     fill, `error`'s plain error-hue fill, and `stopped`'s hollow inset ring.
+     Same specificity as the base rule (0,2,0), later in the file, so it wins on
+     source order and needs no `!important`. */
   .mva-tab-mark.is-streaming {
     background: var(--text-muted);
     box-shadow: 0 0 0 1px var(--text-faint);

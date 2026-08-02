@@ -46,10 +46,29 @@ export interface WorkingSetPlan {
  * Decide the strip's contents. `cap` counts only NON-pinned tabs: pinning is how
  * the user opts a tab out of the budget entirely.
  *
- * Exempt tabs are never retired even when over cap — a turn in flight, a blocked
- * prompt, an unsent draft or a queued message all represent work the user has
- * not finished. When every over-cap tab is exempt the strip simply grows; that
- * is correct, and preferable to tearing away live work to satisfy a number.
+ * SIX exemptions, and the list is the whole contract of the one function that
+ * can take a tab away — a partial list here is worse than none, because the next
+ * reader will trust it:
+ * - `pinned` — the user said so explicitly. Also excluded from the cap's count.
+ * - `id === activeId` — the tab being looked at right now.
+ * - `streaming` — a turn is in flight.
+ * - `needsInput` — the turn is blocked on a permission or ask prompt.
+ * - `hasDraft` — unsent composer text or images.
+ * - `hasQueue` — messages waiting behind the current turn.
+ *
+ * Each one is work the user has not finished. When every over-cap tab is exempt
+ * the strip simply grows; that is correct, and preferable to tearing away live
+ * work to satisfy a number.
+ *
+ * KNOWN COST — `unread` is deliberately NOT an exemption. `lastActiveAt` moves
+ * only on focus, never on turn activity, so a background chat that just finished
+ * carries an old LRU key and is a prime retire candidate: it can leave the strip
+ * before the user ever sees its mark, and `unread` is runtime-only so reopening
+ * it from the history does not bring the mark back. The alternative is worse —
+ * twenty background chats finishing would exempt all twenty and make the cap
+ * inert, which is the failure this file exists to prevent. The counter is that
+ * the chat itself is untouched and one click from the history. Recorded here so
+ * the trade-off is a decision on the record, not a bug rediscovered later.
  */
 export function planWorkingSet(
   tabs: TabCandidate[],
