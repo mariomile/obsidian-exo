@@ -65,7 +65,8 @@ import {
 import { TaskStore, adaptAppToTaskVault } from "./obsidian/task-store";
 import { AgentStore, createAgentStore } from "./obsidian/agent-store";
 import type { AgentDef } from "./core/agents";
-import { AgentTriggerDriver, makeNoteReader } from "./obsidian/agent-triggers";
+import { AgentTriggerDriver, makeNoteReader, todayDailyNotePath } from "./obsidian/agent-triggers";
+import { extractJournalLine, journalLine } from "./core/agent-journal";
 import { agentRunId } from "./core/agent-ledger";
 import { parseProposalCandidates } from "./core/proposals";
 import {
@@ -2929,9 +2930,17 @@ export default class ExoPlugin extends Plugin {
       // actually happened — a write, a proposal, a failure — still gets its
       // report; only a run that declared itself empty is silent, and the ledger
       // records it either way.
-      const worthReporting =
+      const substantive =
         !result.ok || result.writes.length > 0 || proposed > 0 || !isEmptyRun(result.output);
-      const path = worthReporting ? await writeReport(this.app, name, result, this.paths.reports) : "";
+      // `output` decides WHERE the account goes; `substantive` decides WHETHER
+      // there is one. A failure always writes a report whatever the mode — the
+      // error has to land somewhere a human can find it.
+      const wantsReport = substantive && (agent.contract.output === "report" || !result.ok);
+      const path = wantsReport ? await writeReport(this.app, name, result, this.paths.reports) : "";
+      const journalled =
+        substantive && result.ok && agent.contract.output === "journal"
+          ? await this.journalAgentRun(agent, result.output, startedAt)
+          : false;
       // Write runs join the existing review/restore queue rather than a parallel
       // one, so a bad agent write is rolled back the same way as a bad playbook.
       const restoreId = write ? await this.recordAutomationRun(name, startedAt, result, path) : null;
@@ -2950,7 +2959,7 @@ export default class ExoPlugin extends Plugin {
         ...(restoreId ? { restoreId } : {}),
         writes: result.writes,
         by,
-        ...(worthReporting ? {} : { summary: "Nothing to report." }),
+        ...(substantive ? {} : { summary: "Nothing to report." }),
       });
       if (result.ok) {
         const now = Date.now();
@@ -2963,7 +2972,8 @@ export default class ExoPlugin extends Plugin {
       // A silent run gets a silent notice too — a toast per no-op is the same
       // interruption as a note per no-op.
       if (!result.ok) new Notice(`${agent.brain.name} failed (report: ${path})`);
-      else if (worthReporting) new Notice(`${agent.brain.name} done → ${path}${proposalNote}`);
+      else if (wantsReport) new Notice(`${agent.brain.name} done → ${path}${proposalNote}`);
+      else if (journalled) new Notice(`${agent.brain.name} — logged to today's daily note${proposalNote}`);
       return result.ok;
     } catch (err) {
       console.warn(`[Exo] agent "${agent.brain.slug}" run failed:`, err);
@@ -2973,6 +2983,21 @@ export default class ExoPlugin extends Plugin {
       this.agentRunsInFlight.delete(key);
       this.agentContext = callerContext;
     }
+  }
+
+  /**
+   * Leave a run's one-line account in today's daily note.
+   *
+   * Returns whether a line landed — false when the run had nothing to say, or
+   * when there is no daily note for today. Never creates the note: an agent
+   * gets a section of a file the user already keeps, not a new file.
+   */
+  private async journalAgentRun(agent: AgentDef, output: string, at: number): Promise<boolean> {
+    const summary = extractJournalLine(output);
+    if (!summary) return false;
+    const path = todayDailyNotePath(this.app);
+    if (!path) return false;
+    return this.agentStore.appendJournal(path, journalLine(agent.brain.name, at, summary));
   }
 
   /**

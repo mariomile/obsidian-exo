@@ -17,6 +17,7 @@ import {
   type Cadence,
 } from "./automations";
 import { triggerLabel, triggerKey, type AgentAutonomy, type AgentDef, type AgentTrigger } from "./agents";
+import { journalContract } from "./agent-journal";
 import { parseProposalCandidates, type ProposalCandidate } from "./proposals";
 
 /** Persistence key for "when did this agent last run at all" (cooldown). */
@@ -379,6 +380,7 @@ export function buildAgentRunPrompt(
     memory ? "" : null,
     "Close with a short summary a human can scan in ten seconds.",
     contract.autonomy === "propose" ? proposalContract(reportsHint) : null,
+    contract.output === "journal" ? journalContract() : null,
     "</agent-run>",
   ];
   return lines.filter((l): l is string => l !== null).join("\n");

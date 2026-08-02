@@ -34,6 +34,24 @@ export type AgentAutonomy =
 
 export const AGENT_AUTONOMY: readonly AgentAutonomy[] = ["notify", "propose", "act"];
 
+/**
+ * Where a run's account of itself goes.
+ *
+ * Separate from the autonomy tier because they answer different questions:
+ * autonomy is what the agent may DO, output is how loudly it says so. An agent
+ * that quietly files your inbox every day wants `journal` — the work is the
+ * point, and a report note per run is just a second inbox to clear.
+ */
+export type AgentOutput =
+  /** A note per run under the reports folder. The default. */
+  | "report"
+  /** One line appended to today's daily note. No report file. */
+  | "journal"
+  /** Nothing but the ledger entry. */
+  | "silent";
+
+export const AGENT_OUTPUT: readonly AgentOutput[] = ["report", "journal", "silent"];
+
 /** Where a brain was discovered. Order encodes precedence (first wins). */
 export type AgentSource = "vault" | "user" | "codex" | "plugin";
 
@@ -78,6 +96,8 @@ export interface AgentContract {
   /** Lucide icon id. Never an emoji. */
   icon: string;
   autonomy: AgentAutonomy;
+  /** Where the run's account of itself goes. */
+  output: AgentOutput;
   /** Minimum ms between two autonomous runs of this agent. */
   cooldownMs: number;
   /** Glob allowlists. Empty read = no restriction; empty write = no writes. */
@@ -105,6 +125,7 @@ export function defaultContract(slug: string): AgentContract {
     enabled: false,
     icon: DEFAULT_AGENT_ICON,
     autonomy: "propose",
+    output: "report",
     cooldownMs: DEFAULT_COOLDOWN_MS,
     scope: { read: [], write: [] },
     canCall: [],
@@ -391,6 +412,14 @@ export function parseAgentSidecar(raw: string, slug: string): SidecarParse {
     else warnings.push(`unknown autonomy "${autonomyRaw}" — falling back to "${base.autonomy}"`);
   }
 
+  const outputRaw = fmScalar(fm, "output");
+  let output = base.output;
+  if (outputRaw !== undefined) {
+    const candidate = outputRaw.toLowerCase() as AgentOutput;
+    if (AGENT_OUTPUT.includes(candidate)) output = candidate;
+    else warnings.push(`unknown output "${outputRaw}" — falling back to "${base.output}"`);
+  }
+
   let cooldownMs = base.cooldownMs;
   const cooldownRaw = fmScalar(fm, "cooldown");
   if (cooldownRaw !== undefined) {
@@ -414,6 +443,7 @@ export function parseAgentSidecar(raw: string, slug: string): SidecarParse {
     enabled,
     icon: fmScalar(fm, "icon") ?? base.icon,
     autonomy,
+    output,
     cooldownMs,
     scope: { read: fmList(fm, "read"), write: fmList(fm, "write") },
     canCall: canCall.filter((c) => c !== slug),
@@ -439,6 +469,7 @@ export function serializeAgentSidecar(contract: AgentContract, brain?: AgentBrai
     `enabled: ${contract.enabled}`,
     `icon: ${contract.icon}`,
     `autonomy: ${contract.autonomy}`,
+    `output: ${contract.output}`,
     `cooldown: ${formatDuration(contract.cooldownMs)}`,
     `read: ${yamlList(contract.scope.read)}`,
     `write: ${yamlList(contract.scope.write)}`,

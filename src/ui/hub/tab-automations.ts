@@ -27,6 +27,7 @@ import {
   type Cadence,
 } from "../../core/automations";
 import { dailyPulseMetaLabel, isDailyPulseAutomation } from "../../core/daily-pulse";
+import { triggerLabel } from "../../core/agents";
 import { formatAge } from "../../core/actions-hub";
 import type { HubTabContext } from "./shared";
 
@@ -57,8 +58,65 @@ export async function renderAutomationsTab(host: HTMLElement, ctx: HubTabContext
     ctx.rerender();
   };
 
+  const agentsEl = host.createDiv({ cls: "mva-auto-agents" });
+  void renderAgents(agentsEl, ctx);
+
   const runsEl = host.createDiv({ cls: "mva-auto-runs" });
   void renderRuns(runsEl, ctx);
+}
+
+/**
+ * Agents that run unattended, listed beside the playbooks they behave like.
+ *
+ * An agent with a trigger IS an automation from the user's side — the only
+ * difference is that its instructions live in an agent file instead of a
+ * prompt. Keeping them in separate rooms means "what runs without me?" has two
+ * answers, which is one too many. Editing stays in the agent's contract file;
+ * this is the inventory and the on/off switch.
+ */
+async function renderAgents(host: HTMLElement, ctx: HubTabContext): Promise<void> {
+  host.empty();
+  if (!(await ctx.plugin.agentsReady())) return;
+  const agents = ctx.plugin.agentStore
+    .list()
+    .filter((a) => a.brain.source === "vault" || a.brain.source === "user")
+    .filter((a) => a.contract.triggers.length > 0);
+  if (!agents.length) return;
+
+  host.createDiv({ cls: "mva-auto-h", text: "Agents" });
+  host.createDiv({
+    cls: "mva-auto-sub",
+    text: "Agents with a trigger. Their instructions live in .claude/agents/; when and what they may touch lives in the contract file the pane links to.",
+  });
+
+  for (const a of agents) {
+    const row = host.createDiv({ cls: "mva-auto-row" });
+    row.toggleClass("is-off", !a.contract.enabled);
+
+    const toggle = row.createDiv({ cls: "mva-ag-toggle", attr: { role: "button", tabindex: "0" } });
+    toggle.toggleClass("is-on", a.contract.enabled);
+    toggle.setAttribute("aria-label", a.contract.enabled ? "Disable agent" : "Enable agent");
+    clickable(toggle, () => {
+      void ctx.plugin.agentStore
+        .setEnabled(a.brain.slug, !a.contract.enabled, new Date().toISOString().slice(0, 10))
+        .then(() => ctx.rerender());
+    });
+
+    const main = row.createDiv({ cls: "mva-auto-main" });
+    main.createDiv({ cls: "mva-auto-name", text: a.brain.name });
+    const bits = [
+      a.contract.triggers.map(triggerLabel).join(" · "),
+      a.contract.autonomy === "act" ? "writes" : a.contract.autonomy,
+      a.contract.output === "journal" ? "logs to daily note" : a.contract.output === "silent" ? "no report" : "reports",
+    ];
+    main.createDiv({ cls: "mva-auto-meta", text: bits.join(" — ") });
+
+    const open = row.createDiv({ cls: "mva-ag-action", attr: { "aria-label": "Open contract" } });
+    setIcon(open, "settings-2");
+    clickable(open, () => {
+      void ctx.plugin.app.workspace.openLinkText(ctx.plugin.agentStore.sidecarPath(a.brain.slug), "", "tab");
+    });
+  }
 }
 
 function save(ctx: HubTabContext): void {

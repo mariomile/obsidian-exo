@@ -131,6 +131,32 @@ export class AgentTriggerDriver {
   }
 }
 
+/**
+ * Today's daily-note path, from the core Daily Notes plugin's own settings.
+ *
+ * Read from config rather than assumed, because the folder and the date format
+ * are the user's choice — guessing `YYYY-MM-DD` in the vault root would write
+ * into the wrong place, or create a stray note beside the real one. Returns ""
+ * when Daily Notes is not configured, and the caller skips journalling.
+ */
+export function todayDailyNotePath(app: App): string {
+  try {
+    const cfg = (app as unknown as {
+      internalPlugins?: { getPluginById(id: string): { instance?: { options?: { folder?: string; format?: string } } } | null };
+    }).internalPlugins?.getPluginById("daily-notes");
+    const opts = cfg?.instance?.options;
+    const format = opts?.format?.trim() || "YYYY-MM-DD";
+    const folder = (opts?.folder ?? "").trim().replace(/^\/+|\/+$/g, "");
+    // Obsidian ships moment; the format string is a moment format by definition.
+    const moment = (window as unknown as { moment?: (d?: Date) => { format(f: string): string } }).moment;
+    if (!moment) return "";
+    const name = moment(new Date()).format(format);
+    return folder ? `${folder}/${name}.md` : `${name}.md`;
+  } catch {
+    return "";
+  }
+}
+
 /** Read the tags and body a trigger match needs, from Obsidian's own cache
  *  (tags) and the vault (body). Returns null for anything that is not a
  *  readable markdown file. */

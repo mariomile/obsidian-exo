@@ -38,6 +38,7 @@ import {
   type AgentRunRecord,
 } from "../core/agent-ledger";
 import { seededContract } from "../core/agent-seeds";
+import { appendUnderHeading, journalAlreadyHas, JOURNAL_HEADING } from "../core/agent-journal";
 import { listAgentBrains } from "../core/capability-desc";
 import type { ExoPaths } from "../core/paths";
 import { WriteQueue } from "../core/write-queue";
@@ -305,6 +306,32 @@ export class AgentStore {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Append one line to today's daily note, under the agents heading.
+   *
+   * Serialized on the shared queue and read-modify-write, because the daily
+   * note is a file the user may have open and other plugins may also append to.
+   * Never creates the note: if there is no daily note for today, the run's line
+   * is dropped rather than conjuring a file the user did not ask for — the
+   * ledger still has the run. Returns whether the line landed.
+   */
+  async appendJournal(dailyPath: string, line: string): Promise<boolean> {
+    const { vault, queue } = this.deps;
+    if (!dailyPath) return false;
+    return queue
+      .enqueue(async () => {
+        if (!(await vault.exists(dailyPath))) return false;
+        const content = await vault.read(dailyPath);
+        if (journalAlreadyHas(content, line)) return false;
+        await vault.write(dailyPath, appendUnderHeading(content, JOURNAL_HEADING, line));
+        return true;
+      })
+      .catch((err) => {
+        console.warn("[Exo] journal append failed:", err);
+        return false;
+      });
   }
 
   /** An agent's memory, creating the file on first use. Returns the excerpt that
