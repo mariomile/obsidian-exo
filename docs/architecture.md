@@ -110,6 +110,20 @@ it pushed into every session's prompt. Permissions work at the same granularity:
 a rule's tool name can end in `*`, so `mcp__notion__*` governs a whole source
 including tools it adds later (`core/permissions.ts`, `matchToolName`).
 
+**Craft-style source detail, inline.** Every MCP row and every Skills origin
+group is an accordion — a chevron expands Connection / Permissions /
+Documentation (MCP) or the member rows (Skills) beneath the row itself, never
+a second pane. Open/closed state lives in `HubView.expandedKeys` (ephemeral,
+resets on close) and is exposed as `ctx.expanded`/`ctx.toggleExpanded`; body
+data (tool lists, doc content) is only gathered for rows actually open, so a
+43-server tab stays cheap. Permissions renders each of a server's live tools
+against the standing rules (`toolPermissionStatus`); Documentation renders the
+note as real markdown (`MarkdownRenderer.render`, capped + faded like the
+in-chat artifact-card preview) — not flattened text. One gotcha worth knowing:
+claude.ai connectors expose tools under a *sanitized raw* server name
+(`mcp__claude_ai_Craft__…`), not the friendly display name the row shows —
+`connections-scan.ts`'s `toolNamePrefix()` is the one place that reconstructs it.
+
 ## Named agents
 
 An agent is two files with two owners: the **brain** (`.claude/agents/<slug>.md`

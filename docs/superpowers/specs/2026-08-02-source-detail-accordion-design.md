@@ -83,3 +83,7 @@ Stessa meccanica di stato. La sezione "in questo vault" diventa un accordion pro
 - Nuovo test puro per l'helper di stato-permesso-per-tool (`core/permissions.ts` o vicino).
 - `pnpm lint && pnpm test && pnpm build` verde a ogni commit.
 - Verifica manuale: apri/chiudi accordion MCP e Skills, conferma che lo stato espanso sopravviva a un'azione che richiama `rerender()` (es. Reconnect), conferma che il markdown delle note sia reso con titoli/bullet veri.
+
+## Scoperto durante l'implementazione
+
+Aprendo la sezione Permissions su un connector claude.ai reale (Craft), zero tool comparivano nonostante il server ne esponga tre. Causa: `scanLiveCaps` normalizza il nome grezzo (`"claude.ai Craft"`) nel nome amichevole mostrato in riga (`"Craft"`), ma i tool live in `caps.tools` usano un prefisso derivato dal nome GREZZO sanificato (`mcp__claude_ai_Craft__…`), non dal nome amichevole. Il probe ingenuo `mcp__${name}__` — usato anche dal badge di regola esistente — non ha mai fatto match su nessun connector. Fix: `toolNamePrefix()` in `core/connections-scan.ts` ricostruisce il prefisso grezzo da `source`+`name`, con test contro i nomi reali osservati. Non è un contratto documentato dell'SDK — è stato dedotto dai dati — quindi un eventuale mismatch futuro degrada a "nessun tool elencato", mai a un permesso sbagliato.
