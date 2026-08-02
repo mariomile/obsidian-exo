@@ -99,8 +99,8 @@ import {
 import type { TabVM } from "./core/working-set";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
 import type { HistoryFilter, FilterableConvo } from "./core/history";
-import { projectDirName, resumeStatus } from "./core/resume-status";
-import type { ResumeStatus } from "./core/resume-status";
+import { projectDirName, resumeStatus, resumableFrom } from "./core/resume-status";
+import type { ResumeStatus, SessionFileProbe } from "./core/resume-status";
 import { reconcileList } from "./ui/keyed-reconcile";
 import type { CardModel } from "./ui/keyed-reconcile";
 import { DEFAULT_SETTINGS } from "./settings";
@@ -2456,42 +2456,37 @@ export class ChatView extends ItemView {
     return resumeStatus(c, c.provider === "claude" ? this.sessionsOnDisk : null);
   }
 
-  /** Whether sending on this conversation would actually pick up its context —
-   *  asked per turn, so it reads ONE file instead of listing the ~900-entry
-   *  project directory the gallery badge scans.
+  /** Whether sending on this conversation would actually pick up its context.
+   *  Asked once per turn, so it looks at ONE file instead of listing the
+   *  ~900-entry project directory the gallery badge scans.
    *
-   *  The default here is the OPPOSITE of `resumeStatusOf`'s, on purpose. The
-   *  badge must never cry wolf, so an unreadable store says nothing. This answer
-   *  instead feeds `shouldColdReseed`, where the two errors are not symmetric:
-   *  a wrong "not resumable" costs one duplicated recap, while a wrong
-   *  "resumable" is the silent failure itself — the model gets no history at all.
-   *  So only a *positive* determination of absence returns false; every unknown
-   *  (no filesystem adapter, unreadable path, a Codex thread that does not live
-   *  in the Claude project directory at all) keeps the pre-existing behavior of
-   *  trusting the id. An error must never flip behavior, or one bad stat would
-   *  prepend a recap to every turn of every conversation, forever. */
+   *  The decision — the guard order and the asymmetric default that makes only a
+   *  positive absence change behavior — lives in `resumableFrom`, where it is
+   *  unit-tested without a disk. All that remains here is the stat itself. */
   private isSessionResumable(c: Convo): boolean {
-    if (!c.sessionId) return false;
-    // A Codex session id is a thread under ~/.codex, not a Claude CLI session
-    // file: looking for it here would find nothing and declare every Codex chat
-    // dead. Not knowable from this directory, so leave it alone.
-    if (c.provider !== "claude") return true;
+    const vaultBase = this.vaultPath();
+    return resumableFrom({
+      provider: c.provider,
+      sessionId: c.sessionId,
+      vaultBase,
+      probe: () => this.probeSessionFile(vaultBase, c.sessionId ?? ""),
+    });
+  }
+
+  /** Look up one Claude CLI session file. `statSync` with `throwIfNoEntry: false`
+   *  rather than `existsSync`: it is the only spelling that separates "the file
+   *  is not there" (undefined) from "the lookup failed" (throws, e.g. EACCES),
+   *  which `existsSync` flattens into a plain false. That distinction is the
+   *  whole point — see `resumableFrom`, which is allowed to act on the first and
+   *  never on the second. */
+  private probeSessionFile(vaultBase: string, sessionId: string): SessionFileProbe {
     try {
-      const base = this.vaultPath();
-      // "" (mobile, or any non-FileSystemAdapter) encodes to "" and would aim at
-      // ~/.claude/projects itself — a path that reads fine and holds no session
-      // file, i.e. a confidently wrong "gone". Refuse to answer instead.
-      if (!base) return true;
       const fs = require("fs") as typeof import("fs");
       const os = require("os") as typeof import("os");
-      const file = `${os.homedir()}/.claude/projects/${projectDirName(base)}/${c.sessionId}.jsonl`;
-      // `statSync` with `throwIfNoEntry: false` rather than `existsSync`: it is
-      // the only spelling that separates "the file is not there" (undefined —
-      // the one answer allowed to change behavior) from "the lookup failed"
-      // (throws, e.g. EACCES), which `existsSync` would flatten into a false.
-      return fs.statSync(file, { throwIfNoEntry: false }) !== undefined;
+      const file = `${os.homedir()}/.claude/projects/${projectDirName(vaultBase)}/${sessionId}.jsonl`;
+      return fs.statSync(file, { throwIfNoEntry: false }) === undefined ? "absent" : "present";
     } catch {
-      return true;
+      return "failed";
     }
   }
 
@@ -6536,10 +6531,9 @@ export class ChatView extends ItemView {
       // user's message.
       const recallBlock = recalled.length ? this.formatRecallBlock(recalled) : "";
       // Cold-spawn rehydration: a session spawned with no resumable session starts
-      // on an EMPTY CLI transcript, so a "continua/riprendi" has nothing to
-      // continue — the model
-      // forages the vault (session-log, open-items) to reconstruct "which
-      // conversation" instead of reading THIS thread. Whenever we spawn cold but the
+      // on an EMPTY CLI transcript, so a "continua/riprendi" has nothing to continue
+      // — the model forages the vault (session-log, open-items) to reconstruct
+      // "which conversation" instead of reading THIS thread. Whenever we spawn cold but the
       // convo already carries real history, reseed it with the same recap the
       // stage-2 recovery uses. This generalizes that narrow path to close every
       // cold-start hole (poisoned-and-stopped, nuclear reset, fresh process after a

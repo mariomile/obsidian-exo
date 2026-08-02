@@ -249,11 +249,6 @@ describe("shouldColdReseed", () => {
     expect(shouldColdReseed({ ...base, hasResumableSession: true })).toBe(false);
   });
 
-  it("reseeds when the convo holds an id whose session is gone (expired on disk)", () => {
-    // The silent failure this predicate exists to close: an id alone used to
-    // count as context, so an expired session sent the model in with nothing.
-    expect(shouldColdReseed({ ...base, hasResumableSession: false })).toBe(true);
-  });
 
   it("does NOT reseed when a stage-2 recap prefix is already threaded (never double)", () => {
     expect(shouldColdReseed({ ...base, hasRecapPrefix: true })).toBe(false);

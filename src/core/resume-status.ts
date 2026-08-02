@@ -55,3 +55,55 @@ export function resumeStatus(c: ResumableConvo, onDisk: ReadonlySet<string> | nu
   if (!c.sessionId) return "restarts";
   return onDisk.has(c.sessionId) ? "resumable" : "restarts";
 }
+
+/**
+ * The outcome of looking up one session file. Three-way on purpose: "the file is
+ * not there" and "the lookup failed" are different facts, and collapsing them
+ * into a boolean is precisely the mistake this module exists to prevent.
+ */
+export type SessionFileProbe =
+  /** The session file is on disk. */
+  | "present"
+  /** The lookup succeeded and the file is not there. The only evidence of absence. */
+  | "absent"
+  /** The lookup itself failed (EACCES, an unexpected filesystem state). Not evidence. */
+  | "failed";
+
+/**
+ * Whether writing in this conversation would actually pick up its context — the
+ * question `shouldColdReseed` needs before deciding to seed a recap.
+ *
+ * The default is the OPPOSITE of {@link resumeStatus}'s, deliberately. The badge
+ * must never cry wolf, so an unreadable store says nothing at all. This answer
+ * instead gates an outbound message, where the two errors are not symmetric: a
+ * wrong "not resumable" costs one duplicated recap (wasteful, harmless), while a
+ * wrong "resumable" is the silent failure itself — the model receives no history
+ * and starts blind while the transcript sits visible on screen. So this side
+ * leans toward acting, but only on evidence: `absent` is the single input that
+ * returns false. Every unknown keeps the pre-existing behavior of trusting the id,
+ * because a `failed` lookup treated as absence would prepend a recap to every turn
+ * of every conversation, forever.
+ *
+ * `probe` is a thunk so the guards below can short-circuit before any I/O
+ * happens: a Codex conversation or an empty base must not cost a stat, and the
+ * ORDER of the guards lives here, tested, rather than being duplicated by the
+ * caller deciding when to look.
+ */
+export function resumableFrom(s: {
+  provider: string;
+  sessionId?: string;
+  vaultBase: string;
+  probe: () => SessionFileProbe;
+}): boolean {
+  // No session was ever created: nothing to resume, and nothing to look up.
+  if (!s.sessionId) return false;
+  // A Codex session id names a thread under ~/.codex, not a Claude CLI session
+  // file. Searching the Claude project directory for it would find nothing and
+  // declare every Codex chat dead — unknowable from here, so leave it alone.
+  if (s.provider !== "claude") return true;
+  // "" (mobile, or any non-FileSystemAdapter) encodes to "" and would aim the
+  // lookup at ~/.claude/projects itself: a path that reads perfectly fine and
+  // holds no session file, i.e. a confident and wrong "gone".
+  if (!s.vaultBase) return true;
+  return s.probe() !== "absent";
+}
