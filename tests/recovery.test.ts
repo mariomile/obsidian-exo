@@ -239,14 +239,20 @@ describe("resolveRecovery", () => {
 });
 
 describe("shouldColdReseed", () => {
-  const base = { hasSessionId: false, hasRecapPrefix: false, hasPriorHistory: true };
+  const base = { hasResumableSession: false, hasRecapPrefix: false, hasPriorHistory: true };
 
   it("reseeds a cold spawn that is continuing a conversation with history", () => {
     expect(shouldColdReseed(base)).toBe(true);
   });
 
-  it("does NOT reseed when the session id survives (warm resume carries context)", () => {
-    expect(shouldColdReseed({ ...base, hasSessionId: true })).toBe(false);
+  it("does NOT reseed when the session survives (warm resume carries context)", () => {
+    expect(shouldColdReseed({ ...base, hasResumableSession: true })).toBe(false);
+  });
+
+  it("reseeds when the convo holds an id whose session is gone (expired on disk)", () => {
+    // The silent failure this predicate exists to close: an id alone used to
+    // count as context, so an expired session sent the model in with nothing.
+    expect(shouldColdReseed({ ...base, hasResumableSession: false })).toBe(true);
   });
 
   it("does NOT reseed when a stage-2 recap prefix is already threaded (never double)", () => {

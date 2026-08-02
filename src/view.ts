@@ -2456,6 +2456,45 @@ export class ChatView extends ItemView {
     return resumeStatus(c, c.provider === "claude" ? this.sessionsOnDisk : null);
   }
 
+  /** Whether sending on this conversation would actually pick up its context —
+   *  asked per turn, so it reads ONE file instead of listing the ~900-entry
+   *  project directory the gallery badge scans.
+   *
+   *  The default here is the OPPOSITE of `resumeStatusOf`'s, on purpose. The
+   *  badge must never cry wolf, so an unreadable store says nothing. This answer
+   *  instead feeds `shouldColdReseed`, where the two errors are not symmetric:
+   *  a wrong "not resumable" costs one duplicated recap, while a wrong
+   *  "resumable" is the silent failure itself — the model gets no history at all.
+   *  So only a *positive* determination of absence returns false; every unknown
+   *  (no filesystem adapter, unreadable path, a Codex thread that does not live
+   *  in the Claude project directory at all) keeps the pre-existing behavior of
+   *  trusting the id. An error must never flip behavior, or one bad stat would
+   *  prepend a recap to every turn of every conversation, forever. */
+  private isSessionResumable(c: Convo): boolean {
+    if (!c.sessionId) return false;
+    // A Codex session id is a thread under ~/.codex, not a Claude CLI session
+    // file: looking for it here would find nothing and declare every Codex chat
+    // dead. Not knowable from this directory, so leave it alone.
+    if (c.provider !== "claude") return true;
+    try {
+      const base = this.vaultPath();
+      // "" (mobile, or any non-FileSystemAdapter) encodes to "" and would aim at
+      // ~/.claude/projects itself — a path that reads fine and holds no session
+      // file, i.e. a confidently wrong "gone". Refuse to answer instead.
+      if (!base) return true;
+      const fs = require("fs") as typeof import("fs");
+      const os = require("os") as typeof import("os");
+      const file = `${os.homedir()}/.claude/projects/${projectDirName(base)}/${c.sessionId}.jsonl`;
+      // `statSync` with `throwIfNoEntry: false` rather than `existsSync`: it is
+      // the only spelling that separates "the file is not there" (undefined —
+      // the one answer allowed to change behavior) from "the lookup failed"
+      // (throws, e.g. EACCES), which `existsSync` would flatten into a false.
+      return fs.statSync(file, { throwIfNoEntry: false }) !== undefined;
+    } catch {
+      return true;
+    }
+  }
+
   /** `preset` accepts one filter or a set of them: a single value is what the
    *  strip counter passes, while the internal rebuild sites hand back the
    *  filters that were active before they tore the gallery down, so an
@@ -6496,17 +6535,20 @@ export class ChatView extends ItemView {
       // Order: recap (if any) -> recalled memory -> research contract -> the
       // user's message.
       const recallBlock = recalled.length ? this.formatRecallBlock(recalled) : "";
-      // Cold-spawn rehydration: a session spawned with no id starts on an EMPTY CLI
-      // transcript, so a "continua/riprendi" has nothing to continue — the model
+      // Cold-spawn rehydration: a session spawned with no resumable session starts
+      // on an EMPTY CLI transcript, so a "continua/riprendi" has nothing to
+      // continue — the model
       // forages the vault (session-log, open-items) to reconstruct "which
       // conversation" instead of reading THIS thread. Whenever we spawn cold but the
       // convo already carries real history, reseed it with the same recap the
       // stage-2 recovery uses. This generalizes that narrow path to close every
       // cold-start hole (poisoned-and-stopped, nuclear reset, fresh process after a
-      // crash) with one invariant. Skipped when a stage-2 recap prefix is already
+      // crash) with one invariant — including the quiet one: the convo still holds
+      // a sessionId but the CLI already expired the session file behind it, so the
+      // resume lands on nothing. Skipped when a stage-2 recap prefix is already
       // present (never double) and on a convo's first turn (no prior message).
       const coldRecap = shouldColdReseed({
-        hasSessionId: !!c.sessionId,
+        hasResumableSession: this.isSessionResumable(c),
         hasRecapPrefix: !!opts?.sendPrefix,
         // The current user turn is already persisted before this send starts.
         hasPriorHistory: c.messages.length > 1,

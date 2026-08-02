@@ -175,20 +175,26 @@ export function buildRecap(messages: Message[]): string {
 
 /**
  * Whether a turn about to be sent must seed its session with a {@link buildRecap}
- * of the transcript. True only for a COLD spawn (no resumable session id) that is
+ * of the transcript. True only for a COLD spawn (no resumable session) that is
  * continuing a conversation with real history — the case where the CLI process
  * starts on an empty transcript and a "continua/riprendi" would otherwise forage
  * the vault instead of continuing the thread. Skipped when a stage-2 recap prefix
  * is already threaded (never double-seed) and on a convo's first turn (no
  * prior persisted message yet). Generalizes the stage-2-only recap to close every
  * cold-start hole (poisoned-and-stopped, nuclear reset, post-crash fresh process).
+ *
+ * `hasResumableSession` asks whether the session still EXISTS, not merely whether
+ * the convo remembers an id. The CLI expires its session files, so an id can
+ * outlive the session it names: the resume then lands on nothing and the model
+ * starts blind while the whole transcript sits on screen. Holding an id is not
+ * holding context — only a session that is actually there suppresses the recap.
  */
 export function shouldColdReseed(s: {
-  hasSessionId: boolean;
+  hasResumableSession: boolean;
   hasRecapPrefix: boolean;
   hasPriorHistory: boolean;
 }): boolean {
-  return !s.hasSessionId && !s.hasRecapPrefix && s.hasPriorHistory;
+  return !s.hasResumableSession && !s.hasRecapPrefix && s.hasPriorHistory;
 }
 
 /**
