@@ -93,6 +93,23 @@ surfaces re-render when a new caps snapshot lands (`plugin.refreshHub()`).
 Pure logic lives in `core/hub-sections.ts` (partitioning) and
 `core/actions-hub.ts` (view models), both unit-tested without a DOM.
 
+**Agent-native, not UI-only.** Everything the hub does with a click, the agent
+can do from chat: `list_capabilities`, `manage_mcp_server`, `manage_skill`
+(`obsidian/capability-tools.ts`) sit on the same core as the pane, so the two
+halves cannot drift. Mutating tools take the standard permission card; only
+vault-owned servers are editable, and skill import never touches the source
+folder. The shared `Result`/`ok`/`err`/`getExo` kit lives in
+`obsidian/tool-kit.ts` so `tools.ts` and `capability-tools.ts` don't import each
+other.
+
+**A source is more than a config.** `.mcp.json` says how to connect; it never
+says what a server is *for*. Each server can carry a note at
+`.claude/mcp/<name>.md` — what it's for, scope, what to avoid — which the agent
+pulls on demand via `list_capabilities({ with_notes: true })` rather than having
+it pushed into every session's prompt. Permissions work at the same granularity:
+a rule's tool name can end in `*`, so `mcp__notion__*` governs a whole source
+including tools it adds later (`core/permissions.ts`, `matchToolName`).
+
 ## Named agents
 
 An agent is two files with two owners: the **brain** (`.claude/agents/<slug>.md`

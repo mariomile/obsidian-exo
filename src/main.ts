@@ -1,4 +1,4 @@
-import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf, addIcon, requestUrl } from "obsidian";
+import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Platform, Plugin, TFile, WorkspaceLeaf, addIcon, requestUrl } from "obsidian";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
@@ -67,12 +67,14 @@ import { AgentStore, createAgentStore } from "./obsidian/agent-store";
 import type { AgentDef } from "./core/agents";
 import { AgentTriggerDriver, makeNoteReader } from "./obsidian/agent-triggers";
 import { agentRunId } from "./core/agent-ledger";
+import { parseProposalCandidates } from "./core/proposals";
 import {
   agentLastRunKey,
   agentRunName,
   type DueAgentRun,
   buildAgentRunPrompt,
   dueScheduledAgentRuns,
+  extractProposalBlock,
   gateAgentInvoke,
   gateAgentRun,
   writeModeFor,
@@ -1675,6 +1677,7 @@ export default class ExoPlugin extends Plugin {
       inFlightKeys: this.agentRunsInFlight,
       runKey: run.runKey,
       budgetAvailable: this.checkBackgroundBudget(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE),
+      canSpawn: !Platform.isMobile,
     });
     if (!gate.ok) {
       console.info(`[Exo] agent trigger skipped (${gate.reason}): ${gate.detail}`);
@@ -2803,6 +2806,7 @@ export default class ExoPlugin extends Plugin {
         inFlightKeys: this.agentRunsInFlight,
         runKey: run.runKey,
         budgetAvailable: this.checkBackgroundBudget(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE),
+      canSpawn: !Platform.isMobile,
       });
       if (!gate.ok) {
         // Refusals are logged, never silent: a skipped run reads as "nothing to
@@ -2845,13 +2849,14 @@ export default class ExoPlugin extends Plugin {
       const result = await runHeadlessPlaybook(
         this.app,
         this.settings,
-        buildAgentRunPrompt(agent, reason, memory, task),
+        buildAgentRunPrompt(agent, reason, memory, task, this.paths.reports),
         { write }
       );
       const path = await writeReport(this.app, name, result, this.paths.reports);
       // Write runs join the existing review/restore queue rather than a parallel
       // one, so a bad agent write is rolled back the same way as a bad playbook.
       if (write) await this.recordAutomationRun(name, startedAt, result, path);
+      const proposed = await this.collectAgentProposals(agent, result.output, startedAt);
       // The ledger records every run, successful or not — a failed run that
       // leaves no trace is how a quietly broken agent stays invisible.
       await this.agentStore.appendRun({
@@ -2874,7 +2879,12 @@ export default class ExoPlugin extends Plugin {
         await this.saveSettings();
       }
       this.recordBackgroundSpend(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE);
-      new Notice(result.ok ? `${agent.brain.name} done → ${path}` : `${agent.brain.name} failed (report: ${path})`);
+      const proposalNote = proposed > 0 ? ` · ${proposed} proposal${proposed === 1 ? "" : "s"} to review` : "";
+      new Notice(
+        result.ok
+          ? `${agent.brain.name} done → ${path}${proposalNote}`
+          : `${agent.brain.name} failed (report: ${path})`
+      );
       return result.ok;
     } catch (err) {
       console.warn(`[Exo] agent "${agent.brain.slug}" run failed:`, err);
@@ -2884,6 +2894,46 @@ export default class ExoPlugin extends Plugin {
       this.agentRunsInFlight.delete(key);
       this.agentContext = callerContext;
     }
+  }
+
+  /**
+   * Turn a `propose` run's structured block into pending kernel proposals.
+   *
+   * This is what makes the `propose` tier worth having: instead of reading a
+   * report and re-doing the work by hand, the run's conclusions land in the
+   * existing proposals inbox with one-click accept — routed through the same
+   * validated, deduplicated, inert channel as every other producer. The kernel
+   * still disposes; the agent only proposes.
+   *
+   * Returns how many landed. Never throws: a malformed block costs the
+   * proposals, not the run that already did the work.
+   */
+  private async collectAgentProposals(agent: AgentDef, output: string, startedAt: number): Promise<number> {
+    if (agent.contract.autonomy !== "propose" || !this.settings.proposalKernelEnabled) return 0;
+    const block = extractProposalBlock(output ?? "");
+    if (!block) return 0;
+
+    const parsed = parseProposalCandidates(block);
+    if (parsed.status !== "ok") {
+      console.info(`[Exo] agent "${agent.brain.slug}" proposal block rejected:`, parsed.errors ?? parsed.status);
+      return 0;
+    }
+
+    const source = {
+      convoId: `agent:${agent.brain.slug}`,
+      turnId: agentRunId(agent.brain.slug, startedAt),
+      createdAt: startedAt,
+    };
+    let landed = 0;
+    for (const candidate of parsed.value) {
+      try {
+        const res = await this.proposalStore.append(candidate, source);
+        if (res.status === "appended") landed++;
+      } catch (err) {
+        console.warn(`[Exo] proposal append failed for "${agent.brain.slug}":`, err);
+      }
+    }
+    return landed;
   }
 
   /**
@@ -2914,6 +2964,7 @@ export default class ExoPlugin extends Plugin {
       inFlightKeys: this.agentRunsInFlight,
       runKey,
       budgetAvailable: this.checkBackgroundBudget(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE),
+      canSpawn: !Platform.isMobile,
       // A human asking through chat is a manual call; an agent asking is nested.
       manual: caller === "exo",
       nested: caller !== "exo",
@@ -2950,6 +3001,7 @@ export default class ExoPlugin extends Plugin {
         inFlightKeys: this.agentRunsInFlight,
         runKey,
         budgetAvailable: this.checkBackgroundBudget(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE),
+      canSpawn: !Platform.isMobile,
         manual: true,
       });
       if (!gate.ok) {

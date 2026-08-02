@@ -89,8 +89,26 @@ Il flusso dati di ogni tab: **live caps prima, disk scan come fallback**. Lo sna
 - `style-contract.test.ts` verde dopo le aggiunte CSS (nessun hex/ms raw, nessun `!important`).
 - Verifica manuale: palette, tile Cockpit, bottone settings e URI `obsidian://exo-daily-pulse?target=automation` atterrano tutti sul tab Automations.
 
+## Il livello agentico
+
+Il pane non basta: se una capability si gestisce solo cliccando, l'agente non può ripararsi da solo. Tre tool in `obsidian/capability-tools.ts`, sullo **stesso core del pane** così le due metà non divergono:
+
+| Tool | Cosa fa |
+|---|---|
+| `list_capabilities` | MCP con stato live, skill per stato, automation e playbook — read-only, auto-allow |
+| `manage_mcp_server` | add / update / enable / disable / remove / reconnect, poi respawn della sessione |
+| `manage_skill` | import nel vault o rimozione della copia locale |
+
+Guardrail: solo i server vault-owned sono editabili, una config invalida viene riportata invece che scritta, `disable` sposta in `mcpServersDisabled` invece di cancellare, l'import di una skill non tocca mai la sorgente. Ogni tool mutante passa dalla permission card.
+
+## Una source è più di una config
+
+`.mcp.json` dice **come** connettersi, mai **a cosa serve**. Ogni server può avere una nota in `.claude/mcp/<name>.md` (a cosa serve · scope · cosa evitare) che l'agente tira su a richiesta con `list_capabilities({ with_notes: true })` — pull, non push nel system prompt: la maggior parte dei turni non ne ha bisogno, e quelli che ne hanno bisogno possono chiedere. Un template mai compilato **non** conta come documentato (`hasMcpDocContent` toglie frontmatter, commenti e bullet vuoti), così il bottone dice la verità.
+
+Le permission lavorano alla stessa granularità: il nome-tool di una regola può finire in `*`, quindi `mcp__notion__*` governa l'intera source, tool aggiunti in futuro compresi. Il wildcard si ferma al confine di segmento (`mcp__notion__*` non raggiunge mai `mcp__notion_admin__*`) e un `*` nudo è rifiutato — nella allow-list disabiliterebbe la permission card. Le righe MCP dell'hub **mostrano** la regola che copre un server (deny per prima), ma indebolire un permesso resta un atto deliberato in settings, mai un click in una lista.
+
 ## Fuori scope (v1)
 
 - **Insert nel composer dalle chip** (`/cmd`, `@agent`): l'hub vive in un leaf separato, servirebbe `ChatView.insertIntoComposer`. Rimandato.
 - **Search/filter** nelle liste: mitigato dal collasso "N già in Exo".
-- **Gestione da chat** (tool agent-callable per MCP/skill/automation): è il capitolo successivo — vedi il design dell'agentic capability layer.
+- **Automation "agentic"** (terzo tipo di Craft, decise dall'agente): i trigger event-based degli agenti coprono già parte del caso.

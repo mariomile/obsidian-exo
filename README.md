@@ -120,6 +120,7 @@ Create a `.obsidian-plugin-dir` file containing the absolute path to your vault'
 - `src/cli.ts` — robust CLI path resolution (Obsidian doesn't inherit the shell PATH).
 - `src/ui/tools.ts` — tool metadata + detail/diff rendering.
 - `src/ui/hub/` — the Capabilities hub: a view shell plus one renderer per tab (overview, skills, mcp, playbooks, automations, memory). Pure halves in `src/core/hub-sections.ts` and `src/core/capability-scan.ts`.
+- `src/obsidian/capability-tools.ts` — the same hub, agent-callable: `list_capabilities`, `manage_mcp_server`, `manage_skill`. Per-source notes live at `.claude/mcp/<name>.md` (`src/core/mcp-docs.ts`).
 - `src/core/agent*.ts` — named agents: registry and turn binding, run gates, event-trigger matching, run ledger and per-agent memory, seed contracts. Pure and unit-tested; the Obsidian halves are `src/obsidian/agent-store.ts`, `src/obsidian/agent-triggers.ts` and `src/ui/agents-view.ts`. See `docs/specs/2026-08-01-agents-design.md`.
 
 ## Status

@@ -6,11 +6,14 @@ import {
   gateAgentRun,
   gateAgentInvoke,
   MAX_AGENT_DEPTH,
+  AGENT_PROPOSAL_FENCE,
+  extractProposalBlock,
   writeModeFor,
   agentRunName,
   buildAgentRunPrompt,
 } from "../src/core/agent-runs";
 import { mergeAgents, defaultContract, parseTrigger, type AgentBrain, type AgentContract } from "../src/core/agents";
+import { parseProposalCandidates } from "../src/core/proposals";
 
 const at = (y: number, mo: number, d: number, h = 0, mi = 0) => new Date(y, mo - 1, d, h, mi).getTime();
 
@@ -148,6 +151,107 @@ describe("gateAgentRun", () => {
     const g = gateAgentRun({ ...base, agent: agent("a", { cooldownMs: 60 * 60_000 }), lastRunAt: base.now });
     expect(g.ok).toBe(false);
     if (!g.ok) expect(g.detail).toMatch(/cooling down/);
+  });
+});
+
+describe("gateAgentRun — device capability", () => {
+  const base = {
+    lastRunAt: 0,
+    now: at(2026, 8, 1, 9),
+    running: 0,
+    maxConcurrent: 2,
+    inFlightKeys: new Set<string>(),
+    runKey: "k",
+    budgetAvailable: true,
+  };
+
+  it("refuses when the device cannot spawn the CLI", () => {
+    expect(gateAgentRun({ ...base, agent: agent("a"), canSpawn: false })).toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+  });
+
+  it("checks it first — a manual run on a phone still cannot happen", () => {
+    const g = gateAgentRun({ ...base, agent: agent("a", { enabled: false }), canSpawn: false, manual: true });
+    expect(g).toMatchObject({ reason: "unavailable" });
+  });
+
+  it("defaults to allowed, so existing callers are unaffected", () => {
+    expect(gateAgentRun({ ...base, agent: agent("a") })).toEqual({ ok: true });
+    expect(gateAgentRun({ ...base, agent: agent("a"), canSpawn: true })).toEqual({ ok: true });
+  });
+});
+
+describe("extractProposalBlock", () => {
+  const block = (body: string) => "```" + AGENT_PROPOSAL_FENCE + "\n" + body + "\n```";
+
+  it("pulls the payload out of a prose report", () => {
+    const out = `Found two things.\n\n${block('[{"kind":"task"}]')}\n\nDone.`;
+    expect(extractProposalBlock(out)).toBe('[{"kind":"task"}]');
+  });
+
+  it("returns null when there is no block — the normal empty run", () => {
+    expect(extractProposalBlock("Nothing needed doing.")).toBeNull();
+    expect(extractProposalBlock("")).toBeNull();
+  });
+
+  it("takes the LAST block, so quoting the instruction first does not win", () => {
+    const out = `${block('["example"]')}\n\nand my real answer:\n\n${block('["real"]')}`;
+    expect(extractProposalBlock(out)).toBe('["real"]');
+  });
+
+  it("ignores ordinary json fences", () => {
+    expect(extractProposalBlock('```json\n[{"kind":"task"}]\n```')).toBeNull();
+  });
+
+  it("treats an empty block as no proposals", () => {
+    expect(extractProposalBlock(block(""))).toBeNull();
+  });
+
+  // The kernel's schema is FLAT — it reads the fields off each entry and builds
+  // the payload itself. Teaching a nested `payload` in the prompt would make
+  // every proposal an agent emits get rejected, silently.
+  it("round-trips one entry of every kind into the kernel's own parser", () => {
+    const candidates = [
+      { kind: "task", title: "Draft the post", prompt: "write it", rationale: "the draft is stale" },
+      { kind: "loop", title: "Chase the reply", note: "no answer yet", rationale: "it has been a week" },
+      { kind: "decision", title: "Pick a tier", context: "two options", decision: "went with propose", rationale: "safer" },
+    ];
+    for (const c of candidates) {
+      const raw = extractProposalBlock(`Report.\n\n${block(JSON.stringify([c]))}`);
+      expect(raw).not.toBeNull();
+      expect(parseProposalCandidates(raw!).status, `kind ${c.kind}`).toBe("ok");
+    }
+  });
+
+  it("the example in the prompt is itself valid input", () => {
+    const example = buildAgentRunPrompt(agent("a", { autonomy: "propose" }), "x")
+      .split("\n")
+      .find((l) => l.trim().startsWith('[{"kind"'));
+    expect(example).toBeDefined();
+    // The example uses "…" placeholders, so only its SHAPE can be checked:
+    // flat keys, no nested payload.
+    const parsed = JSON.parse(example!.trim()) as Record<string, unknown>[];
+    expect(parsed[0]).toHaveProperty("prompt");
+    expect(parsed[0]).toHaveProperty("rationale");
+    expect(parsed[0]).not.toHaveProperty("payload");
+  });
+});
+
+describe("buildAgentRunPrompt — the proposal channel", () => {
+  it("is offered to `propose` only", () => {
+    expect(buildAgentRunPrompt(agent("a", { autonomy: "propose" }), "x")).toContain(AGENT_PROPOSAL_FENCE);
+    // `notify` has nothing to propose; `act` already writes, so proposing too
+    // would let one change arrive twice.
+    expect(buildAgentRunPrompt(agent("a", { autonomy: "notify" }), "x")).not.toContain(AGENT_PROPOSAL_FENCE);
+    expect(buildAgentRunPrompt(agent("a", { autonomy: "act" }), "x")).not.toContain(AGENT_PROPOSAL_FENCE);
+  });
+
+  it("names the kernel's existing kinds and says proposals are inert", () => {
+    const p = buildAgentRunPrompt(agent("a", { autonomy: "propose" }), "x");
+    for (const kind of ["task", "loop", "decision", "playbook"]) expect(p).toContain(`\`${kind}\``);
+    expect(p).toContain("INERT until a human accepts");
   });
 });
 

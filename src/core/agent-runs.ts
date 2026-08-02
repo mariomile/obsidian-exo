@@ -69,7 +69,7 @@ export function nextScheduledSlot(cadence: Cadence, lastRun: number, now: number
   return isDue(cadence, lastRun, now) ? now : currentSlotStart(cadence, now);
 }
 
-export type RunRefusal = "disabled" | "cooldown" | "concurrency" | "duplicate" | "budget";
+export type RunRefusal = "disabled" | "cooldown" | "concurrency" | "duplicate" | "budget" | "unavailable";
 
 export type RunGate = { ok: true } | { ok: false; reason: RunRefusal; detail: string };
 
@@ -94,6 +94,16 @@ export interface GateInput {
    * parallelism. Depth is bounded separately by `gateAgentInvoke`.
    */
   nested?: boolean;
+  /**
+   * Whether this device can actually spawn the CLI — false on mobile, where
+   * there is no process to spawn.
+   *
+   * Triggers are the only thing in Exo that starts work nobody asked for, so on
+   * a phone they must decline rather than fail: otherwise every note captured
+   * on the go produces an error notice for a run that was never possible.
+   * Defaults to true so existing callers and tests are unaffected.
+   */
+  canSpawn?: boolean;
 }
 
 /**
@@ -103,6 +113,9 @@ export interface GateInput {
  */
 export function gateAgentRun(input: GateInput): RunGate {
   const { agent, runKey, now, manual } = input;
+  if (input.canSpawn === false) {
+    return { ok: false, reason: "unavailable", detail: "agent runs need the CLI, which this device cannot spawn" };
+  }
   if (!agent.contract.enabled && !manual) {
     return { ok: false, reason: "disabled", detail: `${agent.brain.name} is disabled` };
   }
@@ -192,6 +205,61 @@ export function writeModeFor(autonomy: AgentAutonomy): boolean {
   return autonomy === "act";
 }
 
+/* ----------------------------- proposals ----------------------------- */
+
+/** Fenced block an unattended run uses to hand structured proposals back. */
+export const AGENT_PROPOSAL_FENCE = "exo-proposals";
+
+/**
+ * Pull the proposal payload out of a run's prose report.
+ *
+ * The kernel's own parser requires the whole string to be JSON, so a run that
+ * also explains itself in English cannot be fed to it directly. The LAST fence
+ * wins: if a run mentions the format earlier (quoting the instruction, showing
+ * an example), the real answer is the one it finished with. Returns null when
+ * there is no block, which is the normal case for a run that found nothing.
+ */
+export function extractProposalBlock(output: string): string | null {
+  const fence = new RegExp("```" + AGENT_PROPOSAL_FENCE + "\\s*\\n([\\s\\S]*?)\\n```", "g");
+  let last: string | null = null;
+  for (const m of output.matchAll(fence)) last = m[1].trim();
+  return last || null;
+}
+
+/**
+ * The contract that turns a `propose` run's findings into kernel proposals.
+ *
+ * Only `propose` gets this. `notify` has nothing to propose by definition, and
+ * `act` already writes — asking it for proposals too would mean the same change
+ * could arrive twice, once applied and once pending.
+ *
+ * The vocabulary is the kernel's existing four kinds on purpose: a new "apply
+ * this edit" kind would let an accepted proposal write anywhere, which is
+ * exactly the power the kernel exists to withhold.
+ */
+export function proposalContract(memoryRootHint: string): string {
+  return [
+    "",
+    "If anything you found should become an action, end your reply with a fenced block:",
+    "",
+    "```" + AGENT_PROPOSAL_FENCE,
+    '[{"kind":"task","title":"…","prompt":"…","rationale":"why this is worth doing"}]',
+    "```",
+    "",
+    "Rules for that block:",
+    "- A flat JSON array. Every entry needs `kind` and `rationale`, plus the fields for its kind:",
+    "  - `task` (work to run later) → `title`, `prompt`",
+    "  - `loop` (an open thread to resurface) → `title`, `note` (optional `resurface` as YYYY-MM-DD, `tags`)",
+    "  - `decision` (a choice worth recording) → `title`, `context`, `decision`",
+    "  - `playbook` (a repeatable prompt worth saving) → `name`, `prompt`",
+    "- At most 3 entries, and only things a human would plausibly accept. An empty run needs no block at all.",
+    "- Titles stay under 120 characters and rationales under 500. One bad entry rejects the whole block, so keep it minimal and valid.",
+    "- Proposals are INERT until a human accepts them, so propose the real thing rather than a watered-down version — but do not propose the same thing twice.",
+    `- Do not use a proposal to ask for a file edit you could describe in prose; edits stay in your report (${memoryRootHint}).`,
+    "",
+  ].join("\n");
+}
+
 /** Report name for a run — also the automation-run record's name, so agent
  *  runs appear in the existing review/restore queue alongside playbooks. */
 export function agentRunName(agent: AgentDef, reason: string): string {
@@ -210,7 +278,9 @@ export function buildAgentRunPrompt(
   reason: string,
   memory?: { path: string; excerpt: string },
   /** A specific task, when this run was delegated rather than scheduled. */
-  task?: { from: string; text: string }
+  task?: { from: string; text: string },
+  /** Where the run report lands — named so a `propose` run knows prose has a home. */
+  reportsHint = "your run report"
 ): string {
   const { brain, contract } = agent;
   // `null` marks a line that dropped out conditionally; "" is a deliberate blank.
@@ -242,6 +312,7 @@ export function buildAgentRunPrompt(
       : null,
     memory ? "" : null,
     "Close with a short summary a human can scan in ten seconds.",
+    contract.autonomy === "propose" ? proposalContract(reportsHint) : null,
     "</agent-run>",
   ];
   return lines.filter((l): l is string => l !== null).join("\n");
