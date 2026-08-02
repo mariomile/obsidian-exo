@@ -94,6 +94,7 @@ import {
   retiredFromStrip,
   countSurvivingRetirees,
   pinnedFirst,
+  nextFocusAfterRemoval,
 } from "./core/working-set";
 import type { TabVM } from "./core/working-set";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
@@ -1930,13 +1931,17 @@ export class ChatView extends ItemView {
   private closeTab(c: Convo): void {
     const idx = this.openTabs.indexOf(c.id);
     if (idx === -1) return;
+    // Visual (pinned-first) order, captured BEFORE the splice below, so the
+    // neighbour picked for focus is the one the eye sees next to `c` right
+    // now — see `nextFocusAfterRemoval`.
+    const visualOrder = pinnedFirst(this.openTabs, (id) => this.convos.find((x) => x.id === id)?.pinned === true);
     // After the guard, like `setConvoArchived`: a chat that was never a tab must
     // not claim to have left one.
     c.retiredAt = Date.now();
     this.openTabs.splice(idx, 1);
     this.dropSession(c); // free the live session; resumable from history
     if (c === this.active) {
-      const nextId = this.openTabs[idx] ?? this.openTabs[idx - 1] ?? this.openTabs[this.openTabs.length - 1];
+      const nextId = nextFocusAfterRemoval(visualOrder, c.id);
       const next = nextId ? this.convos.find((x) => x.id === nextId) : undefined;
       if (next) {
         this.switchTo(next); // this.active is still `c` here, so this runs
@@ -2210,6 +2215,11 @@ export class ChatView extends ItemView {
       // resuming a turn un-archives it, see setStreaming).
       const idx = this.openTabs.indexOf(c.id);
       if (idx !== -1) {
+        // Visual order captured BEFORE the splice, same reasoning as `closeTab`.
+        const visualOrder = pinnedFirst(
+          this.openTabs,
+          (id) => this.convos.find((x) => x.id === id)?.pinned === true,
+        );
         // Stamped here because this path does not go through `closeTab` (which
         // owns the stamp for every other exit). Inside the guard: `retiredAt`
         // means "left the strip", so a chat that was never a tab must not claim
@@ -2217,7 +2227,7 @@ export class ChatView extends ItemView {
         c.retiredAt = Date.now();
         this.openTabs.splice(idx, 1);
         if (c === this.active) {
-          const nextId = this.openTabs[idx] ?? this.openTabs[idx - 1] ?? this.openTabs[this.openTabs.length - 1];
+          const nextId = nextFocusAfterRemoval(visualOrder, c.id);
           const next = nextId ? this.convos.find((x) => x.id === nextId) : undefined;
           // switchTo re-renders and re-persists the strip itself (and runs the
           // cap over the now-smaller set). It cannot re-enter here: `c` is
@@ -2762,14 +2772,17 @@ export class ChatView extends ItemView {
    *  close-tab flow, but keep the gallery open and just remove its card. */
   private deleteConvo(c: Convo, card: HTMLElement, grid: HTMLElement): void {
     this.dropSession(c);
+    // Visual order captured BEFORE either splice below, same reasoning as
+    // `closeTab` / `setConvoArchived`: pinned status is still readable off
+    // `this.convos` at this point, and `c.id` is still in `this.openTabs`.
+    const visualOrder = pinnedFirst(this.openTabs, (id) => this.convos.find((x) => x.id === id)?.pinned === true);
     const tabIdx = this.openTabs.indexOf(c.id);
     if (tabIdx !== -1) this.openTabs.splice(tabIdx, 1);
     const convoIdx = this.convos.indexOf(c);
     if (convoIdx !== -1) this.convos.splice(convoIdx, 1);
 
     if (c === this.active) {
-      const nextId =
-        this.openTabs[tabIdx] ?? this.openTabs[tabIdx - 1] ?? this.openTabs[this.openTabs.length - 1];
+      const nextId = nextFocusAfterRemoval(visualOrder, c.id);
       let next = nextId ? this.convos.find((x) => x.id === nextId) : undefined;
       if (!next) next = this.convos[0];
       if (!next) {

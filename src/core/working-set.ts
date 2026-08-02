@@ -111,6 +111,33 @@ export function pinnedFirst(ids: readonly string[], isPinned: (id: string) => bo
   return [...pinned, ...rest];
 }
 
+/**
+ * Which tab should get focus after `removedId` leaves the strip, in VISUAL
+ * (`pinnedFirst`) order. `orderedIds` is the order from BEFORE the removal —
+ * the removed id is still in it — so "was it rightmost" is answered by its
+ * position there, not by re-deriving order after the fact.
+ *
+ * Prefers the neighbour that was to the removed tab's right: closing a tab
+ * slides the strip left under the cursor, so the tab that slides into the
+ * closed one's old slot is the one the eye already expects to land on.
+ * Falls back to the left neighbour when the removed tab was rightmost, and
+ * to `undefined` when it was the only tab — callers own that last fallback
+ * (typically: open a fresh conversation).
+ *
+ * Three call sites share this exact decision (`closeTab`, `setConvoArchived`,
+ * `deleteConvo` in view.ts) and, before this function existed, each picked by
+ * storage-order adjacency instead — correct only as long as storage order and
+ * visual order were the same list. Pinned-first sorting broke that equivalence:
+ * closing an unpinned tab next to a pinned block could jump focus onto the
+ * pinned tab, several slots from where the eye was. This function is the one
+ * place that decision is made, so the three sites cannot drift apart again.
+ */
+export function nextFocusAfterRemoval(orderedIds: readonly string[], removedId: string): string | undefined {
+  const idx = orderedIds.indexOf(removedId);
+  if (idx === -1) return undefined;
+  return orderedIds[idx + 1] ?? orderedIds[idx - 1];
+}
+
 /** Clamp the configured cap. Mirrors `retentionBudgetBytes` in retention.ts:
  *  settings come from a hand-editable data.json, and a 0 / negative / NaN cap
  *  would retire every non-exempt tab in the strip in one go. */

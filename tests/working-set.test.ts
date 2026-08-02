@@ -9,6 +9,7 @@ import {
   retiredFromStrip,
   countSurvivingRetirees,
   pinnedFirst,
+  nextFocusAfterRemoval,
 } from "../src/core/working-set";
 import type { TabFacts } from "../src/core/working-set";
 
@@ -456,6 +457,32 @@ describe("pinnedFirst", () => {
     expect(pinnedFirst(ids, pinnedBefore)).toEqual(["c", "a", "b", "d", "e"]);
     const pinnedAfter = pinnedSet([]); // c unpinned
     expect(pinnedFirst(ids, pinnedAfter)).toEqual(["a", "b", "c", "d", "e"]);
+  });
+});
+
+describe("nextFocusAfterRemoval", () => {
+  it("picks the right-hand visual neighbour when removing a middle tab", () => {
+    // The reviewer's trace: openTabs = [a, b, c(pinned), d] renders visually as
+    // [c, a, b, d]. Closing active tab b must land on its visual right, d —
+    // NOT on c, which only looked adjacent in the old storage-order arithmetic.
+    expect(nextFocusAfterRemoval(["c", "a", "b", "d"], "b")).toBe("d");
+  });
+
+  it("falls back to the left-hand visual neighbour when removing the rightmost tab", () => {
+    expect(nextFocusAfterRemoval(["c", "a", "b", "d"], "d")).toBe("b");
+  });
+
+  it("picks the right-hand neighbour when the removed tab was pinned (leftmost)", () => {
+    expect(nextFocusAfterRemoval(["c", "a", "b", "d"], "c")).toBe("a");
+  });
+
+  it("returns undefined when removing the only tab", () => {
+    expect(nextFocusAfterRemoval(["only"], "only")).toBeUndefined();
+  });
+
+  it("returns undefined when the removed id is not in the list", () => {
+    // Defensive: an id that was never part of the visual order has no neighbour.
+    expect(nextFocusAfterRemoval(["a", "b"], "z")).toBeUndefined();
   });
 });
 
