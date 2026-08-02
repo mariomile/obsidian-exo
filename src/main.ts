@@ -1361,37 +1361,52 @@ export default class ExoPlugin extends Plugin {
    *  latency-sensitive one-liner. Transient, tool-less session (same shape as
    *  `oneShot`). Never throws: if the Claude CLI can't be resolved or the call
    *  errors/aborts/times out it resolves to "" and the caller keeps the truncated
-   *  placeholder. An internal 15s timeout (plus the caller's `signal`) guarantees
+   *  placeholder. An internal 90s timeout (plus the caller's `signal`) guarantees
    *  a hung call can't leak.
    *
    *  Instrumented (Task 6 Step 1, see
-   *  .superpowers/sdd/2026-08-01-strip-plan/task-6-brief.md): AI titles land
-   *  ~15% of the time on the real vault. The suspect is this 15s ceiling firing
-   *  before a cold Claude-session spawn inside the Obsidian renderer completes
-   *  (other timeouts in this plugin were already raised to 90s for the same
-   *  reason). Every attempt logs one `this.diag.push("title", ...)` line with:
-   *  spawn latency (time to the `system/init` handshake via `session.onCaps` —
-   *  NOT the moment `createSession()` returns, which is synchronous and always
-   *  ~0ms, so it would never show a cold-spawn stall), time to the first
-   *  text-delta, total duration, and an outcome that distinguishes the internal
-   *  timeout from the caller's own signal aborting, from any other thrown error,
-   *  and from a reply that came back but sanitized to nothing (see
-   *  `classifyTitleOutcome` in core/title.ts). Deliberately NOT gated behind a
-   *  debug flag — this needs to produce data during normal use. */
+   *  .superpowers/sdd/2026-08-01-strip-plan/task-6-brief.md): AI titles landed
+   *  only ~15% of the time on the real vault. The suspect was a 15s ceiling
+   *  firing before a cold Claude-session spawn inside the Obsidian renderer
+   *  completes (other timeouts in this plugin were already raised to 90s for the
+   *  same reason) — CONFIRMED by direct measurement: two runs on the real
+   *  vault, both hit the 15s ceiling and returned "" (15234ms and 15319ms wall
+   *  time against a 15000ms timer — the abort fired right at the deadline, not
+   *  because a reply was slow but because the session hadn't finished
+   *  cold-spawning yet). Raised to 90s to match; see the timer comment below for
+   *  why this must not be "optimized" back down. Every attempt logs one
+   *  `this.diag.push("title", ...)` line with: spawn latency (time to the
+   *  `system/init` handshake via `session.onCaps` — NOT the moment
+   *  `createSession()` returns, which is synchronous and always ~0ms, so it
+   *  would never show a cold-spawn stall), time to the first text-delta, total
+   *  duration, and an outcome that distinguishes the internal timeout from the
+   *  caller's own signal aborting, from any other thrown error, and from a
+   *  reply that came back but sanitized to nothing (see `classifyTitleOutcome`
+   *  in core/title.ts). Deliberately NOT gated behind a debug flag — this needs
+   *  to produce data during normal use. */
   async generateTitle(userText: string, assistantText: string, signal: AbortSignal): Promise<string> {
     const t0 = Date.now();
     const ctrl = new AbortController();
     const onAbort = () => ctrl.abort();
     if (signal.aborted) ctrl.abort();
     else signal.addEventListener("abort", onAbort);
-    // Set only inside the timer callback below — the sole signal that OUR 15s
+    // Set only inside the timer callback below — the sole signal that OUR 90s
     // ceiling actually fired, as opposed to the caller's `signal` aborting for
     // an unrelated reason (e.g. the view tearing down mid-call).
     let timedOut = false;
+    // 90s, matching the other cold-spawn-bound timeouts in this plugin (see the
+    // 90_000 timeouts below in runObserver/produceProposalsAfterTurn/
+    // distillWorkflowPlaybook). This call cold-spawns a FRESH Claude CLI session
+    // inside the Obsidian renderer, which dominates the cost — NOT model
+    // latency. A 15s ceiling was measured firing at 15234ms and 15319ms on the
+    // real vault, both times returning "" before the spawn had even finished.
+    // This value tracks cold-spawn cost, not response time — do not lower it
+    // without a fresh measurement; that is exactly what regressed AI titles to
+    // ~15% success before.
     const timer = setTimeout(() => {
       timedOut = true;
       ctrl.abort();
-    }, 15_000);
+    }, 90_000);
     let spawnMs = -1; // time to system/init (cold-spawn handshake), via onCaps
     let deltaMs = -1; // time to the first assistant text-delta
     let threw = false;

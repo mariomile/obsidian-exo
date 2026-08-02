@@ -99,6 +99,7 @@ import {
 import type { TabVM } from "./core/working-set";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
 import type { HistoryFilter, FilterableConvo } from "./core/history";
+import { isAiTitleDue } from "./core/title";
 import { projectDirName, resumeStatus, resumableFrom } from "./core/resume-status";
 import type { ResumeStatus, SessionFileProbe } from "./core/resume-status";
 import { reconcileList } from "./ui/keyed-reconcile";
@@ -269,8 +270,8 @@ export interface Convo {
   pendingPerm: (() => void) | null; // cancels an open permission card on stop
   pendingAsk: (() => void) | null; // cancels an open ask card on stop
   /** A turn completed on this conversation while it was not the focused tab.
-   *  Runtime-only, never persisted (same discipline as `titledByAi`): after a
-   *  reload there is nothing you "have not seen". */
+   *  Runtime-only, never persisted (same discipline as `aiTitleAttempts`): after
+   *  a reload there is nothing you "have not seen". */
   unread?: boolean;
   queue: {
     text: string;
@@ -310,15 +311,23 @@ export interface Convo {
    *  provider-only rider that routes the turn to the engine's own subagent, so
    *  it can never desync `sessionSigOf()` or force a session respawn. */
   agent?: string;
-  /** True once an AI-title generation has been fired for this conversation —
-   *  one-shot guard so the Haiku title call runs at most once (after the first
-   *  assistant turn). Runtime-only (never persisted). */
-  titledByAi?: boolean;
+  /** Count of AI-title generation attempts fired for this conversation — counts
+   *  fires, not successes (a call that times out still consumes one). Feeds
+   *  `isAiTitleDue` (core/title.ts), which allows at most 2: one after the first
+   *  assistant turn, and — if the title is still not `aiTitleApplied` — one more
+   *  after a later turn. Runtime-only (never persisted). */
+  aiTitleAttempts?: number;
+  /** True once a real AI title has actually landed and been swapped into
+   *  `c.title`. The authoritative "no more retries" signal — deliberately a
+   *  separate explicit flag rather than inferred by comparing `c.title` against
+   *  the shape of a derived placeholder, since a user's own text can
+   *  coincidentally look like a finished title. Runtime-only (never persisted). */
+  aiTitleApplied?: boolean;
   /** Proactive recall (design 2026-07-09): ids of store entries already injected
    *  into THIS conversation's outbound turns, so each memory is paid for once and
    *  then lives in cached history. Runtime-only — never persisted (a reloaded
    *  conversation re-injects from scratch, which is correct: the cached history is
-   *  gone too). Mirrors the runtime-only pattern of `titledByAi` above. */
+   *  gone too). Mirrors the runtime-only pattern of `aiTitleAttempts` above. */
   injectedMemoryIds?: Set<string>;
   /** Controller for the in-flight AI-title call, so disposing the conversation
    *  (close/delete/reset) aborts it. Runtime-only. */
@@ -3286,6 +3295,7 @@ export class ChatView extends ItemView {
         if (ctrl.signal.aborted || !title) return; // aborted/failed → keep placeholder
         if (!this.convos.includes(c)) return; // conversation removed meanwhile
         c.title = title;
+        c.aiTitleApplied = true; // authoritative "don't retry" signal — see isAiTitleDue
         this.renderTabs();
         // Rebuild the open gallery so its card shows the refreshed title — but
         // NOT while a bulk selection is in progress: showGallery() clears the
@@ -6727,21 +6737,24 @@ export class ChatView extends ItemView {
       if (plan.session !== "none") this.dropSession(c);
       if (plan.session === "drop-clear-id") c.sessionId = undefined;
       c.resumeRisky = plan.nextResumeRisky;
-      // First assistant turn just landed → refine the auto-derived tab title with a
-      // Haiku-generated one (fire-and-forget, once per conversation). Placed AFTER the
-      // recovery ladder so a recoverable-but-poisoned first turn (which triggers
-      // dropSession → aborts titleAbort) still gets titled — the exchange is valid.
-      // Gated to exactly one user + one assistant message so a user-renamed or later
-      // turn can never be overwritten; the placeholder stays if the call fails.
+      // An assistant turn just landed → refine the auto-derived tab title with a
+      // Haiku-generated one (fire-and-forget). Placed AFTER the recovery ladder
+      // so a recoverable-but-poisoned turn (which triggers dropSession → aborts
+      // titleAbort) still gets titled — the exchange is valid.
+      // Up to `isAiTitleDue`'s max (2): the first attempt fires after the first
+      // assistant turn; if it timed out/errored and the title is still not
+      // `aiTitleApplied`, one more attempt is allowed after a later turn. Once a
+      // real title lands, `aiTitleApplied` blocks any further attempt — a title
+      // that IS AI-authored is never overwritten.
       if (
         this.plugin.settings.aiTitles &&
-        !c.titledByAi &&
-        c.messages.length === 2 &&
-        c.messages[0].role === "user" &&
-        c.messages[1].role === "assistant" &&
+        isAiTitleDue({ attempts: c.aiTitleAttempts ?? 0, applied: !!c.aiTitleApplied }) &&
+        c.messages.length >= 2 &&
+        c.messages[c.messages.length - 2]?.role === "user" &&
+        c.messages[c.messages.length - 1]?.role === "assistant" &&
         ctx.fullText.trim()
       ) {
-        c.titledByAi = true; // fire once, even if the call later fails
+        c.aiTitleAttempts = (c.aiTitleAttempts ?? 0) + 1; // counts fires, not successes
         this.aiTitle(c, ctx.userText, ctx.fullText);
       }
       // Self-Writing Memory: observe HEALTHY turns only (not poisoned/errored, not
