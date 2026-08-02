@@ -241,6 +241,206 @@ describe("CodexSession app-server lifecycle", () => {
     session.dispose();
   });
 
+  it("applies Exo plan mode through Codex collaborationMode and can switch live", async () => {
+    const { session, child } = await readySession();
+    const first = session.send("plan this", () => {});
+    const firstStart = await child.next("turn/start");
+    expect(firstStart.params?.collaborationMode).toMatchObject({ mode: "default" });
+    child.reply(firstStart, { turn: { id: "turn-1" } });
+    child.push({ method: "turn/started", params: { turn: { id: "turn-1" } } });
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await first;
+
+    session.setPermissionMode?.("plan");
+    const second = session.send("make a plan", () => {});
+    const secondStart = await child.next("turn/start");
+    expect(secondStart.params?.collaborationMode).toMatchObject({
+      mode: "plan",
+      settings: { model: "gpt-5.6-sol", reasoning_effort: "medium" },
+    });
+    child.reply(secondStart, { turn: { id: "turn-2" } });
+    child.push({ method: "turn/started", params: { turn: { id: "turn-2" } } });
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-2", status: "completed" } } });
+    await second;
+    session.dispose();
+  });
+
+  it("preserves the selected reasoning effort inside Codex collaboration mode", async () => {
+    const { session, child } = await readySession({ effort: "high" });
+    const turn = session.send("think hard", () => {});
+    const start = await child.next("turn/start");
+    expect(start.params?.collaborationMode).toMatchObject({
+      mode: "default",
+      settings: { reasoning_effort: "high" },
+    });
+    child.reply(start, { turn: { id: "turn-1" } });
+    child.push({ method: "turn/started", params: { turn: { id: "turn-1" } } });
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    session.dispose();
+  });
+
+  it("routes Codex request_user_input through the owning Exo conversation", async () => {
+    const requestUserInput = vi.fn(async () => ({ audience: "Founders" }));
+    const { session, child } = await readySession({ requestUserInput });
+    const { turn } = await startTurn(session, child, []);
+    child.push({
+      id: 89,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "question-1",
+        questions: [{
+          id: "audience",
+          header: "Audience",
+          question: "Who is this for?",
+          options: [{ label: "Founders", description: "Startup founders" }],
+        }],
+      },
+    });
+    await vi.waitFor(() => expect(requestUserInput).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(child.messages).toContainEqual({
+      id: 89,
+      result: { answers: { audience: { answers: ["Founders"] } } },
+    }));
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    session.dispose();
+  });
+
+  it("routes additional permission requests through the Exo approval card", async () => {
+    const { session, child } = await readySession();
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    const permissions = { network: { enabled: true } };
+    child.push({
+      id: 90,
+      method: "item/permissions/requestApproval",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "perm-1", cwd: "/vault", permissions },
+    });
+    await vi.waitFor(() => expect(events.some((event) => event.kind === "permission-request")).toBe(true));
+    const approval = events.find((event) => event.kind === "permission-request");
+    if (approval?.kind === "permission-request") approval.resolve({ behavior: "allow", remember: true });
+    await vi.waitFor(() => expect(child.messages).toContainEqual({
+      id: 90,
+      result: { permissions, scope: "session" },
+    }));
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    session.dispose();
+  });
+
+  it("renders MCP form elicitations and returns typed content", async () => {
+    const requestUserInput = vi.fn(async () => ({ audience: "Founders", public: "Yes", count: "3" }));
+    const { session, child } = await readySession({ requestUserInput });
+    const { turn } = await startTurn(session, child, []);
+    child.push({
+      id: 91,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "example",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        mode: "form",
+        message: "Configure the export",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            audience: { type: "string", title: "Audience", enum: ["Founders", "PMs"] },
+            public: { type: "boolean", title: "Public" },
+            count: { type: "integer", title: "Count" },
+          },
+        },
+      },
+    });
+    await vi.waitFor(() => expect(requestUserInput).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(child.messages).toContainEqual({
+      id: 91,
+      result: { action: "accept", content: { audience: "Founders", public: true, count: 3 } },
+    }));
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    session.dispose();
+  });
+
+  it("normalizes Codex plans, subagents, web search, dynamic tools, and rate limits", async () => {
+    const { session, child } = await readySession();
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    child.push({ method: "turn/plan/updated", params: {
+      turnId: "turn-1",
+      plan: [{ step: "Inspect", status: "completed" }, { step: "Implement", status: "inProgress" }],
+    } });
+    child.push({ method: "item/started", params: { item: {
+      id: "agent-1", type: "collabAgentToolCall", tool: "spawnAgent", status: "inProgress", prompt: "Review it",
+    } } });
+    child.push({ method: "item/completed", params: { item: {
+      id: "agent-1", type: "collabAgentToolCall", tool: "spawnAgent", status: "completed", agentsStates: { child: "completed" },
+    } } });
+    child.push({ method: "item/started", params: { item: { id: "web-1", type: "webSearch", query: "official docs" } } });
+    child.push({ method: "item/completed", params: { item: { id: "web-1", type: "webSearch", query: "official docs" } } });
+    child.push({ method: "item/started", params: { item: {
+      id: "dyn-1", type: "dynamicToolCall", namespace: "exo", tool: "inspect", status: "inProgress", arguments: { path: "a.md" },
+    } } });
+    child.push({ method: "item/completed", params: { item: {
+      id: "dyn-1", type: "dynamicToolCall", namespace: "exo", tool: "inspect", status: "completed", success: true, output: "ok",
+    } } });
+    child.push({ method: "account/rateLimits/updated", params: {
+      rateLimits: { limitName: "five-hour", primary: { usedPercent: 85, resetsAt: 1234 } },
+    } });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      kind: "tool-call-start", name: "TodoWrite",
+    })));
+    expect(events).toContainEqual(expect.objectContaining({ kind: "tool-call-start", id: "agent-1", name: "Agent" }));
+    expect(events).toContainEqual({ kind: "tool-call-result", id: "agent-1", ok: true, output: '{"child":"completed"}' });
+    expect(events).toContainEqual(expect.objectContaining({ kind: "tool-call-start", id: "web-1", name: "WebSearch" }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: "tool-call-start", id: "dyn-1", name: "dynamic__exo__inspect" }));
+    expect(events).toContainEqual({
+      kind: "rate-limit", status: "allowed_warning", utilization: 0.85, resetsAt: 1234, windowType: "five-hour",
+    });
+    expect(session.rateLimit).toEqual({
+      status: "allowed_warning", utilization: 0.85, resetsAt: 1234, windowType: "five-hour",
+    });
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    session.dispose();
+  });
+
+  it("discovers the live Codex skill and model catalog", async () => {
+    const { session, child } = await readySession();
+    const snapshots: NonNullable<typeof session.caps>[] = [];
+    session.onCaps = (caps) => snapshots.push(caps);
+    const skills = await child.next("skills/list");
+    child.reply(skills, { data: [{ cwd: "/vault", skills: [{ name: "audit", enabled: true }, { name: "off", enabled: false }] }] });
+    const models = await child.next("model/list");
+    child.reply(models, { data: [
+      { id: "gpt-new", displayName: "GPT New", hidden: false, upgrade: null },
+      { id: "gpt-old", displayName: "GPT Old", hidden: false, upgrade: "gpt-new" },
+      { id: "hidden", displayName: "Hidden", hidden: true },
+    ] });
+    await vi.waitFor(() => expect(snapshots).toHaveLength(1));
+    expect(snapshots[0].skills).toEqual(["audit"]);
+    expect(snapshots[0].models).toEqual([
+      { id: "gpt-new", label: "GPT New" },
+      { id: "gpt-old", label: "GPT Old (deprecated)" },
+    ]);
+    session.dispose();
+  });
+
+  it("auto-compacts Codex after a completed turn crosses 90% context usage", async () => {
+    const { session, child } = await readySession({ autoCompact: true });
+    const { turn } = await startTurn(session, child, []);
+    child.push({ method: "thread/tokenUsage/updated", params: {
+      tokenUsage: { last: { totalTokens: 900 }, modelContextWindow: 1000 },
+    } });
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    const compact = await child.next("thread/compact/start");
+    expect(compact.params).toEqual({ threadId: "thread-1" });
+    session.dispose();
+  });
+
   it("fails a silent initialization instead of leaving the UI on Thinking forever", async () => {
     const child = new FakeCodexProcess();
     const session = new CodexSession(OPTS, {
@@ -250,5 +450,15 @@ describe("CodexSession app-server lifecycle", () => {
     });
     await expect(session.send("hello", () => {})).rejects.toThrow(/initialize.*timed out/i);
     expect(child.kill).toHaveBeenCalled();
+  });
+
+  it("releases its per-session Obsidian bridge exactly once", async () => {
+    const stop = vi.fn();
+    const { session } = await readySession({
+      codexBridge: { port: 1234, token: "secret", scriptPath: "/bridge.mjs", stop },
+    });
+    session.dispose();
+    session.dispose();
+    expect(stop).toHaveBeenCalledOnce();
   });
 });

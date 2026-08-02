@@ -64,6 +64,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 export function startCodexBridge(): Promise<CodexBridge> {
   const token = randomBytes(32).toString("hex");
   let tools: AnyTool[] = [];
+  let stopped = false;
   const server: Server = createServer((req, res) => void route(req, res));
   // ask_user can legitimately wait minutes for the human — never time out.
   server.requestTimeout = 0;
@@ -103,6 +104,8 @@ export function startCodexBridge(): Promise<CodexBridge> {
         token,
         setTools: (t) => (tools = t),
         stop: () => {
+          if (stopped) return;
+          stopped = true;
           server.closeAllConnections?.();
           server.close();
         },

@@ -7,6 +7,7 @@ import type {
   AgentSession,
   ContextUsage,
   ImageAttachment,
+  RateLimitInfo,
   SessionCaps,
   SessionOpts,
 } from "./types";
@@ -42,7 +43,30 @@ type ThreadItem = {
   arguments?: unknown;
   result?: unknown;
   error?: unknown;
+  prompt?: string | null;
+  receiverThreadIds?: string[];
+  agentsStates?: unknown;
+  query?: string;
+  namespace?: string | null;
+  success?: boolean | null;
+  output?: unknown;
 };
+
+function collaborationMode(opts: SessionOpts): Record<string, unknown> {
+  const plan = opts.permissionMode === "plan";
+  const reasoningEffort = opts.effort && opts.effort !== "default" ? opts.effort : plan ? "medium" : null;
+  const developerInstructions = [EXO_HOUSE_RULES, opts.systemPrompt, opts.memoryPreamble]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    mode: plan ? "plan" : "default",
+    settings: {
+      model: opts.model && opts.model !== "default" ? opts.model : "gpt-5.6-sol",
+      reasoning_effort: reasoningEffort,
+      developer_instructions: developerInstructions || null,
+    },
+  };
+}
 
 const EXO_HOUSE_RULES =
   'Exo renders every file you read, create, or edit as chips below your message. ' +
@@ -76,6 +100,61 @@ function outputText(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function enumOptions(schema: Record<string, unknown>): { label: string }[] {
+  if (Array.isArray(schema.enum)) {
+    const names = Array.isArray(schema.enumNames) ? schema.enumNames : [];
+    return schema.enum.flatMap((value, index) => typeof value === "string"
+      ? [{ label: typeof names[index] === "string" ? String(names[index]) : value }]
+      : []);
+  }
+  const variants = Array.isArray(schema.oneOf)
+    ? schema.oneOf
+    : Array.isArray(record(schema.items).anyOf) ? record(schema.items).anyOf as unknown[] : [];
+  return variants.flatMap((value) => {
+    const option = record(value);
+    return typeof option.const === "string"
+      ? [{ label: typeof option.title === "string" ? option.title : option.const }]
+      : [];
+  });
+}
+
+function elicitationQuestions(params: Record<string, unknown>): import("./types").UserQuestion[] {
+  const schema = record(params.requestedSchema);
+  const properties = record(schema.properties);
+  return Object.entries(properties).map(([id, raw]) => {
+    const property = record(raw);
+    const type = String(property.type ?? "string");
+    const options = type === "boolean" ? [{ label: "Yes" }, { label: "No" }] : enumOptions(property);
+    return {
+      id,
+      header: typeof property.title === "string" ? property.title : id,
+      question: typeof property.description === "string"
+        ? property.description
+        : typeof params.message === "string" ? params.message : id,
+      options,
+      multiSelect: type === "array",
+    };
+  });
+}
+
+function elicitationContent(
+  params: Record<string, unknown>,
+  answers: Record<string, string>,
+): Record<string, unknown> {
+  const properties = record(record(params.requestedSchema).properties);
+  return Object.fromEntries(Object.entries(answers).map(([id, answer]) => {
+    const schema = record(properties[id]);
+    const type = String(schema.type ?? "string");
+    if (type === "boolean") return [id, answer === "Yes"];
+    if (type === "number" || type === "integer") {
+      const value = Number(answer);
+      return [id, Number.isFinite(value) ? value : answer];
+    }
+    if (type === "array") return [id, answer.split(",").map((value) => value.trim()).filter(Boolean)];
+    return [id, answer];
+  }));
 }
 
 function imageExt(mediaType: string): string {
@@ -133,11 +212,14 @@ export class CodexSession implements AgentSession {
   private imagePaths: string[] = [];
   private usage: ContextUsage | null = null;
   private turnTokens: number | null = null;
+  private autoCompactPending = false;
+  private bridgeStopped = false;
   private ready: Promise<void>;
   private runtime: CodexSessionRuntime;
   private mcpStatuses = new Map<string, string>();
 
   caps: SessionCaps | null = null;
+  rateLimit: RateLimitInfo | null = null;
   onCaps: ((caps: SessionCaps) => void) | null = null;
 
   constructor(private opts: SessionOpts, runtime: Partial<CodexSessionRuntime> = {}) {
@@ -208,10 +290,46 @@ export class CodexSession implements AgentSession {
         throw new Error("Codex app-server did not return a thread id.");
       }
       this.threadId = thread.id;
+      void this.discoverCapabilities();
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
       this.failTransport(failure);
       throw failure;
+    }
+  }
+
+  private async discoverCapabilities(): Promise<void> {
+    try {
+      const [skillsResponse, modelsResponse] = await Promise.all([
+        this.request("skills/list", { cwds: [this.opts.cwd], forceReload: false }),
+        this.request("model/list", {}),
+      ]);
+      const skillEntries = Array.isArray(record(skillsResponse).data) ? record(skillsResponse).data as unknown[] : [];
+      const skills = skillEntries.flatMap((entry) => {
+        const list = record(entry).skills;
+        return Array.isArray(list) ? list.flatMap((skill) => {
+          const value = record(skill);
+          return value.enabled !== false && typeof value.name === "string" ? [value.name] : [];
+        }) : [];
+      });
+      const modelEntries = Array.isArray(record(modelsResponse).data) ? record(modelsResponse).data as unknown[] : [];
+      const models = modelEntries.flatMap((entry) => {
+        const value = record(entry);
+        if (value.hidden === true || typeof value.id !== "string") return [];
+        const label = typeof value.displayName === "string" ? value.displayName : value.id;
+        return [{ id: value.id, label: value.upgrade ? `${label} (deprecated)` : label }];
+      });
+      this.caps = {
+        skills: [...new Set(skills)],
+        commands: [],
+        agents: [],
+        tools: [],
+        mcpServers: [...this.mcpStatuses].map(([name, status]) => ({ name, status })),
+        models,
+      };
+      this.onCaps?.(this.caps);
+    } catch (error) {
+      this.onEvent?.({ kind: "notice", message: `Codex capability discovery failed: ${String(error)}` });
     }
   }
 
@@ -262,9 +380,63 @@ export class CodexSession implements AgentSession {
     const id = message.id;
     if (id === undefined) return;
     const params = message.params ?? {};
+    if (method === "item/tool/requestUserInput") {
+      const rawQuestions = Array.isArray(params.questions) ? params.questions : [];
+      const questions = rawQuestions.flatMap((value) => {
+        const question = record(value);
+        if (typeof question.id !== "string" || typeof question.question !== "string") return [];
+        const options = Array.isArray(question.options)
+          ? question.options.flatMap((raw) => {
+              const option = record(raw);
+              return typeof option.label === "string"
+                ? [{ label: option.label, ...(typeof option.description === "string" ? { description: option.description } : {}) }]
+                : [];
+            })
+          : [];
+        return [{
+          id: question.id,
+          header: typeof question.header === "string" ? question.header : question.id,
+          question: question.question,
+          options,
+          multiSelect: question.multiSelect === true,
+          secret: question.isSecret === true,
+        }];
+      });
+      if (!this.opts.requestUserInput || questions.length === 0) {
+        this.sendRpc({ id, result: { answers: {} } });
+        return;
+      }
+      void this.opts.requestUserInput(questions).then(
+        (answers) => this.sendRpc({
+          id,
+          result: {
+            answers: Object.fromEntries(
+              questions.map((question) => [question.id, { answers: [answers[question.id] ?? ""].filter(Boolean) }])
+            ),
+          },
+        }),
+        () => this.sendRpc({ id, result: { answers: {} } }),
+      );
+      return;
+    }
+
+    if (method === "mcpServer/elicitation/request") {
+      const questions = elicitationQuestions(params);
+      if (!this.opts.requestUserInput || questions.length === 0) {
+        this.sendRpc({ id, result: { action: "decline" } });
+        return;
+      }
+      void this.opts.requestUserInput(questions).then(
+        (answers) => this.sendRpc({ id, result: { action: "accept", content: elicitationContent(params, answers) } }),
+        () => this.sendRpc({ id, result: { action: "cancel" } }),
+      );
+      return;
+    }
+
     const commandApproval = method === "item/commandExecution/requestApproval";
     const fileApproval = method === "item/fileChange/requestApproval";
-    if (!commandApproval && !fileApproval) {
+    const permissionsApproval = method === "item/permissions/requestApproval";
+    if (!commandApproval && !fileApproval && !permissionsApproval) {
       this.sendRpc({ id, error: { code: -32601, message: `Unsupported app-server request: ${method}` } });
       return;
     }
@@ -280,11 +452,25 @@ export class CodexSession implements AgentSession {
     this.onEvent?.({
       kind: "permission-request",
       id: `codex-${String(id)}`,
-      tool: commandApproval ? "Bash" : "Edit",
+      tool: commandApproval ? "Bash" : fileApproval ? "Edit" : "Permissions",
       input: commandApproval
         ? { command: params.command ?? "", cwd: params.cwd, reason: params.reason }
-        : { file_path: params.grantRoot ?? "", reason: params.reason },
+        : fileApproval
+          ? { file_path: params.grantRoot ?? "", reason: params.reason }
+          : { permissions: params.permissions ?? {}, cwd: params.cwd, reason: params.reason },
       resolve: (decision) => {
+        if (permissionsApproval) {
+          this.approvalCancels.delete(id);
+          settled = true;
+          this.sendRpc({
+            id,
+            result: {
+              permissions: decision.behavior === "allow" ? params.permissions ?? {} : {},
+              scope: decision.behavior === "allow" && decision.remember ? "session" : "turn",
+            },
+          });
+          return;
+        }
         if (decision.behavior === "allow") finish(decision.remember ? "acceptForSession" : "accept");
         else finish("decline");
       },
@@ -323,8 +509,41 @@ export class CodexSession implements AgentSession {
       if (used > 0) this.turnTokens = used;
       if (used > 0 && total > 0) {
         this.usage = { used, total };
+        if (this.opts.autoCompact && used / total >= 0.9) this.autoCompactPending = true;
         this.onEvent?.({ kind: "usage", usage: this.usage });
       }
+      return;
+    }
+    if (method === "turn/plan/updated") {
+      const plan = Array.isArray(params.plan) ? params.plan : [];
+      this.onEvent?.({
+        kind: "tool-call-start",
+        id: `codex-plan-${String(params.turnId ?? this.activeTurnId ?? "turn")}`,
+        name: "TodoWrite",
+        input: {
+          todos: plan.map((raw) => {
+            const step = record(raw);
+            return {
+              content: String(step.step ?? ""),
+              status: step.status === "inProgress" ? "in_progress" : String(step.status ?? "pending"),
+            };
+          }),
+        },
+      });
+      return;
+    }
+    if (method === "account/rateLimits/updated") {
+      const limits = record(params.rateLimits);
+      const primary = record(limits.primary);
+      const usedPercent = Number(primary.usedPercent ?? 0);
+      const rejected = typeof limits.rateLimitReachedType === "string" && !!limits.rateLimitReachedType;
+      this.rateLimit = {
+        status: rejected ? "rejected" : usedPercent >= 80 ? "allowed_warning" : "allowed",
+        utilization: usedPercent / 100,
+        resetsAt: typeof primary.resetsAt === "number" ? primary.resetsAt : undefined,
+        windowType: typeof limits.limitName === "string" ? limits.limitName : "Codex",
+      };
+      this.onEvent?.({ kind: "rate-limit", ...this.rateLimit });
       return;
     }
     if (method === "thread/compacted") {
@@ -364,8 +583,14 @@ export class CodexSession implements AgentSession {
       } else if (status === "interrupted" && !this.interruptRequested) {
         this.onEvent?.({ kind: "error", message: "Codex turn was interrupted." });
       }
+      const shouldCompact = this.autoCompactPending && status === "completed";
+      this.autoCompactPending = false;
       this.onEvent?.({ kind: "turn-end", sessionId: this.threadId });
       this.finishTurn();
+      if (shouldCompact && this.threadId) {
+        void this.request("thread/compact/start", { threadId: this.threadId })
+          .catch((error) => this.onEvent?.({ kind: "notice", message: `Auto-compact failed: ${String(error)}` }));
+      }
     }
   }
 
@@ -404,6 +629,30 @@ export class CodexSession implements AgentSession {
       this.onEvent?.(done
         ? { kind: "tool-call-result", id, ok: item.status === "completed", output: outputText(item.result ?? item.error) }
         : { kind: "tool-call-start", id, name, input: item.arguments });
+      return;
+    }
+    if (item.type === "collabAgentToolCall") {
+      const input = {
+        description: item.prompt ?? String(item.tool ?? "Subagent"),
+        prompt: item.prompt ?? "",
+        receiver_thread_ids: item.receiverThreadIds ?? [],
+      };
+      this.onEvent?.(done
+        ? { kind: "tool-call-result", id, ok: item.status === "completed", output: outputText(item.agentsStates) }
+        : { kind: "tool-call-start", id, name: "Agent", input });
+      return;
+    }
+    if (item.type === "webSearch") {
+      this.onEvent?.(done
+        ? { kind: "tool-call-result", id, ok: true, output: item.query ?? "" }
+        : { kind: "tool-call-start", id, name: "WebSearch", input: { query: item.query ?? "" } });
+      return;
+    }
+    if (item.type === "dynamicToolCall") {
+      const name = ["dynamic", item.namespace, item.tool].filter(Boolean).join("__");
+      this.onEvent?.(done
+        ? { kind: "tool-call-result", id, ok: item.success !== false && item.status !== "failed", output: outputText(item.output ?? item.result ?? item.error) }
+        : { kind: "tool-call-start", id, name, input: item.arguments });
     }
   }
 
@@ -414,6 +663,7 @@ export class CodexSession implements AgentSession {
       agents: this.caps?.agents ?? [],
       tools: this.caps?.tools ?? [],
       mcpServers: [...this.mcpStatuses].map(([name, status]) => ({ name, status })),
+      ...(this.caps?.models ? { models: this.caps.models } : {}),
     };
     this.onCaps?.(this.caps);
   }
@@ -476,6 +726,7 @@ export class CodexSession implements AgentSession {
         cwd: this.opts.cwd,
         approvalPolicy: approvalPolicy(this.opts.approvalPolicy),
         approvalsReviewer: "user",
+        collaborationMode: collaborationMode(this.opts),
         ...(this.opts.model && this.opts.model !== "default" ? { model: this.opts.model } : {}),
         ...(this.opts.effort && this.opts.effort !== "default" ? { effort: this.opts.effort } : {}),
       }));
@@ -522,6 +773,10 @@ export class CodexSession implements AgentSession {
       .catch((error) => this.onEvent?.({ kind: "error", message: String(error) }));
   }
 
+  setPermissionMode(mode: import("./types").PermissionMode): void {
+    this.opts.permissionMode = mode;
+  }
+
   interrupt(): void {
     if (this.disposed || this.ended || !this.threadId || !this.activeTurnId) return;
     this.interruptRequested = true;
@@ -548,6 +803,7 @@ export class CodexSession implements AgentSession {
     } catch { /* ignore */ }
     this.child = null;
     this.ended = true;
+    this.stopBridge();
     this.cleanupImages();
   }
 
@@ -602,5 +858,12 @@ export class CodexSession implements AgentSession {
       this.child?.kill("SIGTERM");
     } catch { /* ignore */ }
     this.child = null;
+    this.stopBridge();
+  }
+
+  private stopBridge(): void {
+    if (this.bridgeStopped) return;
+    this.bridgeStopped = true;
+    this.opts.codexBridge?.stop?.();
   }
 }

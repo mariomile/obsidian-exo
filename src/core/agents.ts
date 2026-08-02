@@ -81,6 +81,9 @@ export interface AgentBrain {
   source: AgentSource;
   /** Full path of the brain file, for "open definition" affordances. */
   path?: string;
+  /** Markdown body, used to carry a named-agent definition into runtimes that
+   *  do not natively load Claude agent files (Codex). */
+  prompt?: string;
 }
 
 export type AgentTrigger =
@@ -211,7 +214,8 @@ export function parseAgentBrain(raw: string, slug: string, source: AgentSource, 
   const prefix = cut === -1 ? "" : slug.slice(0, cut + 1);
   const base = cut === -1 ? slug : slug.slice(cut + 1);
   const fm = frontmatterBlock(raw);
-  if (!fm) return { slug, name: base, invocable: slug, source, path };
+  const prompt = fm ? raw.slice(raw.indexOf("---", 3) + 3).trim() : raw.trim();
+  if (!fm) return { slug, name: base, invocable: slug, source, path, ...(prompt ? { prompt } : {}) };
   const name = fmScalar(fm, "name") ?? base;
   const tools = fmList(fm, "tools");
   return {
@@ -223,6 +227,7 @@ export function parseAgentBrain(raw: string, slug: string, source: AgentSource, 
     tools: tools.length ? tools : undefined,
     source,
     path,
+    ...(prompt ? { prompt } : {}),
   };
 }
 
@@ -592,7 +597,11 @@ export function agentsWithTrigger<K extends AgentTrigger["on"]>(
  * engine's own subagent machinery — Exo does not run a second brain, it just
  * stops being ambiguous about which one the engine should use.
  */
-export function buildAgentBindingOutbound(def: AgentDef, visibleText: string): string {
+export function buildAgentBindingOutbound(
+  def: AgentDef,
+  visibleText: string,
+  provider: "claude" | "codex" = "claude",
+): string {
   const { brain, contract } = def;
   const lines = [
     "<agent-binding>",
@@ -600,7 +609,10 @@ export function buildAgentBindingOutbound(def: AgentDef, visibleText: string): s
     // Wait for it: the Agent tool backgrounds by default, and a bound turn that
     // answers "I've started it" instead of answering the question is worse than
     // not having bound at all.
-    `Delegate this request to that subagent and WAIT for its result: Agent({ subagent_type: "${brain.invocable}", prompt: <the user's request>, run_in_background: false }).`,
+    provider === "claude"
+      ? `Delegate this request to that subagent and WAIT for its result: Agent({ subagent_type: "${brain.invocable}", prompt: <the user's request>, run_in_background: false }).`
+      : "Delegate this request with spawn_agent, include the agent definition below in its task, and WAIT for the result with wait_agent before answering.",
+    provider === "codex" && brain.prompt ? `Agent definition:\n${brain.prompt}` : "",
     brain.description ? `Its remit: ${brain.description}` : "",
     contract.scope.read.length ? `It reads: ${contract.scope.read.join(", ")}.` : "",
     contract.scope.write.length

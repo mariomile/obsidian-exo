@@ -57,10 +57,9 @@ export async function renderMemoryTab(host: HTMLElement, ctx: HubTabContext): Pr
   }
 
   // Vault memory files
-  const claude = s.provider === "claude";
   host.appendChild(buildGroupHeader("Vault memory"));
-  host.appendChild(buildStatusRow("Read at boot", s.memoryReadEnabled && claude ? "on" : "off", s.memoryReadEnabled && claude));
-  host.appendChild(buildStatusRow("Write (gated)", s.memoryWriteEnabled && claude ? "on" : "off", s.memoryWriteEnabled && claude));
+  host.appendChild(buildStatusRow("Read at boot", s.memoryReadEnabled ? "on" : "off", s.memoryReadEnabled));
+  host.appendChild(buildStatusRow("Write (gated)", s.memoryWriteEnabled ? "on" : "off", s.memoryWriteEnabled));
   const files: [string, string][] = [
     ["vault-context.md", paths.vaultContext],
     ["preferences.md", paths.preferences],

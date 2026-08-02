@@ -2,7 +2,8 @@ import { App, FileSystemAdapter, TFile } from "obsidian";
 import { resolveCli, describeError } from "./cli";
 import { ADAPTERS } from "./providers/registry";
 import type { AgentEvent } from "./providers/types";
-import { createObsidianToolServer, OBSIDIAN_READ_TOOLS } from "./obsidian/tools";
+import { buildObsidianTools, createObsidianToolServer, OBSIDIAN_READ_TOOLS } from "./obsidian/tools";
+import type { CodexBridge } from "./obsidian/codex-bridge";
 import { READ_ONLY_TOOLS, toolFilePath, toolFilePaths } from "./ui/tools";
 import { isReadOnlyExternalTool } from "./core/headless-tools";
 import { WRITE_TOOLS } from "./core/touched";
@@ -23,6 +24,12 @@ export interface HeadlessResult {
    *  flagged in the report instead. */
   checkpoint: Map<string, string | null>;
   error?: string;
+}
+
+export interface HeadlessOpts {
+  write?: boolean;
+  /** Isolated Codex bridge owned by this run; released with the session. */
+  codexBridge?: { bridge: CodexBridge; scriptPath: string; release: () => void };
 }
 
 function vaultPath(app: App): string {
@@ -75,7 +82,7 @@ export async function runHeadlessPlaybook(
   app: App,
   settings: MVASettings,
   prompt: string,
-  opts: { write?: boolean } = {}
+  opts: HeadlessOpts = {}
 ): Promise<HeadlessResult> {
   const provider = settings.provider;
   const write = opts.write === true;
@@ -90,6 +97,22 @@ export async function runHeadlessPlaybook(
   let session: import("./providers/types").AgentSession | null = null;
   try {
     const cli = await resolveCli(provider, bin);
+    let codexBridge: import("./providers/types").SessionOpts["codexBridge"];
+    if (provider === "codex" && settings.obsidianToolsEnabled && opts.codexBridge) {
+      const readNames = new Set([...OBSIDIAN_READ_TOOLS].map((name) => name.replace("mcp__obsidian__", "")));
+      const tools = buildObsidianTools(app, {
+        memoryRead: settings.memoryReadEnabled,
+        memoryWrite: false,
+        paths: exoPaths(settings.memoryRoot || LEGACY_MEMORY_ROOT),
+      }).filter((tool) => readNames.has(tool.name) || (write && WRITE_TOOLS.test(tool.name)));
+      opts.codexBridge.bridge.setTools(tools);
+      codexBridge = {
+        port: opts.codexBridge.bridge.port,
+        token: opts.codexBridge.bridge.token,
+        scriptPath: opts.codexBridge.scriptPath,
+        stop: opts.codexBridge.release,
+      };
+    }
     session = ADAPTERS[provider].createSession({
       cli,
       model: provider === "claude" ? settings.claudeModel : settings.codexModel,
@@ -111,6 +134,7 @@ export async function runHeadlessPlaybook(
       // never ask (nothing can answer).
       sandboxMode: write ? "workspace-write" : "read-only",
       approvalPolicy: "never",
+      codexBridge,
     });
 
     for (let i = 0; i < steps.length; i++) {
@@ -185,6 +209,7 @@ export async function runHeadlessPlaybook(
     };
   } finally {
     session?.dispose();
+    if (!session) opts.codexBridge?.release();
   }
 }
 

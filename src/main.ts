@@ -41,7 +41,7 @@ import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidi
 import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
 import { DreamModal } from "./ui/dream-modal";
-import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessResult } from "./headless";
+import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessOpts, type HeadlessResult } from "./headless";
 import { automationLastRunKey, migrateScheduledRuns, isDue, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
 import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
@@ -189,8 +189,8 @@ export default class ExoPlugin extends Plugin {
    *  until a session has spawned this app run. */
   lastSessionCaps: import("./providers/types").SessionCaps | null = null;
 
-  /** Codex ↔ Obsidian tools bridge (lazy singleton; stopped on unload). */
-  private codexBridge: CodexBridge | null = null;
+  /** Codex ↔ Obsidian tool bridges, isolated per session and stopped on unload. */
+  private codexBridges = new Set<CodexBridge>();
   private codexBridgeScriptPath: string | null = null;
 
   /** One-time guard for the codex-bridge node preflight Notice. */
@@ -2300,7 +2300,11 @@ export default class ExoPlugin extends Plugin {
     }
     const startedAt = Date.now();
     new Notice(`Running playbook "${name}"…`);
-    const result = await runHeadlessPlaybook(this.app, this.settings, prompt, opts);
+    const headlessOpts: HeadlessOpts = { ...opts };
+    if (this.settings.provider === "codex" && this.settings.obsidianToolsEnabled) {
+      headlessOpts.codexBridge = (await this.ensureCodexBridge()) ?? undefined;
+    }
+    const result = await runHeadlessPlaybook(this.app, this.settings, prompt, headlessOpts);
     const path = await writeReport(this.app, name, result, this.paths.reports);
     if (opts.write) await this.recordAutomationRun(name, startedAt, result, path);
     new Notice(
@@ -2374,18 +2378,33 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
-  /** Start (once) the loopback executor and materialize the stdio script the
-   *  codex child spawns. Null when anything fails — Codex then runs without
-   *  obsidian tools, exactly as before the bridge existed. */
-  async ensureCodexBridge(): Promise<{ bridge: CodexBridge; scriptPath: string } | null> {
+  /** Start an isolated loopback executor and materialize the shared stdio script
+   *  the codex child spawns. Null when anything fails — Codex then runs without
+   *  Obsidian tools. The owning session must call `release` on teardown. */
+  async ensureCodexBridge(): Promise<{
+    bridge: CodexBridge;
+    scriptPath: string;
+    release: () => void;
+  } | null> {
     try {
-      if (!this.codexBridge) this.codexBridge = await startCodexBridge();
       if (!this.codexBridgeScriptPath) {
         const rel = `${this.manifest.dir}/codex-bridge.mjs`;
         await this.app.vault.adapter.write(rel, CODEX_BRIDGE_SCRIPT);
         this.codexBridgeScriptPath = `${this.vaultPath()}/${rel}`;
       }
-      return { bridge: this.codexBridge, scriptPath: this.codexBridgeScriptPath };
+      const bridge = await startCodexBridge();
+      this.codexBridges.add(bridge);
+      let released = false;
+      return {
+        bridge,
+        scriptPath: this.codexBridgeScriptPath,
+        release: () => {
+          if (released) return;
+          released = true;
+          this.codexBridges.delete(bridge);
+          bridge.stop();
+        },
+      };
     } catch (e) {
       console.warn("[Exo] codex bridge unavailable:", e);
       return null;
@@ -2569,7 +2588,8 @@ export default class ExoPlugin extends Plugin {
       window.clearTimeout(h);
     }
     this.startupIdleHandles = [];
-    this.codexBridge?.stop();
+    for (const bridge of this.codexBridges) bridge.stop();
+    this.codexBridges.clear();
   }
 
   /** Pending queue requests (for the Autonomy card). */
@@ -2927,11 +2947,15 @@ export default class ExoPlugin extends Plugin {
     try {
       new Notice(`${agent.brain.name} — running (${reason})…`);
       const memory = await this.agentStore.loadMemory(agent, today);
+      const headlessOpts: HeadlessOpts = { write };
+      if (this.settings.provider === "codex" && this.settings.obsidianToolsEnabled) {
+        headlessOpts.codexBridge = (await this.ensureCodexBridge()) ?? undefined;
+      }
       const result = await runHeadlessPlaybook(
         this.app,
         this.settings,
         buildAgentRunPrompt(agent, reason, memory, task, this.paths.reports),
-        { write }
+        headlessOpts
       );
       const proposed = await this.collectAgentProposals(agent, result.output, startedAt);
       // A note is earned, not automatic. An agent watching a folder runs far

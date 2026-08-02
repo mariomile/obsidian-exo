@@ -79,6 +79,16 @@ export interface ImageAttachment {
   name?: string;
 }
 
+/** Provider-native structured question normalized to Exo's ask card. */
+export interface UserQuestion {
+  question: string;
+  header: string;
+  id: string;
+  options: { label: string; description?: string }[];
+  multiSelect?: boolean;
+  secret?: boolean;
+}
+
 /** Everything fixed for the lifetime of a conversation session. */
 export interface SessionOpts {
   cli: ResolvedCli;
@@ -99,7 +109,7 @@ export interface SessionOpts {
   runHooks?: boolean;
   /** Resume a prior on-disk session id when (re)creating the session. */
   resumeSessionId?: string;
-  /** In-process Obsidian MCP server (createSdkMcpServer return). Claude only. */
+  /** In-process Obsidian MCP server (createSdkMcpServer return). */
   obsidianServer?: unknown;
   /** Disable built-in file tools so the agent uses Obsidian-native ones. */
   nativeFirst?: boolean;
@@ -114,7 +124,9 @@ export interface SessionOpts {
   /** Codex ↔ Obsidian tools bridge (Tranche B1): loopback executor coordinates
    *  + the generated stdio script path. Present only for Codex sessions with
    *  obsidian tools enabled. */
-  codexBridge?: { port: number; token: string; scriptPath: string };
+  codexBridge?: { port: number; token: string; scriptPath: string; stop?: () => void };
+  /** Render a provider-native request for user input in the owning conversation. */
+  requestUserInput?: (questions: UserQuestion[]) => Promise<Record<string, string>>;
 }
 
 /** Capability snapshot from the CLI's `system/init` message — the real skills /
@@ -132,6 +144,8 @@ export interface SessionCaps {
    *  drifted every time the CLI added an orchestration tool. */
   tools: string[];
   mcpServers: { name: string; status: string }[];
+  /** Runtime model catalog when the provider exposes one (Codex app-server). */
+  models?: ModelOption[];
 }
 
 /**
@@ -143,9 +157,8 @@ export interface SessionCaps {
 export interface AgentSession {
   /** Latest capability snapshot (see SessionCaps); null until init arrives. */
   caps?: SessionCaps | null;
-  /** Latest Claude-plan quota snapshot (see RateLimitInfo); null until (and
-   *  unless) a `rate_limit_event` arrives — only claude.ai subscription
-   *  sessions ever get one. Stored so a view can read it after switching tabs. */
+  /** Latest provider quota snapshot (see RateLimitInfo), stored so a view can
+   *  read it after switching tabs. */
   rateLimit?: RateLimitInfo | null;
   /** Invoked once when the init snapshot lands (may be before the first send). */
   onCaps?: ((caps: SessionCaps) => void) | null;
@@ -163,7 +176,7 @@ export interface AgentSession {
    *  Optional free-text `instructions` steer what the compaction summary keeps
    *  (appended to the /compact slash command). */
   compact?(instructions?: string): void;
-  /** Change the permission mode live (Claude); used by the plan-mode toggle. */
+  /** Change the permission mode live; used by the plan-mode toggle. */
   setPermissionMode?(mode: PermissionMode): void;
   /** Tear down the session (kills any live process). */
   dispose(): void;

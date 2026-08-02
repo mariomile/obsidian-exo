@@ -445,6 +445,14 @@ describe("buildAgentBindingOutbound", () => {
     const notify = mergeAgents([brain("x", { name: "X" })], [{ ...defaultContract("x"), autonomy: "notify" }])[0];
     expect(buildAgentBindingOutbound(notify, "y")).toContain("report only");
   });
+  it("uses Codex multi-agent primitives and includes the agent definition", () => {
+    const codexDef = { ...def, brain: { ...def.brain, prompt: "You are the vault ghostwriter." } };
+    const out = buildAgentBindingOutbound(codexDef, "write it", "codex");
+    expect(out).toContain("spawn_agent");
+    expect(out).toContain("wait_agent");
+    expect(out).toContain("You are the vault ghostwriter.");
+    expect(out).not.toContain("subagent_type");
+  });
 });
 
 describe("parseAgentCommand", () => {

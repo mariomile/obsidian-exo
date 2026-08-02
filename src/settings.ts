@@ -38,11 +38,11 @@ export interface MVASettings {
   autoAllowRead: boolean;
   fastStartup: boolean;
   /** Start the CLI session in the background when Exo opens, so the first
-   *  message skips the cold start. Claude only. */
+   *  message skips the cold start. */
   prewarmSession: boolean;
   /** Run Claude Code hooks (.claude/settings.json) — CC parity, on by default. */
   runHooks: boolean;
-  /** `/goal` command enabled (Claude only). */
+  /** `/goal` command enabled. */
   enableGoal: boolean;
   /** Per-window auto-iteration cap before `/goal` pauses to ask to continue. */
   goalMaxIterations: number;
@@ -55,11 +55,11 @@ export interface MVASettings {
   /** Codex sandbox + approval policy. */
   codexSandbox: string;
   codexApproval: string;
-  /** Auto-compact the conversation when context fills (token saver, Claude). */
+  /** Auto-compact the conversation when context fills (token saver). */
   autoCompactEnabled: boolean;
   /** Load native tool defs on-demand instead of always in context (saves tokens). */
   contextSavingMode: boolean;
-  // Obsidian-native (Claude). All optional/toggleable.
+  // Obsidian-native tools. All optional/toggleable.
   obsidianToolsEnabled: boolean;
   nativeFirst: boolean;
   memoryReadEnabled: boolean;
@@ -85,7 +85,7 @@ export interface MVASettings {
    *  scorer and auto-inject the top relevant, not-yet-injected memories into the
    *  outbound turn (in `[recalled-memory]` blocks). ON by default — this is the
    *  point of the store. Kill-switch: OFF makes the send path identical to before
-   *  the feature existed. Claude only (memory read must also be on). */
+   *  the feature existed. Memory read must also be on. */
   proactiveRecall: boolean;
   /** Max memories proactive recall injects per turn (advanced). */
   proactiveRecallK: number;
@@ -419,8 +419,9 @@ export class MVASettingTab extends PluginSettingTab {
     const fill = (d: DropdownComponent, provider: ProviderId) => {
       d.selectEl.empty();
       const cur = provider === "claude" ? s.claudeModel : s.codexModel;
+      const runtimeModels = provider === "codex" ? this.plugin.lastSessionCaps?.models : undefined;
       const opts = modelOptions(
-        ADAPTERS[provider].models(),
+        runtimeModels?.length ? runtimeModels : ADAPTERS[provider].models(),
         provider === "claude" ? s.claudeCustomModels : s.codexCustomModels
       );
       for (const o of opts) d.addOption(o.id, o.label);
@@ -794,32 +795,32 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Read vault memory",
-      `Boot each conversation with context from ${paths.root}/ (vault-context, preferences, rules, recent sessions). Claude only.`,
+      `Boot each conversation with context from ${paths.root}/ (vault-context, preferences, rules, recent sessions).`,
       "memoryReadEnabled"
     );
     this.toggleSetting(
       el,
       "Write vault memory",
-      `Let the agent capture decisions, learnings, and session-log entries into ${paths.root}/ — every write is still permission-gated. Claude only.`,
+      `Let the agent capture decisions, learnings, and session-log entries into ${paths.root}/ — every write is still permission-gated.`,
       "memoryWriteEnabled"
     );
     this.toggleSetting(
       el,
       "Self-writing memory",
-      "After each healthy turn, a cheap background observer proposes durable memories and appends them to the store as @generated entries — you can review or undo each write. Off by default; runs only when Write vault memory is also on. Claude only.",
+      "After each healthy turn, a cheap background observer proposes durable memories and appends them to the store as @generated entries — you can review or undo each write. Off by default; runs only when Write vault memory is also on. The observer currently uses the configured Claude background model for both chat providers.",
       "selfWritingMemory"
     );
     this.toggleSetting(
       el,
       "The agent is the folder (identity)",
-      `Hydrate every conversation from ${paths.agentDir}/ — three short blocks (persona = how Exo behaves, human = a distilled model of you, now = what matters right now) that give Exo AND any external tool (Claude Code, Codex) a coherent identity. Adds the rethink_memory tool (now/human rewrite freely, persona is propose-only) and an observer that proposes now.md updates after a turn. Off by default; with it off, boot is unchanged and the folder is never read. Rollout: run "Exo: Seed agent folder", review human.md, then flip this on. Claude only.`,
+      `Hydrate every conversation from ${paths.agentDir}/ — three short blocks (persona = how Exo behaves, human = a distilled model of you, now = what matters right now) that give Exo AND any external tool (Claude Code, Codex) a coherent identity. Adds the rethink_memory tool (now/human rewrite freely, persona is propose-only) and an observer that proposes now.md updates after a turn. Off by default; with it off, boot is unchanged and the folder is never read. Rollout: run "Exo: Seed agent folder", review human.md, then flip this on.`,
       "agentFolderEnabled"
     );
 
     new Setting(el)
       .setName("Proactive recall")
       .setDesc(
-        "Before each message is sent, surface the most relevant stored memories into the turn automatically — so the agent no longer has to decide to call recall. Deduped per conversation and relevance-gated, so irrelevant turns cost nothing. On by default; needs Read vault memory. Claude only."
+        "Before each message is sent, surface the most relevant stored memories into the turn automatically — so the agent no longer has to decide to call recall. Deduped per conversation and relevance-gated, so irrelevant turns cost nothing. On by default; needs Read vault memory."
       )
       .addToggle((t) =>
         t.setValue(s.proactiveRecall).onChange(async (v) => {
@@ -1098,7 +1099,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Auto-compact (token saver)",
-      "Summarize and compact the conversation automatically when the context window fills, so long chats don't re-bill the whole history each turn. Claude only.",
+      "Summarize and compact the conversation automatically when the context window fills, so long chats don't re-bill the whole history each turn.",
       "autoCompactEnabled"
     );
     this.toggleSetting(
@@ -1110,7 +1111,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Obsidian tools",
-      "Give the agent native vault tools (search, read, backlinks, neighborhood, create/edit notes, frontmatter) alongside the standard ones. Claude only.",
+      "Give the agent native vault tools (search, read, backlinks, neighborhood, create/edit notes, frontmatter) alongside the standard ones.",
       "obsidianToolsEnabled"
     );
     this.toggleSetting(
@@ -1124,7 +1125,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Enable named agents",
-      "Turns on the agent registry: `@agent` in the composer binds a turn to a specific subagent, `/as <agent>` binds the whole conversation, and agents with a schedule trigger can run unattended. Definitions come from `.claude/agents/*.md` (the prompt, shared with the CLI) plus a contract file per agent under your memory root (triggers, autonomy tier, write scope). Off by default; each agent is separately disabled until you turn it on. Claude only.",
+      "Turns on the agent registry: `@agent` in the composer binds a turn to a specific subagent, `/as <agent>` binds the whole conversation, and agents with a schedule trigger can run unattended. Definitions come from `.claude/agents/*.md` plus a contract file per agent under your memory root (triggers, autonomy tier, write scope). Off by default; each agent is separately disabled until you turn it on.",
       "agentsEnabled",
       // Warm the registry the moment the flag flips. Without this the store
       // stays unloaded until some other consumer happens to ask for it, so
@@ -1142,7 +1143,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Enable orchestration",
-      "Turns on the Orchestration Board: the `add_task` chat tool, the \"Promote to task\" command, and the board itself, so work can be queued up and run as separate conversations instead of inline in this chat. Off by default. Turning it OFF never touches conversations already running — they keep going as normal chats; it only stops new tasks from being queued or started. Claude only.",
+      "Turns on the Orchestration Board: the `add_task` chat tool, the \"Promote to task\" command, and the board itself, so work can be queued up and run as separate conversations instead of inline in this chat. Off by default. Turning it OFF never touches conversations already running — they keep going as normal chats; it only stops new tasks from being queued or started.",
       "orchestrationEnabled"
     );
 

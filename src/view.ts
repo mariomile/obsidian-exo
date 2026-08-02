@@ -260,7 +260,7 @@ export interface Convo {
   sessionSig: string;
   streaming: boolean;
   stopped: boolean; // set by stop() so the turn renders as "Stopped", not an error
-  /** Active `/goal` (Claude only). In-memory: not persisted across reloads. */
+  /** Active `/goal`. In-memory: not persisted across reloads. */
   goal?: GoalState;
   pendingPerm: (() => void) | null; // cancels an open permission card on stop
   pendingAsk: (() => void) | null; // cancels an open ask card on stop
@@ -894,8 +894,10 @@ export class ChatView extends ItemView {
     const bin = c.provider === "claude" ? s.claudeBin : s.codexBin;
     const cli = await resolveCli(c.provider, bin);
 
-    // Obsidian-native tools are Claude-only and require agentic (gated) mode.
-    const useObsidian = s.obsidianToolsEnabled && s.toolsEnabled && c.provider === "claude";
+    const hasObsidianTools = s.obsidianToolsEnabled && s.toolsEnabled;
+    // Claude receives the native in-process MCP server; Codex receives the same
+    // registry through its isolated loopback bridge below.
+    const useObsidian = hasObsidianTools && c.provider === "claude";
     // The createSdkMcpServer instance binds to its first session's transport and
     // is NOT reusable across query() sessions — a cached instance means every
     // session after the first (new tabs, post-error respawns) boots without the
@@ -943,7 +945,7 @@ export class ChatView extends ItemView {
       // (obsidian tools on + memory read on ⇒ `recall`, +write ⇒ `remember`).
       // With proactive recall ON, swap in the variant that says memories are
       // auto-provided (the model needn't decide to call `recall`).
-      if (useObsidian) {
+      if (hasObsidianTools) {
         const note = s.proactiveRecall
           ? memoryStoreNoteProactive(this.plugin.paths.store)
           : memoryStoreNote(this.plugin.paths.store);
@@ -961,9 +963,7 @@ export class ChatView extends ItemView {
     // server, swapped per session. SANDBOX HONESTY: bridge writes happen in the
     // Obsidian process and bypass codex's sandbox, so a read-only sandbox gets
     // read tools only.
-    // Known limitation (v1): ONE toolset shared across codex sessions — see "Out of scope" in the design doc for the singleton ask_user routing caveat.
-    // rethink_memory is deliberately not wired over this bridge yet (v1 scope) — see the same doc section.
-    let codexBridge: { port: number; token: string; scriptPath: string } | undefined;
+    let codexBridge: { port: number; token: string; scriptPath: string; stop?: () => void } | undefined;
     if (
       c.provider === "codex" &&
       s.obsidianToolsEnabled &&
@@ -983,6 +983,8 @@ export class ChatView extends ItemView {
           loopsWriteQueue: this.plugin.loopsWriteQueue,
           orchestrationEnabled: s.orchestrationEnabled && !readOnlySandbox,
           tasksWriteQueue: this.plugin.tasksWriteQueue,
+          agentFolderEnabled: s.agentFolderEnabled && !readOnlySandbox,
+          rethinkBridge: (req) => this.rethinkBridge(c, req),
           paths: this.plugin.paths,
         });
         const READ_BASENAMES = new Set(
@@ -991,7 +993,12 @@ export class ChatView extends ItemView {
         b.bridge.setTools(
           readOnlySandbox ? all.filter((t) => READ_BASENAMES.has(t.name) || t.name === "ask_user") : all
         );
-        codexBridge = { port: b.bridge.port, token: b.bridge.token, scriptPath: b.scriptPath };
+        codexBridge = {
+          port: b.bridge.port,
+          token: b.bridge.token,
+          scriptPath: b.scriptPath,
+          stop: b.release,
+        };
       }
     }
 
@@ -1009,10 +1016,16 @@ export class ChatView extends ItemView {
       obsidianServer,
       nativeFirst: useObsidian && s.nativeFirst,
       memoryPreamble,
-      autoCompact: s.autoCompactEnabled && c.provider === "claude",
+      autoCompact: s.autoCompactEnabled,
       sandboxMode: s.codexSandbox,
       approvalPolicy: s.codexApproval,
       codexBridge,
+      requestUserInput: async (questions) => {
+        const answers = await this.askBridge(c, questions);
+        return Object.fromEntries(
+          questions.map((question) => [question.id, answers[question.header] ?? ""])
+        );
+      },
     });
     // Capability snapshot (system/init, CLI ≥2.1.199): the real skills/commands/
     // agents/MCP this session sees. Cache view-wide for the autocomplete menus
@@ -1206,7 +1219,8 @@ export class ChatView extends ItemView {
     for (const provider of ["claude", "codex"] as ProviderId[]) {
       const a = ADAPTERS[provider];
       const seen = new Set<string>();
-      for (const m of a.models()) {
+      const runtimeModels = provider === "codex" ? this.plugin.lastSessionCaps?.models : undefined;
+      for (const m of runtimeModels?.length ? runtimeModels : a.models()) {
         out.push({ id: m.id, label: m.label, provider });
         seen.add(m.id);
       }
@@ -2322,11 +2336,16 @@ export class ChatView extends ItemView {
       new Notice("Send a message first — nothing to compact yet.");
       return;
     }
-    c.session.compact(instructions);
+    const effectiveInstructions = c.provider === "codex" ? undefined : instructions;
+    c.session.compact(effectiveInstructions);
     // Any compaction retires the proactive nudge for good.
     c.compactNudged = true;
     this.composer.hideCompactNudge();
-    new Notice(instructions ? "Compacting with your instructions…" : "Compacting the conversation…");
+    new Notice(
+      instructions && c.provider === "codex"
+        ? "Compacting the conversation… Codex does not support custom compact instructions."
+        : instructions ? "Compacting with your instructions…" : "Compacting the conversation…",
+    );
   }
 
   /** Reflect the active conversation's streaming state on the send button. */
@@ -3331,7 +3350,7 @@ export class ChatView extends ItemView {
 
   /** True when proactive recall may run for `c`: the master flag is on and the
    *  same preconditions that register the `recall` tool hold (obsidian tools +
-   *  memory read + agentic Claude). Any false → the send path is byte-identical
+   *  memory read + agentic mode). Any false → the send path is byte-identical
    *  to before this feature existed. */
   private proactiveRecallEligible(c: Convo): boolean {
     const s = this.plugin.settings;
@@ -3394,7 +3413,7 @@ export class ChatView extends ItemView {
   }
 
   /** Self-Writing Memory: after a HEALTHY turn, fire the observer off the critical
-   *  path. Gated to Claude + both toggles; never blocks the turn or the next one.
+   *  path. Gated by both memory toggles; never blocks the turn or the next one.
    *  On a successful write, render a discreet veto row (review · undo) into the turn.
    *  When the agent folder is on, ALSO pass `now.md` as context so the pass can
    *  propose a now.md update (design §5) — rendered as an Apply/Dismiss card. */
@@ -5095,7 +5114,7 @@ export class ChatView extends ItemView {
         otherLabel.remove();
         otherInput = otherTxt.createEl("input", {
           cls: "mva-ask-other",
-          attr: { type: "text", placeholder: "Type your answer…" },
+          attr: { type: q.secret ? "password" : "text", placeholder: "Type your answer…" },
         });
         // Clicks inside the input must not re-fire the row's expand handler.
         otherInput.addEventListener("click", (ev) => ev.stopPropagation());
@@ -5718,8 +5737,7 @@ export class ChatView extends ItemView {
     return this.plugin.agentStore.resolve(slug);
   }
 
-  /** Client-side `/goal` handler (built-in parity). Setting a goal is Claude-only;
-   *  status and clear work on any provider. Returns nothing; Notices on the guarded cases. */
+  /** Client-side `/goal` handler shared by both providers. */
   handleGoalCommand(c: Convo, text: string): void {
     if (!this.plugin.settings.enableGoal) {
       new Notice("The /goal command is disabled in settings.");
@@ -5740,10 +5758,6 @@ export class ChatView extends ItemView {
       if (c.goal) c.goal = clearGoal(c.goal);
       this.composer.refreshGoal(c);
       new Notice("Goal cleared.");
-      return;
-    }
-    if (c.provider !== "claude") {
-      new Notice("/goal is supported only on Claude sessions.");
       return;
     }
     if (c.streaming) {
@@ -6403,7 +6417,7 @@ export class ChatView extends ItemView {
       // The agent binding wraps LAST so its instruction sits closest to the
       // user's text — and, like Research Mode, it never touches the visible or
       // persisted bubble.
-      const agentMessage = boundAgent ? buildAgentBindingOutbound(boundAgent, researchMessage) : researchMessage;
+      const agentMessage = boundAgent ? buildAgentBindingOutbound(boundAgent, researchMessage, c.provider) : researchMessage;
       const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, recallBlock, agentMessage].filter(Boolean).join("\n\n");
       await session.send(outbound, onEvent, imgs);
       // `session.send` can resolve cleanly even after a user Stop/Esc — the

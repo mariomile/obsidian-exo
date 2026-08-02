@@ -10,6 +10,7 @@ export interface AskQuestion {
   header: string;
   options: { label: string; description?: string }[];
   multiSelect?: boolean;
+  secret?: boolean;
 }
 
 export type Segment =
