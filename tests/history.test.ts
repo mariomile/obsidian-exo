@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { groupByTime, matchesFilters } from "../src/core/history";
 
+// groupByTime buckets "today"/"yesterday" by the host's local calendar day
+// (correct for the shipped plugin — Obsidian/Electron reads the OS timezone,
+// and this env var has no effect there). Pinning it here only makes this
+// Node test process deterministic across machines/CI regardless of the
+// developer's own timezone; it does not change what ships.
+process.env.TZ = "UTC";
+
 const DAY = 86_400_000;
 const NOW = 1_700_000_000_000; // fixed anchor, no Date.now() in tests
 
@@ -77,6 +84,13 @@ describe("matchesFilters", () => {
     expect(matchesFilters(retired, ["retired"], NOW)).toBe(true);
     const archived = convo("b", { retiredAt: NOW - DAY, archived: true });
     expect(matchesFilters(archived, ["retired"], NOW)).toBe(false);
+  });
+
+  it("retired: false for a zero-message husk, mirroring retiredFromStrip's own exclusion", () => {
+    // retiredFromStrip (working-set.ts, Piano 2) never surfaces a card for a
+    // convo with no messages — this filter must not disagree and match one.
+    const husk = convo("husk", { retiredAt: NOW - DAY, messages: [] });
+    expect(matchesFilters(husk, ["retired"], NOW)).toBe(false);
   });
 
   it("archived: mirrors the archived flag directly", () => {

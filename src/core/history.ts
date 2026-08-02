@@ -76,11 +76,19 @@ export interface FilterableConvo {
 const PREDICATES: Record<HistoryFilter, (c: FilterableConvo, now: number) => boolean> = {
   open: (c) => c.openTabIds.has(c.id),
   // Mirrors retiredFromStrip's contract exactly (Piano 2): retired, not
-  // archived, not currently open. Deliberately NOT windowed here — this
-  // filter answers "has it ever left the strip", the group in view.ts applies
-  // the shared time window via retiredFromStrip itself (R3).
-  retired: (c) => !!c.retiredAt && c.archived !== true && !c.openTabIds.has(c.id),
+  // archived, has at least one message, not currently open. The
+  // messages.length > 0 clause matters — retiredFromStrip excludes zero-message
+  // husks because "counting one would promise a card that does not exist"
+  // (working-set.ts); this predicate answers the same "will it show up in the
+  // history" question, so it must not drift from that contract. Deliberately
+  // NOT windowed here — this filter answers "has it ever left the strip", the
+  // group in view.ts applies the shared time window via retiredFromStrip
+  // itself (R3).
+  retired: (c) => !!c.retiredAt && c.archived !== true && c.messages.length > 0 && !c.openTabIds.has(c.id),
   archived: (c) => c.archived === true,
+  // Treats a missing updatedAt as epoch-0 — i.e. always older-than-30 — the
+  // same "least information, oldest bucket" convention groupByTime uses for a
+  // missing updatedAt. Kept deliberately consistent between the two.
   olderThan30: (c, now) => (c.updatedAt ?? 0) < now - 30 * DAY_MS,
   shortConvo: (c) => c.messages.length < 3,
 };
