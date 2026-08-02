@@ -78,6 +78,14 @@ Stessa meccanica di stato. La sezione "in questo vault" diventa un accordion pro
 - Editing della documentazione inline nell'accordion (resta: apri la nota vera in una tab).
 - Un secondo pannello master-detail in stile Craft a schermo intero — l'hub resta un pane singolo dentro Obsidian.
 
+## Aggiunte dello stesso giorno (2026-08-02, seconda metà)
+
+Su richiesta di Mario, oltre all'accordion:
+
+- **Composer-insert dai chip** — `Composer.insertText` (append + focus) delegato da `ChatView.insertIntoComposer`, con wrapper a livello plugin `ExoPlugin.insertIntoComposer` sul modello di `revealConversation`. I chip Commands (`/`) e Sub-agents (`@`) nel tab Skills diventano cliccabili: click → rivela la chat, inserisce `/cmd `/`@agent ` nella conversazione attiva. Hooks/Tools restano solo informativi.
+- **Search/filter** su MCP e Skills — box di ricerca stable-keyed in `reconcileList` (mai ricostruito mentre l'utente digita, il focus non si perde), `matchesQuery` in `core/hub-sections.ts`, debounce 150ms prima del re-render (entrambi i tab rileggono dati da disco a ogni render). Su Skills i gruppi per origine con match si aprono automaticamente durante la ricerca (idioma "VS Code file-tree search") **senza toccare** lo stato di accordion persistito — cancellare la ricerca ripristina esattamente ciò che l'utente aveva impostato a mano.
+- **Rimossa la session card in chat** — il mini-pannello con i chip provider/model/effort duplicava l'Overview dell'hub e Mario non lo usava. Il bottone Capabilities nell'header ora apre l'hub direttamente (`plugin.activateHub()`), eliminando `ui/session-card.ts` e tutto il plumbing `capsEl` in `view.ts`.
+
 ## Verifica
 
 - Nuovo test puro per l'helper di stato-permesso-per-tool (`core/permissions.ts` o vicino).
