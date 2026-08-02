@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groupByTime, matchesFilters } from "../src/core/history";
+import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "../src/core/history";
 
 // groupByTime buckets "today"/"yesterday" by the host's local calendar day
 // (correct for the shipped plugin — Obsidian/Electron reads the OS timezone,
@@ -114,5 +114,24 @@ describe("matchesFilters", () => {
     const onlyRetired = convo("onlyRetired", { retiredAt: NOW - DAY, updatedAt: NOW - 1 * DAY });
     expect(matchesFilters(both, ["retired", "olderThan30"], NOW)).toBe(true);
     expect(matchesFilters(onlyRetired, ["retired", "olderThan30"], NOW)).toBe(false);
+  });
+});
+
+// startOfDay is public API because the view's relative-time label ("ritirata
+// ieri") has to count the SAME days groupByTime buckets by. The property that
+// matters there is the one asserted below: 90 seconds apart is one calendar day
+// apart when midnight falls between them — a raw 24h floor would say zero.
+describe("startOfDay", () => {
+  it("floors any time of day to that calendar day's midnight", () => {
+    const late = new Date(2026, 6, 14, 23, 59, 30).getTime();
+    const early = new Date(2026, 6, 15, 0, 0, 1).getTime();
+    expect(startOfDay(late)).toBe(new Date(2026, 6, 14, 0, 0, 0, 0).getTime());
+    expect(startOfDay(early)).toBe(new Date(2026, 6, 15, 0, 0, 0, 0).getTime());
+    expect(Math.round((startOfDay(early) - startOfDay(late)) / DAY_MS)).toBe(1);
+  });
+
+  it("is idempotent — flooring an already-floored timestamp is a no-op", () => {
+    const floored = startOfDay(new Date(2026, 6, 14, 17, 5).getTime());
+    expect(startOfDay(floored)).toBe(floored);
   });
 });

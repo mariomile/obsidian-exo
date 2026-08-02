@@ -16,9 +16,13 @@ export interface TimeGroup<T> {
   items: T[];
 }
 
-const DAY_MS = 86_400_000;
+export const DAY_MS = 86_400_000;
 
-function startOfDay(ts: number): number {
+/** Midnight of the calendar day `ts` falls in, in the local timezone. Exported
+ *  because the view's relative-time label has to speak the same date vocabulary
+ *  as `groupByTime`: flooring raw 24-hour periods instead would call a chat
+ *  retired yesterday at 23:00 "retired today" when read this morning. */
+export function startOfDay(ts: number): number {
   const d = new Date(ts);
   d.setHours(0, 0, 0, 0);
   return d.getTime();

@@ -96,7 +96,7 @@ import {
   countSurvivingRetirees,
 } from "./core/working-set";
 import type { TabVM } from "./core/working-set";
-import { groupByTime, matchesFilters } from "./core/history";
+import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
 import type { HistoryFilter, FilterableConvo } from "./core/history";
 import { reconcileList } from "./ui/keyed-reconcile";
 import type { CardModel } from "./ui/keyed-reconcile";
@@ -2339,12 +2339,23 @@ export class ChatView extends ItemView {
     sendBtn.toggleClass("is-streaming", on);
   }
 
+  /** Open/close the gallery. With a `preset` the caller is naming a destination
+   *  (the strip counter says "open the retired ones"), so an already-open
+   *  gallery showing something else SWITCHES to that preset instead of closing
+   *  — silently closing would break the affordance the counter advertises.
+   *  Clicking it again, once the preset is exactly what's on screen, closes:
+   *  that keeps the counter a toggle for its own destination, and the
+   *  no-preset header icon behaves exactly as before. */
   private toggleGallery(preset?: HistoryFilter): void {
-    if (this.galleryEl) this.hideGallery();
-    else {
-      if (this.capsEl) this.hideCapabilities();
+    if (this.galleryEl) {
+      const alreadyThere = !preset || (this.historyFilters.size === 1 && this.historyFilters.has(preset));
+      this.hideGallery();
+      if (alreadyThere) return;
       void this.showGallery(preset);
+      return;
     }
+    if (this.capsEl) this.hideCapabilities();
+    void this.showGallery(preset);
   }
 
   private hideGallery(): void {
@@ -2390,11 +2401,15 @@ export class ChatView extends ItemView {
     });
   }
 
-  private async showGallery(preset?: HistoryFilter): Promise<void> {
+  /** `preset` accepts one filter or a set of them: a single value is what the
+   *  strip counter passes, while the internal rebuild sites hand back the
+   *  filters that were active before they tore the gallery down, so an
+   *  unrelated event never silently undoes the user's chip selection. */
+  private async showGallery(preset?: HistoryFilter | readonly HistoryFilter[]): Promise<void> {
     this.saveActive();
     this.gallerySelection.clear();
     this.historyFilters.clear();
-    if (preset) this.historyFilters.add(preset);
+    if (preset) for (const f of typeof preset === "string" ? [preset] : preset) this.historyFilters.add(f);
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
     this.listEl.hide();
     this.composer.getComposerEl().hide();
@@ -2454,11 +2469,20 @@ export class ChatView extends ItemView {
     for (const key of Object.keys(CHIP_LABELS) as HistoryFilter[]) {
       const chip = chipsWrap.createDiv({ cls: "mva-gallery-chip" });
       chip.setText(CHIP_LABELS[key]);
-      chip.toggleClass("is-active", this.historyFilters.has(key));
+      // Class and `aria-pressed` move together, same discipline as
+      // setCardSelected: clickable() stamps role="button" on the chip, and a
+      // button with no `aria-pressed` announces no state at all — the active
+      // chip would be visible to sighted users only.
+      const paint = () => {
+        const on = this.historyFilters.has(key);
+        chip.toggleClass("is-active", on);
+        chip.setAttr("aria-pressed", String(on));
+      };
+      paint();
       this.clickable(chip, () => {
         if (this.historyFilters.has(key)) this.historyFilters.delete(key);
         else this.historyFilters.add(key);
-        chip.toggleClass("is-active", this.historyFilters.has(key));
+        paint();
         renderGrid(search.value);
       });
     }
@@ -2689,6 +2713,14 @@ export class ChatView extends ItemView {
     // over-report and the delete under-deliver.
     this.retentionCandidateIds = this.retentionCandidateIds.filter((id) => id !== c.id);
     this.convoSizeCache.delete(c.id);
+    // Group headers are SIBLINGS of the cards, not wrappers, so removing the
+    // last card of a group leaves its header standing above the next group's
+    // cards. A header owns exactly the cards that immediately follow it, so
+    // "no card right after me" is precisely "my group is now empty" — one pass
+    // over a static NodeList settles every header, in any order.
+    grid.querySelectorAll<HTMLElement>(".mva-gallery-group-header").forEach((h) => {
+      if (!h.nextElementSibling?.classList.contains("mva-card")) h.remove();
+    });
     if (!grid.querySelector(".mva-card")) {
       grid.createDiv({ cls: "mva-empty-sub", text: "No conversations yet." });
     }
@@ -2833,8 +2865,11 @@ export class ChatView extends ItemView {
     this.persistTabs();
     this.persist();
     this.renderTabs();
+    // Carry the active chips across the rebuild: the user chose them, and a
+    // delete they asked for must not silently reset what they are looking at.
+    const keepFilters = [...this.historyFilters];
     this.hideGallery();
-    void this.showGallery();
+    void this.showGallery(keepFilters);
     // Il caso zero non è un "0 eliminate": succede quando la selezione conteneva
     // solo la chat attiva, che il ciclo salta. Dirlo, invece di riportare un
     // numero che sembra un errore.
@@ -2934,9 +2969,14 @@ export class ChatView extends ItemView {
 
   /** "3 giorni fa" style relative time, for the retired-group badge — absolute
    *  dates (formatDate) answer "when"; this answers "how long has it been
-   *  sitting there", which is what explains why the card is in this group. */
+   *  sitting there", which is what explains why the card is in this group.
+   *
+   *  Counts CALENDAR days, the same vocabulary `groupByTime` uses, not raw
+   *  24-hour periods: a chat retired yesterday at 23:00 and read this morning
+   *  is "ieri", not "oggi". `Math.round` because a DST day is 23 or 25 hours
+   *  long and the quotient would otherwise land just off the integer. */
   private formatRelative(ts: number): string {
-    const days = Math.floor((Date.now() - ts) / 86_400_000);
+    const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / DAY_MS);
     if (days <= 0) return "oggi";
     if (days === 1) return "ieri";
     return `${days} giorni fa`;
@@ -3125,9 +3165,12 @@ export class ChatView extends ItemView {
         // selection, so a title landing in the background would silently undo
         // the user's in-progress multi-select. A stale card title is the lesser
         // surprise, and the next gallery open fixes it.
+        // The filters get the same protection, by being replayed rather than
+        // skipped: they are equally user-chosen state showGallery() would clear.
         if (this.galleryEl && this.gallerySelection.size === 0) {
+          const keepFilters = [...this.historyFilters];
           this.hideGallery();
-          void this.showGallery();
+          void this.showGallery(keepFilters);
         }
         this.persist();
       })

@@ -3371,6 +3371,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-gallery-group-header:first-child {
   padding-top: 0;
 }
+/* Same reason as the group header: the gallery's empty state ("No matching
+   conversations." / "No conversations yet.") is a direct child of the auto-fill
+   grid, so without this it squeezes into a single 180px column instead of
+   reading as a full-width message. */
+.mva-gallery > .mva-empty-sub {
+  grid-column: 1 / -1;
+}
 .mva-card.is-selected {
   box-shadow: inset 0 0 0 2px var(--interactive-accent);
 }
