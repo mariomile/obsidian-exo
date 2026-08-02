@@ -1696,7 +1696,7 @@ export class ChatView extends ItemView {
     // `this.convos` and not `allConvos()`: the active convo is always in
     // `openTabs`, so the filter excludes it either way, and `convos` is the set
     // that already exists before `restore()` assigns `active`.
-    this.renderOverflow(retiredFromStrip(this.convos, this.openTabs).length);
+    this.renderOverflow(retiredFromStrip(this.convos, this.openTabs, Date.now()).length);
     // A lone empty tab needs no bar — keep the chrome minimal. The whole row
     // hides, tail included: the `+` used to live inside `tabsEl` and disappear
     // with it. The counter does NOT keep the row alive: it is an affordance OF

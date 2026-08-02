@@ -345,47 +345,51 @@ describe("retiredFromStrip", () => {
     messages: ["hi"],
     ...over,
   });
+  // These tests exercise the four non-time conditions, not the window added
+  // below — `now` is pinned right at the fixtures' own `retiredAt` so the
+  // cutoff falls deep in the past and never excludes anything here.
+  const NOW = 1000;
 
   it("counts a chat that left the strip and is still retrievable", () => {
-    expect(retiredFromStrip([conv("a")], []).map((c) => c.id)).toEqual(["a"]);
+    expect(retiredFromStrip([conv("a")], [], NOW).map((c) => c.id)).toEqual(["a"]);
   });
 
   it("ignores a chat that was never in the strip", () => {
     // No retiredAt: an old history entry that was never a tab must not inflate
     // the number — that would turn the counter into "everything you ever wrote".
-    expect(retiredFromStrip([conv("a", { retiredAt: undefined })], [])).toEqual([]);
+    expect(retiredFromStrip([conv("a", { retiredAt: undefined })], [], NOW)).toEqual([]);
   });
 
   it("ignores a chat that is currently an open tab", () => {
     // Reopening un-retires, but the number must be right in the window before
     // that too: a tab on screen is not hidden.
-    expect(retiredFromStrip([conv("a"), conv("b")], ["b"]).map((c) => c.id)).toEqual(["a"]);
+    expect(retiredFromStrip([conv("a"), conv("b")], ["b"], NOW).map((c) => c.id)).toEqual(["a"]);
   });
 
   it("ignores archived chats — a different exit with a different destination", () => {
-    expect(retiredFromStrip([conv("a", { archived: true })], [])).toEqual([]);
+    expect(retiredFromStrip([conv("a", { archived: true })], [], NOW)).toEqual([]);
   });
 
   it("counts a chat whose archived flag is explicitly false", () => {
-    expect(retiredFromStrip([conv("a", { archived: false })], []).map((c) => c.id)).toEqual(["a"]);
+    expect(retiredFromStrip([conv("a", { archived: false })], [], NOW).map((c) => c.id)).toEqual(["a"]);
   });
 
   it("ignores empty husks — the history does not list them", () => {
     // A "New chat" with nothing in it can be retired by the cap, but it has no
     // card in the history, so counting it promises something clicking cannot
     // deliver. This is the case the counter's contract exists for.
-    expect(retiredFromStrip([conv("a", { messages: [] })], [])).toEqual([]);
+    expect(retiredFromStrip([conv("a", { messages: [] })], [], NOW)).toEqual([]);
   });
 
   it("counts every exit path alike once each is stamped", () => {
     // The cap, both archive gestures and the manual x all stamp retiredAt; the
     // filter reads the stamp, not the gesture, so they cannot disagree.
     const all = [conv("cap"), conv("x", { retiredAt: 2000 }), conv("open"), conv("husk", { messages: [] })];
-    expect(retiredFromStrip(all, ["open"]).map((c) => c.id)).toEqual(["cap", "x"]);
+    expect(retiredFromStrip(all, ["open"], NOW).map((c) => c.id)).toEqual(["cap", "x"]);
   });
 
   it("accepts any iterable of open ids, including a Set", () => {
-    expect(retiredFromStrip([conv("a"), conv("b")], new Set(["a"])).map((c) => c.id)).toEqual(["b"]);
+    expect(retiredFromStrip([conv("a"), conv("b")], new Set(["a"]), NOW).map((c) => c.id)).toEqual(["b"]);
   });
 });
 
@@ -409,5 +413,26 @@ describe("countSurvivingRetirees", () => {
 
   it("counts every retiree when none are empty", () => {
     expect(countSurvivingRetirees([withMessages(1), withMessages(3)])).toBe(2);
+  });
+});
+
+describe("retiredFromStrip time window", () => {
+  const NOW = 1_700_000_000_000;
+  const DAY = 86_400_000;
+
+  it("excludes a retired conversation older than the default 14-day window", () => {
+    const c = { id: "old", retiredAt: NOW - 20 * DAY, archived: false, messages: [{}] };
+    expect(retiredFromStrip([c], [], NOW)).toEqual([]);
+  });
+
+  it("includes a retired conversation within the window", () => {
+    const c = { id: "recent", retiredAt: NOW - 2 * DAY, archived: false, messages: [{}] };
+    expect(retiredFromStrip([c], [], NOW)).toEqual([c]);
+  });
+
+  it("accepts a custom window, for callers that need a different cutoff", () => {
+    const c = { id: "mid", retiredAt: NOW - 20 * DAY, archived: false, messages: [{}] };
+    expect(retiredFromStrip([c], [], NOW, 30 * DAY)).toEqual([c]);
+    expect(retiredFromStrip([c], [], NOW, 10 * DAY)).toEqual([]);
   });
 });

@@ -191,27 +191,41 @@ export interface RetiredCandidateSource {
  * - not an open tab — reopening un-retires (`switchTo` clears `retiredAt`), but
  *   this also covers the window before that: a tab on screen is not "hidden".
  *
- * NO TIME WINDOW YET, and that is a known cost, not an oversight. `retiredAt`
- * never expires, so in normal use this number only grows: after a few weeks it
+ * THE WINDOW IS CLOSED. This used to run without one — a known cost, not an
+ * oversight, because the count had to equal what its destination showed, and
+ * that destination was the whole history. The debt was explicit: `retiredAt`
+ * never expires, so an unwindowed filter only grows, and after a few weeks it
  * reports the size of the history rather than what the strip is hiding. It is
- * left windowless on purpose because the count must equal what its destination
- * shows, and today that destination is the whole history.
- *
- * TO THE NEXT IMPLEMENTER: the window and the "Ritirate di recente" group are
- * ONE change. Whoever adds the group adds the window here in the same commit —
- * windowing the group but not this filter (or the reverse) is precisely how the
- * number and the set it opens stop matching, which is the one failure this
- * function exists to prevent. The strip's own defence against the growth in the
- * meantime is that the row hides at one tab, so the number is only ever on
- * screen while there is a strip for it to describe.
+ * closed here, together with the "Ritirate di recente" group that reads this
+ * same function — the docstring that used to sit here demanded exactly that:
+ * whoever added the group had to add the window in the same commit, so the
+ * count and the set it opens could never point at different definitions of
+ * "recently retired". The default window is short (see `DEFAULT_RETIRED_WINDOW_MS`
+ * below) precisely so "recently retired" still reads as recent; a chat that
+ * ages out is still on disk and still in the full history, one search away —
+ * the window only stops it from being counted, and shown, as if it just
+ * happened.
  */
+/** Default: a retired chat stops counting as "recently retired" after two
+ *  weeks. Not exposed as a setting yet — YAGNI until someone asks; a constant
+ *  beats a config surface nobody requested. */
+export const DEFAULT_RETIRED_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
 export function retiredFromStrip<T extends RetiredCandidateSource>(
   convos: readonly T[],
   openIds: Iterable<string>,
+  now: number,
+  windowMs: number = DEFAULT_RETIRED_WINDOW_MS,
 ): T[] {
   const open = new Set(openIds);
+  const cutoff = now - windowMs;
   return convos.filter(
-    (c) => !!c.retiredAt && c.archived !== true && c.messages.length > 0 && !open.has(c.id),
+    (c) =>
+      !!c.retiredAt &&
+      c.retiredAt >= cutoff &&
+      c.archived !== true &&
+      c.messages.length > 0 &&
+      !open.has(c.id),
   );
 }
 
