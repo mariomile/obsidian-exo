@@ -679,7 +679,8 @@ export class MVASettingTab extends PluginSettingTab {
 
     const rulesDesc =
       "One per line: ToolName or ToolName(argument). Deny wins, and both apply before the permission card. " +
-      "Bash arguments match command-token boundaries; file paths match exactly unless they end in * (explicit prefix match).";
+      "Bash arguments match command-token boundaries; file paths match exactly unless they end in * (explicit prefix match). " +
+      "A tool name can end in * to cover a whole MCP source — mcp__notion__* governs every tool that server exposes, including ones it adds later. A bare * is ignored.";
     new Setting(el)
       .setName("Always-allow rules")
       .setDesc(rulesDesc)

@@ -5143,6 +5143,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    reuse the .mva-caps-chip vocabulary inside a grouped section. */
 .mva-hub-chipsec { display: flex; flex-direction: column; gap: 6px; }
 .mva-hub-chipsec .mva-caps-body { padding: 2px 2px 10px; }
+/* Standing permission rule covering an MCP source — visibility, not a control. */
+.mva-hub-rule { display: inline-flex; align-items: center; gap: 4px; }
+.mva-hub-rule-icon { display: inline-flex; }
+.mva-hub-rule-icon svg { width: 11px; height: 11px; }
+.mva-hub-rule.is-deny { color: var(--text-error, var(--text-muted)); }
 /* Playbook schedule badge (clock + cadence) on the Playbooks tab. */
 .mva-hub-sched { display: inline-flex; align-items: center; gap: 4px; }
 .mva-hub-sched-icon { display: inline-flex; }

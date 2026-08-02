@@ -41,13 +41,46 @@ export function permRuleLine(tool: string, input: unknown): string {
   return tool;
 }
 
+/** Does a rule's tool-name segment cover `tool`?
+ *
+ *  Exact by default. A trailing `*` matches a prefix, which is what makes a
+ *  whole MCP source governable by one line: `mcp__notion__*` covers every tool
+ *  that server exposes, so a user can allow (or deny) a source rather than
+ *  re-deciding per tool as the server's tool list grows.
+ *
+ *  The prefix must end at a segment boundary (`__`), so `mcp__notion__*` never
+ *  reaches `mcp__notion_admin__delete` — the neighbouring server whose name
+ *  merely starts the same way. `*` alone is refused: a rule that matches every
+ *  tool is never what someone meant to write, and in the allow list it would
+ *  silently disable the permission card entirely. */
+export function matchToolName(pattern: string, tool: string): boolean {
+  if (!pattern.endsWith("*")) return pattern === tool;
+  const prefix = pattern.replace(/\*+$/, "");
+  if (!prefix) return false; // bare "*" — refused, see above
+  if (tool === prefix.replace(/__$/, "")) return true; // mcp__notion__* covers mcp__notion
+  return tool.startsWith(prefix.endsWith("__") ? prefix : `${prefix}__`);
+}
+
+/** The first rule line whose tool-name segment covers `tool`, or null. Used to
+ *  SHOW a standing rule (the hub's MCP rows) — never to decide anything;
+ *  `decidePermission` remains the single decision path. */
+export function findToolRule(rules: string, tool: string): string | null {
+  for (const raw of rules.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^([\w-]+(?:__[\w-]+)*(?:__)?\*?)(?:\((.*?)\))?$/);
+    if (m && matchToolName(m[1], tool)) return line;
+  }
+  return null;
+}
+
 /** Match one Exo permission rule against a tool invocation. */
 export function matchPermRule(rules: string, tool: string, argText: string): boolean {
   for (const raw of rules.split("\n")) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
-    const m = line.match(/^([\w-]+(?:__[\w-]+)*)(?:\((.*?)\))?$/);
-    if (!m || m[1] !== tool) continue;
+    const m = line.match(/^([\w-]+(?:__[\w-]+)*(?:__)?\*?)(?:\((.*?)\))?$/);
+    if (!m || !matchToolName(m[1], tool)) continue;
     const rawArg = m[2] ?? "";
     const wildcard = rawArg.endsWith("*");
     const prefix = wildcard ? rawArg.replace(/\*+$/, "") : rawArg;

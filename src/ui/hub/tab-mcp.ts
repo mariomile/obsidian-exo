@@ -1,4 +1,4 @@
-import { Notice } from "obsidian";
+import { Notice, setIcon } from "obsidian";
 import { homedir } from "os";
 import { readFile } from "fs/promises";
 import {
@@ -12,6 +12,7 @@ import {
 import { connectMcp, disconnectMcp, setMcpEnabled } from "../../core/connections-install";
 import { parseMcpJson, summarizeServer } from "../../core/mcp-config";
 import { mcpSections } from "../../core/hub-sections";
+import { findToolRule } from "../../core/permissions";
 import { MCP_DOCS_DIR, mcpDocPath, mcpDocTemplate, isSafeDocName, hasMcpDocContent } from "../../core/mcp-docs";
 import { resolveCli, mcpLogin } from "../../cli";
 import { McpServerModal } from "../mcp-server-modal";
@@ -93,6 +94,20 @@ export async function gatherMcp(ctx: HubTabContext): Promise<{ items: DiscoveryI
   return { items: [...vaultItems, ...mcpFromConfig, ...live], ourNames };
 }
 
+/** A standing allow/deny rule covering the WHOLE server, if the user wrote one.
+ *  Deny is reported first: it's the one that wins at decision time. The probe
+ *  is the source's tool-name prefix, so only a source-level rule
+ *  (`mcp__notion__*`) matches — a rule naming one specific tool doesn't badge
+ *  the row, because it doesn't govern the server. */
+function governingRule(ctx: HubTabContext, name: string): { kind: "deny" | "allow"; line: string } | null {
+  const probe = `mcp__${name}__`;
+  const s = ctx.plugin.settings;
+  const deny = findToolRule(s.permDenyRules ?? "", probe);
+  if (deny) return { kind: "deny", line: deny };
+  const allow = findToolRule(s.permAllowRules ?? "", probe);
+  return allow ? { kind: "allow", line: allow } : null;
+}
+
 /** Which servers already carry a filled-in doc note — drives the Docs button's
  *  label so "write one" and "read it" don't look the same. */
 async function gatherDocumented(ctx: HubTabContext, names: string[]): Promise<Set<string>> {
@@ -127,7 +142,7 @@ export async function renderMcpTab(host: HTMLElement, ctx: HubTabContext): Promi
     models.push({ key: `sec:${label}`, sig: `${list.length}`, build: () => buildGroupHeader(label, list.length) });
     for (const it of list) models.push({
       key: `mcp:${it.name}`,
-      sig: `${it.state}:${it.status ?? ""}:${ourNames.has(it.name)}:${documented.has(it.name)}:${it.desc ?? ""}`,
+      sig: `${it.state}:${it.status ?? ""}:${ourNames.has(it.name)}:${documented.has(it.name)}:${governingRule(ctx, it.name)?.line ?? ""}:${it.desc ?? ""}`,
       build: () => buildMcpRow(it, ourNames, documented, ctx),
     });
   };
@@ -184,6 +199,17 @@ function buildMcpRow(it: DiscoveryItem, ourNames: Set<string>, documented: Set<s
       docs.toggleClass("is-muted", !has);
       docs.setAttr("title", has ? "Open this server's notes" : "Describe what this server is for, so the agent knows when to use it");
       docs.onclick = () => void openDocs(ctx, it);
+    }
+    // Standing permission rules covering this source, if any — visibility only.
+    // Weakening a permission stays a deliberate act in settings, never a click
+    // here; the row's job is to make an existing blanket rule impossible to
+    // forget about.
+    const gov = governingRule(ctx, it.name);
+    if (gov) {
+      const badge = right.createSpan({ cls: `mva-conn-state mva-hub-rule is-${gov.kind}` });
+      setIcon(badge.createSpan({ cls: "mva-hub-rule-icon" }), gov.kind === "deny" ? "shield-ban" : "shield-check");
+      badge.createSpan({ text: gov.kind === "deny" ? "denied by rule" : "auto-allowed" });
+      badge.setAttr("title", `Matches the ${gov.kind === "deny" ? "deny" : "always-allow"} rule: ${gov.line}`);
     }
     // Full lifecycle only for servers WE wrote into .mcp.json — inherited /
     // live-only / connector servers are configured at their own source.

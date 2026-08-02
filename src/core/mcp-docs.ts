@@ -18,11 +18,21 @@ export function mcpDocPath(server: string): string {
   return `${MCP_DOCS_DIR}/${server}.md`;
 }
 
-/** Server names come from `.mcp.json` keys and config scans; a name with a
- *  path separator would escape the docs dir. `buildServerConfig` already
- *  restricts new names to `[\w-]+`, but inherited/imported names are not ours. */
+/** Can this server name be a filename in the docs dir?
+ *
+ *  Server names come from `.mcp.json` keys, Codex TOML and live session caps —
+ *  `buildServerConfig` restricts the ones WE create to `[\w-]+`, but inherited
+ *  and connector names are not ours and arrive as-is ("Booking.com",
+ *  "plugin:brand-voice:figma"). So this rejects what would actually be unsafe
+ *  or unwritable rather than allow-listing a narrow shape: path separators and
+ *  `..` (traversal), a leading dot (hidden file, and `.`/`..` themselves), `:`
+ *  (a path separator in classic macOS APIs), and control characters. */
 export function isSafeDocName(server: string): boolean {
-  return /^[\w-]+$/.test(server);
+  if (!server || server.length > 120) return false;
+  if (server.startsWith(".")) return false;
+  if (server.includes("..")) return false;
+  // eslint-disable-next-line no-control-regex -- rejecting control chars is the point
+  return !/[/\\:\u0000-\u001f]/.test(server);
 }
 
 /** Starter note for a server that has none yet. Deliberately a set of prompts,
