@@ -523,11 +523,11 @@ export class ChatView extends ItemView {
    *  every resize and on every change of tab count, never persisted — it is a
    *  property of the pane the strip happens to be in, not of the session. */
   private stripDensity: StripDensity = "wide";
-  /** Tab count behind the last density decision. Two jobs: it is the count the
-   *  resize path re-decides with, and it is the guard that keeps `renderTabs`
-   *  from measuring the DOM on every state repaint — density can only change
-   *  when the row's width changes (the observer) or when a tab is added or
-   *  removed (this). */
+  /** How many tabs the last render drew — kept current on EVERY render, the
+   *  hidden-row one included. Two jobs: it is the count the resize path
+   *  re-decides density with, and it is the guard that keeps `renderTabs` from
+   *  measuring the DOM on every state repaint. Density can only move when the
+   *  row's width changes (the observer) or when this does. */
   private stripTabCount = 0;
   private stripResizeObserver: ResizeObserver | null = null;
   /** What the active tab takes when it shows its title: `.mva-tab`'s max-width.
@@ -656,7 +656,14 @@ export class ChatView extends ItemView {
     // is out of the flex flow and belongs to neither container: putting it in
     // `tabsEl` would make it an unkeyed child of the reconciled list, and
     // putting it inside a tab would put it inside a scroll container.
-    this.tabHoverEl = this.tabsRowEl.createDiv({ cls: "mva-tab-hover is-hidden" });
+    // `aria-hidden`: its text is a duplicate of the title the hovered tab's own
+    // `aria-label` already carries, and in browse mode a screen reader walks the
+    // DOM — it would meet the same conversation twice, once as a tab and once as
+    // a floating label with no role. It is a pointer affordance only.
+    this.tabHoverEl = this.tabsRowEl.createDiv({
+      cls: "mva-tab-hover is-hidden",
+      attr: { "aria-hidden": "true" },
+    });
     // Same reason as `overflowPainted` above: `onOpen` can run again on the same
     // view, and an anchor surviving the row it pointed into would keep a label
     // alive that has nothing left to describe.
@@ -1796,6 +1803,11 @@ export class ChatView extends ItemView {
     if (ids.length <= 1) {
       reconcileList(this.tabsEl, []); // drop the lone tab, as the old empty() did
       this.hideTabHover(); // the row is going away; so must anything it was showing
+      // Keep the field honest. Left at the old count it would describe a render
+      // that no longer exists, while `is-dense` sits on a display:none row — dead
+      // state rather than a bug (the row is unmeasurable, so nothing can flip),
+      // but state that stops meaning what its docstring says.
+      this.stripTabCount = ids.length;
       return;
     }
 
@@ -1878,9 +1890,18 @@ export class ChatView extends ItemView {
    *
    * The width is the ROW's, minus the tail. Not `tabsEl`'s: that one is sized by
    * its content, so in dense mode it reports the width dense mode produced and
-   * the strip would never come back. `clientWidth` includes the row's 10px
-   * gutters, so this overstates by 20px — well inside the 20px hysteresis band,
-   * and cheaper than a computed-style read on every tick.
+   * the strip would never come back.
+   *
+   * KNOWN BIAS, accepted. `clientWidth` includes the row's two 10px gutters, and
+   * the subtraction leaves in the 2px flex gap before the tail, so this reports
+   * ~22px more than the tabs can actually use. That is a systematic offset, not
+   * noise — hysteresis absorbs noise and does nothing about a constant, which
+   * simply shifts both thresholds down together. It divides by `tabCount - 1`,
+   * so the error is ~4px per tab at six tabs (harmless) but the whole ~22px on
+   * the single divisor at two tabs, moving the effective entry point from 90 to
+   * ~68: at low tab counts the strip goes dense one band late. Accepted rather
+   * than paying a `getComputedStyle` on every resize tick, because that is the
+   * count where wide already fits comfortably and the flip matters least.
    */
   private updateStripDensity(): boolean {
     if (!this.tabsRowEl || !this.tabsTailEl) return false;
@@ -2043,12 +2064,11 @@ export class ChatView extends ItemView {
       badge.createSpan({ text: String(agents) });
     }
 
-    // KNOWN COST — the × goes with the title in dense mode, so a non-active tab
-    // there cannot be closed in one click; clicking it makes it active, which
-    // renders it wide again, × included. Keeping it would either double every
-    // dense tab (12px icon + 6px gap against an 18px tab, and the strip stops
-    // fitting again) or make it appear on hover, which reflows the strip under
-    // the cursor — the one thing the hover label exists to avoid.
+    // The × goes with the title in dense mode: keeping it would either double
+    // every dense tab (12px icon + 6px gap against an 18px tab, and the strip
+    // stops fitting again) or make it appear on hover, which reflows the strip
+    // under the cursor — the one thing the hover label exists to avoid. Closing
+    // does NOT go with it: the context menu below carries it in both densities.
     if (!bare) {
       const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
       setIcon(x, "x");
@@ -2064,10 +2084,17 @@ export class ChatView extends ItemView {
       tab.addEventListener("mouseleave", () => this.hideTabHover());
     }
     this.clickable(tab, () => this.switchTo(c));
-    // Right-click is where a tab's own properties live, and pinning is the only
-    // one it has. Wired per node like the × above: the listener dies with the
-    // tab the reconciler discards, so nothing has to unregister it, and the
-    // convo it acts on is the closure's, never a lookup back from the target.
+    // Right-click is where a tab's own actions live. Wired per node like the ×
+    // above: the listener dies with the tab the reconciler discards, so nothing
+    // has to unregister it, and the convo it acts on is the closure's — `c`,
+    // this tab's own conversation — never a lookup back from the event target.
+    //
+    // Closing lives HERE and not only on the ×, which is what makes dropping the
+    // × in dense mode affordable. The × is pointer-only and, in dense, gone: the
+    // fallback of "activate the tab, then close it" would change which
+    // conversation is open as a side effect of wanting to close a different one.
+    // This item closes the right-clicked tab whatever the density, and reaches
+    // the keyboard through Shift+F10 / the context-menu key.
     tab.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       const menu = new Menu();
@@ -2077,6 +2104,8 @@ export class ChatView extends ItemView {
           .setIcon(pinned ? "pin-off" : "pin")
           .onClick(() => this.togglePin(c))
       );
+      // Last: it is the one item that takes something away.
+      menu.addItem((i) => i.setTitle("Close tab").setIcon("x").onClick(() => this.closeTab(c)));
       menu.showAtMouseEvent(e);
     });
     return tab;

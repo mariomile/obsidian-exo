@@ -399,9 +399,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    them at all, so there is nothing left to hide. No `transition` on any of
    these selectors either — motion in this strip means "this is happening now",
    and animating a relayout would compete with the one signal that must catch
-   the eye. */
+   the eye.
+
+   Padding only, and deliberately NO `max-width: none`. It would buy nothing for
+   a dense tab (18px of content, or ~48px with the agents badge — the 170px cap
+   never binds) and would silently uncap the ONE tab still painting a title, in
+   the mode entered exactly when width is scarcest. `chooseDensity` subtracts
+   `STRIP_ACTIVE_TAB_PX = 170` as the active tab's cost; the CSS must not then
+   let it cost more, or a 40-character title eats the budget the five mark-only
+   tabs were supposed to free and the strip scrolls again. */
 .mva-tabstrip.is-dense .mva-tab {
-  max-width: none;
   padding: 4px 6px;
 }
 /* The boundary between the pinned block and the rest, drawn once for the whole
