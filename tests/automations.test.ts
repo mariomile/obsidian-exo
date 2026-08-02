@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   currentSlotStart,
+  formatDueIn,
+  playbookScheduleLabel,
   isDue,
   nextDueAt,
   nextAutomation,
@@ -152,5 +154,34 @@ describe("parseCadenceInput", () => {
     expect(parseCadenceInput("daily", 24)).toBeNull();
     expect(parseCadenceInput("weekly", 9, 7)).toBeNull();
     expect(parseCadenceInput("weekly", 9, "boh")).toBeNull();
+  });
+});
+
+describe("formatDueIn", () => {
+  const M = 60_000, H = 3_600_000, D = 24 * H;
+  it("collapses anything within a minute to 'due now'", () => {
+    expect(formatDueIn(0)).toBe("due now");
+    expect(formatDueIn(59_000)).toBe("due now");
+    expect(formatDueIn(-5_000)).toBe("due now");
+  });
+  it("formats minutes, hours, days with floor", () => {
+    expect(formatDueIn(5 * M)).toBe("in 5m");
+    expect(formatDueIn(H - 1)).toBe("in 59m");
+    expect(formatDueIn(3 * H + 30 * M)).toBe("in 3h");
+    expect(formatDueIn(2 * D + 5 * H)).toBe("in 2d");
+  });
+});
+
+describe("playbookScheduleLabel", () => {
+  const autos: AutomationConfig[] = [
+    { name: "Morning Brief", cadence: { kind: "daily", hour: 8 }, enabled: true, write: false },
+    { name: "paused one", cadence: { kind: "hourly" }, enabled: false, write: false },
+  ];
+  it("matches enabled automations case-insensitively", () => {
+    expect(playbookScheduleLabel("morning brief", autos)).toBe("daily 08:00");
+  });
+  it("ignores disabled automations and unknown names", () => {
+    expect(playbookScheduleLabel("paused one", autos)).toBeNull();
+    expect(playbookScheduleLabel("nope", autos)).toBeNull();
   });
 });

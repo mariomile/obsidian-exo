@@ -30,7 +30,7 @@ export interface MVASettings {
   /** Internal idempotency receipts for accepted playbook proposals. */
   proposalPlaybookReceipts: Record<string, string>;
   /** What sending a message during a running turn does: "queue" waits and starts
-   *  it as the next turn; "steer" injects it into the live turn (Claude only). */
+   *  it as the next turn; "steer" injects it into the live turn. */
   steerMode: "queue" | "steer";
   /** Phase 1 default: false (pure chat). Phase 2 turns this on with gating. */
   toolsEnabled: boolean;
@@ -221,6 +221,11 @@ export interface MVASettings {
   /** Soft cap on NON-pinned tabs in the chat strip. Opening one more retires the
    *  least-recently-active unpinned tab. Retiring never deletes. */
   stripMaxTabs: number;
+  /** Named-agent master flag, default OFF. Gates the registry, the `@agent`
+   *  binding in the composer, the `/as` command and scheduled agent runs.
+   *  Discovering agents never grants them autonomy — each agent is additionally
+   *  disabled in its own contract until turned on. */
+  agentsEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -307,6 +312,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   orchestrationMaxConcurrent: 2,
   retentionBudgetMb: 50,
   stripMaxTabs: 6,
+  agentsEnabled: false,
   connectionsInlineUnderline: true,
   connectionsStemming: true,
 };
@@ -365,7 +371,15 @@ export class MVASettingTab extends PluginSettingTab {
   }
 
   /** A boolean toggle row — the repeated shape across the tabs. */
-  private toggleSetting(el: HTMLElement, name: string, desc: string, key: keyof MVASettings): void {
+  private toggleSetting(
+    el: HTMLElement,
+    name: string,
+    desc: string,
+    key: keyof MVASettings,
+    /** Run after the flag is saved — for flags that need to take effect now
+     *  rather than at the next plugin load. */
+    onAfter?: (value: boolean) => void | Promise<void>
+  ): void {
     new Setting(el)
       .setName(name)
       .setDesc(desc)
@@ -373,6 +387,7 @@ export class MVASettingTab extends PluginSettingTab {
         t.setValue(this.plugin.settings[key] as boolean).onChange(async (v) => {
           (this.plugin.settings[key] as boolean) = v;
           await this.plugin.saveSettings();
+          await onAfter?.(v);
         })
       );
   }
@@ -503,7 +518,7 @@ export class MVASettingTab extends PluginSettingTab {
     new Setting(el)
       .setName("Sending during a running turn")
       .setDesc(
-        "Queue = your message waits and starts as the next turn. Steer = inject it into the running turn so the agent can change course mid-flight (Claude only; Codex always queues)."
+        "Queue = your message waits and starts as the next turn. Steer = inject it into the running Claude or Codex turn so the agent can change course mid-flight."
       )
       .addDropdown((d) =>
         d
@@ -672,7 +687,8 @@ export class MVASettingTab extends PluginSettingTab {
 
     const rulesDesc =
       "One per line: ToolName or ToolName(argument). Deny wins, and both apply before the permission card. " +
-      "Bash arguments match command-token boundaries; file paths match exactly unless they end in * (explicit prefix match).";
+      "Bash arguments match command-token boundaries; file paths match exactly unless they end in * (explicit prefix match). " +
+      "A tool name can end in * to cover a whole MCP source — mcp__notion__* governs every tool that server exposes, including ones it adds later. A bare * is ignored.";
     new Setting(el)
       .setName("Always-allow rules")
       .setDesc(rulesDesc)
@@ -733,7 +749,7 @@ export class MVASettingTab extends PluginSettingTab {
           .addOptions({
             untrusted: "Untrusted (ask often)",
             "on-request": "On request",
-            "on-failure": "On failure",
+            granular: "Granular",
             never: "Never",
           })
           .setValue(s.codexApproval)
@@ -966,7 +982,7 @@ export class MVASettingTab extends PluginSettingTab {
       )
       .addButton((b) => {
         b.setButtonText(`Manage… (${s.automations.length})`).onClick(() => {
-          this.plugin.openAutomationsModal();
+          void this.plugin.activateHub("automations");
         });
       });
 
@@ -1076,7 +1092,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Pre-warm the agent session",
-      "Start the CLI session in the background the moment Exo opens, so your first message skips the cold start. Claude only.",
+      "Start the CLI session in the background the moment Exo opens, so your first message skips the cold start.",
       "prewarmSession"
     );
     this.toggleSetting(
@@ -1102,6 +1118,24 @@ export class MVASettingTab extends PluginSettingTab {
       "Native-first",
       "Disable the built-in file tools (Read/Grep/Glob/LS/Edit/Write) so vault work goes only through the Obsidian-native tools. Bash stays available (gated). Claude only.",
       "nativeFirst"
+    );
+
+    new Setting(el).setName("Agents").setHeading();
+    this.toggleSetting(
+      el,
+      "Enable named agents",
+      "Turns on the agent registry: `@agent` in the composer binds a turn to a specific subagent, `/as <agent>` binds the whole conversation, and agents with a schedule trigger can run unattended. Definitions come from `.claude/agents/*.md` (the prompt, shared with the CLI) plus a contract file per agent under your memory root (triggers, autonomy tier, write scope). Off by default; each agent is separately disabled until you turn it on. Claude only.",
+      "agentsEnabled",
+      // Warm the registry the moment the flag flips. Without this the store
+      // stays unloaded until some other consumer happens to ask for it, so
+      // turning agents on and immediately creating a note in a watched folder
+      // did nothing at all — the trigger driver sees an empty agent list and
+      // drops the event before it even schedules.
+      async (on) => {
+        this.plugin.invalidateAgents();
+        if (on) await this.plugin.agentsReady();
+        await this.plugin.refreshAgentsUI();
+      }
     );
 
     new Setting(el).setName("Orchestration Board").setHeading();

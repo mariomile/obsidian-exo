@@ -17,6 +17,14 @@ describe("exoPaths", () => {
     expect(p.vaultContext).toBe("_exo/vault-context.md");
     expect(p.preferences).toBe("_exo/memory/preferences/preferences.md");
     expect(p.agentDir).toBe("_exo/agent");
+    expect(p.agents).toBe("_exo/agents");
+    expect(p.agentRuns).toBe("_exo/agents/runs");
+    expect(p.agentMemory).toBe("_exo/memory/agents");
+  });
+
+  it("keeps the agent identity layer and the agent registry distinct", () => {
+    const p = exoPaths("_exo");
+    expect(p.agentDir).not.toBe(p.agents); // `agent/` = persona blocks, `agents/` = the registry
   });
 
   it("reproduces the exact legacy _system/ layout (marioverse must not move)", () => {

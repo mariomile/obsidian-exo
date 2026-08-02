@@ -6,6 +6,7 @@ import {
   memoryStats,
   memoryActions,
   systemStatuses,
+  capsSummary,
 } from "../src/core/actions-hub";
 import type { MemoryEntry } from "../src/core/memory-store";
 import type { LoopEntry } from "../src/core/open-loops";
@@ -201,5 +202,31 @@ describe("systemStatuses", () => {
     });
     expect(ac).toEqual({ id: "autocommit", label: "Auto-commit", value: "off", enabled: false });
     expect(obs.value).toBe("on · every 10 steps");
+  });
+});
+
+describe("capsSummary", () => {
+  it("returns empty with no session snapshot", () => {
+    expect(capsSummary(null)).toEqual([]);
+    expect(capsSummary(undefined)).toEqual([]);
+  });
+  it("counts inventories and summarizes MCP health", () => {
+    const stats = capsSummary({
+      skills: ["a", "b"],
+      commands: ["c"],
+      agents: [],
+      tools: ["Read", "Write", "Bash"],
+      mcpServers: [
+        { name: "ok", status: "connected" },
+        { name: "auth", status: "needs-auth" },
+      ],
+    });
+    expect(stats.find((s) => s.label === "Skills")?.value).toBe("2");
+    expect(stats.find((s) => s.label === "Tools")?.value).toBe("3");
+    expect(stats.find((s) => s.label === "MCP")?.value).toBe("1 connected · 1 need attention");
+  });
+  it("reports all-connected without the attention clause", () => {
+    const stats = capsSummary({ skills: [], commands: [], agents: [], tools: [], mcpServers: [{ name: "x", status: "connected" }] });
+    expect(stats.find((s) => s.label === "MCP")?.value).toBe("1 connected");
   });
 });

@@ -94,6 +94,15 @@ export function dailyPulseNeedsReview(state: DailyPulseReviewState): boolean {
   return state.itemCount > 0 && state.lastSuccessAt > state.lastReviewedAt;
 }
 
+/** Meta-line suffix for the Daily Pulse automation row. */
+export function dailyPulseMetaLabel(state: DailyPulseReviewState): string {
+  if (state.status === "error") return "retry available";
+  if (dailyPulseNeedsReview(state)) {
+    return `${state.itemCount} item${state.itemCount === 1 ? "" : "s"} to review`;
+  }
+  return state.lastSuccessAt > 0 ? "reviewed" : "not generated";
+}
+
 /** Persistable review/error state for the future quiet Retry UI. */
 export function dailyPulseReviewAfterRun(
   previous: DailyPulseReviewState,

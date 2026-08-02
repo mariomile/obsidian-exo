@@ -1,6 +1,7 @@
 import { App } from "obsidian";
 import { readdir, readFile, stat } from "fs/promises";
 import { homedir } from "os";
+import type { AgentSource } from "./agents";
 
 /** name → one-line description, per capability kind. Names keep their CLI
  *  form: plugin-scoped entries are `plugin:name`, everything else is bare. */
@@ -174,8 +175,43 @@ export async function buildDescIndex(app: App): Promise<DescIndex> {
   return idx;
 }
 
+/** Every `agents/*.md` across the same scopes `buildDescIndex` walks, in
+ *  precedence order (vault > global > codex > plugins). Returns raw file
+ *  contents so the caller can parse them once with `parseAgentBrain` instead of
+ *  each surface rolling its own frontmatter regex. Never throws. */
+export async function listAgentBrains(app: App): Promise<{ slug: string; path: string; raw: string; source: AgentSource }[]> {
+  const scopes: { scope: Scope; source: AgentSource }[] = [
+    { scope: vaultScope(app), source: "vault" },
+    { scope: fsScope(`${homedir()}/.claude`), source: "user" },
+    { scope: fsScope(`${homedir()}/.codex`), source: "codex" },
+    ...(await pluginScopes()).map((scope) => ({ scope, source: "plugin" as const })),
+  ];
+  const out: { slug: string; path: string; raw: string; source: AgentSource }[] = [];
+  for (const { scope, source } of scopes) {
+    const { files } = await scope.list("agents");
+    const pre = scope.prefix ?? "";
+    await Promise.all(
+      files
+        .filter((f) => f.endsWith(".md"))
+        .map(async (path) => {
+          try {
+            // Frontmatter lives at the top; agent bodies can be long prompts.
+            const raw = (await scope.read(path)).slice(0, 8000);
+            // Plugins ship agents as `<name>.agent.md`; the `.agent` is a file
+            // convention, not part of the id.
+            const slug = pre + baseName(path).replace(/\.agent$/, "");
+            out.push({ slug, path, raw, source });
+          } catch {
+            /* unreadable file — skip */
+          }
+        })
+    );
+  }
+  return out;
+}
+
 /** Skill names under `~/.codex/skills` (folder-per-skill or loose .md).
- *  The Codex CLI is spawn-per-turn — there is no init capability snapshot —
+ *  Codex app-server does not expose a native skill capability snapshot —
  *  so this direct scan is the only way Exo can list Codex-native skills.
  *  Missing dir → empty. */
 export async function codexSkillNames(): Promise<string[]> {

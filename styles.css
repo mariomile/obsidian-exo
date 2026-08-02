@@ -1378,6 +1378,264 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 14px;
 }
 
+/* Bound-agent chip — hidden unless a `@agent` pick or `/as` binding is live.
+   Carries its label (unlike the icon-only Research toggle) because "which
+   agent" is the whole point; a pending one-turn binding reads dashed so it is
+   visibly temporary. */
+.mva-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 160px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--mva-r1);
+  color: var(--mva-brand, var(--interactive-accent));
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 9%, transparent);
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t), border-color var(--mva-t);
+}
+.mva-agent-chip:hover {
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 16%, transparent);
+}
+.mva-agent-chip.is-pending {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 45%, transparent);
+}
+.mva-agent-chip-icon {
+  display: inline-flex;
+}
+.mva-agent-chip-icon .svg-icon {
+  width: 13px;
+  height: 13px;
+}
+.mva-agent-chip-label {
+  overflow: hidden;
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------ Agents pane ------------------------------ */
+/* One row per agent. The tier badge and the trigger line carry the weight:
+   the pane answers "what runs without me asking?", so consequence reads before
+   identity. A disabled agent dims rather than disappearing. */
+.mva-ag {
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+.mva-ag-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.mva-ag-title {
+  flex: 1;
+  font-size: var(--font-ui-large);
+  font-weight: 600;
+}
+.mva-ag-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: var(--mva-r1);
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t);
+}
+.mva-ag-action:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-ag-action .svg-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.mva-ag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mva-ag-row {
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--mva-r2);
+  transition: border-color var(--mva-t), opacity var(--mva-t);
+}
+.mva-ag-row:hover {
+  border-color: var(--background-modifier-border-hover);
+}
+.mva-ag-row.is-off {
+  opacity: 0.55;
+}
+.mva-ag-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.mva-ag-icon {
+  display: inline-flex;
+  padding-top: 2px;
+  color: var(--text-muted);
+}
+.mva-ag-icon .svg-icon {
+  width: 16px;
+  height: 16px;
+}
+.mva-ag-main {
+  flex: 1;
+  min-width: 0;
+}
+.mva-ag-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.mva-ag-name {
+  font-weight: 600;
+}
+.mva-ag-tier {
+  padding: 1px 6px;
+  border-radius: var(--mva-r1);
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-smaller);
+  letter-spacing: 0.02em;
+}
+/* Only a tier that can actually write is coloured — the rest stay quiet. */
+.mva-ag-tier.is-write {
+  color: var(--mva-brand, var(--interactive-accent));
+  background: color-mix(in srgb, var(--mva-brand, var(--interactive-accent)) 12%, transparent);
+}
+.mva-ag-desc {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.mva-ag-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+.mva-ag-sep {
+  opacity: 0.5;
+}
+.mva-ag-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mva-ag-toggle {
+  position: relative;
+  width: 30px;
+  height: 17px;
+  border-radius: 9px;
+  background: var(--background-modifier-border);
+  cursor: pointer;
+  transition: background var(--mva-t);
+}
+.mva-ag-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--background-primary);
+  transition: transform var(--mva-t);
+}
+.mva-ag-toggle.is-on {
+  background: var(--mva-brand, var(--interactive-accent));
+}
+.mva-ag-toggle.is-on::after {
+  transform: translateX(13px);
+}
+
+.mva-ag-warn {
+  margin-top: 6px;
+  padding-left: 26px;
+  color: var(--text-warning, var(--text-muted));
+  font-size: var(--font-ui-smaller);
+}
+.mva-ag-history-toggle {
+  margin-top: 8px;
+  padding-left: 26px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+.mva-ag-history-toggle:hover {
+  color: var(--text-normal);
+}
+.mva-ag-history {
+  margin-top: 6px;
+  padding-left: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mva-ag-run {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.mva-ag-run.is-failed .mva-ag-run-when {
+  color: var(--text-error, var(--text-muted));
+}
+.mva-ag-run-when {
+  min-width: 130px;
+}
+.mva-ag-run-by {
+  font-style: italic;
+}
+.mva-ag-run-open {
+  color: var(--text-accent);
+  cursor: pointer;
+}
+.mva-ag-run-open:hover {
+  text-decoration: underline;
+}
+/* Quiet until armed — restore overwrites current file content, so the second
+   click is the one that reads as consequential. */
+.mva-ag-run-restore {
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.mva-ag-run-restore:hover {
+  color: var(--text-normal);
+}
+.mva-ag-run-restore.is-armed {
+  color: var(--text-error, var(--text-accent));
+  font-weight: 600;
+}
+
+.mva-ag-empty {
+  padding: 28px 4px;
+  text-align: center;
+}
+.mva-ag-empty-title {
+  font-weight: 600;
+}
+.mva-ag-empty-body {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.mva-ag-foot {
+  margin-top: 12px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
 .mva-sel-pop {
   position: absolute;
   left: 0;
@@ -5047,10 +5305,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-ll-preview { white-space: pre-wrap; color: var(--text-faint); background: var(--background-secondary);
   border-radius: var(--radius-s); padding: 6px 8px; max-height: 140px; overflow-y: auto; }
 
-/* --------------------------- automations modal --------------------------- */
+/* --------------------------- automations tab ---------------------------- */
 /* Same form recipe as the prompt-vars/task modals: quiet labels, chip+popover
-   selects, .mva-btn buttons. Only layout deltas live here. */
-.mva-auto-modal .modal-content { min-width: 460px; }
+   selects, .mva-btn buttons. Only layout deltas live here. Hosted in the
+   Capabilities hub pane (was a modal until 0.30). */
 .mva-auto-sub {
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
@@ -5092,6 +5350,26 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-auto-x:hover { color: var(--text-muted); }
 .mva-auto-x svg { width: 14px; height: 14px; }
+/* Slim in-chat session card (replaced the full Capabilities overlay, 0.30). */
+.mva-session-card { display: flex; flex-direction: column; gap: 10px; max-width: 560px; }
+.mva-session-counts { padding-top: 2px; border-top: 1px solid var(--background-modifier-border); }
+.mva-session-foot { display: flex; justify-content: flex-end; padding-top: 2px; }
+/* Chip sections (Commands / Sub-agents / Hooks / Tools) on the Skills tab —
+   reuse the .mva-caps-chip vocabulary inside a grouped section. */
+.mva-hub-chipsec { display: flex; flex-direction: column; gap: 6px; }
+.mva-hub-chipsec .mva-caps-body { padding: 2px 2px 10px; }
+/* Standing permission rule covering an MCP source — visibility, not a control. */
+.mva-hub-rule { display: inline-flex; align-items: center; gap: 4px; }
+.mva-hub-rule-icon { display: inline-flex; }
+.mva-hub-rule-icon svg { width: 11px; height: 11px; }
+.mva-hub-rule.is-deny { color: var(--text-error, var(--text-muted)); }
+/* Playbook schedule badge (clock + cadence) on the Playbooks tab. */
+.mva-hub-sched { display: inline-flex; align-items: center; gap: 4px; }
+.mva-hub-sched-icon { display: inline-flex; }
+.mva-hub-sched-icon svg { width: 11px; height: 11px; }
+/* Unknown-playbook marker inside the picker chip (replaces the old text glyph). */
+.mva-auto-chip-warn { display: inline-flex; margin-left: 4px; color: var(--text-warning, var(--text-muted)); }
+.mva-auto-chip-warn svg { width: 12px; height: 12px; }
 .mva-auto-foot { margin: 10px 0 4px; }
 .mva-auto-popfield {
   display: flex;

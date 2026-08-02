@@ -30,49 +30,15 @@ import { createBacklogTask, adaptAppToTaskVault } from "./task-store";
 import {
   automationLastRunKey,
   cadenceLabel,
+  formatDueIn,
   nextDueAt,
   parseCadenceInput,
   unreviewedWriteRuns,
-  type AutomationConfig,
-  type AutomationRunRecord,
 } from "../core/automations";
+import { triggerLabel } from "../core/agents";
+import { ok, err, getExo, type Result } from "./tool-kit";
+import { buildCapabilityTools, CAPABILITY_READ_TOOLS } from "./capability-tools";
 
-type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
-
-/** The slice of the exo plugin the automation tools use — resolved live from
- *  app.plugins (same cross-plugin convention as getSonar; here it's our own
- *  plugin, reached this way to avoid a tools→main import cycle). */
-interface ExoAutomationsHost {
-  settings: {
-    automations: AutomationConfig[];
-    customPrompts: { name: string; prompt: string }[];
-    scheduledLastRun: Record<string, number>;
-  };
-  saveSettings(): Promise<void>;
-  loadAutomationRuns(): Promise<AutomationRunRecord[]>;
-  restoreAutomationRun(id: string): Promise<string[]>;
-  markAutomationRunReviewed(id: string): Promise<void>;
-  runPlaybook(name: string, prompt: string, opts?: { write?: boolean }): Promise<boolean>;
-}
-
-function getExo(app: App): ExoAutomationsHost | null {
-  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
-  const p = plugins?.plugins?.["exo"] as Partial<ExoAutomationsHost> | undefined;
-  return p && typeof p.loadAutomationRuns === "function" && typeof p.runPlaybook === "function"
-    ? (p as ExoAutomationsHost)
-    : null;
-}
-
-/** "due now" / "in 3h" / "in 2d" — tool-output twin of the Cockpit's formatter. */
-function fmtDueIn(ms: number): string {
-  if (ms <= 60_000) return "due now";
-  const HOUR = 3_600_000;
-  if (ms < HOUR) return `in ${Math.floor(ms / 60_000)}m`;
-  if (ms < 24 * HOUR) return `in ${Math.floor(ms / HOUR)}h`;
-  return `in ${Math.floor(ms / (24 * HOUR))}d`;
-}
-const ok = (text: string): Result => ({ content: [{ type: "text", text }] });
-const err = (text: string): Result => ({ content: [{ type: "text", text }], isError: true });
 
 /** Structured question shape for `ask_user`. Duplicated from view.ts to avoid a
  *  view→tools import cycle (tools.ts must not import from view.ts). */
@@ -1062,6 +1028,49 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
   // the Automations panel, so "metti in pausa il digest" works as a sentence.
   // All four resolve the live exo plugin instance at call time (never cached).
 
+  // Named agents. Read-only by design in this milestone: the model can see who
+  // exists and what each one is allowed to do, but binding a turn to an agent
+  // stays a human action in the composer (`@agent` / `/as`).
+  const listAgents = tool(
+    "list_agents",
+    "List Exo's named agents: what each one does, whether it is enabled, its autonomy tier (notify/propose/act), its read/write scope and its triggers. Use it when Mario asks which agents exist, before suggesting he delegate something, or to check what an agent is allowed to touch.",
+    {},
+    async () => {
+      const exo = getExo(app);
+      if (!exo) return ok("Exo plugin not reachable.");
+      if (!(await exo.agentsReady())) return ok("Named agents are disabled in Exo settings.");
+      const agents = exo.agentStore.list();
+      if (!agents.length) return ok("No agents found. Agent prompts live in `.claude/agents/*.md`.");
+      const lines = agents.map(({ brain, contract }) => {
+        const triggers = contract.triggers.map(triggerLabel).join(", ") || "manual only";
+        const scope = contract.scope.write.length ? `writes ${contract.scope.write.join(", ")}` : "no write scope";
+        return [
+          `- ${brain.name} (@${brain.slug}) — ${contract.enabled ? "enabled" : "disabled"} · ${contract.autonomy} · ${scope} · ${triggers}`,
+          brain.description ? `    ${brain.description}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+      });
+      const orphans = exo.agentStore.orphans();
+      if (orphans.length) lines.push("", `Contracts with no prompt file: ${orphans.join(", ")}`);
+      return ok(lines.join("\n"));
+    }
+  );
+
+  const invokeAgent = tool(
+    "invoke_agent",
+    "Hand a specific task to another named agent and wait for its result. Use when the work belongs to a different agent's domain (research, CRM, content) rather than doing it yourself. The call is refused unless the calling agent lists the target in its `can_call`, and delegation depth is capped — so a refusal is a configuration answer, not something to retry or work around.",
+    {
+      agent: z.string().describe("Slug or name of the agent to invoke."),
+      task: z.string().describe("The specific task, written as an instruction. Not the agent's standing job."),
+    },
+    async ({ agent, task }) => {
+      const exo = getExo(app);
+      if (!exo) return ok("Exo plugin not reachable.");
+      return ok(await exo.invokeAgentFromAgent(agent, task));
+    }
+  );
+
   const listAutomations = tool(
     "list_automations",
     "List Exo's automations (scheduled playbook runs): cadence, on/paused, read-only vs write mode, last/next run — plus available playbooks and recent write runs with their review state and run ids. Use it before managing automations or when Mario asks what runs automatically.",
@@ -1075,7 +1084,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       if (!s.automations.length) lines.push("No automations configured.");
       for (const a of s.automations) {
         const last = s.scheduledLastRun[automationLastRunKey(a)] ?? 0;
-        const next = a.enabled ? ` · next ${fmtDueIn(nextDueAt(a.cadence, last, now) - now)}` : "";
+        const next = a.enabled ? ` · next ${formatDueIn(nextDueAt(a.cadence, last, now) - now)}` : "";
         const mode = a.system === "daily-pulse"
           ? `writes ${paths.review} (marker-safe)`
           : a.write ? "writes (checkpointed, restorable)" : "read-only";
@@ -1211,7 +1220,9 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     listAnnotations, listSonarActions, askUser, listLoops,
     createNote, appendToNote, updateFrontmatter, addLinks, linkMentions, ignoreMentionTool, openNote,
     editNote, insertAtCursor, renameNote, resolveAnnotation, runSonarAction,
+    listAgents, invokeAgent,
     listAutomations, savePlaybook, manageAutomation, reviewAutomationRun,
+    ...buildCapabilityTools(app),
     ...(memoryRead ? [recall] : []),
     ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
     // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
@@ -1278,6 +1289,8 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__recall",
   "mcp__obsidian__list_loops",
   "mcp__obsidian__list_automations",
+  "mcp__obsidian__list_agents",
+  ...CAPABILITY_READ_TOOLS,
 ]);
 
 /** Memory-write tool names (gated separately by the memoryWrite setting). */

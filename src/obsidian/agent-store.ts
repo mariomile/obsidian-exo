@@ -1,0 +1,373 @@
+/**
+ * Agent store — the single read/write path for the agent registry.
+ *
+ * Joins the two halves of an agent: the CLI-native **brain**
+ * (`.claude/agents/<slug>.md`, discovered across scopes, never written) and the
+ * Exo **contract** (`<memoryRoot>/agents/<slug>.md`, owned here). Every write
+ * goes through one shared `WriteQueue`, matching the contract already used by
+ * the Memory Union Store and the Orchestration ledger.
+ *
+ * Both IO surfaces are injected as structural slices — `AgentVaultAdapter` for
+ * the vault and a `brains()` thunk for the multi-scope filesystem walk — so the
+ * join, scaffold and conflict logic is unit-testable against in-memory fakes
+ * without a real Obsidian `App`.
+ */
+import type { App, TFile } from "obsidian";
+import {
+  isAgentSidecar,
+  mergeAgents,
+  orphanContracts,
+  parseAgentBrain,
+  parseAgentSidecar,
+  reconcileInvocable,
+  resolveAgent,
+  serializeAgentSidecar,
+  type AgentBrain,
+  type AgentContract,
+  type AgentDef,
+  type AgentSource,
+} from "../core/agents";
+import {
+  agentMemoryExcerpt,
+  agentMemoryPath,
+  initialAgentMemory,
+  ledgerFileName,
+  parseAgentLedger,
+  serializeAgentRun,
+  sortRuns,
+  type AgentRunRecord,
+} from "../core/agent-ledger";
+import { seededContract } from "../core/agent-seeds";
+import { listAgentBrains } from "../core/capability-desc";
+import type { ExoPaths } from "../core/paths";
+import { WriteQueue } from "../core/write-queue";
+
+/** A brain file as found on disk, before parsing. */
+export interface RawBrain {
+  slug: string;
+  path: string;
+  raw: string;
+  source: AgentSource;
+}
+
+/** Structural slice of the vault API this module needs. */
+export interface AgentVaultAdapter {
+  /** Vault-relative paths of the files directly inside `dir` (missing → []). */
+  listFiles(dir: string): Promise<string[]>;
+  read(path: string): Promise<string>;
+  write(path: string, content: string): Promise<void>;
+  exists(path: string): Promise<boolean>;
+  ensureFolder(dir: string): Promise<void>;
+}
+
+export function adaptAppToAgentVault(app: App): AgentVaultAdapter {
+  return {
+    listFiles: async (dir) => {
+      try {
+        return (await app.vault.adapter.list(dir)).files;
+      } catch {
+        return []; // missing folder is the normal case before first use
+      }
+    },
+    read: (path) => app.vault.adapter.read(path),
+    write: async (path, content) => {
+      const file = app.vault.getAbstractFileByPath(path);
+      // Prefer the Vault API over the adapter so Obsidian's cache, Sync and
+      // the plugin's own file watchers all see the change.
+      if (file) await app.vault.modify(file as TFile, content);
+      else await app.vault.create(path, content);
+    },
+    exists: (path) => app.vault.adapter.exists(path),
+    ensureFolder: async (dir) => {
+      if (!dir || app.vault.getAbstractFileByPath(dir)) return;
+      try {
+        await app.vault.createFolder(dir);
+      } catch {
+        /* raced with another writer, or already exists */
+      }
+    },
+  };
+}
+
+export interface AgentStoreDeps {
+  vault: AgentVaultAdapter;
+  paths: ExoPaths;
+  queue: WriteQueue;
+  /** Multi-scope brain discovery. Injected so tests avoid the filesystem. */
+  brains: () => Promise<RawBrain[]>;
+  /** The engine's own agent list from the last `system/init`, when one exists —
+   *  ground truth for invocable ids. Absent/empty simply skips reconciliation. */
+  caps?: () => readonly string[];
+}
+
+/** A sidecar file that exists but is not an Exo contract — a pre-existing note
+ *  that happens to live in the agents folder. Never parsed, never overwritten. */
+export interface AgentConflict {
+  slug: string;
+  path: string;
+}
+
+export class AgentStore {
+  private agents: AgentDef[] = [];
+  private warningsBySlug = new Map<string, string[]>();
+  private orphanSlugs: string[] = [];
+  private conflictFiles: AgentConflict[] = [];
+  /** Slugs whose contract file exists on disk (set during refresh). */
+  private sidecarSlugs = new Set<string>();
+  private listeners = new Set<() => void>();
+  private loaded = false;
+
+  constructor(private deps: AgentStoreDeps) {}
+
+  /* ------------------------------ reads ------------------------------ */
+
+  list(): AgentDef[] {
+    return this.agents;
+  }
+
+  get(slug: string): AgentDef | null {
+    return this.agents.find((a) => a.brain.slug === slug) ?? null;
+  }
+
+  /** Resolve a loose user-typed reference (`@handle`, slug, or display name). */
+  resolve(query: string): AgentDef | null {
+    return resolveAgent(this.agents, query);
+  }
+
+  /** Enabled agents only — the set any trigger is allowed to consider. */
+  enabled(): AgentDef[] {
+    return this.agents.filter((a) => a.contract.enabled);
+  }
+
+  warningsFor(slug: string): string[] {
+    return this.warningsBySlug.get(slug) ?? [];
+  }
+
+  /** Contracts whose brain disappeared (renamed or deleted agent). */
+  orphans(): string[] {
+    return this.orphanSlugs;
+  }
+
+  /** Files in the agents folder that are not contracts. Surfaced, not touched. */
+  conflicts(): AgentConflict[] {
+    return this.conflictFiles;
+  }
+
+  isLoaded(): boolean {
+    return this.loaded;
+  }
+
+  /* ----------------------------- refresh ----------------------------- */
+
+  /** Rescan both halves and rebuild the registry. Never throws. */
+  async refresh(): Promise<void> {
+    const { vault, paths } = this.deps;
+
+    const rawBrains = await this.deps.brains().catch((): RawBrain[] => []);
+    const brains: AgentBrain[] = rawBrains.map((b) => parseAgentBrain(b.raw, b.slug, b.source, b.path));
+
+    const contracts: AgentContract[] = [];
+    const warnings = new Map<string, string[]>();
+    const conflicts: AgentConflict[] = [];
+    const sidecars = new Set<string>();
+
+    for (const file of await vault.listFiles(paths.agents)) {
+      if (!file.endsWith(".md")) continue;
+      const slug = file.split("/").pop()!.replace(/\.md$/, "");
+      let raw: string;
+      try {
+        raw = await vault.read(file);
+      } catch {
+        continue;
+      }
+      if (!isAgentSidecar(raw)) {
+        conflicts.push({ slug, path: file });
+        continue;
+      }
+      sidecars.add(slug);
+      const { contract, warnings: w } = parseAgentSidecar(raw, slug);
+      contracts.push(contract);
+      if (w.length) warnings.set(slug, w);
+    }
+
+    this.agents = reconcileInvocable(mergeAgents(brains, contracts), this.deps.caps?.() ?? []);
+    this.warningsBySlug = warnings;
+    this.orphanSlugs = orphanContracts(brains, contracts);
+    this.conflictFiles = conflicts;
+    this.sidecarSlugs = sidecars;
+    this.loaded = true;
+    this.emit();
+  }
+
+  /* ------------------------------ writes ----------------------------- */
+
+  /**
+   * Create an inert sidecar for every brain that has none. Returns the paths
+   * written.
+   *
+   * Scaffolding never grants autonomy: the generated contract is disabled with
+   * no triggers and no write scope, so discovering an agent can never make it
+   * start doing things. A conflicting non-contract file is left untouched.
+   *
+   * Only the user's own agents (vault and `~/.claude`) get a sidecar. Installed
+   * plugins ship agents by the hundred, their ids contain a `:` that has no
+   * business in a filename, and nobody wants a trigger contract for a
+   * marketplace code reviewer — they stay discoverable and bindable, just not
+   * schedulable.
+   */
+  async scaffoldMissing(today = ""): Promise<string[]> {
+    const { vault, paths, queue } = this.deps;
+    const conflicting = new Set(this.conflictFiles.map((c) => c.slug));
+    const missing = this.agents.filter(
+      (a) =>
+        (a.brain.source === "vault" || a.brain.source === "user")
+        && !conflicting.has(a.brain.slug)
+        && !this.hasSidecarFor(a.brain.slug)
+    );
+    if (!missing.length) return [];
+
+    return queue.enqueue(async () => {
+      await vault.ensureFolder(paths.agents);
+      const written: string[] = [];
+      for (const agent of missing) {
+        const path = this.sidecarPath(agent.brain.slug);
+        if (await vault.exists(path)) continue; // raced, or a conflict we skipped
+        // A recognised agent gets a plausible starting contract instead of a
+        // blank one — still disabled, so this suggests rather than activates.
+        await vault.write(path, serializeAgentSidecar(seededContract(agent.brain.slug), agent.brain, today));
+        written.push(path);
+      }
+      return written;
+    });
+  }
+
+  /** Persist a contract, preserving unrelated frontmatter is not attempted —
+   *  the sidecar is fully Exo-owned, so it is rewritten wholesale. */
+  async saveContract(contract: AgentContract, today = ""): Promise<void> {
+    const { vault, paths, queue } = this.deps;
+    const brain = this.get(contract.slug)?.brain;
+    await queue.enqueue(async () => {
+      await vault.ensureFolder(paths.agents);
+      await vault.write(this.sidecarPath(contract.slug), serializeAgentSidecar(contract, brain, today));
+    });
+    await this.refresh();
+  }
+
+  /** Flip a single agent on or off without touching the rest of its contract. */
+  async setEnabled(slug: string, enabled: boolean, today = ""): Promise<void> {
+    const agent = this.get(slug);
+    if (!agent) return;
+    await this.saveContract({ ...agent.contract, enabled }, today);
+  }
+
+  sidecarPath(slug: string): string {
+    return `${this.deps.paths.agents}/${slug}.md`;
+  }
+
+  /* ------------------------ run ledger + memory ----------------------- */
+
+  ledgerPath(at: number): string {
+    return `${this.deps.paths.agentRuns}/${ledgerFileName(at)}`;
+  }
+
+  memoryPath(slug: string): string {
+    return agentMemoryPath(this.deps.paths.agentMemory, slug);
+  }
+
+  /**
+   * Append one run to the month's ledger.
+   *
+   * Append-only and serialized on the shared queue: the ledger is evidence, so
+   * a concurrent run must never rewrite another's block. A failure here is
+   * swallowed — losing a ledger line is bad, but failing the run that already
+   * did its work would be worse.
+   */
+  async appendRun(record: AgentRunRecord): Promise<void> {
+    const { vault, paths, queue } = this.deps;
+    const path = this.ledgerPath(record.startedAt);
+    await queue
+      .enqueue(async () => {
+        await vault.ensureFolder(paths.agentRuns);
+        const existing = (await vault.exists(path)) ? await vault.read(path) : "";
+        await vault.write(path, existing + (existing && !existing.endsWith("\n") ? "\n" : "") + serializeAgentRun(record));
+      })
+      .catch((err) => {
+        console.warn("[Exo] agent ledger append failed:", err);
+      });
+  }
+
+  /** Runs recorded in the ledger file covering `at` (default: now), newest first. */
+  async readRuns(at = Date.now()): Promise<AgentRunRecord[]> {
+    const path = this.ledgerPath(at);
+    try {
+      if (!(await this.deps.vault.exists(path))) return [];
+      return sortRuns(parseAgentLedger(await this.deps.vault.read(path)));
+    } catch {
+      return [];
+    }
+  }
+
+  /** An agent's memory, creating the file on first use. Returns the excerpt that
+   *  rides into a run prompt, plus the path the agent may append to. */
+  async loadMemory(agent: AgentDef, today = ""): Promise<{ path: string; excerpt: string }> {
+    const { vault, paths, queue } = this.deps;
+    const path = this.memoryPath(agent.brain.slug);
+    try {
+      if (!(await vault.exists(path))) {
+        await queue.enqueue(async () => {
+          await vault.ensureFolder(paths.agentMemory);
+          if (!(await vault.exists(path))) {
+            await vault.write(path, initialAgentMemory(agent.brain.name, agent.brain.slug, today));
+          }
+        });
+        return { path, excerpt: "" };
+      }
+      return { path, excerpt: agentMemoryExcerpt(await vault.read(path)) };
+    } catch {
+      // No memory is a degraded run, not a failed one.
+      return { path, excerpt: "" };
+    }
+  }
+
+  /* --------------------------- subscription -------------------------- */
+
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private emit(): void {
+    for (const fn of this.listeners) {
+      try {
+        fn();
+      } catch {
+        /* a broken listener must not break the store */
+      }
+    }
+  }
+
+  /** Whether a contract file was actually seen on the last refresh. Recorded
+   *  during the scan rather than inferred from the parsed contract: a freshly
+   *  scaffolded sidecar is byte-identical in meaning to a missing one, so any
+   *  content-based heuristic would re-scaffold it forever. */
+  private hasSidecarFor(slug: string): boolean {
+    return this.sidecarSlugs.has(slug);
+  }
+}
+
+/** Wire a store against a real Obsidian app. `caps` is read lazily so a refresh
+ *  after the first session's init picks up the engine's real agent list. */
+export function createAgentStore(
+  app: App,
+  paths: ExoPaths,
+  queue: WriteQueue,
+  caps?: () => readonly string[]
+): AgentStore {
+  return new AgentStore({
+    vault: adaptAppToAgentVault(app),
+    paths,
+    queue,
+    brains: () => listAgentBrains(app),
+    caps,
+  });
+}

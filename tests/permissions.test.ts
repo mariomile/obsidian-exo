@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchPermRule, decidePermission, allowKey, permArgText, permRuleLine } from "../src/core/permissions";
+import { matchPermRule, matchToolName, findToolRule, decidePermission, allowKey, permArgText, permRuleLine } from "../src/core/permissions";
 
 describe("matchPermRule", () => {
   it("matches Bash rules on command-token boundaries", () => {
@@ -15,6 +15,48 @@ describe("matchPermRule", () => {
   it("requires an explicit wildcard for path-prefix rules", () => {
     expect(matchPermRule("Write(Active/Project/*)", "Write", "Active/Project/note.md")).toBe(true);
     expect(matchPermRule("Write(Active/Project/*)", "Write", "Active/Other/note.md")).toBe(false);
+  });
+
+  it("governs a whole MCP source with one wildcard rule", () => {
+    expect(matchPermRule("mcp__notion__*", "mcp__notion__search", "")).toBe(true);
+    expect(matchPermRule("mcp__notion__*", "mcp__notion__create_pages", "")).toBe(true);
+    expect(matchPermRule("mcp__notion__*", "mcp__linear__search", "")).toBe(false);
+  });
+
+  it("stops the source wildcard at a segment boundary", () => {
+    // The neighbouring server whose name merely starts the same way.
+    expect(matchPermRule("mcp__notion__*", "mcp__notion_admin__delete", "")).toBe(false);
+    expect(matchPermRule("mcp__notion__*", "mcp__notionx__search", "")).toBe(false);
+  });
+
+  it("refuses a bare * — it would silently disable the permission card", () => {
+    expect(matchPermRule("*", "Bash", "rm -rf /")).toBe(false);
+    expect(matchPermRule("*", "mcp__notion__search", "")).toBe(false);
+  });
+
+  it("keeps non-wildcard tool names exact", () => {
+    expect(matchPermRule("mcp__notion__search", "mcp__notion__search_all", "")).toBe(false);
+  });
+
+  it("still applies the argument filter under a tool wildcard", () => {
+    expect(matchPermRule("mcp__obsidian__*(Active/Foo.md)", "mcp__obsidian__edit_note", "Active/Foo.md")).toBe(true);
+    expect(matchPermRule("mcp__obsidian__*(Active/Foo.md)", "mcp__obsidian__edit_note", "Other.md")).toBe(false);
+  });
+});
+
+describe("matchToolName", () => {
+  it("is exact without a wildcard", () => {
+    expect(matchToolName("Bash", "Bash")).toBe(true);
+    expect(matchToolName("Bash", "BashOutput")).toBe(false);
+  });
+
+  it("covers the source's own bare name", () => {
+    expect(matchToolName("mcp__notion__*", "mcp__notion")).toBe(true);
+  });
+
+  it("tolerates a wildcard written without the trailing separator", () => {
+    expect(matchToolName("mcp__notion*", "mcp__notion__search")).toBe(true);
+    expect(matchToolName("mcp__notion*", "mcp__notionx__search")).toBe(false);
   });
 });
 
@@ -148,5 +190,23 @@ describe("permRuleLine", () => {
 
   it("produces the bare tool name for other tools", () => {
     expect(permRuleLine("Read", { file_path: "Active/Foo.md" })).toBe("Read");
+  });
+});
+
+describe("findToolRule", () => {
+  it("returns the source-level rule that covers a server", () => {
+    expect(findToolRule("Bash(rm)\nmcp__notion__*", "mcp__notion__")).toBe("mcp__notion__*");
+  });
+
+  it("ignores a rule naming one specific tool — it does not govern the source", () => {
+    expect(findToolRule("mcp__notion__search", "mcp__notion__")).toBeNull();
+  });
+
+  it("skips comments and blank lines", () => {
+    expect(findToolRule("# mcp__notion__*\n\n", "mcp__notion__")).toBeNull();
+  });
+
+  it("returns null when nothing matches", () => {
+    expect(findToolRule("mcp__linear__*", "mcp__notion__")).toBeNull();
   });
 });
