@@ -26,3 +26,30 @@ export function sanitizeTitle(raw: string, maxLen = 60): string {
   if (s.length > maxLen) s = s.slice(0, maxLen).trim();
   return s;
 }
+
+/** How a `generateTitle` attempt ended — see main.ts for the instrumentation
+ *  that computes these. Distinguishes the internal 15s ceiling firing ("timeout",
+ *  the cold-spawn hypothesis under test) from the caller's own signal aborting
+ *  ("caller-abort", e.g. the view tearing down) and from any other thrown error
+ *  ("error", e.g. the CLI binary can't be resolved) — and, on the non-throwing
+ *  path, a real reply from one that survived `sanitizeTitle` as empty. */
+export type TitleOutcome = "ok" | "ok-empty" | "timeout" | "caller-abort" | "error";
+
+/** Pure classifier — no I/O, so the four failure modes above can be exercised
+ *  directly without spinning up a session. `threw` is whether the attempt's
+ *  try block threw/rejected; `timedOut` and `callerAborted` are only meaningful
+ *  when `threw` is true; `title` is the sanitized result on the non-throwing
+ *  path. */
+export function classifyTitleOutcome(opts: {
+  threw: boolean;
+  timedOut: boolean;
+  callerAborted: boolean;
+  title: string;
+}): TitleOutcome {
+  if (opts.threw) {
+    if (opts.timedOut) return "timeout";
+    if (opts.callerAborted) return "caller-abort";
+    return "error";
+  }
+  return opts.title ? "ok" : "ok-empty";
+}

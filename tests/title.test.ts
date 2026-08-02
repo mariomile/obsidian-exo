@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sanitizeTitle } from "../src/core/title";
+import { sanitizeTitle, classifyTitleOutcome } from "../src/core/title";
 
 describe("sanitizeTitle", () => {
   it("returns a clean plain title unchanged", () => {
@@ -41,5 +41,33 @@ describe("sanitizeTitle", () => {
     expect(sanitizeTitle("")).toBe("");
     expect(sanitizeTitle("   \n  ")).toBe("");
     expect(sanitizeTitle('""')).toBe("");
+  });
+});
+
+describe("classifyTitleOutcome", () => {
+  it("reports a real title as ok", () => {
+    expect(classifyTitleOutcome({ threw: false, timedOut: false, callerAborted: false, title: "Refactor the auth flow" })).toBe(
+      "ok"
+    );
+  });
+
+  it("distinguishes a reply that sanitized to nothing from a real success", () => {
+    expect(classifyTitleOutcome({ threw: false, timedOut: false, callerAborted: false, title: "" })).toBe("ok-empty");
+  });
+
+  it("reports the internal 15s ceiling firing as timeout, even if the caller signal also ends up aborted", () => {
+    // ctrl.abort() inside the timer callback never touches the caller's own
+    // signal, but the classifier still must not let a coincidentally-aborted
+    // caller signal mask a genuine timeout — timedOut wins.
+    expect(classifyTitleOutcome({ threw: true, timedOut: true, callerAborted: true, title: "" })).toBe("timeout");
+    expect(classifyTitleOutcome({ threw: true, timedOut: true, callerAborted: false, title: "" })).toBe("timeout");
+  });
+
+  it("reports the caller's own signal aborting (not the internal timer) as caller-abort", () => {
+    expect(classifyTitleOutcome({ threw: true, timedOut: false, callerAborted: true, title: "" })).toBe("caller-abort");
+  });
+
+  it("reports any other thrown failure (e.g. CLI missing) as error", () => {
+    expect(classifyTitleOutcome({ threw: true, timedOut: false, callerAborted: false, title: "" })).toBe("error");
   });
 });

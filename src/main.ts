@@ -45,7 +45,7 @@ import { automationLastRunKey, migrateScheduledRuns, isDue, pruneRuns, type Auto
 import { AutomationsModal } from "./ui/automations-modal";
 import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
-import { sanitizeTitle } from "./core/title";
+import { sanitizeTitle, classifyTitleOutcome } from "./core/title";
 import { buildEditPrompt, buildContinuePrompt } from "./core/inline-ai";
 import { inlineAiExtension } from "./editor/inline-ai";
 import { mentionsExtension } from "./mentions/editor";
@@ -1280,13 +1280,41 @@ export default class ExoPlugin extends Plugin {
    *  `oneShot`). Never throws: if the Claude CLI can't be resolved or the call
    *  errors/aborts/times out it resolves to "" and the caller keeps the truncated
    *  placeholder. An internal 15s timeout (plus the caller's `signal`) guarantees
-   *  a hung call can't leak. */
+   *  a hung call can't leak.
+   *
+   *  Instrumented (Task 6 Step 1, see
+   *  .superpowers/sdd/2026-08-01-strip-plan/task-6-brief.md): AI titles land
+   *  ~15% of the time on the real vault. The suspect is this 15s ceiling firing
+   *  before a cold Claude-session spawn inside the Obsidian renderer completes
+   *  (other timeouts in this plugin were already raised to 90s for the same
+   *  reason). Every attempt logs one `this.diag.push("title", ...)` line with:
+   *  spawn latency (time to the `system/init` handshake via `session.onCaps` —
+   *  NOT the moment `createSession()` returns, which is synchronous and always
+   *  ~0ms, so it would never show a cold-spawn stall), time to the first
+   *  text-delta, total duration, and an outcome that distinguishes the internal
+   *  timeout from the caller's own signal aborting, from any other thrown error,
+   *  and from a reply that came back but sanitized to nothing (see
+   *  `classifyTitleOutcome` in core/title.ts). Deliberately NOT gated behind a
+   *  debug flag — this needs to produce data during normal use. */
   async generateTitle(userText: string, assistantText: string, signal: AbortSignal): Promise<string> {
+    const t0 = Date.now();
     const ctrl = new AbortController();
     const onAbort = () => ctrl.abort();
     if (signal.aborted) ctrl.abort();
     else signal.addEventListener("abort", onAbort);
-    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    // Set only inside the timer callback below — the sole signal that OUR 15s
+    // ceiling actually fired, as opposed to the caller's `signal` aborting for
+    // an unrelated reason (e.g. the view tearing down mid-call).
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, 15_000);
+    let spawnMs = -1; // time to system/init (cold-spawn handshake), via onCaps
+    let deltaMs = -1; // time to the first assistant text-delta
+    let threw = false;
+    let resultTitle = "";
+    let errDetail = "";
     try {
       const cli = await resolveCli("claude", this.settings.claudeBin);
       const session = ADAPTERS.claude.createSession({
@@ -1298,6 +1326,13 @@ export default class ExoPlugin extends Plugin {
         toolsEnabled: false, // title only — no tools
         fastStartup: true,
       });
+      // The real "did the CLI process come up" signal — createSession() itself
+      // is synchronous (it only builds the query() object), so timing right
+      // after it returns would always read ~0ms and could never confirm or
+      // rule out a cold-spawn stall.
+      session.onCaps = () => {
+        if (spawnMs < 0) spawnMs = Date.now() - t0;
+      };
       ctrl.signal.addEventListener("abort", () => {
         try {
           session.dispose();
@@ -1316,17 +1351,30 @@ export default class ExoPlugin extends Plugin {
       let out = "";
       try {
         await session.send(prompt, (e: AgentEvent) => {
-          if (e.kind === "text-delta") out += e.text;
+          if (e.kind === "text-delta") {
+            if (deltaMs < 0) deltaMs = Date.now() - t0;
+            out += e.text;
+          }
         });
       } finally {
         session.dispose();
       }
-      return sanitizeTitle(out);
-    } catch {
+      resultTitle = sanitizeTitle(out);
+      return resultTitle;
+    } catch (err) {
+      threw = true;
+      errDetail = err instanceof Error ? err.message : String(err);
       return ""; // CLI missing / errored / aborted — keep the placeholder
     } finally {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
+      const outcome = classifyTitleOutcome({ threw, timedOut, callerAborted: signal.aborted, title: resultTitle });
+      const totalMs = Date.now() - t0;
+      this.diag.push(
+        "title",
+        `${outcome} spawn=${spawnMs >= 0 ? `${spawnMs}ms` : "?"} delta=${deltaMs >= 0 ? `${deltaMs}ms` : "?"} total=${totalMs}ms` +
+          (outcome === "error" ? ` err=${errDetail}` : "")
+      );
     }
   }
 
