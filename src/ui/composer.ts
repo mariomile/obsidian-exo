@@ -183,6 +183,14 @@ export class Composer {
   focusInput(): void {
     window.setTimeout(() => this.inputEl?.focus(), 0);
   }
+  /** Append text at the end of the current draft (a smart space between old
+   *  and new content, none if the draft is empty or already ends in one), then
+   *  focus — the palette/hub-chip insert idiom. */
+  insertText(text: string): void {
+    const v = this.inputEl.value;
+    this.setInputValue(v + (v && !v.endsWith(" ") ? " " : "") + text);
+    this.focusInput();
+  }
   /** Snapshot the in-progress draft for the outgoing conversation. Arrays are
    *  handed over by reference — setDraft immediately replaces the composer's
    *  own, so the snapshot can't be mutated behind the convo's back. */

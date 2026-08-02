@@ -126,16 +126,29 @@ function chipSection(
   };
 }
 
-function chip(parent: HTMLElement, label: string, active: boolean, desc?: string): HTMLElement {
+function chip(parent: HTMLElement, label: string, active: boolean, desc?: string, onClick?: () => void): HTMLElement {
   const el = parent.createSpan({ cls: `mva-caps-chip ${active ? "is-on" : "is-off"}` });
   el.createSpan({ cls: "mva-caps-dot" });
   el.createSpan({ cls: "mva-caps-label", text: label });
   if (desc) el.setAttr("aria-label", desc), el.setAttr("title", desc);
+  if (onClick) {
+    el.addClass("is-clickable");
+    el.onclick = onClick;
+  }
   return el;
 }
 
-function chipList(body: HTMLElement, items: NamedItem[], prefix: string, active = true): void {
-  const render = (it: NamedItem) => chip(body, `${prefix}${it.name}`, active, it.desc);
+/** `ctx` present → each chip inserts `<prefix><name> ` into the active chat's
+ *  composer on click (Commands `/`, Sub-agents `@`); omit it for informational
+ *  chips (Tools) that aren't meant to be typed into a prompt. */
+function chipList(body: HTMLElement, items: NamedItem[], prefix: string, ctx?: HubTabContext, active = true): void {
+  const render = (it: NamedItem) => chip(
+    body,
+    `${prefix}${it.name}`,
+    active,
+    it.desc ?? (ctx ? "Click to insert in the composer" : undefined),
+    ctx ? () => void ctx.plugin.insertIntoComposer(`${prefix}${it.name} `) : undefined
+  );
   for (const it of items.slice(0, MAX_CHIPS)) render(it);
   const rest = items.slice(MAX_CHIPS);
   if (rest.length) {
@@ -176,12 +189,12 @@ async function vocabularySections(ctx: HubTabContext): Promise<CardModel[]> {
   const out: CardModel[] = [];
   out.push(chipSection("sec:commands", "Commands", commands.length, (body) => {
     if (!commands.length) body.createDiv({ cls: "mva-conn-empty", text: "None found." });
-    chipList(body, commands, "/");
+    chipList(body, commands, "/", ctx);
   }, commands.map((c) => c.name).join(",")));
 
   out.push(chipSection("sec:agents", "Sub-agents", agents.length, (body) => {
     if (!agents.length) body.createDiv({ cls: "mva-conn-empty", text: "None found." });
-    chipList(body, agents, "@");
+    chipList(body, agents, "@", ctx);
   }, agents.map((a) => a.name).join(",")));
 
   const hookSig = [...vaultHooks, ...globalHooks].map((h) => `${h.event}:${h.count}`).join(",") + `:${s.runHooks}`;

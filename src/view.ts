@@ -48,7 +48,6 @@ import { readBootContext } from "./obsidian/memory";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
-import { renderSessionCard } from "./ui/session-card";
 import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
 import { assembleContext, formatContextDebug } from "./core/context-assembly";
@@ -520,7 +519,6 @@ export class ChatView extends ItemView {
   /** Last computed wide state — only rebuild the Context panel on the transition. */
   private wasWide = false;
   private galleryEl: HTMLElement | null = null;
-  private capsEl: HTMLElement | null = null;
   private brandDot!: HTMLElement;
   private lastPersistErrorNotice = 0;
   /** Coalesces persist() bursts into one write. Many state changes (every
@@ -834,6 +832,14 @@ export class ChatView extends ItemView {
     this.composer.setCurrentSelection(text, path);
   }
 
+  /** Append text to the active tab's draft and focus — the hub's Skills tab
+   *  chip-click idiom (`/command `, `@agent `). Targets whichever conversation
+   *  is currently active in this view; the plugin-level wrapper reveals the
+   *  view first so the user sees where the text landed. */
+  insertIntoComposer(text: string): void {
+    this.composer.insertText(text);
+  }
+
   /* --------------------------- session mgmt ------------------------- */
 
   private sessionSigOf(c: Convo): string {
@@ -1035,10 +1041,6 @@ export class ChatView extends ItemView {
         }
       }
       this.composer.resetSlashCache(); // menus rebuild with the enriched lists
-      if (this.capsEl) {
-        this.hideCapabilities();
-        this.showCapabilities(); // live panel refresh if it's open
-      }
       this.plugin.refreshHub(); // the hub pane tracks the same live snapshot
       // Release any reconnect (Connections pane) waiter parked on the next caps.
       if (this.capsWaiters.length) {
@@ -1158,7 +1160,7 @@ export class ChatView extends ItemView {
     const caps = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "Capabilities" } });
     setIcon(caps, "blocks");
     setTooltip(caps, "Capabilities");
-    caps.onclick = () => this.toggleCapabilities();
+    caps.onclick = () => void this.plugin.activateHub();
 
     const histBtn = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "History" } });
     setIcon(histBtn, "history");
@@ -1536,7 +1538,6 @@ export class ChatView extends ItemView {
 
   private newConversation(target?: { provider: ProviderId; model: string }): void {
     if (this.galleryEl) this.hideGallery();
-    if (this.capsEl) this.hideCapabilities();
     // Keep other conversations (and their live sessions) alive — parallel.
     this.saveActive();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
@@ -1621,7 +1622,6 @@ export class ChatView extends ItemView {
 
   private switchTo(c: Convo): void {
     if (c === this.active) return;
-    if (this.capsEl) this.hideCapabilities();
     this.saveActive();
     this.active.draft = this.composer.getDraft();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
@@ -2354,7 +2354,6 @@ export class ChatView extends ItemView {
       void this.showGallery(preset);
       return;
     }
-    if (this.capsEl) this.hideCapabilities();
     void this.showGallery(preset);
   }
 
@@ -2370,36 +2369,6 @@ export class ChatView extends ItemView {
     this.rebuildOutline();
   }
 
-  /* -------------------------- capabilities -------------------------- */
-
-  private toggleCapabilities(): void {
-    if (this.capsEl) this.hideCapabilities();
-    else this.showCapabilities();
-  }
-
-  private hideCapabilities(): void {
-    this.capsEl?.remove();
-    this.capsEl = null;
-    this.listEl.show();
-    this.rebuildOutline();
-  }
-
-  private showCapabilities(): void {
-    if (this.galleryEl) this.hideGallery();
-    this.listEl.hide();
-    const wrap = this.listHost.createDiv({ cls: "mva-gallery-wrap" });
-    this.capsEl = wrap;
-    this.rebuildOutline(); // drop the outline rail while the session card is up
-    renderSessionCard(wrap, this.plugin.settings, {
-      provider: this.provider,
-      model: this.model,
-      caps: this.sessionCaps ?? this.plugin.lastSessionCaps,
-      onOpenHub: () => {
-        this.hideCapabilities();
-        void this.plugin.activateHub();
-      },
-    });
-  }
 
   /** `preset` accepts one filter or a set of them: a single value is what the
    *  strip counter passes, while the internal rebuild sites hand back the
@@ -5242,7 +5211,7 @@ export class ChatView extends ItemView {
       window.clearTimeout(this.outlineCollapseTimer);
       this.outlineCollapseTimer = null;
     }
-    if (this.galleryEl || this.capsEl) return; // hidden behind full-pane overlays
+    if (this.galleryEl) return; // hidden behind a full-pane overlay
     const turns = Array.from(this.listEl.querySelectorAll<HTMLElement>(".mva-user"));
     if (turns.length < 2) return; // no rail for a single-message conversation
 
@@ -6895,7 +6864,6 @@ export class ChatView extends ItemView {
     const c = this.convos.find((x) => x.id === id);
     if (!c) return false;
     if (this.galleryEl) this.hideGallery();
-    this.hideCapabilities();
     this.switchTo(c);
     return true;
   }

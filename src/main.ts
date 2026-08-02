@@ -1193,6 +1193,16 @@ export default class ExoPlugin extends Plugin {
     return view instanceof ChatView ? view.revealConversation(convoId) : false;
   }
 
+  /** Plugin-level wrapper around `ChatView.insertIntoComposer` for the
+   *  Capabilities hub's Skills tab: click a Command/Sub-agent chip → reveal
+   *  Exo and drop it into whatever conversation is active there. Creates the
+   *  view on demand, same as `revealConversation`. */
+  async insertIntoComposer(text: string): Promise<void> {
+    await this.activateView();
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (view instanceof ChatView) view.insertIntoComposer(text);
+  }
+
   /**
    * Periodic tick for the git auto-commit safety net (see core/git-autocommit
    * for the pure decision logic). Cheap on every tick that isn't due; only

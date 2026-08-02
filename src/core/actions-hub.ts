@@ -103,37 +103,6 @@ export function formatAge(then: number | null | undefined, now: number, fallback
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-/* ---------------------------- Session summary ---------------------------- */
-
-/** Structural mirror of SessionCaps (providers/types) — kept local so this
- *  module stays dependency-free and unit-testable with plain values. */
-export interface CapsLike {
-  skills: string[];
-  commands: string[];
-  agents: string[];
-  tools: string[];
-  mcpServers: { name: string; status: string }[];
-}
-
-/** The slim session card's count line: what the live session actually loaded.
- *  Empty when no session has spawned yet (the card shows a quiet fallback). */
-export function capsSummary(caps: CapsLike | null | undefined): HubStat[] {
-  if (!caps) return [];
-  const mcp = caps.mcpServers ?? [];
-  const connected = mcp.filter((m) => m.status === "connected").length;
-  const trouble = mcp.length - connected;
-  return [
-    { label: "Skills", value: String(caps.skills.length) },
-    { label: "Commands", value: String(caps.commands.length) },
-    { label: "Agents", value: String(caps.agents.length) },
-    { label: "Tools", value: String(caps.tools.length) },
-    {
-      label: "MCP",
-      value: trouble > 0 ? `${connected} connected · ${trouble} need attention` : `${connected} connected`,
-    },
-  ];
-}
-
 /* ------------------------------ Memory card ------------------------------ */
 
 export interface MemoryCardInput {
