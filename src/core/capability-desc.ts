@@ -211,7 +211,7 @@ export async function listAgentBrains(app: App): Promise<{ slug: string; path: s
 }
 
 /** Skill names under `~/.codex/skills` (folder-per-skill or loose .md).
- *  The Codex CLI is spawn-per-turn — there is no init capability snapshot —
+ *  Codex app-server does not expose a native skill capability snapshot —
  *  so this direct scan is the only way Exo can list Codex-native skills.
  *  Missing dir → empty. */
 export async function codexSkillNames(): Promise<string[]> {

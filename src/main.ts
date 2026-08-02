@@ -1820,6 +1820,11 @@ export default class ExoPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // Codex app-server no longer accepts the legacy `on-failure` policy.
+    if (this.settings.codexApproval === "on-failure") {
+      this.settings.codexApproval = "on-request";
+      await this.saveSettings();
+    }
     // Memory-root auto-detect (one-shot): a vault that already has a legacy-root
     // layer keeps it — existing installs (marioverse included) never migrate —
     // while a fresh vault adopts the neutral, tool-owned `_exo/`. Persisted so

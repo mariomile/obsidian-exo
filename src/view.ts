@@ -982,8 +982,8 @@ export class ChatView extends ItemView {
    *  caps arrive (or after an 8s cap so the Connections pane never hangs). */
   async reloadMcpConnections(): Promise<{ ok: boolean; error?: string; servers?: SessionCaps["mcpServers"] }> {
     const c = this.active;
-    if (!c || c.provider !== "claude") {
-      return { ok: false, error: "No active Claude session to reconnect (MCP is Claude-only)." };
+    if (!c) {
+      return { ok: false, error: "No active session to reconnect." };
     }
     if (c.streaming) {
       return { ok: false, error: "A turn is running — stop it, then reconnect." };
@@ -1010,12 +1010,12 @@ export class ChatView extends ItemView {
 
   /** Spin up the active conversation's CLI session in the background so the first
    *  message skips the cold start. No-op if disabled, already warm, streaming, or
-   *  on Codex (spawn-per-turn model — nothing to warm). Errors are swallowed; a
+   *  already warm. Errors are swallowed; a
    *  real send surfaces them through the normal UX. */
   private prewarm(): void {
     if (!this.plugin.settings.prewarmSession) return;
     const c = this.active;
-    if (!c || c.provider !== "claude" || c.session || c.streaming) return;
+    if (!c || c.session || c.streaming) return;
     void this.ensureSession(c).catch(() => {});
   }
 
@@ -1790,32 +1790,12 @@ export class ChatView extends ItemView {
     this.togglePlanMode();
   }
 
-  /** Manually compact the active conversation's context (Claude), optionally
+  /** Manually compact the active conversation's context, optionally
    *  steered by free-text `instructions` (from the /compact slash command). */
   private compactActive(instructions?: string): void {
     const c = this.active;
     if (c.streaming) {
       new Notice("Wait for the current turn to finish, then compact.");
-      return;
-    }
-    if (c.provider !== "claude") {
-      // Codex has no session-level compact API (TUI-only) — emulate by
-      // dropping the session: the cold-reseed invariant (shouldColdReseed in
-      // runTurn) threads a transcript recap into the next turn automatically.
-      // Only the user's compaction focus needs carrying, as a provider-only
-      // prefix (never UI/persisted).
-      if (!c.messages.length) {
-        new Notice("Send a message first — nothing to compact yet.");
-        return;
-      }
-      this.dropSession(c);
-      c.sessionId = undefined;
-      c.pendingSendPrefix = instructions ? `Compaction focus from the user: ${instructions}` : undefined;
-      c.usage = undefined;
-      this.composer.updateUsage(null);
-      c.compactNudged = true;
-      this.composer.hideCompactNudge();
-      new Notice("Compacted — the next message restarts the session with a summary.");
       return;
     }
     if (!c.session?.compact) {
@@ -4777,9 +4757,8 @@ export class ChatView extends ItemView {
     if (c.streaming) {
       // Mid-turn behavior. Default (steerMode "queue") always enqueues so the
       // message starts as the next turn. Opt-in "steer" injects into the live
-      // turn (Claude Code parity). The provider's steer() owns the capability
-      // contract — Codex has no steer (→ undefined → false), and Claude's steer
-      // returns false when images are attached — so the shared path stays
+      // turn. The provider's steer() owns the capability contract; both
+      // providers return false when images are attached, so the shared path stays
       // provider-agnostic. A false return or a throw falls back to queue.
       let steered = false;
       if (!c.researchMode.enabled && this.plugin.settings.steerMode === "steer") {
@@ -5055,8 +5034,8 @@ export class ChatView extends ItemView {
       );
     }
 
-    // Images flow to both providers since Tranche A: Claude gets base64 blocks,
-    // Codex gets temp files via `codex exec -i` (handled in the adapter).
+    // Images flow to both providers: Claude gets base64 blocks; Codex's
+    // app-server gets temporary local-image paths (handled in the adapter).
     let imgs = images;
     const embedded = await this.composer.embeddedImages(text);
     if (embedded.length) imgs = [...(imgs ?? []), ...embedded];

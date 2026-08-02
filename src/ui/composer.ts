@@ -538,8 +538,8 @@ export class Composer {
       add(skills, this.host.sessionCaps.skills);
       add(agents, this.host.sessionCaps.agents);
     }
-    // Codex has no init snapshot (spawn-per-turn), so its native skill catalog
-    // (~/.codex/skills) is scanned directly — without this, Codex sessions only
+    // Codex's app-server snapshot does not expose its native skill catalog, so
+    // ~/.codex/skills is scanned directly — without this, Codex sessions only
     // ever saw the vault's own .claude/ skills.
     if (this.host.provider === "codex") {
       try {
@@ -1149,11 +1149,10 @@ export class Composer {
   }
 
   /** Show the discreet ≥75% compaction nudge under the composer — one-shot per
-   *  conversation, Claude-only (compaction is a Claude capability). Marks the
+   *  conversation. Marks the
    *  convo as nudged before rendering so it never re-appears. */
   private maybeShowCompactNudge(): void {
     const c = this.host.active;
-    if (c.provider !== "claude") return; // compaction is Claude-only
     if (c.compactNudged) return; // one-shot per conversation
     if (!c.session?.compact) return; // nothing to compact yet
     if (this.compactNudgeEl) return; // already visible

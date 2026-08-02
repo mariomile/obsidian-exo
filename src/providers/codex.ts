@@ -1,23 +1,16 @@
-import { spawn, type ChildProcess } from "child_process";
-import { writeFile, unlink } from "fs/promises";
-import { tmpdir } from "os";
-import { join } from "path";
+import { CodexSession as AppServerCodexSession } from "./codex-app-server";
 import type {
   AgentEvent,
   AgentSession,
-  ContextUsage,
-  ImageAttachment,
   ModelOption,
   ProviderAdapter,
   SessionOpts,
 } from "./types";
 
-/** File extension for an image attachment's media type (codex -i needs a path). */
-function imageExt(mediaType: string): string {
-  const m = /^image\/(png|jpe?g|gif|webp)$/i.exec(mediaType);
-  const sub = m?.[1]?.toLowerCase() ?? "png";
-  return sub === "jpeg" ? "jpg" : sub;
-}
+export {
+  CodexSession,
+  type CodexSessionRuntime,
+} from "./codex-app-server";
 
 /** GPT-5-family input context window — the ring's denominator for Codex.
  *  A constant, not per-model: close enough for a fill gauge, and the JSONL
@@ -30,7 +23,8 @@ export function codexMcpOverride(b: { port: number; token: string; scriptPath: s
   const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   return (
     `mcp_servers.obsidian={command="node",args=["${esc(b.scriptPath)}"],` +
-    `env={EXO_BRIDGE_PORT="${b.port}",EXO_BRIDGE_TOKEN="${esc(b.token)}"}}`
+    `env={EXO_BRIDGE_PORT="${b.port}",EXO_BRIDGE_TOKEN="${esc(b.token)}"},` +
+    `startup_timeout_sec=10,tool_timeout_sec=3600}`
   );
 }
 
@@ -168,126 +162,6 @@ export function handleCodexLine(
   }
 }
 
-/**
- * Codex session. Codex has no persistent streaming-input protocol wired here,
- * so each turn spawns `codex exec --json`, resuming the prior session id for
- * conversation continuity. Tools run inside Codex's sandbox (workspace-write).
- */
-class CodexSession implements AgentSession {
-  private child: ChildProcess | null = null;
-  private sessionId?: string;
-
-  constructor(private opts: SessionOpts) {
-    this.sessionId = opts.resumeSessionId;
-  }
-
-  async send(message: string, onEvent: (e: AgentEvent) => void, images?: ImageAttachment[]): Promise<void> {
-    const o = this.opts;
-    const args = ["exec", "--json", "--skip-git-repo-check", "-C", o.cwd];
-    if (this.sessionId) args.splice(1, 0, "resume", this.sessionId);
-    // Memory/identity boot (Tranche A parity): Codex has no system-prompt seam,
-    // so the preamble rides the session's FIRST turn as a prefixed block — the
-    // resumed transcript carries it from then on. Never re-injected on resume.
-    if (!this.sessionId && o.memoryPreamble) {
-      message = `<boot-context>\n${o.memoryPreamble}\n</boot-context>\n\n${message}`;
-    }
-    // Images (Tranche A parity): `codex exec -i <file>` on both fresh and
-    // resumed prompts. Attachments arrive as base64 — spill to temp files,
-    // best-effort cleanup after the child exits.
-    const imgPaths: string[] = [];
-    for (const [i, img] of (images ?? []).entries()) {
-      try {
-        const p = join(tmpdir(), `exo-codex-img-${Date.now()}-${i}.${imageExt(img.mediaType)}`);
-        await writeFile(p, Buffer.from(img.dataB64, "base64"));
-        imgPaths.push(p);
-      } catch {
-        /* unwritable temp — send the turn without this image */
-      }
-    }
-    for (const p of imgPaths) args.push("-i", p);
-    // Sandbox: forced read-only when tools are off; otherwise the chosen mode.
-    const sandbox = o.toolsEnabled ? o.sandboxMode || "workspace-write" : "read-only";
-    args.push("-s", sandbox);
-    // `codex exec` dropped the `-a/--ask-for-approval` flag (removed by 0.142);
-    // the config key is the stable way to set the policy across CLI versions.
-    if (o.approvalPolicy && /^[a-z-]+$/.test(o.approvalPolicy)) {
-      args.push("-c", `approval_policy="${o.approvalPolicy}"`);
-    }
-    if (o.model && o.model !== "default" && /^[A-Za-z0-9._-]+$/.test(o.model)) args.push("-m", o.model);
-    if (o.effort && o.effort !== "default" && /^[a-z]+$/.test(o.effort)) {
-      args.push("-c", `model_reasoning_effort="${o.effort}"`);
-    }
-    if (o.fastStartup) args.push("-c", "mcp_servers={}");
-    // Obsidian tools over the loopback bridge. Ordering matters: this comes
-    // AFTER the fastStartup blanket `mcp_servers={}` so the obsidian server
-    // survives it (later -c overrides win in codex config layering).
-    if (o.codexBridge) args.push("-c", codexMcpOverride(o.codexBridge));
-
-    return new Promise<void>((resolve, reject) => {
-      const child = spawn(o.cli.bin, args, {
-        cwd: o.cwd,
-        env: { ...process.env, PATH: o.cli.pathEnv },
-      });
-      this.child = child;
-
-      let buf = "";
-      let stderr = "";
-      const state: CodexParseState = { sessionId: this.sessionId, streamed: false, finalText: "" };
-
-      child.on("error", (err) => reject(err));
-
-      child.stdout?.on("data", (chunk: Buffer | string) => {
-        buf += chunk.toString();
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (!line) continue;
-          handleCodexLine(line, state, onEvent);
-          this.sessionId = state.sessionId;
-        }
-      });
-
-      child.stderr?.on("data", (d: Buffer | string) => (stderr += d.toString()));
-
-      child.on("close", (code) => {
-        this.child = null;
-        for (const p of imgPaths) void unlink(p).catch(() => {});
-        if (code !== 0 && code !== null) {
-          const m = stderr.trim() || `codex exited with code ${code}`;
-          onEvent({ kind: "error", message: m });
-          // Don't hard-reject on non-zero (e.g. interrupted) — end the turn.
-        }
-        if (!state.streamed && state.finalText) onEvent({ kind: "text-delta", text: state.finalText });
-        onEvent({ kind: "turn-end", sessionId: this.sessionId });
-        resolve();
-      });
-
-      child.stdin?.on("error", () => {
-        /* broken pipe — handled via close */
-      });
-      child.stdin?.write(message);
-      child.stdin?.end();
-    });
-  }
-
-  interrupt(): void {
-    try {
-      this.child?.kill("SIGTERM");
-    } catch {
-      /* ignore */
-    }
-  }
-
-  dispose(): void {
-    this.interrupt();
-  }
-
-  async contextUsage(): Promise<ContextUsage | null> {
-    return null;
-  }
-}
-
 export const codexAdapter: ProviderAdapter = {
   id: "codex",
   displayName: "Codex",
@@ -307,6 +181,6 @@ export const codexAdapter: ProviderAdapter = {
   },
 
   createSession(opts: SessionOpts): AgentSession {
-    return new CodexSession(opts);
+    return new AppServerCodexSession(opts);
   },
 };

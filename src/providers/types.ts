@@ -109,7 +109,7 @@ export interface SessionOpts {
   autoCompact?: boolean;
   /** Codex sandbox: read-only | workspace-write | danger-full-access. */
   sandboxMode?: string;
-  /** Codex approval policy: untrusted | on-request | on-failure | never. */
+  /** Codex approval policy: untrusted | on-request | granular | never. */
   approvalPolicy?: string;
   /** Codex ↔ Obsidian tools bridge (Tranche B1): loopback executor coordinates
    *  + the generated stdio script path. Present only for Codex sessions with
@@ -137,7 +137,8 @@ export interface SessionCaps {
 /**
  * A live conversation. For Claude this wraps a single long-lived SDK `query()`
  * in streaming-input mode — follow-up turns reuse the same process/context
- * (no per-message cold start). For Codex it spawns `codex exec` per turn.
+ * (no per-message cold start). Codex likewise keeps one app-server process and
+ * thread alive for the conversation.
  */
 export interface AgentSession {
   /** Latest capability snapshot (see SessionCaps); null until init arrives. */
@@ -150,16 +151,15 @@ export interface AgentSession {
   onCaps?: ((caps: SessionCaps) => void) | null;
   /** Send one user turn; resolves when that turn completes. */
   send(message: string, onEvent: (e: AgentEvent) => void, images?: ImageAttachment[]): Promise<void>;
-  /** Inject a user message into the in-flight turn (mid-turn steering, Claude
-   *  Code parity). Returns true when it was accepted into a running turn, false
+  /** Inject a user message into the in-flight turn. Returns true when it was
+   *  accepted into a running turn, false
    *  when there's nothing to steer or the provider can't steer this input (caller
-   *  should queue instead). The provider owns the capability contract: Codex has
-   *  no steer at all, and Claude declines when `images` are attached (steer is
-   *  text-only). Claude only. */
+   *  should queue instead). Both providers decline when `images` are attached
+   *  because steer is text-only. */
   steer?(text: string, images?: ImageAttachment[]): boolean;
   /** Interrupt the in-flight turn. */
   interrupt(): void;
-  /** Compact the conversation context (best-effort; Claude supports /compact).
+  /** Compact the conversation context using the provider's native operation.
    *  Optional free-text `instructions` steer what the compaction summary keeps
    *  (appended to the /compact slash command). */
   compact?(instructions?: string): void;
@@ -170,8 +170,8 @@ export interface AgentSession {
   /** Current context-window usage, if the provider exposes it. */
   contextUsage(): Promise<ContextUsage | null>;
   /** W0 cost governance: input_tokens + output_tokens from the most recently
-   *  completed turn, if the provider exposes it (Claude only — synchronous,
-   *  no control round-trip, unlike `contextUsage()`). */
+   *  completed turn, if the provider exposes it (synchronous, no control
+   *  round-trip, unlike `contextUsage()`). */
   lastTurnTokens?(): number | null;
 }
 

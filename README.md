@@ -31,9 +31,9 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 ## Features
 
 - **Custom chat UI** — streaming markdown, message bubbles, theme-agnostic (built on Obsidian's native CSS variables; transparent panel that adapts to any theme).
-- **Two backends, switchable** — Claude (via the Claude Agent SDK pointed at your installed CLI) and Codex (`codex exec --json`). Switch per conversation from the header.
+- **Two backends, switchable** — Claude (via the Claude Agent SDK pointed at your installed CLI) and Codex (via a persistent `codex app-server` thread). Switch per conversation from the header.
 - **Agentic** — the agent can Read / Write / Edit / Bash / Search with the vault as its working directory.
-- **Permission gating** (Claude) — tool calls surface as cards; sensitive actions (Edit/Write/unlisted Bash) prompt with **Allow once / Always allow / Deny**, with a per-session allowlist and auto-allow for read-only tools. Codex is gated by its own sandbox (`workspace-write`).
+- **Permission gating** — tool calls surface as cards; sensitive actions can prompt with **Allow once / Always allow / Deny**. Claude uses Exo's tool gate; Codex combines its sandbox with app-server command/file approvals routed through the same UI.
 - **Tool-call cards** — running / success / error, with diff preview for edits and command + output for shell.
 - **Knowledge-work native** — answers stream with a live caret; assistant replies can be **inserted into the active note** or copied as markdown; tool cards link the **note they touched** (click to open it in the graph). The new-chat **empty state** centres the Exo mark with a soft breathing aura and gathers **Suggestions**, **Your prompts**, and related notes around it.
 - **Unified composer** — one input box with the textarea and all controls inside. A single **`+`** opens a themed popover to attach a note, file, folder, or image; a **⚙ tune dialog** consolidates model, effort, and permission in one place, with an always-visible **permission dot** (green / amber / red) so the active mode is never a surprise. Typing while the agent streams **queues** the message by default (steer is a setting). The send button lives in the box. Colours follow the active theme — the provider brand colour only tints the identity mark.
@@ -73,7 +73,7 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 
 **What gates what the agent can do:**
 - **Claude backend** — Exo's permission system surfaces each tool call (Read/Write/Edit/Bash/etc.) as a card before it runs; sensitive actions (Edit, Write, unlisted Bash commands) require **Allow once / Always allow / Deny**, with a per-session allowlist and auto-allow limited to read-only tools. You control the permission mode (e.g. more/less restrictive) from the composer.
-- **Codex backend** — gated by Codex's own sandbox (`workspace-write`); per-action approvals are not yet wired into Exo's UI, so Codex relies entirely on its CLI-level sandbox settings.
+- **Codex backend** — persistent streaming turns, Stop/steer/native compact, sandbox controls, and per-action command/file approvals routed through Exo's permission UI.
 
 In short: Exo is a thin, local UI over CLIs you already trust and are already signed into — it adds no new network surface of its own, but it does give the agent read/write access to your vault, scoped by the permission/sandbox settings above.
 

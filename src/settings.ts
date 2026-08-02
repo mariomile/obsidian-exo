@@ -30,7 +30,7 @@ export interface MVASettings {
   /** Internal idempotency receipts for accepted playbook proposals. */
   proposalPlaybookReceipts: Record<string, string>;
   /** What sending a message during a running turn does: "queue" waits and starts
-   *  it as the next turn; "steer" injects it into the live turn (Claude only). */
+   *  it as the next turn; "steer" injects it into the live turn. */
   steerMode: "queue" | "steer";
   /** Phase 1 default: false (pure chat). Phase 2 turns this on with gating. */
   toolsEnabled: boolean;
@@ -510,7 +510,7 @@ export class MVASettingTab extends PluginSettingTab {
     new Setting(el)
       .setName("Sending during a running turn")
       .setDesc(
-        "Queue = your message waits and starts as the next turn. Steer = inject it into the running turn so the agent can change course mid-flight (Claude only; Codex always queues)."
+        "Queue = your message waits and starts as the next turn. Steer = inject it into the running Claude or Codex turn so the agent can change course mid-flight."
       )
       .addDropdown((d) =>
         d
@@ -740,7 +740,7 @@ export class MVASettingTab extends PluginSettingTab {
           .addOptions({
             untrusted: "Untrusted (ask often)",
             "on-request": "On request",
-            "on-failure": "On failure",
+            granular: "Granular",
             never: "Never",
           })
           .setValue(s.codexApproval)
@@ -1083,7 +1083,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Pre-warm the agent session",
-      "Start the CLI session in the background the moment Exo opens, so your first message skips the cold start. Claude only.",
+      "Start the CLI session in the background the moment Exo opens, so your first message skips the cold start.",
       "prewarmSession"
     );
     this.toggleSetting(
