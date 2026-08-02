@@ -5603,6 +5603,56 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
 }
 .mva-conn-row.is-muted { opacity: 0.6; }
+/* Accordion — shared by the MCP row detail and the Skills origin groups. */
+.mva-hub-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  transition: color var(--mva-t);
+}
+.mva-hub-chevron svg { width: 13px; height: 13px; }
+.is-clickable:hover .mva-hub-chevron { color: var(--text-muted); }
+.mva-hub-accordion { display: flex; flex-direction: column; }
+.mva-hub-accordion-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 2px 0 4px 22px; /* aligns under the row's name, past the chevron */
+  padding: 10px 12px;
+  border-left: 2px solid var(--background-modifier-border);
+}
+.mva-hub-accordion-section-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+.mva-hub-perm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.mva-hub-perm-name { font-family: var(--font-monospace); color: var(--text-normal); }
+.mva-hub-perm-status { margin-left: auto; color: var(--text-muted); }
+.mva-hub-perm-status.is-denied { color: var(--text-error, var(--text-muted)); }
+.mva-hub-perm-status.is-allowed { color: var(--text-success, var(--text-muted)); }
+.mva-hub-doc-preview {
+  position: relative;
+  max-height: 220px;
+  overflow: hidden;
+  font-size: 12.5px;
+  padding: 4px 2px;
+}
+.mva-hub-doc-fade {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 48px;
+  background: linear-gradient(to bottom, transparent, var(--background-primary));
+  pointer-events: none;
+}
 .mva-conn-name { font-weight: 600; }
 .mva-conn-origin {
   font-size: 11px;

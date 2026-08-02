@@ -74,6 +74,21 @@ export function findToolRule(rules: string, tool: string): string | null {
   return null;
 }
 
+export type ToolPermStatus = "denied" | "auto-allowed" | "asks";
+
+/** What a tool's standing rules say WOULD happen, at a glance — for display
+ *  only (the MCP tab's Permissions accordion). This is deliberately not the
+ *  same function as `decidePermission`: that one also factors in the live
+ *  session's `isRead`/`alreadyAllowed`/`autoAllowRead`, none of which are
+ *  known from settings alone, and mixing them in here would make the badge
+ *  claim a certainty the static rules don't have. Same deny-before-allow
+ *  order as the real decision, just narrower. */
+export function toolPermissionStatus(tool: string, allowRules: string, denyRules: string): ToolPermStatus {
+  if (matchPermRule(denyRules, tool, "")) return "denied";
+  if (matchPermRule(allowRules, tool, "")) return "auto-allowed";
+  return "asks";
+}
+
 /** Match one Exo permission rule against a tool invocation. */
 export function matchPermRule(rules: string, tool: string, argText: string): boolean {
   for (const raw of rules.split("\n")) {

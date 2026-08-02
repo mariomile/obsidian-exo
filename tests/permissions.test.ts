@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchPermRule, matchToolName, findToolRule, decidePermission, allowKey, permArgText, permRuleLine } from "../src/core/permissions";
+import { matchPermRule, matchToolName, findToolRule, toolPermissionStatus, decidePermission, allowKey, permArgText, permRuleLine } from "../src/core/permissions";
 
 describe("matchPermRule", () => {
   it("matches Bash rules on command-token boundaries", () => {
@@ -208,5 +208,19 @@ describe("findToolRule", () => {
 
   it("returns null when nothing matches", () => {
     expect(findToolRule("mcp__linear__*", "mcp__notion__")).toBeNull();
+  });
+});
+
+describe("toolPermissionStatus", () => {
+  it("deny wins over allow", () => {
+    expect(toolPermissionStatus("mcp__notion__search", "mcp__notion__*", "mcp__notion__search")).toBe("denied");
+  });
+
+  it("reports auto-allowed when only an allow rule matches", () => {
+    expect(toolPermissionStatus("mcp__notion__search", "mcp__notion__*", "")).toBe("auto-allowed");
+  });
+
+  it("falls back to asks when nothing matches", () => {
+    expect(toolPermissionStatus("mcp__notion__create_pages", "mcp__notion__search", "")).toBe("asks");
   });
 });

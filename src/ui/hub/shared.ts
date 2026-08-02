@@ -1,5 +1,6 @@
-import type { App } from "obsidian";
+import { setIcon, type App } from "obsidian";
 import type ExoPlugin from "../../main";
+import { clickable } from "../dom";
 
 /** Everything a hub tab renderer needs. Tabs are free functions
  *  `render<Tab>Tab(host, ctx)` — the view shell owns navigation and refresh,
@@ -11,6 +12,12 @@ export interface HubTabContext {
   rerender: () => void;
   /** Vault base path on disk ("" on non-desktop adapters). */
   base: () => string;
+  /** Accordion open/closed state, keyed by the caller (e.g. "mcp:notion").
+   *  Lives on the HubView instance — ephemeral UI state, not a setting, and
+   *  resets when the pane closes. Row `sig`s should include this so
+   *  reconcileList rebuilds a row when it's toggled. */
+  expanded: (key: string) => boolean;
+  toggleExpanded: (key: string) => void;
 }
 
 /** Uppercase section header, with an optional count pill (list sections only —
@@ -20,6 +27,43 @@ export function buildGroupHeader(label: string, count?: number): HTMLElement {
   h.createSpan({ cls: "mva-conn-group-name", text: label });
   if (count !== undefined) h.createSpan({ cls: "mva-conn-group-count", text: String(count) });
   return h;
+}
+
+function chevron(open: boolean): HTMLElement {
+  const c = createSpan({ cls: "mva-hub-chevron" });
+  setIcon(c, open ? "chevron-down" : "chevron-right");
+  return c;
+}
+
+/** A group header that collapses/expands the rows under it — the member rows
+ *  are simply omitted from the model list for a render pass while closed, so
+ *  callers gate on `ctx.expanded(key)` themselves before building them. */
+export function buildAccordionGroupHeader(ctx: HubTabContext, key: string, label: string, count?: number): HTMLElement {
+  const h = buildGroupHeader(label, count);
+  h.insertBefore(chevron(ctx.expanded(key)), h.firstChild);
+  h.addClass("is-clickable");
+  clickable(h, () => ctx.toggleExpanded(key));
+  return h;
+}
+
+/** Wrap a built row in accordion behavior: a leading chevron toggles a body
+ *  panel appended below the header. The header itself (name/origin/desc/
+ *  actions) is untouched — this only prepends a chevron and appends the body
+ *  when open. `buildBody` is called only when open, so callers can skip
+ *  gathering expensive detail (tool lists, doc content) for closed rows. */
+export function buildAccordionRow(ctx: HubTabContext, key: string, header: HTMLElement, buildBody: () => HTMLElement): HTMLElement {
+  const wrap = createDiv({ cls: "mva-hub-accordion" });
+  const isOpen = ctx.expanded(key);
+  header.insertBefore(chevron(isOpen), header.firstChild);
+  header.addClass("is-clickable");
+  clickable(header, (e) => {
+    // Action buttons inside the header (Edit/Remove/…) must not also toggle.
+    if ((e.target as HTMLElement).closest("button")) return;
+    ctx.toggleExpanded(key);
+  });
+  wrap.appendChild(header);
+  if (isOpen) wrap.appendChild(buildBody());
+  return wrap;
 }
 
 /** Row scaffold: name · origin badge · desc on the left, actions container on

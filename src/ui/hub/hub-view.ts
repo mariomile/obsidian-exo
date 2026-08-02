@@ -48,6 +48,9 @@ export class HubView extends ItemView {
   /** In-flight render, and whether another was requested while it ran. */
   private rendering: Promise<void> | null = null;
   private renderAgain = false;
+  /** Accordion open/closed state, keyed by the tab (e.g. "mcp:notion").
+   *  Ephemeral UI state — not a setting, resets when the pane closes. */
+  private expandedKeys = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);
@@ -107,6 +110,11 @@ export class HubView extends ItemView {
       plugin: this.plugin,
       rerender: () => void this.render(),
       base: () => this.base(),
+      expanded: (key) => this.expandedKeys.has(key),
+      toggleExpanded: (key) => {
+        if (!this.expandedKeys.delete(key)) this.expandedKeys.add(key);
+        void this.render();
+      },
     };
   }
 
