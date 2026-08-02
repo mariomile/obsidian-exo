@@ -1178,11 +1178,6 @@ export class ChatView extends ItemView {
       menu.showAtMouseEvent(e);
     };
 
-    const caps = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "Capabilities" } });
-    setIcon(caps, "blocks");
-    setTooltip(caps, "Capabilities");
-    caps.onclick = () => void this.plugin.activateHub();
-
     const histBtn = header.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "History" } });
     setIcon(histBtn, "history");
     setTooltip(histBtn, "History");
