@@ -12,6 +12,7 @@
  * leaving the strip has no bearing on whether a conversation survives on disk.
  */
 import type { NeedsInputReason } from "./session-cards";
+import type { StripDensity } from "./strip-density";
 
 // ---------------------------------------------------------------------------
 // Working set
@@ -424,6 +425,15 @@ export interface TabFacts {
   agents: number;
   pinned: boolean;
   active: boolean;
+  /** How the strip is rendering right now. A non-active tab paints a title, a
+   *  pin and a close × in `wide` and none of the three in `dense`, so a density
+   *  flip that is not in here repaints nothing — the reconciler would leave
+   *  every unchanged node exactly as the previous density built it. */
+  density: StripDensity;
+  /** This tab opens the unpinned group, and a pinned block precedes it — so it
+   *  draws the separator between the two. With nothing pinned there is no
+   *  boundary and this is false on every tab. A rendered fact like any other. */
+  firstUnpinned: boolean;
   // No `provider` here. The mark is a pure state channel: reusing its one slot
   // for provider identity is the same collision this vocabulary exists to
   // avoid — a filled brand dot and a filled `unread` dot differ only in hue,
@@ -444,5 +454,7 @@ export function tabSignature(f: TabFacts): string {
     String(f.agents),
     f.pinned ? "pin" : "",
     f.active ? "act" : "",
+    f.density,
+    f.firstUnpinned ? "fu" : "",
   ].join("|");
 }

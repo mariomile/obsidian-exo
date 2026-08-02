@@ -96,7 +96,9 @@ import {
   pinnedFirst,
   nextFocusAfterRemoval,
 } from "./core/working-set";
-import type { TabVM } from "./core/working-set";
+import type { TabVM, TabFacts } from "./core/working-set";
+import { chooseDensity } from "./core/strip-density";
+import type { StripDensity } from "./core/strip-density";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
 import type { HistoryFilter, FilterableConvo } from "./core/history";
 import { isAiTitleDue } from "./core/title";
@@ -510,6 +512,29 @@ export class ChatView extends ItemView {
   /** Last count painted into `tabsOverflowEl`. Same ethic as the tab signature:
    *  repaint on a real change, not on every render. -1 = never painted. */
   private overflowPainted = -1;
+  /** The dense-mode hover label: the title of the tab under the cursor. A
+   *  sibling of `tabsEl`, never a child of a tab — see `showTabHover` for the
+   *  measurement that forced that. */
+  private tabHoverEl!: HTMLElement;
+  /** The tab the label is currently describing, so a repaint that discards that
+   *  node can take the label down with it. */
+  private tabHoverAnchor: HTMLElement | null = null;
+  /** Current strip density. Runtime-only: recomputed from the live row width on
+   *  every resize and on every change of tab count, never persisted — it is a
+   *  property of the pane the strip happens to be in, not of the session. */
+  private stripDensity: StripDensity = "wide";
+  /** Tab count behind the last density decision. Two jobs: it is the count the
+   *  resize path re-decides with, and it is the guard that keeps `renderTabs`
+   *  from measuring the DOM on every state repaint — density can only change
+   *  when the row's width changes (the observer) or when a tab is added or
+   *  removed (this). */
+  private stripTabCount = 0;
+  private stripResizeObserver: ResizeObserver | null = null;
+  /** What the active tab takes when it shows its title: `.mva-tab`'s max-width.
+   *  A documented constant and NOT a measurement of the rendered tab — reading
+   *  the DOM here would feed the decision its own last output, and the width it
+   *  would read in dense mode is the width dense mode produced. */
+  private static readonly STRIP_ACTIVE_TAB_PX = 170;
   private listWrap!: HTMLElement;
   /** Pinned "N agents running" chip above the composer, reflecting ONLY the chat
    *  currently open (its own subagents + background tasks). Always visible while
@@ -627,6 +652,15 @@ export class ChatView extends ItemView {
     const addTab = this.tabsTailEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
     setIcon(addTab, "plus");
     this.clickable(addTab, () => this.newConversation());
+    // The dense-mode hover label. Absolutely positioned against the ROW, so it
+    // is out of the flex flow and belongs to neither container: putting it in
+    // `tabsEl` would make it an unkeyed child of the reconciled list, and
+    // putting it inside a tab would put it inside a scroll container.
+    this.tabHoverEl = this.tabsRowEl.createDiv({ cls: "mva-tab-hover is-hidden" });
+    // Same reason as `overflowPainted` above: `onOpen` can run again on the same
+    // view, and an anchor surviving the row it pointed into would keep a label
+    // alive that has nothing left to describe.
+    this.tabHoverAnchor = null;
     // Chat column + Recap Rail as flex-row siblings. In the sidebar (not wide)
     // the row is a plain column and the recap host stays display:none (CSS); the
     // chat behaves exactly as before.
@@ -709,6 +743,25 @@ export class ChatView extends ItemView {
       this.recapResizeObserver = null;
     });
     this.registerEvent(this.app.workspace.on("layout-change", () => this.applyWideMode()));
+    // Strip density: the same debounce shape as the two observers above, for the
+    // same reason — a drag emits a continuous stream of ticks.
+    //
+    // It observes the strip ROW and not the tab list. The row's box is the pane's
+    // width and a fixed height, neither of which density can move; `.mva-tabs`
+    // sizes to its own content, so observing it would feed the decision the
+    // consequence of the last decision and let a flip re-trigger itself. The
+    // repaint is also gated on an actual change of density, which closes the
+    // loop from the other side.
+    const applyDensityDebounced = debounce(() => {
+      if (this.updateStripDensity()) this.renderTabs();
+    }, 120, true);
+    this.stripResizeObserver = new ResizeObserver(() => applyDensityDebounced());
+    this.stripResizeObserver.observe(this.tabsRowEl);
+    this.register(() => {
+      applyDensityDebounced.cancel();
+      this.stripResizeObserver?.disconnect();
+      this.stripResizeObserver = null;
+    });
     this.applyWideMode();
     this.prewarm();
   }
@@ -1742,12 +1795,32 @@ export class ChatView extends ItemView {
     this.tabsRowEl.toggleClass("is-hidden", ids.length <= 1);
     if (ids.length <= 1) {
       reconcileList(this.tabsEl, []); // drop the lone tab, as the old empty() did
+      this.hideTabHover(); // the row is going away; so must anything it was showing
       return;
     }
 
+    // Adding or removing a tab changes the density's divisor, so it has to
+    // re-decide here as well as on resize. Gated on the count actually moving:
+    // `renderTabs` runs on every state transition (a streaming pulse, an agent
+    // count), and `updateStripDensity` reads layout — measuring on each of those
+    // would trade a repaint we avoid for a forced reflow we did not need.
+    if (ids.length !== this.stripTabCount) {
+      this.stripTabCount = ids.length;
+      // Return value ignored on purpose: the class is applied inside, and we are
+      // already about to repaint every tab that needs it.
+      this.updateStripDensity();
+    }
+
+    const isPinnedId = (id: string): boolean => this.convos.find((c) => c.id === id)?.pinned === true;
     // Display order only: pinned tabs sort to the left so they sit at a stable,
     // always-visible edge. `ids` (this.openTabs) stays unsorted — see above.
-    const shown = pinnedFirst(ids, (id) => this.convos.find((c) => c.id === id)?.pinned === true);
+    const shown = pinnedFirst(ids, isPinnedId);
+    // The tab that opens the unpinned group, but only when a pinned block comes
+    // before it: with nothing pinned there is no boundary to draw, and with
+    // everything pinned there is no unpinned group to open. `shown` is already
+    // in pinned-first order, so "the first unpinned one" is the boundary — and
+    // when there is none, `undefined` matches no id.
+    const firstUnpinnedId = shown.some(isPinnedId) ? shown.find((id) => !isPinnedId(id)) : undefined;
     const models: CardModel[] = [];
     for (const id of shown) {
       const c = this.convos.find((x) => x.id === id);
@@ -1767,22 +1840,95 @@ export class ChatView extends ItemView {
       // alone cannot express: "New chat" with a first message in it is a plain
       // title.
       const placeholder = !c.title || (c.title === "New chat" && c.messages.length === 0);
+      // ONE object for the signature and for the build, rather than two argument
+      // lists that have to agree: a fact the tab paints and the signature omits
+      // is a tab that goes stale, and this makes the two structurally the same
+      // set of facts instead of a convention the next reader has to keep.
+      const facts: TabFacts = {
+        title: c.title,
+        placeholder,
+        state: vm.state,
+        needsInput: vm.needsInput,
+        reason: vm.reason,
+        agents,
+        pinned,
+        active: isActive,
+        density: this.stripDensity,
+        firstUnpinned: id === firstUnpinnedId,
+      };
       models.push({
         key: c.id,
-        sig: tabSignature({
-          title: c.title,
-          placeholder,
-          state: vm.state,
-          needsInput: vm.needsInput,
-          reason: vm.reason,
-          agents,
-          pinned,
-          active: isActive,
-        }),
-        build: () => this.buildTab(c, vm, agents, isActive, placeholder, pinned),
+        sig: tabSignature(facts),
+        build: () => this.buildTab(c, vm, facts),
       });
     }
     reconcileList(this.tabsEl, models);
+    // A repaint can discard the very node the hover label is describing (the
+    // density flip does exactly that, to every tab at once). The label outlives
+    // its anchor's `mouseleave`, so it has to be taken down here.
+    if (this.tabHoverAnchor && !this.tabHoverAnchor.isConnected) this.hideTabHover();
+  }
+
+  /**
+   * Re-decide the strip's density from the live row width, apply the class, and
+   * report whether it moved. Deliberately does NOT repaint: `renderTabs` calls
+   * this on its way to a repaint it was already doing, and the resize path
+   * repaints only when this returns true — which is what keeps an observer that
+   * triggers a repaint from re-triggering itself.
+   *
+   * The width is the ROW's, minus the tail. Not `tabsEl`'s: that one is sized by
+   * its content, so in dense mode it reports the width dense mode produced and
+   * the strip would never come back. `clientWidth` includes the row's 10px
+   * gutters, so this overstates by 20px — well inside the 20px hysteresis band,
+   * and cheaper than a computed-style read on every tick.
+   */
+  private updateStripDensity(): boolean {
+    if (!this.tabsRowEl || !this.tabsTailEl) return false;
+    const next = chooseDensity({
+      availableWidth: this.tabsRowEl.clientWidth - this.tabsTailEl.offsetWidth,
+      tabCount: this.stripTabCount,
+      activeTabWidth: ChatView.STRIP_ACTIVE_TAB_PX,
+      current: this.stripDensity,
+    });
+    if (next === this.stripDensity) return false;
+    this.stripDensity = next;
+    this.tabsRowEl.toggleClass("is-dense", next === "dense");
+    return true;
+  }
+
+  /**
+   * Show the dense-mode hover label for `tab`.
+   *
+   * It is a child of the strip ROW and positioned by hand, rather than an
+   * `position: absolute` child of the tab, because of what the real tree does:
+   * `.mva-tabs` is a scroll container (`overflow-x: auto`) and clips positioned
+   * descendants, and dense mode cannot simply turn that off — pinned tabs are
+   * exempt from the strip cap, so a dense strip is not guaranteed to fit and
+   * still has to scroll. Letting the label escape instead was measured on the
+   * live pane: `.view-content` computes `overflow: auto`, and its scrollWidth
+   * went from 457px to 1390px — a horizontal scrollbar on the whole chat.
+   *
+   * Clamped to the row for the same reason: the label may cover its neighbours,
+   * which is the point, but it may never reach past the row that holds it.
+   */
+  private showTabHover(tab: HTMLElement, title: string): void {
+    const el = this.tabHoverEl;
+    if (!el) return;
+    el.setText(title);
+    el.removeClass("is-hidden");
+    const row = this.tabsRowEl.getBoundingClientRect();
+    const at = tab.getBoundingClientRect();
+    // Anchored just past the tab, so the mark it is naming stays visible; pushed
+    // back left only as far as it takes to keep its right edge inside the row.
+    // The 10 is the row's right gutter (`.mva-tabstrip`'s padding).
+    const rightLimit = row.width - 10 - el.offsetWidth;
+    el.style.left = `${Math.max(0, Math.min(at.right - row.left + 4, rightLimit))}px`;
+    this.tabHoverAnchor = tab;
+  }
+
+  private hideTabHover(): void {
+    this.tabHoverAnchor = null;
+    this.tabHoverEl?.addClass("is-hidden");
   }
 
   /**
@@ -1820,20 +1966,27 @@ export class ChatView extends ItemView {
     setIcon(el.createSpan({ cls: "mva-tab-overflow-ico" }), "chevron-right");
   }
 
-  /** Build one tab, DETACHED: `reconcileList` owns insertion and ordering, so
-   *  creating this under `tabsEl` would duplicate the node and corrupt the
-   *  order. Every fact it paints must appear in the caller's `tabSignature`
-   *  call, or changing that fact will not repaint. */
-  private buildTab(
-    c: Convo,
-    vm: TabVM,
-    agents: number,
-    isActive: boolean,
-    placeholder: boolean,
-    pinned: boolean
-  ): HTMLElement {
+  /**
+   * Build one tab, DETACHED: `reconcileList` owns insertion and ordering, so
+   * creating this under `tabsEl` would duplicate the node and corrupt the order.
+   * It paints exactly `f` — the same object the caller signed — so a fact it
+   * reads is a fact the signature carries by construction.
+   */
+  private buildTab(c: Convo, vm: TabVM, f: TabFacts): HTMLElement {
+    const { agents, pinned, active: isActive, placeholder } = f;
+    // In dense mode a non-active tab is its status mark and nothing else. The
+    // title it would have shown at 170px is ~14 characters of a sentence that
+    // starts the same way as every other one in the strip — the widest possible
+    // tab buying no recognition — so it costs ~18px instead of 170 and the title
+    // arrives on hover, where it can be read in full.
+    const bare = f.density === "dense" && !isActive;
     const tab = createDiv({ cls: "mva-tab" + (isActive ? " is-active" : "") });
     const title = placeholder ? "New chat" : c.title || "New chat";
+    // The separator between the pinned block and the rest. A border on the tab
+    // that opens the group, never a node between tabs: `tabsEl` holds only keyed
+    // children, and a foreign element there takes an index and shifts every tab
+    // after it out of the order the reconciler asked for.
+    tab.toggleClass("is-first-unpinned", f.firstUnpinned);
     // "Blocked on you" rides the TAB, not the mark: it is the only state where
     // the work is stopped AND the user is the reason, so it earns the whole
     // tab's weight instead of a share of the 6px slot. It also has to coexist
@@ -1844,6 +1997,11 @@ export class ChatView extends ItemView {
     // says it to everyone else. It has to carry everything the tab shows,
     // including the badge and the pin: setting it here REPLACES
     // name-from-content, so their own labels stop being announced.
+    //
+    // Unconditional, and identical in both densities. What dense mode drops is
+    // pixels, not facts: below, the title, the pin and the × leave the DOM, so
+    // this attribute becomes the ONLY place a screen reader can learn which
+    // conversation this mark belongs to.
     tab.setAttr("aria-label", tabAriaLabel(title, vm, { agents, pinned }));
 
     // One 6px slot, five states, zero pictograms — and nothing else: the
@@ -1852,16 +2010,20 @@ export class ChatView extends ItemView {
     const mark = tab.createSpan({ cls: "mva-tab-mark" });
     if (vm.state !== "idle") mark.addClass(`is-${vm.state}`);
 
-    const titleEl = tab.createSpan({ cls: "mva-tab-title" + (placeholder ? " is-placeholder" : "") });
-    if (placeholder) {
-      setIcon(titleEl, "pencil");
-      titleEl.append("New chat");
-    } else {
-      titleEl.setText(title);
-    }
+    if (!bare) {
+      const titleEl = tab.createSpan({ cls: "mva-tab-title" + (placeholder ? " is-placeholder" : "") });
+      if (placeholder) {
+        setIcon(titleEl, "pencil");
+        titleEl.append("New chat");
+      } else {
+        titleEl.setText(title);
+      }
 
-    // Pinned is a noun, so it gets an icon (states never do).
-    if (pinned) setIcon(tab.createSpan({ cls: "mva-tab-pin" }), "pin");
+      // Pinned is a noun, so it gets an icon (states never do). Dropped in dense
+      // for the same reason the title is: the separator says "these are the
+      // pinned ones" once for the whole group, at 1px, instead of 11px per tab.
+      if (pinned) setIcon(tab.createSpan({ cls: "mva-tab-pin" }), "pin");
+    }
 
     // Per-tab agent count: how many subagents/background tasks THIS chat is
     // running right now — local to its own tab, so a busy background chat is
@@ -1881,12 +2043,26 @@ export class ChatView extends ItemView {
       badge.createSpan({ text: String(agents) });
     }
 
-    const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
-    setIcon(x, "x");
-    this.clickable(x, (e) => {
-      e.stopPropagation();
-      this.closeTab(c);
-    });
+    // KNOWN COST — the × goes with the title in dense mode, so a non-active tab
+    // there cannot be closed in one click; clicking it makes it active, which
+    // renders it wide again, × included. Keeping it would either double every
+    // dense tab (12px icon + 6px gap against an 18px tab, and the strip stops
+    // fitting again) or make it appear on hover, which reflows the strip under
+    // the cursor — the one thing the hover label exists to avoid.
+    if (!bare) {
+      const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
+      setIcon(x, "x");
+      this.clickable(x, (e) => {
+        e.stopPropagation();
+        this.closeTab(c);
+      });
+    }
+    if (bare) {
+      // The title, on hover, over the neighbours. Wired per node like the ×
+      // above, so the listeners die with the tab the reconciler discards.
+      tab.addEventListener("mouseenter", () => this.showTabHover(tab, title));
+      tab.addEventListener("mouseleave", () => this.hideTabHover());
+    }
     this.clickable(tab, () => this.switchTo(c));
     // Right-click is where a tab's own properties live, and pinning is the only
     // one it has. Wired per node like the × above: the listener dies with the

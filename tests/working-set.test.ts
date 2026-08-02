@@ -287,6 +287,8 @@ describe("tabSignature", () => {
     agents: 0,
     pinned: false,
     active: false,
+    density: "wide",
+    firstUnpinned: false,
     ...over,
   });
 
@@ -305,6 +307,11 @@ describe("tabSignature", () => {
     ["agents", { agents: 1 }],
     ["pinned", { pinned: true }],
     ["active", { active: true }],
+    // The one that would have failed silently: in `dense` a non-active tab has
+    // no title, no pin and no ×, so a flip the signature does not carry leaves
+    // every untouched node painted for the density that just ended.
+    ["density", { density: "dense" }],
+    ["firstUnpinned", { firstUnpinned: true }],
   ];
   for (const [name, over] of variants) {
     it(`changes when ${name} changes`, () => {

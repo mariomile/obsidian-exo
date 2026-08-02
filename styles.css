@@ -120,6 +120,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: flex;
   align-items: center;
   gap: 2px;
+  /* Containing block for the dense hover label, which is positioned against
+     this row and clamped to it. Nothing else in the strip is positioned. */
+  position: relative;
   /* Left/right gutter matches the header (10px) so tabs line up under the
      brand + icon buttons; small bottom breathing room before the transcript. */
   padding: 2px 10px 6px;
@@ -382,6 +385,66 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    one moving element per tab, or they compete instead of informing. */
 .mva-tab-agents-icon.is-spinning .svg-icon {
   animation: mva-spin 1.1s linear infinite;
+}
+/* Dense strip — a non-active tab is a status mark and nothing else. Measured on
+   a real sidebar pane: 356px of usable strip against the ~980px six wide tabs
+   ask for, so only two of the six were reachable and the rest sat behind a
+   scrollbar that is hidden by design. The title a wide tab shows at 170px is
+   ~14 characters of a sentence that starts the same way as every other one in
+   the strip, so the widest possible tab buys no recognition — dense pays ~18px
+   for the one thing that does distinguish them (state and position) and puts
+   the title on hover, where it can be read whole.
+
+   The title, the pin and the × are not hidden here: `buildTab` does not create
+   them at all, so there is nothing left to hide. No `transition` on any of
+   these selectors either — motion in this strip means "this is happening now",
+   and animating a relayout would compete with the one signal that must catch
+   the eye. */
+.mva-tabstrip.is-dense .mva-tab {
+  max-width: none;
+  padding: 4px 6px;
+}
+/* The boundary between the pinned block and the rest, drawn once for the whole
+   group at 1px instead of an 11px pin on every tab in it. A border on the tab
+   that opens the group and never a node between tabs: `.mva-tabs` holds only
+   keyed children, and a foreign element there takes an index and shifts every
+   tab after it out of order. */
+.mva-tabstrip.is-dense .mva-tab.is-first-unpinned {
+  border-left: 1px solid var(--background-modifier-border);
+  margin-left: 4px;
+  padding-left: 8px;
+}
+/* The hover label. It reveals the title OVER the neighbours, never between
+   them: expanding in flow would push the tabs the user is aiming at out from
+   under the cursor. A child of the row rather than of the tab, positioned by
+   `showTabHover` — `.mva-tabs` scrolls (dense does not guarantee a fit: pinned
+   tabs are exempt from the strip cap) and a scroll container clips positioned
+   descendants, while letting one escape grows `.view-content`'s scroll width
+   into a horizontal scrollbar on the whole chat. Measured, both of them.
+
+   Flat inset ring, no drop shadow — same chrome-flat surface as the active tab
+   twenty pixels away. `pointer-events: none` so the tab underneath keeps every
+   click it had. */
+.mva-tab-hover {
+  position: absolute;
+  top: 2px;
+  height: 28px;
+  max-width: 220px;
+  padding: 0 10px;
+  border-radius: var(--mva-r2);
+  background: var(--background-secondary);
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: 12px;
+  line-height: 28px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 2;
+}
+.mva-tab-hover.is-hidden {
+  display: none;
 }
 
 /* Chat column + Recap Rail wrapper. A plain vertical flex by default (the chat
