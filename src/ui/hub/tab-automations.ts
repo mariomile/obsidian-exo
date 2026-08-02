@@ -27,11 +27,19 @@ import {
   type Cadence,
 } from "../../core/automations";
 import { dailyPulseMetaLabel, isDailyPulseAutomation } from "../../core/daily-pulse";
-import { triggerLabel } from "../../core/agents";
+import { triggerLabel, formatDuration, parseDuration } from "../../core/agents";
+
 import { formatAge } from "../../core/actions-hub";
 import type { HubTabContext } from "./shared";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Plain-language names for the output modes — the chip has to say what it does. */
+const OUTPUT_LABELS = {
+  report: "a note per run",
+  journal: "a line in the daily note",
+  silent: "no write-up",
+} as const;
 
 export async function renderAutomationsTab(host: HTMLElement, ctx: HubTabContext): Promise<void> {
   host.empty();
@@ -108,12 +116,65 @@ async function renderAgents(host: HTMLElement, ctx: HubTabContext): Promise<void
 
     const main = row.createDiv({ cls: "mva-auto-main" });
     main.createDiv({ cls: "mva-auto-name", text: a.brain.name });
-    const bits = [
-      a.contract.triggers.map(triggerLabel).join(" · "),
-      a.contract.autonomy === "act" ? "writes" : a.contract.autonomy,
-      a.contract.output === "journal" ? "logs to daily note" : a.contract.output === "silent" ? "no report" : "reports",
-    ];
-    main.createDiv({ cls: "mva-auto-meta", text: bits.join(" — ") });
+
+    // The three fields worth changing without opening a file. Same chip +
+    // popover recipe as a playbook row, so the two kinds of automation read as
+    // one surface rather than two.
+    const chips = main.createDiv({ cls: "mva-auto-chips" });
+    const patch = (next: Partial<typeof a.contract>) => {
+      void ctx.plugin.agentStore
+        .saveContract({ ...a.contract, ...next }, new Date().toISOString().slice(0, 10))
+        .then(() => ctx.rerender());
+    };
+
+    chipSelect(chips, a.contract.autonomy, "Autonomy", (pop, close) =>
+      optionRows(
+        pop,
+        [
+          { value: "notify", label: "notify — reads only" },
+          { value: "propose", label: "propose — suggests changes" },
+          { value: "act", label: "act — applies changes" },
+        ],
+        a.contract.autonomy,
+        (v) => {
+          close();
+          patch({ autonomy: v as typeof a.contract.autonomy });
+        }
+      ),
+      // `act` with nothing writable is the one combination that silently does
+      // nothing, so it is worth a warning triangle rather than a discovery.
+      { warn: a.contract.autonomy === "act" && a.contract.scope.write.length === 0 }
+    );
+
+    chipSelect(chips, OUTPUT_LABELS[a.contract.output], "Where it reports", (pop, close) =>
+      optionRows(
+        pop,
+        [
+          { value: "report", label: OUTPUT_LABELS.report },
+          { value: "journal", label: OUTPUT_LABELS.journal },
+          { value: "silent", label: OUTPUT_LABELS.silent },
+        ],
+        a.contract.output,
+        (v) => {
+          close();
+          patch({ output: v as typeof a.contract.output });
+        }
+      )
+    );
+
+    chipSelect(chips, `every ${formatDuration(a.contract.cooldownMs)}`, "Minimum gap between runs", (pop, close) =>
+      optionRows(
+        pop,
+        ["5m", "15m", "30m", "1h", "2h", "6h", "1d"].map((v) => ({ value: v, label: `every ${v}` })),
+        formatDuration(a.contract.cooldownMs),
+        (v) => {
+          close();
+          patch({ cooldownMs: parseDuration(v) ?? a.contract.cooldownMs });
+        }
+      )
+    );
+
+    main.createDiv({ cls: "mva-auto-meta", text: a.contract.triggers.map(triggerLabel).join(" · ") });
 
     row.createDiv({ cls: "mva-auto-spacer" });
 

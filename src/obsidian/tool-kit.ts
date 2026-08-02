@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import type { AutomationConfig, AutomationRunRecord } from "../core/automations";
-import type { AgentDef } from "../core/agents";
+import type { AgentContract, AgentDef } from "../core/agents";
 
 /** The shape every in-process tool returns. Free-form human-readable text —
  *  the agent reads it, not a parser. */
@@ -26,9 +26,16 @@ export interface ExoToolHost {
   runPlaybook(name: string, prompt: string, opts?: { write?: boolean }): Promise<boolean>;
   /** Resolves false when named agents are disabled in settings. */
   agentsReady(): Promise<boolean>;
-  agentStore: { list(): AgentDef[]; orphans(): string[] };
+  agentStore: {
+    list(): AgentDef[];
+    orphans(): string[];
+    resolve(query: string): AgentDef | null;
+    saveContract(contract: AgentContract, today?: string): Promise<void>;
+  };
   /** Delegate to another agent; resolves to a human-readable result or refusal. */
   invokeAgentFromAgent(target: string, task: string): Promise<string>;
+  /** Re-render any open Agents pane after a contract change. */
+  refreshAgentsUI(): Promise<void>;
   /** Live capability snapshot from the session's system/init (null pre-spawn
    *  and on Codex — capability tools fall back to disk scans). */
   lastSessionCaps: {

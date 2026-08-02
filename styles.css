@@ -5835,3 +5835,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-size: var(--font-ui-smaller);
   cursor: pointer;
 }
+
+/* Agent rows in the Automations tab: chips sit under the name, same recipe as
+   a playbook row's controls. */
+.mva-auto-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}

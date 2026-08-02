@@ -35,7 +35,7 @@ import {
   parseCadenceInput,
   unreviewedWriteRuns,
 } from "../core/automations";
-import { triggerLabel } from "../core/agents";
+import { triggerLabel, parseTrigger, parseDuration, formatDuration, type AgentTrigger } from "../core/agents";
 import { ok, err, getExo, type Result } from "./tool-kit";
 import { buildCapabilityTools, CAPABILITY_READ_TOOLS } from "./capability-tools";
 
@@ -1071,6 +1071,84 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     }
   );
 
+  const manageAgent = tool(
+    "manage_agent",
+    "Change a named agent's contract: turn it on or off, set its autonomy tier, where it reports, its cooldown, its read/write scope, or its triggers. Use it when Mario asks to change how or when an agent runs (\"make the triager run every 2 hours\", \"stop the librarian\", \"let it write into Atlas\"). Triggers replace the whole list and use the one-line form: `schedule daily 08`, `schedule weekly mon 08`, `schedule hourly`, `vault-event create _inbox/**`, `tag #needs/post`, `note-mention`. Widening `write` or setting autonomy to `act` lets the agent edit notes unattended — confirm with Mario before doing either.",
+    {
+      agent: z.string().describe("Slug or name of the agent."),
+      enabled: z.boolean().optional(),
+      autonomy: z.enum(["notify", "propose", "act"]).optional(),
+      output: z.enum(["report", "journal", "silent"]).optional(),
+      cooldown: z.string().optional().describe("e.g. 30m, 2h, 1d"),
+      read: z.array(z.string()).optional().describe("Replaces the read globs."),
+      write: z.array(z.string()).optional().describe("Replaces the write globs. [] means no autonomous writes."),
+      can_call: z.array(z.string()).optional().describe("Replaces the delegation allowlist."),
+      triggers: z.array(z.string()).optional().describe("Replaces every trigger. [] leaves the agent manual-only."),
+    },
+    async (args) => {
+      const exo = getExo(app);
+      if (!exo) return ok("Exo plugin not reachable.");
+      if (!(await exo.agentsReady())) return ok("Named agents are disabled in Exo settings.");
+      const found = exo.agentStore.resolve(args.agent);
+      if (!found) return err(`No agent named "${args.agent}".`);
+
+      const c = { ...found.contract, scope: { ...found.contract.scope } };
+      const changed: string[] = [];
+
+      if (args.enabled !== undefined && args.enabled !== c.enabled) {
+        c.enabled = args.enabled;
+        changed.push(args.enabled ? "enabled" : "disabled");
+      }
+      if (args.autonomy && args.autonomy !== c.autonomy) {
+        c.autonomy = args.autonomy;
+        changed.push(`autonomy → ${args.autonomy}`);
+      }
+      if (args.output && args.output !== c.output) {
+        c.output = args.output;
+        changed.push(`output → ${args.output}`);
+      }
+      if (args.cooldown) {
+        const ms = parseDuration(args.cooldown);
+        if (ms === null) return err(`Unparseable cooldown "${args.cooldown}" — use forms like 30m, 2h, 1d.`);
+        c.cooldownMs = ms;
+        changed.push(`cooldown → ${formatDuration(ms)}`);
+      }
+      if (args.read) {
+        c.scope.read = args.read;
+        changed.push(`read → ${args.read.join(", ") || "(none)"}`);
+      }
+      if (args.write) {
+        c.scope.write = args.write;
+        changed.push(`write → ${args.write.join(", ") || "(none)"}`);
+      }
+      if (args.can_call) {
+        c.canCall = args.can_call.filter((x) => x !== c.slug);
+        changed.push(`can_call → ${c.canCall.join(", ") || "(none)"}`);
+      }
+      if (args.triggers) {
+        const parsed: AgentTrigger[] = [];
+        for (const line of args.triggers) {
+          const t = parseTrigger(line);
+          // Refuse the whole edit rather than silently dropping a trigger the
+          // user believes they just set.
+          if (!t) return err(`Unparseable trigger "${line}". Use forms like: schedule daily 08 · vault-event create _inbox/** · tag #x · note-mention`);
+          parsed.push(t);
+        }
+        c.triggers = parsed;
+        changed.push(`triggers → ${parsed.map(triggerLabel).join(" · ") || "(manual only)"}`);
+      }
+
+      if (!changed.length) return ok(`${found.brain.name} already matches that — nothing changed.`);
+      await exo.agentStore.saveContract(c, new Date().toISOString().slice(0, 10));
+      await exo.refreshAgentsUI();
+      const warn =
+        c.autonomy === "act" && c.scope.write.length === 0
+          ? " Note: autonomy is `act` but no write globs are declared, so every write will still be refused."
+          : "";
+      return ok(`${found.brain.name}: ${changed.join(", ")}.${warn}`);
+    }
+  );
+
   const listAutomations = tool(
     "list_automations",
     "List Exo's automations (scheduled playbook runs): cadence, on/paused, read-only vs write mode, last/next run — plus available playbooks and recent write runs with their review state and run ids. Use it before managing automations or when Mario asks what runs automatically.",
@@ -1220,7 +1298,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     listAnnotations, listSonarActions, askUser, listLoops,
     createNote, appendToNote, updateFrontmatter, addLinks, linkMentions, ignoreMentionTool, openNote,
     editNote, insertAtCursor, renameNote, resolveAnnotation, runSonarAction,
-    listAgents, invokeAgent,
+    listAgents, invokeAgent, manageAgent,
     listAutomations, savePlaybook, manageAutomation, reviewAutomationRun,
     ...buildCapabilityTools(app),
     ...(memoryRead ? [recall] : []),
