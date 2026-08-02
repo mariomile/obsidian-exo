@@ -6025,3 +6025,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
 }
+
+/* Trigger popover: a labelled field per parameter, same recipe as the
+   playbook cadence popover. */
+.mva-auto-popnote {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--background-modifier-border);
+}

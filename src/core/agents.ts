@@ -329,6 +329,33 @@ export function triggerLabel(t: AgentTrigger): string {
   return "on @mention in a note";
 }
 
+/**
+ * The trigger that answers "when does this run on its own?".
+ *
+ * `note-mention` is excluded because it fires when a human types the agent's
+ * name — that is invocation, and treating it as the primary trigger would make
+ * an on-demand agent look scheduled.
+ */
+export function primaryTrigger(triggers: AgentTrigger[]): AgentTrigger | null {
+  return triggers.find((t) => t.on !== "note-mention") ?? null;
+}
+
+/**
+ * Replace the primary trigger, preserving everything else in place.
+ *
+ * Order is preserved rather than rebuilt so an agent with several triggers does
+ * not silently reshuffle when one is edited. Passing null removes it, which is
+ * how an agent goes back to running only when asked.
+ */
+export function setPrimaryTrigger(triggers: AgentTrigger[], next: AgentTrigger | null): AgentTrigger[] {
+  const at = triggers.findIndex((t) => t.on !== "note-mention");
+  if (at === -1) return next ? [next, ...triggers] : [...triggers];
+  const out = [...triggers];
+  if (next) out[at] = next;
+  else out.splice(at, 1);
+  return out;
+}
+
 /** Stable identity of a trigger, for run dedupe keys. */
 export function triggerKey(t: AgentTrigger): string {
   return serializeTrigger(t);

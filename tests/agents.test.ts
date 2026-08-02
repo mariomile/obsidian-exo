@@ -23,6 +23,8 @@ import {
   agentsWithTrigger,
   buildAgentBindingOutbound,
   parseAgentCommand,
+  primaryTrigger,
+  setPrimaryTrigger,
   type AgentBrain,
   type AgentContract,
 } from "../src/core/agents";
@@ -476,5 +478,38 @@ describe("buildAgentBindingOutbound — synchronous delegation", () => {
     const out = buildAgentBindingOutbound(def, "write it");
     expect(out).toContain("run_in_background: false");
     expect(out).toMatch(/WAIT for its result/);
+  });
+});
+
+describe("primaryTrigger / setPrimaryTrigger", () => {
+  const t = (s: string) => parseTrigger(s)!;
+
+  it("skips note-mention — invocation is not a schedule", () => {
+    expect(primaryTrigger([t("note-mention")])).toBeNull();
+    expect(primaryTrigger([t("note-mention"), t("schedule daily 08")])?.on).toBe("schedule");
+  });
+
+  it("replaces in place, leaving the other triggers where they were", () => {
+    const before = [t("note-mention"), t("schedule daily 08"), t("tag #x")];
+    const after = setPrimaryTrigger(before, t("schedule weekly mon 09"));
+    expect(after.map((x) => x.on)).toEqual(["note-mention", "schedule", "tag"]);
+    expect(after[1]).toEqual(t("schedule weekly mon 09"));
+    expect(after[2]).toEqual(before[2]);
+  });
+
+  it("prepends when there is no unattended trigger yet", () => {
+    const after = setPrimaryTrigger([t("note-mention")], t("schedule hourly"));
+    expect(after.map((x) => x.on)).toEqual(["schedule", "note-mention"]);
+  });
+
+  it("removing it leaves the agent on-demand, not empty", () => {
+    const after = setPrimaryTrigger([t("note-mention"), t("schedule daily 08")], null);
+    expect(after.map((x) => x.on)).toEqual(["note-mention"]);
+  });
+
+  it("does not mutate the input", () => {
+    const before = [t("schedule daily 08")];
+    setPrimaryTrigger(before, t("schedule hourly"));
+    expect(before[0]).toEqual(t("schedule daily 08"));
   });
 });

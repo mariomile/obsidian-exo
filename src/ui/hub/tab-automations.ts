@@ -27,9 +27,17 @@ import {
   type Cadence,
 } from "../../core/automations";
 import { dailyPulseMetaLabel, isDailyPulseAutomation } from "../../core/daily-pulse";
-import { formatDuration, parseDuration } from "../../core/agents";
+import {
+  formatDuration,
+  parseDuration,
+  primaryTrigger,
+  setPrimaryTrigger,
+  type AgentContract,
+  type AgentTrigger,
+} from "../../core/agents";
 import {
   describeAgentAutomation,
+  triggerClause,
   cadenceNote,
   spellDuration,
   AUTONOMY_CHOICES,
@@ -150,6 +158,8 @@ async function renderAgents(host: HTMLElement, ctx: HubTabContext): Promise<void
         patch({ output: v as typeof a.contract.output });
       })
     );
+
+    renderTriggerChip(chips, a.contract, (triggers) => patch({ triggers }));
 
     chipSelect(chips, `no more than every ${spellDuration(a.contract.cooldownMs)}`, "How often at most", (pop, close) =>
       optionRows(
@@ -465,6 +475,115 @@ function chipSelect(
  * settings — one of them lets an agent edit notes while you are not looking —
  * so the meaning belongs next to the choice, not in documentation.
  */
+/**
+ * The "when it runs" chip — the last field that used to require editing YAML.
+ *
+ * Edits only the primary trigger. An agent almost always has one reason it runs
+ * on its own; a full list editor would be a modal, and a modal for the common
+ * case is the wrong trade. Rarer shapes (several schedules, a second watched
+ * folder) stay available from chat and the contract file, which the chip's
+ * footer says out loud rather than leaving the reader to wonder.
+ */
+function renderTriggerChip(
+  chips: HTMLElement,
+  contract: AgentContract,
+  onChange: (triggers: AgentTrigger[]) => void
+): void {
+  const current = primaryTrigger(contract.triggers);
+  const kind =
+    !current ? "none"
+    : current.on === "schedule" ? current.cadence.kind
+    : current.on === "vault-event" ? "folder"
+    : "tag";
+
+  const replace = (next: AgentTrigger | null) => onChange(setPrimaryTrigger(contract.triggers, next));
+  const hourNow = current?.on === "schedule" && current.cadence.kind !== "hourly" ? current.cadence.hour : 8;
+
+  chipSelect(chips, current ? triggerClause(current).toLowerCase() : "only when i ask", "When it runs", (pop, close) => {
+    optionRows(
+      pop,
+      [
+        { value: "none", label: "only when I ask" },
+        { value: "hourly", label: "every hour" },
+        { value: "daily", label: "every day" },
+        { value: "weekly", label: "every week" },
+        { value: "folder", label: "when a note lands in a folder" },
+        { value: "tag", label: "when a tag is added" },
+      ],
+      kind,
+      (v) => {
+        close();
+        if (v === "none") return replace(null);
+        if (v === "hourly") return replace({ on: "schedule", cadence: { kind: "hourly" } });
+        if (v === "daily") return replace({ on: "schedule", cadence: { kind: "daily", hour: hourNow } });
+        if (v === "weekly") return replace({ on: "schedule", cadence: { kind: "weekly", day: 1, hour: hourNow } });
+        if (v === "folder") return replace({ on: "vault-event", event: "create", path: "_inbox/**" });
+        return replace({ on: "tag", tag: "#todo" });
+      }
+    );
+
+    if (current?.on === "schedule" && current.cadence.kind !== "hourly") {
+      const cadence = current.cadence;
+      const row = pop.createDiv({ cls: "mva-auto-popfield" });
+      row.createSpan({ cls: "mva-pv-label", text: "At hour" });
+      const hour = row.createEl("input", {
+        cls: "mva-pv-input mva-auto-hour",
+        attr: { type: "number", min: "0", max: "23" },
+      });
+      hour.value = String(cadence.hour);
+      hour.onchange = () => {
+        const h = Math.min(23, Math.max(0, Number(hour.value) || 0));
+        replace({ on: "schedule", cadence: { ...cadence, hour: h } });
+      };
+    }
+
+    if (current?.on === "schedule" && current.cadence.kind === "weekly") {
+      const cadence = current.cadence;
+      const row = pop.createDiv({ cls: "mva-auto-popfield" });
+      row.createSpan({ cls: "mva-pv-label", text: "On" });
+      optionRows(
+        row,
+        DAY_LABELS.map((d, i) => ({ value: String(i), label: d })),
+        String(cadence.day),
+        (v) => replace({ on: "schedule", cadence: { ...cadence, day: Number(v) } })
+      );
+    }
+
+    if (current?.on === "vault-event") {
+      const evt = current;
+      const row = pop.createDiv({ cls: "mva-auto-popfield" });
+      row.createSpan({ cls: "mva-pv-label", text: "Folder" });
+      const input = row.createEl("input", { cls: "mva-pv-input", attr: { type: "text", placeholder: "_inbox" } });
+      // The glob is the schema's business, not the reader's: they type a folder.
+      input.value = evt.path.replace(/\/\*+$/, "");
+      input.onchange = () => {
+        const folder = input.value.trim().replace(/^\/+|\/+$/g, "");
+        if (folder) replace({ ...evt, path: `${folder}/**` });
+      };
+    }
+
+    if (current?.on === "tag") {
+      const tag = current;
+      const row = pop.createDiv({ cls: "mva-auto-popfield" });
+      row.createSpan({ cls: "mva-pv-label", text: "Tag" });
+      const input = row.createEl("input", { cls: "mva-pv-input", attr: { type: "text", placeholder: "#todo" } });
+      input.value = tag.tag;
+      input.onchange = () => {
+        const t = input.value.trim();
+        if (t) replace({ on: "tag", tag: t.startsWith("#") ? t : `#${t}` });
+      };
+    }
+
+    const extra = contract.triggers.filter((t) => t.on !== "note-mention").length - 1;
+    if (extra > 0) {
+      pop.createDiv({
+        cls: "mva-sel-opt-hint mva-auto-popnote",
+        text: `+${extra} more trigger${extra > 1 ? "s" : ""} — edit them in the contract file or from chat.`,
+      });
+    }
+  });
+}
+
 function hintedRows(
   pop: HTMLElement,
   options: readonly { value: string; label: string; hint: string }[],
