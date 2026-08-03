@@ -5713,6 +5713,38 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-auto-popfield .mva-pv-label { margin: 0; }
 .mva-auto-hour { width: 64px; }
+/* The "N triggers" disclosure chip and the list it expands into. A caret
+   rotates open rather than a plus/minus swap — same wash-family motion as
+   every other chip, no new easing introduced. */
+.mva-auto-multitrigger::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-1px);
+  transition: transform var(--mva-t);
+}
+.mva-auto-multitrigger.is-open::after { transform: rotate(-135deg) translateY(1px); }
+@media (prefers-reduced-motion: reduce) {
+  .mva-auto-multitrigger::after { transition: none; }
+}
+.mva-auto-triggerlist {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.mva-auto-triggerrow { display: flex; }
+.mva-auto-triggerrow .mva-sel-chip {
+  color: var(--text-muted);
+  background: var(--background-secondary);
+}
 .mva-auto-runs { margin-top: 14px; }
 .mva-auto-runrow {
   display: flex;

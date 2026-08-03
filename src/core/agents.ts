@@ -163,12 +163,25 @@ function unquote(value: string): string {
   return t;
 }
 
+/**
+ * Strip a trailing inline comment. A comment is `#` preceded by whitespace and
+ * followed by whitespace-or-end — `true # note` strips to `true`. A `#`
+ * glued directly to the next character is a value, not a comment: a `tag`
+ * trigger's own syntax is `tag #todo`, and treating that `#` as a comment
+ * start silently deletes the tag, producing an "unparseable trigger" a run
+ * apart from the one the user actually wrote. Observed live: every `tag`
+ * trigger through the sidecar round-trip vanished before this existed.
+ */
+function stripInlineComment(s: string): string {
+  return s.replace(/\s+#(?=\s|$).*$/, "");
+}
+
 /** A top-level scalar value. Comments after the value are stripped. */
 export function fmScalar(fm: string, key: string): string | undefined {
   const re = new RegExp(`^${key}:[ \\t]*(.*)$`, "m");
   const hit = fm.match(re)?.[1];
   if (hit === undefined) return undefined;
-  const v = unquote(hit.replace(/\s+#.*$/, ""));
+  const v = unquote(stripInlineComment(hit));
   return v || undefined;
 }
 
@@ -180,7 +193,7 @@ export function fmList(fm: string, key: string): string[] {
   const lines = fm.split(/\r?\n/);
   const start = lines.findIndex((l) => new RegExp(`^${key}:`).test(l));
   if (start === -1) return [];
-  const inline = lines[start].slice(key.length + 1).replace(/\s+#.*$/, "").trim();
+  const inline = stripInlineComment(lines[start].slice(key.length + 1)).trim();
   if (inline.startsWith("[")) {
     const body = inline.replace(/^\[|\]$/g, "");
     return body
@@ -193,7 +206,7 @@ export function fmList(fm: string, key: string): string[] {
   for (let i = start + 1; i < lines.length; i++) {
     const m = lines[i].match(/^[ \t]*-[ \t]+(.*)$/);
     if (!m) break;
-    const v = unquote(m[1].replace(/\s+#.*$/, ""));
+    const v = unquote(stripInlineComment(m[1]));
     if (v) out.push(v);
   }
   return out;
@@ -354,6 +367,40 @@ export function setPrimaryTrigger(triggers: AgentTrigger[], next: AgentTrigger |
   if (next) out[at] = next;
   else out.splice(at, 1);
   return out;
+}
+
+/**
+ * Every trigger that can fire on its own, paired with its index in the FULL
+ * list. The index is what a caller needs to edit or remove one entry out of
+ * several without disturbing `note-mention` or the others — an agent with
+ * two schedules has two independent things to manage, and array position is
+ * the only handle a trigger has (it carries no id of its own).
+ */
+export function unattendedTriggerEntries(triggers: AgentTrigger[]): { index: number; trigger: AgentTrigger }[] {
+  return triggers.map((trigger, index) => ({ index, trigger })).filter((e) => e.trigger.on !== "note-mention");
+}
+
+/** Replace the trigger at `index`. An out-of-range index is a no-op (still
+ *  returns a copy, so callers can rely on referential difference meaning
+ *  "something changed"). */
+export function replaceTriggerAt(triggers: AgentTrigger[], index: number, next: AgentTrigger): AgentTrigger[] {
+  if (index < 0 || index >= triggers.length) return [...triggers];
+  const out = [...triggers];
+  out[index] = next;
+  return out;
+}
+
+/** Remove the trigger at `index`. Out-of-range is a no-op copy. */
+export function removeTriggerAt(triggers: AgentTrigger[], index: number): AgentTrigger[] {
+  if (index < 0 || index >= triggers.length) return [...triggers];
+  const out = [...triggers];
+  out.splice(index, 1);
+  return out;
+}
+
+/** Append a trigger — the "add another" affordance in a multi-trigger list. */
+export function addTrigger(triggers: AgentTrigger[], next: AgentTrigger): AgentTrigger[] {
+  return [...triggers, next];
 }
 
 /** Stable identity of a trigger, for run dedupe keys. */

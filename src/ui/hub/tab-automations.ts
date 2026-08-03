@@ -32,6 +32,10 @@ import {
   parseDuration,
   primaryTrigger,
   setPrimaryTrigger,
+  unattendedTriggerEntries,
+  replaceTriggerAt,
+  removeTriggerAt,
+  addTrigger,
   type AgentContract,
   type AgentTrigger,
 } from "../../core/agents";
@@ -484,26 +488,38 @@ function chipSelect(
  * folder) stay available from chat and the contract file, which the chip's
  * footer says out loud rather than leaving the reader to wonder.
  */
-function renderTriggerChip(
-  chips: HTMLElement,
-  contract: AgentContract,
-  onChange: (triggers: AgentTrigger[]) => void
+/**
+ * Chip + popover to set ONE trigger to one of the six shapes, or clear it.
+ *
+ * No contract-level knowledge: the caller decides what "current" means (the
+ * sole primary trigger, or one entry in a multi-trigger list) and what
+ * clearing it does (unbind vs. remove this entry) via `nullLabel` — pass null
+ * to hide that option entirely, which is what the "add another" button uses
+ * (there is nothing to clear when nothing exists yet).
+ *
+ * This is the one place the six trigger shapes and their parameter fields are
+ * described; the single-trigger chip and every row of the multi-trigger list
+ * call it instead of each carrying its own copy.
+ */
+function triggerPicker(
+  parent: HTMLElement,
+  current: AgentTrigger | null,
+  label: string,
+  nullLabel: string | null,
+  onPick: (next: AgentTrigger | null) => void
 ): void {
-  const current = primaryTrigger(contract.triggers);
   const kind =
     !current ? "none"
     : current.on === "schedule" ? current.cadence.kind
     : current.on === "vault-event" ? "folder"
     : "tag";
-
-  const replace = (next: AgentTrigger | null) => onChange(setPrimaryTrigger(contract.triggers, next));
   const hourNow = current?.on === "schedule" && current.cadence.kind !== "hourly" ? current.cadence.hour : 8;
 
-  chipSelect(chips, current ? triggerClause(current).toLowerCase() : "only when i ask", "When it runs", (pop, close) => {
+  chipSelect(parent, label, "When it runs", (pop, close) => {
     optionRows(
       pop,
       [
-        { value: "none", label: "only when I ask" },
+        ...(nullLabel ? [{ value: "none", label: nullLabel }] : []),
         { value: "hourly", label: "every hour" },
         { value: "daily", label: "every day" },
         { value: "weekly", label: "every week" },
@@ -513,12 +529,12 @@ function renderTriggerChip(
       kind,
       (v) => {
         close();
-        if (v === "none") return replace(null);
-        if (v === "hourly") return replace({ on: "schedule", cadence: { kind: "hourly" } });
-        if (v === "daily") return replace({ on: "schedule", cadence: { kind: "daily", hour: hourNow } });
-        if (v === "weekly") return replace({ on: "schedule", cadence: { kind: "weekly", day: 1, hour: hourNow } });
-        if (v === "folder") return replace({ on: "vault-event", event: "create", path: "_inbox/**" });
-        return replace({ on: "tag", tag: "#todo" });
+        if (v === "none") return onPick(null);
+        if (v === "hourly") return onPick({ on: "schedule", cadence: { kind: "hourly" } });
+        if (v === "daily") return onPick({ on: "schedule", cadence: { kind: "daily", hour: hourNow } });
+        if (v === "weekly") return onPick({ on: "schedule", cadence: { kind: "weekly", day: 1, hour: hourNow } });
+        if (v === "folder") return onPick({ on: "vault-event", event: "create", path: "_inbox/**" });
+        return onPick({ on: "tag", tag: "#todo" });
       }
     );
 
@@ -533,7 +549,7 @@ function renderTriggerChip(
       hour.value = String(cadence.hour);
       hour.onchange = () => {
         const h = Math.min(23, Math.max(0, Number(hour.value) || 0));
-        replace({ on: "schedule", cadence: { ...cadence, hour: h } });
+        onPick({ on: "schedule", cadence: { ...cadence, hour: h } });
       };
     }
 
@@ -545,7 +561,7 @@ function renderTriggerChip(
         row,
         DAY_LABELS.map((d, i) => ({ value: String(i), label: d })),
         String(cadence.day),
-        (v) => replace({ on: "schedule", cadence: { ...cadence, day: Number(v) } })
+        (v) => onPick({ on: "schedule", cadence: { ...cadence, day: Number(v) } })
       );
     }
 
@@ -558,7 +574,7 @@ function renderTriggerChip(
       input.value = evt.path.replace(/\/\*+$/, "");
       input.onchange = () => {
         const folder = input.value.trim().replace(/^\/+|\/+$/g, "");
-        if (folder) replace({ ...evt, path: `${folder}/**` });
+        if (folder) onPick({ ...evt, path: `${folder}/**` });
       };
     }
 
@@ -570,17 +586,91 @@ function renderTriggerChip(
       input.value = tag.tag;
       input.onchange = () => {
         const t = input.value.trim();
-        if (t) replace({ on: "tag", tag: t.startsWith("#") ? t : `#${t}` });
+        if (t) onPick({ on: "tag", tag: t.startsWith("#") ? t : `#${t}` });
       };
     }
+  });
+}
 
-    const extra = contract.triggers.filter((t) => t.on !== "note-mention").length - 1;
-    if (extra > 0) {
-      pop.createDiv({
-        cls: "mva-sel-opt-hint mva-auto-popnote",
-        text: `+${extra} more trigger${extra > 1 ? "s" : ""} — edit them in the contract file or from chat.`,
-      });
-    }
+/**
+ * Which agents currently show their expanded trigger list, by slug.
+ *
+ * Module-level rather than a DOM attribute: the tab does a full rebuild
+ * (`host.empty()` + recreate) on every settings change — see the file header —
+ * so anything held on a DOM node resets the instant a value inside the list
+ * changes. This is the equivalent of the `expanded: Set<string>` an
+ * `ItemView` class would keep as instance state, for a module of plain
+ * render functions with no instance to hold it.
+ */
+const expandedTriggerLists = new Set<string>();
+
+/**
+ * The row's "when it runs" control.
+ *
+ * The common case — zero or one unattended trigger — stays exactly what it was:
+ * a single chip. An agent with several only differs in WHICH trigger the chip
+ * edits and what closing it to null means, so this switches on count rather
+ * than duplicating the picker for a rare shape.
+ */
+function renderTriggerChip(
+  chips: HTMLElement,
+  contract: AgentContract,
+  onChange: (triggers: AgentTrigger[]) => void
+): void {
+  const unattended = unattendedTriggerEntries(contract.triggers);
+
+  if (unattended.length <= 1) {
+    // Dropped back to the simple case (the user removed down to one) — an
+    // expand flag left set would reopen a list with nothing left to show.
+    expandedTriggerLists.delete(contract.slug);
+    const current = primaryTrigger(contract.triggers);
+    triggerPicker(
+      chips,
+      current,
+      current ? triggerClause(current).toLowerCase() : "only when i ask",
+      "only when I ask",
+      (next) => onChange(setPrimaryTrigger(contract.triggers, next))
+    );
+    return;
+  }
+
+  // Two or more: the chip becomes a disclosure instead of an editor — editing
+  // one of several needs to say WHICH one, and a chip's own label is already
+  // spoken for by "N triggers".
+  const chip = chips.createDiv({ cls: "mva-sel-chip mva-auto-multitrigger", attr: { "aria-label": "When it runs" } });
+  chip.setText(`${unattended.length} triggers`);
+  chip.toggleClass("is-open", expandedTriggerLists.has(contract.slug));
+  clickable(chip, () => {
+    if (expandedTriggerLists.has(contract.slug)) expandedTriggerLists.delete(contract.slug);
+    else expandedTriggerLists.add(contract.slug);
+    chip.toggleClass("is-open", expandedTriggerLists.has(contract.slug));
+    syncMultiTriggerList(chips, contract, onChange);
+  });
+
+  syncMultiTriggerList(chips, contract, onChange);
+}
+
+/** Render or remove the expanded list to match `expandedTriggerLists` — one
+ *  function for both directions, so open and close can never drift apart. */
+function syncMultiTriggerList(
+  chips: HTMLElement,
+  contract: AgentContract,
+  onChange: (triggers: AgentTrigger[]) => void
+): void {
+  chips.querySelector(".mva-auto-triggerlist")?.remove();
+  if (!expandedTriggerLists.has(contract.slug)) return;
+
+  const list = chips.createDiv({ cls: "mva-auto-triggerlist" });
+  for (const { index, trigger } of unattendedTriggerEntries(contract.triggers)) {
+    const row = list.createDiv({ cls: "mva-auto-triggerrow" });
+    triggerPicker(row, trigger, triggerClause(trigger), "remove this trigger", (next) =>
+      onChange(next ? replaceTriggerAt(contract.triggers, index, next) : removeTriggerAt(contract.triggers, index))
+    );
+  }
+
+  const add = list.createDiv({ cls: "mva-auto-triggerrow" });
+  triggerPicker(add, null, "+ add another trigger", null, (next) => {
+    if (next) onChange(addTrigger(contract.triggers, next));
   });
 }
 

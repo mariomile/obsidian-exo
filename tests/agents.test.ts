@@ -25,6 +25,10 @@ import {
   parseAgentCommand,
   primaryTrigger,
   setPrimaryTrigger,
+  unattendedTriggerEntries,
+  replaceTriggerAt,
+  removeTriggerAt,
+  addTrigger,
   type AgentBrain,
   type AgentContract,
 } from "../src/core/agents";
@@ -119,6 +123,24 @@ describe("frontmatter helpers", () => {
   it("returns [] for absent or empty keys", () => {
     expect(fmList(fm, "write")).toEqual([]);
     expect(fmList(fm, "empty")).toEqual([]);
+  });
+
+  // Regression: found live. A `tag` trigger's own syntax is `tag #todo` — the
+  // `#` is the value, not a comment. The old regex stripped anything after
+  // whitespace+`#` unconditionally, so `tag #todo` silently became `tag`
+  // (which fails to parse), and every tag trigger vanished on the very first
+  // read-modify-write of a sidecar. A real comment always has a space (or
+  // nothing) after the `#`; a tag value never does.
+  it("does not eat a #tag glued directly after the hash — only a real comment (space after #) is stripped", () => {
+    const fmWithTag = frontmatterBlock(
+      ["---", "triggers:", "  - tag #todo", "  - schedule daily 08 # this really is a comment", "---", "x"].join("\n")
+    )!;
+    expect(fmList(fmWithTag, "triggers")).toEqual(["tag #todo", "schedule daily 08"]);
+  });
+
+  it("strips a bare trailing # with nothing after it", () => {
+    const fm2 = frontmatterBlock(["---", "icon: bot #", "---", "x"].join("\n"))!;
+    expect(fmScalar(fm2, "icon")).toBe("bot");
   });
 });
 
@@ -311,6 +333,19 @@ describe("parseAgentSidecar", () => {
     const original = parseAgentSidecar(raw, "ghostwriter").contract;
     const round = parseAgentSidecar(serializeAgentSidecar(original), "ghostwriter").contract;
     expect(round).toEqual(original);
+  });
+
+  // Regression: found live (2026-08-03). The round-trip fixture above never
+  // included a `tag` trigger, so the comment-stripping bug in fmList — which
+  // silently ate the `#` off `tag #todo` — survived every prior test. A
+  // second write-then-read of the SAME contract must be a no-op.
+  it("round-trips a tag trigger, twice, without losing it", () => {
+    const withTag = parseAgentSidecar(raw, "ghostwriter").contract;
+    withTag.triggers = [...withTag.triggers, { on: "tag", tag: "#todo" }];
+    const once = parseAgentSidecar(serializeAgentSidecar(withTag), "ghostwriter").contract;
+    expect(once.triggers).toEqual(withTag.triggers);
+    const twice = parseAgentSidecar(serializeAgentSidecar(once), "ghostwriter").contract;
+    expect(twice).toEqual(once);
   });
 });
 
@@ -511,5 +546,71 @@ describe("primaryTrigger / setPrimaryTrigger", () => {
     const before = [t("schedule daily 08")];
     setPrimaryTrigger(before, t("schedule hourly"));
     expect(before[0]).toEqual(t("schedule daily 08"));
+  });
+});
+
+describe("unattendedTriggerEntries", () => {
+  const t = (s: string) => parseTrigger(s)!;
+
+  it("pairs each unattended trigger with its position in the FULL list", () => {
+    const all = [t("note-mention"), t("schedule daily 08"), t("tag #x")];
+    expect(unattendedTriggerEntries(all)).toEqual([
+      { index: 1, trigger: all[1] },
+      { index: 2, trigger: all[2] },
+    ]);
+  });
+
+  it("is empty when only note-mention is present", () => {
+    expect(unattendedTriggerEntries([t("note-mention")])).toEqual([]);
+  });
+
+  it("is empty for an empty list", () => {
+    expect(unattendedTriggerEntries([])).toEqual([]);
+  });
+});
+
+describe("replaceTriggerAt / removeTriggerAt / addTrigger", () => {
+  const t = (s: string) => parseTrigger(s)!;
+
+  it("replaces only the targeted index", () => {
+    const all = [t("note-mention"), t("schedule daily 08"), t("tag #x")];
+    const out = replaceTriggerAt(all, 1, t("schedule hourly"));
+    expect(out).toEqual([all[0], t("schedule hourly"), all[2]]);
+  });
+
+  it("removes only the targeted index, keeping order", () => {
+    const all = [t("note-mention"), t("schedule daily 08"), t("tag #x")];
+    expect(removeTriggerAt(all, 1)).toEqual([all[0], all[2]]);
+  });
+
+  it("out-of-range index is a harmless no-op copy", () => {
+    const all = [t("note-mention")];
+    expect(replaceTriggerAt(all, 5, t("tag #x"))).toEqual(all);
+    expect(removeTriggerAt(all, -1)).toEqual(all);
+  });
+
+  it("addTrigger appends without disturbing the rest", () => {
+    const all = [t("note-mention")];
+    expect(addTrigger(all, t("schedule hourly"))).toEqual([all[0], t("schedule hourly")]);
+  });
+
+  it("never mutates the input array", () => {
+    const all = [t("note-mention"), t("schedule daily 08")];
+    const copy = [...all];
+    replaceTriggerAt(all, 1, t("schedule hourly"));
+    removeTriggerAt(all, 0);
+    addTrigger(all, t("tag #x"));
+    expect(all).toEqual(copy);
+  });
+
+  it("composes: editing a multi-trigger agent one entry at a time", () => {
+    let triggers = [t("note-mention"), t("schedule daily 08"), t("vault-event create _inbox/**")];
+    // Remove the schedule, leaving the folder watch and the mention.
+    const scheduleEntry = unattendedTriggerEntries(triggers).find((e) => e.trigger.on === "schedule")!;
+    triggers = removeTriggerAt(triggers, scheduleEntry.index);
+    expect(unattendedTriggerEntries(triggers).map((e) => e.trigger.on)).toEqual(["vault-event"]);
+    // Add a tag trigger.
+    triggers = addTrigger(triggers, t("tag #x"));
+    expect(unattendedTriggerEntries(triggers).map((e) => e.trigger.on)).toEqual(["vault-event", "tag"]);
   });
 });
