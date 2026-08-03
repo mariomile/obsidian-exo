@@ -490,6 +490,13 @@ export class ChatView extends ItemView {
    *  Set while a bar is armed, so rebuilding or closing the gallery can never
    *  strand the document-level listener. */
   private bulkDisarm: (() => void) | null = null;
+  /** Re-runs the open gallery's grid against current state, preserving the
+   *  search text and the active chips. Non-null exactly while a gallery is up.
+   *  Exists because `renderGrid` is a closure over `showGallery`'s locals, and
+   *  an action that changes what the cards say — freeing a session file — has
+   *  to repaint them without tearing the history down and losing the user's
+   *  place in it. */
+  private galleryRerender: (() => void) | null = null;
 
   /** The strip's outer row. Owns the gutter and the hidden state, so hiding the
    *  strip still hides the trailing controls along with the tabs. */
@@ -2623,6 +2630,9 @@ export class ChatView extends ItemView {
     // to be removed with its container, so drop it here or it outlives the DOM.
     this.bulkDisarm?.();
     this.bulkDisarm = null;
+    // The grid it would repaint is about to be gone; holding the closure would
+    // also pin the search input and every card it built.
+    this.galleryRerender = null;
     this.galleryEl?.remove();
     this.galleryEl = null;
     // The session-id set is only ever read while the gallery is up, and every
@@ -2864,6 +2874,10 @@ export class ChatView extends ItemView {
       this.renderBulkBar();
     };
     search.addEventListener("input", () => renderGrid(search.value));
+    // Re-render on demand from outside this closure, keeping whatever the user
+    // has typed and toggled. Bound here rather than exposing renderGrid itself
+    // so callers cannot accidentally reset the search box by passing "".
+    this.galleryRerender = () => renderGrid(search.value);
     renderGrid("");
   }
 
@@ -3154,9 +3168,13 @@ export class ChatView extends ItemView {
     // the badge answer from the same snapshot, and neither costs a second scan.
     // Null (unread / unreadable) collapses to an empty set: no evidence, so
     // nothing is eligible and no control appears — the safe direction here.
+    //
+    // Indexed once rather than two `find()` scans per selected id: this runs on
+    // every search keystroke, and the selection can be the entire history.
+    const byId = new Map(this.convos.map((c) => [c.id, c] as const));
     const freeable = eligibleForFreeing(
-      selected.filter((id) => this.convos.find((c) => c.id === id)?.provider === "claude"),
-      (id) => this.convos.find((c) => c.id === id)?.sessionId,
+      selected.filter((id) => byId.get(id)?.provider === "claude"),
+      (id) => byId.get(id)?.sessionId,
       this.sessionsOnDisk ?? new Set(),
       this.active.id,
     );
@@ -3253,18 +3271,45 @@ export class ChatView extends ItemView {
         return;
       }
       disarm();
-      void this.freeSessions(ids).then((freed) => {
-        // The snapshot is stale the moment an unlink lands. Null, not a surgical
-        // removal of the freed ids: null is this feature's own "unknown, go
-        // re-derive" signal, and the next showGallery() re-reads the directory —
-        // one read from which every badge corrects itself.
-        this.sessionsOnDisk = null;
-        new Notice(
-          `${freed} session${freed === 1 ? "e" : "i"} liberat${freed === 1 ? "a" : "e"}. Il contenuto resta intatto.`,
-        );
-      });
+      void this.freeAndRefresh(ids);
     });
     return disarm;
+  }
+
+  /** Free the session files, then make the open gallery tell the truth again.
+   *
+   *  The snapshot is stale the moment an unlink lands, and simply nulling it was
+   *  wrong in two directions at once. Nulling blanks the resume badge for EVERY
+   *  conversation on screen — including the ones whose session files were never
+   *  touched — as soon as anything re-renders, which one keystroke in the search
+   *  box is enough to trigger. And `disarm()` restores the resting label without
+   *  rebuilding the bar, so the control would go on advertising "Libera 2
+   *  sessioni" for files that no longer exist; a second click would unlink
+   *  nothing and report "0 sessioni liberate". That is precisely the
+   *  looks-actionable-but-isn't failure the eligibility rule exists to prevent,
+   *  leaking back in on the far side of the action.
+   *
+   *  So: re-read, then repaint. This is not the second read the plan rules out —
+   *  that rule keeps the eligibility DECISION on one consistent snapshot, while
+   *  reading back a change we just made is the only way the next decision starts
+   *  from the truth. Order is load-bearing: read first, so the rebuild sees it.
+   *
+   *  Both steps are skipped when the gallery closed mid-flight — `hideGallery`
+   *  has already set the snapshot to null, which is then correct ("not read"),
+   *  and the next open re-reads anyway. */
+  private async freeAndRefresh(ids: readonly string[]): Promise<void> {
+    const freed = await this.freeSessions(ids);
+    if (this.galleryEl) {
+      this.sessionsOnDisk = await this.readSessionsOnDisk();
+      // Rebuilds the cards AND the bulk bar (renderGrid ends in renderBulkBar):
+      // the freed conversations pick up "Riparte da capo" immediately, the
+      // untouched ones keep their badge, and the control recounts against what
+      // is actually left — or disappears when nothing is.
+      this.galleryRerender?.();
+    }
+    new Notice(
+      `${freed} session${freed === 1 ? "e" : "i"} liberat${freed === 1 ? "a" : "e"}. Il contenuto resta intatto.`,
+    );
   }
 
   /** Delete the CLI session files for `ids`, and only those — never anything
