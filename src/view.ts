@@ -102,7 +102,7 @@ import type { StripDensity } from "./core/strip-density";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
 import type { HistoryFilter, FilterableConvo } from "./core/history";
 import { isAiTitleDue } from "./core/title";
-import { projectDirName, resumeStatus, resumableFrom } from "./core/resume-status";
+import { projectDirName, resumeStatus, resumableFrom, eligibleForFreeing } from "./core/resume-status";
 import type { ResumeStatus, SessionFileProbe } from "./core/resume-status";
 import { reconcileList } from "./ui/keyed-reconcile";
 import type { CardModel } from "./ui/keyed-reconcile";
@@ -3139,10 +3139,31 @@ export class ChatView extends ItemView {
     const wrap = this.galleryEl;
     if (!wrap) return;
     wrap.querySelector(".mva-gallery-bulk")?.remove();
-    const n = this.effectiveSelection().length;
+    const selected = this.effectiveSelection();
+    const n = selected.length;
     if (n === 0) return;
     const bar = wrap.createDiv({ cls: "mva-gallery-bulk" });
     bar.createSpan({ text: `${n} selezionat${n === 1 ? "a" : "e"}` });
+
+    // Claude-only, exactly like the badge (`resumeStatusOf`): a Codex sessionId
+    // names a thread under ~/.codex, a different id space entirely — matching it
+    // against Claude's project directory is meaningless, and filtering here is
+    // what keeps a Codex thread id from ever reaching an unlink call.
+    //
+    // `this.sessionsOnDisk` is the set showGallery() already read; the button and
+    // the badge answer from the same snapshot, and neither costs a second scan.
+    // Null (unread / unreadable) collapses to an empty set: no evidence, so
+    // nothing is eligible and no control appears — the safe direction here.
+    const freeable = eligibleForFreeing(
+      selected.filter((id) => this.convos.find((c) => c.id === id)?.provider === "claude"),
+      (id) => this.convos.find((c) => c.id === id)?.sessionId,
+      this.sessionsOnDisk ?? new Set(),
+      this.active.id,
+    );
+    // No eligible session → no control at all. A button that looks actionable and
+    // silently does nothing teaches the user the wrong thing about the action.
+    const freeDisarm = freeable.length > 0 ? this.addBulkFree(bar, freeable) : null;
+
     const del = bar.createSpan({ cls: "mva-gallery-bulk-del", text: "Elimina" });
     // Same arm/disarm shape as the per-card trash (addCardDelete): a 3s timer
     // plus a capturing outside-click. The N-conversation control must not be
@@ -3163,7 +3184,13 @@ export class ChatView extends ItemView {
       }
       document.removeEventListener("click", outside, true);
     };
-    this.bulkDisarm = disarm;
+    // The bar owns ONE teardown but can now hold two armed controls, and neither
+    // hideGallery nor the next renderBulkBar knows which one the user touched —
+    // so clear both.
+    this.bulkDisarm = () => {
+      freeDisarm?.();
+      disarm();
+    };
     this.clickable(del, () => {
       if (!armed) {
         armed = true;
@@ -3181,6 +3208,96 @@ export class ChatView extends ItemView {
       this.gallerySelection.clear();
       this.refreshSelectionUI();
     });
+  }
+
+  /** The "free the session file" control, sitting between the count and
+   *  `Elimina`. Returns its own disarm so the bar can tear down whichever
+   *  control the user armed.
+   *
+   *  Deliberately lighter than `Elimina`: muted rather than error red, and NOT
+   *  pushed right — that slot belongs to the one action that removes something
+   *  the user reads. This removes a support file; the conversation itself is
+   *  untouched. The two-stage confirm is `Elimina`'s exact shape (3s timer plus
+   *  a capturing outside click) because the action is still irreversible — only
+   *  the visual weight differs, never the guard.
+   *
+   *  `ids` are already the ELIGIBLE ones, each resolved to a session file the
+   *  gallery just saw on disk. So the number on the button is the number of
+   *  files that will actually go, never the raw selection count: a control that
+   *  promises 5 and frees 2 is a control that lies. */
+  private addBulkFree(bar: HTMLElement, ids: readonly string[]): () => void {
+    const label = `Libera ${ids.length} session${ids.length === 1 ? "e" : "i"}`;
+    const free = bar.createSpan({ cls: "mva-gallery-bulk-free", text: label });
+    let armed = false;
+    let disarmTimer: number | null = null;
+    const outside = (ev: MouseEvent) => {
+      if (ev.target !== free && !free.contains(ev.target as Node)) disarm();
+    };
+    const disarm = () => {
+      armed = false;
+      free.removeClass("is-armed");
+      free.setText(label);
+      if (disarmTimer) {
+        window.clearTimeout(disarmTimer);
+        disarmTimer = null;
+      }
+      document.removeEventListener("click", outside, true);
+    };
+    this.clickable(free, () => {
+      if (!armed) {
+        armed = true;
+        free.addClass("is-armed");
+        free.setText(`Conferma — libera ${ids.length}`);
+        disarmTimer = window.setTimeout(disarm, 3000);
+        document.addEventListener("click", outside, true);
+        return;
+      }
+      disarm();
+      void this.freeSessions(ids).then((freed) => {
+        // The snapshot is stale the moment an unlink lands. Null, not a surgical
+        // removal of the freed ids: null is this feature's own "unknown, go
+        // re-derive" signal, and the next showGallery() re-reads the directory —
+        // one read from which every badge corrects itself.
+        this.sessionsOnDisk = null;
+        new Notice(
+          `${freed} session${freed === 1 ? "e" : "i"} liberat${freed === 1 ? "a" : "e"}. Il contenuto resta intatto.`,
+        );
+      });
+    });
+    return disarm;
+  }
+
+  /** Delete the CLI session files for `ids`, and only those — never anything
+   *  else in the shared projects directory. Every path is built from a
+   *  `sessionId` the eligibility check already matched against a real file in
+   *  this vault's own project directory, and `projectDirName` is reused rather
+   *  than re-derived so the encoding cannot drift from the read that found them.
+   *
+   *  Best-effort per file: one failure (EACCES, a file already gone) must not
+   *  stop the rest, and there is nothing useful to surface per file — the badge
+   *  self-corrects on the next gallery open either way.
+   *
+   *  Nothing on the `Convo` is touched. Freeing a session is not editing a
+   *  conversation, and leaving `sessionId` in place keeps the badge honest: it
+   *  reports what the disk says, not what this method remembers doing. */
+  private async freeSessions(ids: readonly string[]): Promise<number> {
+    const base = this.vaultPath();
+    if (!base) return 0;
+    const fs = require("fs") as typeof import("fs");
+    const os = require("os") as typeof import("os");
+    const dir = `${os.homedir()}/.claude/projects/${projectDirName(base)}`;
+    let freed = 0;
+    for (const id of ids) {
+      const sessionId = this.convos.find((x) => x.id === id)?.sessionId;
+      if (!sessionId) continue;
+      try {
+        await fs.promises.unlink(`${dir}/${sessionId}.jsonl`);
+        freed++;
+      } catch {
+        /* best-effort: a failed unlink is not worth aborting the rest for */
+      }
+    }
+    return freed;
   }
 
   /** Permanently drop every selected conversation. The only deletion path that

@@ -3510,6 +3510,21 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-size: 12px;
   color: var(--text-muted);
 }
+.mva-gallery-bulk-free {
+  /* Informational, not destructive — the same muted register as Annulla, never
+     the error red reserved for Elimina: this frees a support file, it does not
+     remove anything the user reads. No `margin-left: auto` on purpose either;
+     that slot is Elimina's, so consequence still grows left-to-right. */
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.mva-gallery-bulk-free:hover {
+  color: var(--text-normal);
+}
+.mva-gallery-bulk-free.is-armed {
+  color: var(--text-normal);
+  font-weight: 600;
+}
 .mva-gallery-bulk-del {
   margin-left: auto;
   color: var(--text-error);
