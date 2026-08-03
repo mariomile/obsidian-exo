@@ -18,7 +18,10 @@
   /* Shared card rhythm — one padding/radius/border across every card family
      (tool, permission, ask, capabilities) so they read as one system. */
   --mva-card-pad: 10px 12px;
-  --mva-card-radius: var(--mva-r2);
+  /* Il raggio card segue quello della suite (--mv-r-card), con --mva-r2 come
+     fallback storico: le 7 famiglie di card di Exo si arrotondavano a 9px
+     mentre Masonry, Horizon e Bases stavano su un altro valore. */
+  --mva-card-radius: var(--mv-r-card, var(--mva-r2));
   --mva-card-border: 1px solid var(--background-modifier-border);
   /* Single reading-column cap shared by the transcript, the agents chip and the
      composer so they stay centered on the same axis at any pane width. */
