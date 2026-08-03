@@ -198,8 +198,12 @@ export interface AgentSession {
   compact?(instructions?: string): void;
   /** Change the permission mode live; used by the plan-mode toggle. */
   setPermissionMode?(mode: PermissionMode): void;
-  /** Tear down the session (kills any live process). */
-  dispose(): void;
+  /** Tear down the session (kills any live process). `reason` is a short,
+   *  stable tag for WHY (e.g. "working-set-retire", "user-delete",
+   *  "stop-escalation") — it rides into the rejected error message of any
+   *  turn this interrupts, so a session killed mid-turn is diagnosable from
+   *  the persisted transcript alone instead of a call-site archaeology dig. */
+  dispose(reason: string): void;
   /** Current context-window usage, if the provider exposes it. */
   contextUsage(): Promise<ContextUsage | null>;
   /** Refresh native plan/account quota windows, if the provider exposes them. */

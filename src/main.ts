@@ -1291,7 +1291,7 @@ export default class ExoPlugin extends Plugin {
     });
     signal.addEventListener("abort", () => {
       try {
-        session.dispose();
+        session.dispose("utility-aborted");
       } catch {
         /* already torn down */
       }
@@ -1305,7 +1305,7 @@ export default class ExoPlugin extends Plugin {
         }
       });
     } finally {
-      session.dispose();
+      session.dispose("utility-run-end");
     }
     return out;
   }
@@ -1432,7 +1432,7 @@ export default class ExoPlugin extends Plugin {
       };
       ctrl.signal.addEventListener("abort", () => {
         try {
-          session.dispose();
+          session.dispose("title-aborted");
         } catch {
           /* already torn down */
         }
@@ -1454,7 +1454,7 @@ export default class ExoPlugin extends Plugin {
           }
         });
       } finally {
-        session.dispose();
+        session.dispose("title-run-end");
       }
       resultTitle = sanitizeTitle(out);
       return resultTitle;
@@ -1518,7 +1518,7 @@ export default class ExoPlugin extends Plugin {
       });
       ctrl.signal.addEventListener("abort", () => {
         try {
-          session.dispose();
+          session.dispose("utility-pass-aborted");
         } catch {
           /* already torn down */
         }
@@ -1535,7 +1535,7 @@ export default class ExoPlugin extends Plugin {
         const tokens = session.lastTurnTokens?.();
         if (typeof tokens === "number") onUsage?.(tokens);
       } finally {
-        session.dispose();
+        session.dispose("utility-pass-run-end");
       }
       return out;
     } catch (err) {

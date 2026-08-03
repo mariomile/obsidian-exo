@@ -98,6 +98,10 @@ class ClaudeSession implements AgentSession {
   private queue: { role: "user"; content: UserContent; priority?: "now" }[] = [];
   private wake: (() => void) | null = null;
   private disposed = false;
+  /** Set once, by dispose(). Reused by send()'s post-dispose guard so a call
+   *  that arrives just after teardown reports the same "why" as the turn that
+   *  was actually interrupted, instead of a bare unlabeled "disposed". */
+  private disposedReason: string | null = null;
   /** True once the SDK message stream has ended (CLI process gone). A dead session
    *  can never emit a `result`, so sends against it must fail fast instead of
    *  parking forever (the view drops the session and the next message starts fresh). */
@@ -489,7 +493,9 @@ class ClaudeSession implements AgentSession {
     onEvent: (e: AgentEvent) => void,
     images?: import("./types").ImageAttachment[]
   ): Promise<void> {
-    if (this.disposed) return Promise.reject(new Error("Session disposed."));
+    if (this.disposed) {
+      return Promise.reject(new Error(`Session disposed (${this.disposedReason ?? "unknown"}).`));
+    }
     // A dead stream can never answer: fail fast so the view drops this session
     // and the next message starts a fresh one (instead of parking forever — the
     // idle-session variant of this is a pre-warmed CLI that died while idle).
@@ -599,9 +605,10 @@ class ClaudeSession implements AgentSession {
     if (this.resolveTurn) this.safeInterrupt();
   }
 
-  dispose(): void {
+  dispose(reason: string): void {
     if (this.disposed) return; // idempotent — dispose may be called more than once
     this.disposed = true;
+    this.disposedReason = reason;
     this.denyPending?.();
     try {
       this.wake?.();
@@ -611,8 +618,10 @@ class ClaudeSession implements AgentSession {
     // Interrupt only if a turn is in flight (avoids the transport error on idle teardown).
     if (this.resolveTurn) this.safeInterrupt();
     // The pump loop breaks on `disposed` without emitting a result, so settle here
-    // to ensure any awaiting send() promise is released.
-    this.settleTurn(new Error("Session disposed."));
+    // to ensure any awaiting send() promise is released. `reason` rides into the
+    // rejected error so a session killed mid-turn is diagnosable from the
+    // persisted transcript alone (see AgentSession.dispose doc).
+    this.settleTurn(new Error(`Session disposed (${reason}).`));
   }
 
   /** W0 cost governance: input_tokens + output_tokens from the most recently

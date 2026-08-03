@@ -267,6 +267,11 @@ export interface Convo {
   sessionSig: string;
   streaming: boolean;
   stopped: boolean; // set by stop() so the turn renders as "Stopped", not an error
+  /** When the FIRST Stop/Esc of the current turn was requested. Runtime-only —
+   *  feeds stopAction's grace window so a second impatient press within a
+   *  normal interrupt round-trip doesn't force-dispose a healthy session.
+   *  Cleared at the next turn's start (runTurn) alongside `stopped`. */
+  stopRequestedAt?: number;
   /** Active `/goal`. In-memory: not persisted across reloads. */
   goal?: GoalState;
   pendingPerm: (() => void) | null; // cancels an open permission card on stop
@@ -840,7 +845,7 @@ export class ChatView extends ItemView {
     // made in the last debounce window isn't lost when the view closes.
     if (this.persistTimer !== null) this.flushPersist();
     // this.active is always within this.convos, so the loop covers it.
-    for (const c of this.convos) this.dropSession(c);
+    for (const c of this.convos) this.dropSession(c, "view-unload");
     this.memoryObserver?.dispose();
     this.memoryObserver = null;
     this.closeAgentPopover();
@@ -976,7 +981,7 @@ export class ChatView extends ItemView {
     const seq = (this.spawnSeq.get(c) ?? 0) + 1;
     this.spawnSeq.set(c, seq);
     this.diag.push("session", `spawn provider=${c.provider} resume=${c.sessionId ? c.sessionId.slice(0, 8) : "no"}`);
-    c.session?.dispose();
+    c.session?.dispose("respawn");
     const s = this.plugin.settings;
     const bin = c.provider === "claude" ? s.claudeBin : s.codexBin;
     const cli = await resolveCli(c.provider, bin);
@@ -1158,7 +1163,7 @@ export class ChatView extends ItemView {
     // Superseded while awaiting (newer spawn or dropSession): don't install —
     // dispose the fresh session so it can't leak as an orphaned CLI process.
     if (this.spawnSeq.get(c) !== seq) {
-      session.dispose();
+      session.dispose("spawn-superseded");
       throw new Error("Session spawn superseded.");
     }
     c.session = session;
@@ -1166,12 +1171,19 @@ export class ChatView extends ItemView {
     return session;
   }
 
-  private dropSession(c: Convo): void {
-    if (c.session) this.diag.push("session", `drop convo=${c.id}`);
+  /** `reason` is required, not advisory: it is the ONLY record of why a live
+   *  session was torn down mid-life, and it is what makes the next "why did my
+   *  turn die with 'Session disposed.'" report a five-minute diag-log read
+   *  instead of an hour re-tracing every call site by hand (see the c147
+   *  investigation, 2026-08-03). It rides both the diag log AND the rejected
+   *  send() promise's message, so it survives into the persisted transcript
+   *  even if the diag log itself is gone by the time anyone looks. */
+  private dropSession(c: Convo, reason: string): void {
+    if (c.session) this.diag.push("session", `drop convo=${c.id} reason=${reason}`);
     // Supersede any in-flight spawn so it can't install a session after the drop.
     this.spawnSeq.set(c, (this.spawnSeq.get(c) ?? 0) + 1);
     this.sessionInit.delete(c);
-    c.session?.dispose();
+    c.session?.dispose(reason);
     c.session = null;
     c.sessionSig = "";
     // Abort any in-flight AI-title call for this conversation (dropSession is the
@@ -1205,7 +1217,7 @@ export class ChatView extends ItemView {
         resolve(caps);
       });
     });
-    this.dropSession(c);
+    this.dropSession(c, "mcp-reconnect");
     try {
       await this.ensureSession(c);
     } catch (e) {
@@ -1285,7 +1297,7 @@ export class ChatView extends ItemView {
     this.persistModel(); // writes this.model into the right provider's settings slot + active.model
     this.active.sessionId = undefined;
     this.active.allow.clear();
-    this.dropSession(this.active);
+    this.dropSession(this.active, "provider-change");
     this.active.usage = undefined;
     this.composer.updateUsage(null);
     this.persist();
@@ -1681,7 +1693,7 @@ export class ChatView extends ItemView {
       if (!c) continue;
       c.retiredAt = now; // never 0: toConvoData drops a falsy value
       retiredConvos.push(c);
-      this.dropSession(c); // free the live session; resumable from the history
+      this.dropSession(c, "working-set-retire"); // free the live session; resumable from the history
     }
     // Remove exactly what was retired, rather than assigning `plan.visible`:
     // the plan is built from resolvable ids only, so assigning it would ALSO
@@ -2168,7 +2180,7 @@ export class ChatView extends ItemView {
     // not claim to have left one.
     c.retiredAt = Date.now();
     this.openTabs.splice(idx, 1);
-    this.dropSession(c); // free the live session; resumable from history
+    this.dropSession(c, "tab-close"); // free the live session; resumable from history
     if (c === this.active) {
       const nextId = nextFocusAfterRemoval(visualOrder, c.id);
       const next = nextId ? this.convos.find((x) => x.id === nextId) : undefined;
@@ -2212,7 +2224,7 @@ export class ChatView extends ItemView {
   /** Clear the active conversation to a fresh session, keeping the tab. */
   private newSessionInTab(): void {
     const c = this.active;
-    this.dropSession(c);
+    this.dropSession(c, "new-session-in-tab");
     c.messages = [];
     c.sessionId = undefined;
     c.allow.clear();
@@ -2224,6 +2236,7 @@ export class ChatView extends ItemView {
     // screen to explain it. Cleared here rather than trusting the next turn to:
     // the tab repaints below, and a "New chat" may sit untouched for hours.
     c.stopped = false;
+    c.stopRequestedAt = undefined;
     c.resumeRisky = false;
     c.researchMode = initialResearchModeState();
     c.agent = undefined;
@@ -3041,7 +3054,7 @@ export class ChatView extends ItemView {
    *  switch to a neighbor — or a fresh convo when none remain — exactly like the
    *  close-tab flow, but keep the gallery open and just remove its card. */
   private deleteConvo(c: Convo, card: HTMLElement, grid: HTMLElement): void {
-    this.dropSession(c);
+    this.dropSession(c, "user-delete");
     // Visual order captured BEFORE either splice below, same reasoning as
     // `closeTab` / `setConvoArchived`: pinned status is still readable off
     // `this.convos` at this point, and `c.id` is still in `this.openTabs`.
@@ -3357,7 +3370,7 @@ export class ChatView extends ItemView {
     for (const id of ids) {
       const c = this.convos.find((x) => x.id === id);
       if (!c || c === this.active) continue; // never delete the focused chat
-      this.dropSession(c);
+      this.dropSession(c, "user-delete");
       const tabIdx = this.openTabs.indexOf(c.id);
       if (tabIdx !== -1) this.openTabs.splice(tabIdx, 1);
       const idx = this.convos.indexOf(c);
@@ -4620,7 +4633,7 @@ export class ChatView extends ItemView {
     if (idx < 0) return;
     c.messages = c.messages.slice(0, idx + 1);
     for (let i = turns.length - 1; i > idx; i--) turns[i].remove();
-    this.dropSession(c); // next message starts a fresh session from this point
+    this.dropSession(c, "rewind"); // next message starts a fresh session from this point
     c.sessionId = undefined;
     c.queue = [];
     this.renderQueue(c);
@@ -4727,7 +4740,7 @@ export class ChatView extends ItemView {
     // Then the conversation rewind — drop this turn and everything after.
     c.messages = c.messages.slice(0, idx);
     for (let i = turns.length - 1; i >= idx; i--) turns[i].remove();
-    this.dropSession(c);
+    this.dropSession(c, "rewind-code");
     c.sessionId = undefined;
     c.queue = [];
     this.renderQueue(c);
@@ -6065,19 +6078,21 @@ export class ChatView extends ItemView {
   private stop(source: "esc" | "button" = "button"): void {
     const c = this.active;
     // `stopped` resets at turn start, so true here means a PRIOR stop this turn
-    // didn't settle it — the interrupt was swallowed (stuck transport, zombie
-    // CLI). Escalate: dispose the session so the parked send() rejects, the
-    // turn closes, and the composer unblocks. Next message starts fresh (the
-    // on-disk transcript is still resumable). See stopAction in core/recovery.
-    const action = stopAction(c.stopped);
+    // hasn't settled it YET. That alone isn't proof of a stuck session — a
+    // healthy `q.interrupt()` is a CLI round-trip, not a local call — so the
+    // escalation to `dispose` only fires once STOP_ESCALATION_GRACE_MS has
+    // passed since the FIRST press. See stopAction in core/recovery.
+    const msSinceFirstStop = c.stopped ? Date.now() - (c.stopRequestedAt ?? 0) : 0;
+    const action = stopAction(c.stopped, msSinceFirstStop);
     this.diag.push("stop", `${source} → ${action}`);
+    if (!c.stopped) c.stopRequestedAt = Date.now();
     c.stopped = true;
     c.queue = [];
     this.renderQueue(c);
     c.pendingPerm?.(); // cancel any open permission card
     c.pendingAsk?.(); // cancel any open ask card
     if (action === "dispose") {
-      this.dropSession(c);
+      this.dropSession(c, "stop-escalation");
       new Notice("Exo — session force-reset");
       return;
     }
@@ -6469,6 +6484,7 @@ export class ChatView extends ItemView {
     c.currentCtx = ctx; // target for this conversation's ask_user cards
     this.reconcileLiveTasks(c); // drop orphaned/faded entries before this turn adds new ones
     c.stopped = false;
+    c.stopRequestedAt = undefined;
     this.setStreaming(c, true);
 
     // Working indicator (Feature 1): a persistent Claude-Code-style row so the
@@ -7006,7 +7022,7 @@ export class ChatView extends ItemView {
       // Reaching this catch at all means the turn didn't finish cleanly (abort,
       // user-stop, or a thrown session error) — fold the run with the x glyph.
       this.flushRender(ctx, true);
-      this.dropSession(c); // a failed turn likely poisoned the session
+      this.dropSession(c, "turn-error"); // a failed turn likely poisoned the session
       // `c.stopped` = the user asked for this (Stop/Esc, possibly the force-
       // dispose escalation whose "Session disposed." rejection is not an
       // AbortError) — render it as a clean stop, never a scary error.
@@ -7119,7 +7135,7 @@ export class ChatView extends ItemView {
         isRecoveryRetry: !!opts?.isRecoveryRetry,
         resumeRisky: !!c.resumeRisky,
       });
-      if (plan.session !== "none") this.dropSession(c);
+      if (plan.session !== "none") this.dropSession(c, `recovery-${plan.session}`);
       if (plan.session === "drop-clear-id") c.sessionId = undefined;
       c.resumeRisky = plan.nextResumeRisky;
       // An assistant turn just landed → refine the auto-derived tab title with a

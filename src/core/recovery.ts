@@ -197,14 +197,27 @@ export function shouldColdReseed(s: {
   return !s.hasResumableSession && !s.hasRecapPrefix && s.hasPriorHistory;
 }
 
+/** How long a first interrupt gets to settle the turn on its own before a
+ *  second Stop/Esc is trusted as evidence of a stuck session rather than plain
+ *  impatience. Below this, `q.interrupt()`'s round-trip (CLI process, not a
+ *  local call) has not had a fair chance to land yet. */
+export const STOP_ESCALATION_GRACE_MS = 1500;
+
 /**
- * What a Stop press should do, given whether this turn was already stopped.
+ * What a Stop press should do, given whether this turn was already stopped
+ * and how long ago that first stop was requested.
+ *
  * First press → `interrupt` (graceful; the CLI session survives — Claude Code
- * parity). A second press while the turn is STILL in flight means the interrupt
- * didn't settle it (stuck transport, zombie process): escalate to `dispose`,
- * which rejects the parked send() so the turn closes and the composer unblocks.
- * User-driven successor to the removed TurnWatchdog's rescue role.
+ * parity). A second press within `STOP_ESCALATION_GRACE_MS` of the first is
+ * still `interrupt` — the round-trip hasn't had a fair chance to land, so
+ * force-disposing here would kill a turn that was about to end cleanly on its
+ * own (the exact "accidental Esc silently kills work" class of incident this
+ * file has already seen once — see `stop()` in view.ts). Only a press AFTER
+ * the grace window escalates to `dispose`, which rejects the parked send() so
+ * the turn closes and the composer unblocks. User-driven successor to the
+ * removed TurnWatchdog's rescue role.
  */
-export function stopAction(alreadyStopped: boolean): "interrupt" | "dispose" {
-  return alreadyStopped ? "dispose" : "interrupt";
+export function stopAction(alreadyStopped: boolean, msSinceFirstStop: number): "interrupt" | "dispose" {
+  if (!alreadyStopped) return "interrupt";
+  return msSinceFirstStop >= STOP_ESCALATION_GRACE_MS ? "dispose" : "interrupt";
 }

@@ -6,6 +6,7 @@ import {
   resolveRecovery,
   shouldColdReseed,
   stopAction,
+  STOP_ESCALATION_GRACE_MS,
 } from "../src/core/recovery";
 import type { Message, Segment } from "../src/core/model";
 
@@ -265,14 +266,30 @@ describe("shouldColdReseed", () => {
 
 describe("stopAction", () => {
   it("first stop of a turn interrupts (session survives, CC parity)", () => {
-    expect(stopAction(false)).toBe("interrupt");
+    expect(stopAction(false, 0)).toBe("interrupt");
   });
 
-  it("second stop while the turn is STILL streaming escalates to dispose", () => {
-    // The interrupt didn't settle the turn (stuck transport / zombie CLI).
-    // Pressing Stop/Esc again must force-dispose the session so the parked
-    // send() rejects and the composer unblocks — the user-driven successor
-    // to the removed TurnWatchdog's rescue role.
-    expect(stopAction(true)).toBe("dispose");
+  it("second stop AFTER the grace window escalates to dispose", () => {
+    // The interrupt didn't settle the turn within a normal round-trip (stuck
+    // transport / zombie CLI). Pressing Stop/Esc again must force-dispose the
+    // session so the parked send() rejects and the composer unblocks — the
+    // user-driven successor to the removed TurnWatchdog's rescue role.
+    expect(stopAction(true, STOP_ESCALATION_GRACE_MS)).toBe("dispose");
+    expect(stopAction(true, STOP_ESCALATION_GRACE_MS + 5000)).toBe("dispose");
+  });
+
+  it("second stop WITHIN the grace window re-interrupts instead of disposing", () => {
+    // A healthy turn's interrupt round-trip is not instant — a second press
+    // that lands before the CLI could plausibly have acknowledged the first
+    // one is impatience, not evidence of a stuck session. Force-disposing here
+    // would kill a turn that was about to end cleanly on its own (the exact
+    // "accidental Esc silently kills work" class of incident this file has
+    // already seen once).
+    expect(stopAction(true, 0)).toBe("interrupt");
+    expect(stopAction(true, STOP_ESCALATION_GRACE_MS - 1)).toBe("interrupt");
+  });
+
+  it("grace window boundary is inclusive of dispose (>=, not >)", () => {
+    expect(stopAction(true, STOP_ESCALATION_GRACE_MS)).toBe("dispose");
   });
 });

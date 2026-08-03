@@ -208,7 +208,7 @@ export async function runHeadlessPlaybook(
       error: describeError(err, ADAPTERS[provider].displayName),
     };
   } finally {
-    session?.dispose();
+    session?.dispose("headless-run-end");
     if (!session) opts.codexBridge?.release();
   }
 }

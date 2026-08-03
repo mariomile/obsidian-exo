@@ -276,6 +276,9 @@ export class CodexSession implements AgentSession {
   private stdoutBuffer = "";
   private stderrTail: string[] = [];
   private disposed = false;
+  /** Set once, by dispose(). Reused by send()'s post-dispose guard — see the
+   *  parity note on ClaudeSession.disposedReason. */
+  private disposedReason: string | null = null;
   private ended = false;
   private turnInFlight = false;
   private interruptRequested = false;
@@ -758,7 +761,7 @@ export class CodexSession implements AgentSession {
   }
 
   async send(message: string, onEvent: (event: AgentEvent) => void, images?: ImageAttachment[]): Promise<void> {
-    if (this.disposed) throw new Error("Session disposed.");
+    if (this.disposed) throw new Error(`Session disposed (${this.disposedReason ?? "unknown"}).`);
     if (this.turnInFlight) throw new Error("A turn is already in flight.");
     this.turnInFlight = true;
     this.onEvent = onEvent;
@@ -851,9 +854,10 @@ export class CodexSession implements AgentSession {
     void this.request("turn/interrupt", { threadId: this.threadId, turnId: this.activeTurnId }).catch(() => {});
   }
 
-  dispose(): void {
+  dispose(reason: string): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.disposedReason = reason;
     this.cancelApprovals();
     if (this.threadId && this.activeTurnId) {
       this.sendRpc({
@@ -862,8 +866,8 @@ export class CodexSession implements AgentSession {
         params: { threadId: this.threadId, turnId: this.activeTurnId },
       });
     }
-    this.rejectPending(new Error("Session disposed."));
-    this.finishTurn(new Error("Session disposed."));
+    this.rejectPending(new Error(`Session disposed (${reason}).`));
+    this.finishTurn(new Error(`Session disposed (${reason}).`));
     try {
       this.child?.stdin?.end();
       this.child?.kill("SIGTERM");
