@@ -211,7 +211,7 @@ interface ConvoData {
    *  auto-retired from the tab strip. Persisted. */
   pinned?: boolean;
   /** When this conversation left the tab strip (retired or archived). Feeds the
-   *  history's "Ritirate di recente" group. Absent = never been in the strip,
+   *  history's "Recently retired" group. Absent = never been in the strip,
    *  or still in it. Persisted. */
   retiredAt?: number;
   /** When this conversation was last the focused tab. The strip's LRU key.
@@ -241,7 +241,7 @@ export interface Convo {
    *  auto-retired from the tab strip. Persisted. */
   pinned?: boolean;
   /** When this conversation left the tab strip (retired or archived). Feeds the
-   *  history's "Ritirate di recente" group. Absent = never been in the strip,
+   *  history's "Recently retired" group. Absent = never been in the strip,
    *  or still in it. Persisted. */
   retiredAt?: number;
   /** When this conversation was last the focused tab. The strip's LRU key.
@@ -1721,7 +1721,7 @@ export class ChatView extends ItemView {
     const survivingCount = countSurvivingRetirees(retiredConvos);
     if (survivingCount >= ChatView.RETIRE_NOTICE_MIN) {
       new Notice(
-        `${survivingCount} chat ritirate dalla strip — sono nella cronologia, nulla è stato eliminato.`
+        `${survivingCount} chats retired from the strip — they're in the history, nothing was deleted.`
       );
     }
     this.renderTabs();
@@ -1976,7 +1976,7 @@ export class ChatView extends ItemView {
    * back. Rendered only when there are any — a zero would be chrome reporting
    * nothing.
    *
-   * It opens the whole history for now. Plan 3 adds the "Ritirate di recente"
+   * It opens the whole history for now. Plan 3 adds the "Recently retired"
    * group and points this straight at it; until then the destination is wider
    * than the group, but the NUMBER is already exactly the group's size — that
    * is the seam, and it is on the destination side, never on the count.
@@ -2683,7 +2683,7 @@ export class ChatView extends ItemView {
   }
 
   /** Resume status of one conversation as the gallery sees it. Single seam, so
-   *  the badge and the "Riparte da capo" chip cannot drift apart: they are the
+   *  the badge and the "Restarts" chip cannot drift apart: they are the
    *  same call on the same input, not two expressions that agree today.
    *
    *  A Codex conversation always reports `unknown`: its session id is a Codex
@@ -2796,20 +2796,25 @@ export class ChatView extends ItemView {
     // read is in flight leaves us building chips and cards into a detached DOM.
     if (this.galleryEl !== wrap) return; // gallery was closed while we awaited
 
-    // Filter chips, multi-select with AND semantics. Declared before `renderGrid`
-    // on purpose: the DOM order is banner → chips → search → grid, and the click
-    // handlers only dereference `renderGrid`/`search` when the user clicks, long
-    // after both bindings are initialised. Same shape as the search box's own
-    // `input` listener below.
+    // Filter chips, single-select (radio semantics): at most one is active at
+    // a time, so the results are never a confusing intersection of several
+    // chips at once. Declared before `renderGrid` on purpose: the DOM order is
+    // banner → chips → search → grid, and the click handlers only dereference
+    // `renderGrid`/`search` when the user clicks, long after both bindings are
+    // initialised. Same shape as the search box's own `input` listener below.
     const chipsWrap = wrap.createDiv({ cls: "mva-gallery-chips" });
     const CHIP_LABELS: Record<HistoryFilter, string> = {
-      open: "Aperte",
-      retired: "Ritirate",
-      archived: "Archiviate",
-      olderThan30: "Più vecchie di 30 giorni",
-      shortConvo: "Meno di 3 messaggi",
-      restarts: "Riparte da capo",
+      open: "Open",
+      retired: "Retired",
+      archived: "Archived",
+      olderThan30: "Older than 30 days",
+      shortConvo: "Under 3 messages",
+      restarts: "Restarts",
     };
+    // Every chip's paint fn, so clicking one can repaint the whole row — the
+    // one that just lost exclusivity needs to visibly turn off too, not just
+    // the one that was clicked.
+    const chipPaints: (() => void)[] = [];
     for (const key of Object.keys(CHIP_LABELS) as HistoryFilter[]) {
       const chip = chipsWrap.createDiv({ cls: "mva-gallery-chip" });
       chip.setText(CHIP_LABELS[key]);
@@ -2822,11 +2827,15 @@ export class ChatView extends ItemView {
         chip.toggleClass("is-active", on);
         chip.setAttr("aria-pressed", String(on));
       };
+      chipPaints.push(paint);
       paint();
       this.clickable(chip, () => {
-        if (this.historyFilters.has(key)) this.historyFilters.delete(key);
-        else this.historyFilters.add(key);
-        paint();
+        // Clicking the active chip clears it (show everything again);
+        // clicking a different one replaces whatever was active — never adds.
+        const wasOn = this.historyFilters.has(key);
+        this.historyFilters.clear();
+        if (!wasOn) this.historyFilters.add(key);
+        for (const p of chipPaints) p();
         renderGrid(search.value);
       });
     }
@@ -2864,7 +2873,7 @@ export class ChatView extends ItemView {
         return matchesFilters(asFilterable, active, now) && (!ql || this.convoMatches(c, ql));
       });
 
-      // "Ritirate di recente" pulls from the ALREADY filtered set, and the rest
+      // "Recently retired" pulls from the ALREADY filtered set, and the rest
       // is the complement of it — so a conversation lands in exactly one group,
       // never in both its retired group and its time bucket.
       const retiredGroup = retiredFromStrip(filtered, this.openTabs, now);
@@ -2872,7 +2881,7 @@ export class ChatView extends ItemView {
       const rest = filtered.filter((c) => !retiredIds.has(c.id));
 
       if (retiredGroup.length > 0) {
-        this.renderHistoryGroup(grid, "Ritirate di recente", retiredGroup, doneConvoIds, true);
+        this.renderHistoryGroup(grid, "Recently retired", retiredGroup, doneConvoIds, true);
       }
       for (const g of groupByTime(rest, now)) {
         this.renderHistoryGroup(grid, g.label, g.items, doneConvoIds);
@@ -2946,12 +2955,12 @@ export class ChatView extends ItemView {
     }
 
     // Why this chat left the active board: a completed orchestration task
-    // ("Done") beats a plain manual archive ("Archiviata") when both are true.
+    // ("Done") beats a plain manual archive ("Archived") when both are true.
     const badges = head.createDiv({ cls: "mva-card-badges" });
     if (doneConvoIds.has(c.id)) {
       badges.createSpan({ cls: "mva-card-status-badge is-done", text: "Done" });
     } else if (c.archived) {
-      badges.createSpan({ cls: "mva-card-status-badge is-archived", text: "Archiviata" });
+      badges.createSpan({ cls: "mva-card-status-badge is-archived", text: "Archived" });
     }
     // Only the exception is drawn: a conversation that resumes with its full
     // context says nothing, exactly like an idle tab draws no mark. `unknown`
@@ -2961,19 +2970,20 @@ export class ChatView extends ItemView {
     if (this.resumeStatusOf(c) === "restarts") {
       // One word, deliberately. The badge cluster is `flex: 0 0 auto` and never
       // wraps or compresses, so every character it costs comes straight out of
-      // `.mva-card-title` — and cards are ~180px wide. "Riparte da capo" is
-      // ~105px of a ~152px head, leaving about three characters of title; with
-      // "Archiviata" and "Active" alongside it the demanded width doubles the
-      // space available and `overflow: hidden` clips the Open/Active badge off
-      // the card. "Riparte" is ~45px, in line with "Active", and matches the
-      // one-word badge family. The full sentence lives in title/aria-label, so
-      // the meaning is a hover or a screen reader away, not lost.
+      // `.mva-card-title` — and cards are ~180px wide. The full sentence in
+      // title/aria-label is ~105px of a ~152px head, leaving about three
+      // characters of title; with "Archived" and "Active" alongside it the
+      // demanded width doubles the space available and `overflow: hidden` clips
+      // the Open/Active badge off the card. "Restart" is one word, ~45px, in
+      // line with "Active", and matches the one-word badge family. The full
+      // sentence lives in title/aria-label, so the meaning is a hover or a
+      // screen reader away, not lost.
       badges.createSpan({
         cls: "mva-card-status-badge is-restarts",
-        text: "Riparte",
+        text: "Restart",
         attr: {
-          title: "Riparte da capo: la sessione non è più disponibile",
-          "aria-label": "Riparte da capo: la sessione non è più disponibile",
+          title: "Restarts from scratch: the session is no longer available.",
+          "aria-label": "Restarts from scratch: the session is no longer available.",
         },
       });
     }
@@ -3195,7 +3205,7 @@ export class ChatView extends ItemView {
     // silently does nothing teaches the user the wrong thing about the action.
     const freeDisarm = freeable.length > 0 ? this.addBulkFree(bar, freeable) : null;
 
-    const del = bar.createSpan({ cls: "mva-gallery-bulk-del", text: "Elimina" });
+    const del = bar.createSpan({ cls: "mva-gallery-bulk-del", text: "Delete" });
     // Same arm/disarm shape as the per-card trash (addCardDelete): a 3s timer
     // plus a capturing outside-click. The N-conversation control must not be
     // guarded more weakly than the one-conversation one, which is what a bare
@@ -3208,7 +3218,7 @@ export class ChatView extends ItemView {
     const disarm = () => {
       armed = false;
       del.removeClass("is-armed");
-      del.setText("Elimina");
+      del.setText("Delete");
       if (disarmTimer) {
         window.clearTimeout(disarmTimer);
         disarmTimer = null;
@@ -3226,7 +3236,7 @@ export class ChatView extends ItemView {
       if (!armed) {
         armed = true;
         del.addClass("is-armed");
-        del.setText(`Elimina ${n} definitivamente`);
+        del.setText(`Delete ${n} permanently`);
         disarmTimer = window.setTimeout(disarm, 3000);
         document.addEventListener("click", outside, true);
         return;
@@ -3234,7 +3244,7 @@ export class ChatView extends ItemView {
       disarm();
       this.deleteSelected();
     });
-    const cancel = bar.createSpan({ cls: "mva-gallery-bulk-cancel", text: "Annulla" });
+    const cancel = bar.createSpan({ cls: "mva-gallery-bulk-cancel", text: "Cancel" });
     this.clickable(cancel, () => {
       this.gallerySelection.clear();
       this.refreshSelectionUI();
@@ -3257,7 +3267,7 @@ export class ChatView extends ItemView {
    *  files that will actually go, never the raw selection count: a control that
    *  promises 5 and frees 2 is a control that lies. */
   private addBulkFree(bar: HTMLElement, ids: readonly string[]): () => void {
-    const label = `Libera ${ids.length} session${ids.length === 1 ? "e" : "i"}`;
+    const label = `Free ${ids.length} session${ids.length === 1 ? "" : "s"}`;
     const free = bar.createSpan({ cls: "mva-gallery-bulk-free", text: label });
     let armed = false;
     let disarmTimer: number | null = null;
@@ -3278,7 +3288,7 @@ export class ChatView extends ItemView {
       if (!armed) {
         armed = true;
         free.addClass("is-armed");
-        free.setText(`Conferma — libera ${ids.length}`);
+        free.setText(`Confirm — free ${ids.length}`);
         disarmTimer = window.setTimeout(disarm, 3000);
         document.addEventListener("click", outside, true);
         return;
@@ -3296,9 +3306,9 @@ export class ChatView extends ItemView {
    *  conversation on screen — including the ones whose session files were never
    *  touched — as soon as anything re-renders, which one keystroke in the search
    *  box is enough to trigger. And `disarm()` restores the resting label without
-   *  rebuilding the bar, so the control would go on advertising "Libera 2
-   *  sessioni" for files that no longer exist; a second click would unlink
-   *  nothing and report "0 sessioni liberate". That is precisely the
+   *  rebuilding the bar, so the control would go on advertising "Free 2
+   *  sessions" for files that no longer exist; a second click would unlink
+   *  nothing and report "0 sessions freed". That is precisely the
    *  looks-actionable-but-isn't failure the eligibility rule exists to prevent,
    *  leaking back in on the far side of the action.
    *
@@ -3315,14 +3325,12 @@ export class ChatView extends ItemView {
     if (this.galleryEl) {
       this.sessionsOnDisk = await this.readSessionsOnDisk();
       // Rebuilds the cards AND the bulk bar (renderGrid ends in renderBulkBar):
-      // the freed conversations pick up "Riparte da capo" immediately, the
+      // the freed conversations pick up the "Restart" badge immediately, the
       // untouched ones keep their badge, and the control recounts against what
       // is actually left — or disappears when nothing is.
       this.galleryRerender?.();
     }
-    new Notice(
-      `${freed} session${freed === 1 ? "e" : "i"} liberat${freed === 1 ? "a" : "e"}. Il contenuto resta intatto.`,
-    );
+    new Notice(`Freed ${freed} session${freed === 1 ? "" : "s"}. Content is untouched.`);
   }
 
   /** Delete the CLI session files for `ids`, and only those — never anything
@@ -3394,16 +3402,16 @@ export class ChatView extends ItemView {
     const keepFilters = [...this.historyFilters];
     this.hideGallery();
     void this.showGallery(keepFilters);
-    // Il caso zero non è un "0 eliminate": succede quando la selezione conteneva
-    // solo la chat attiva, che il ciclo salta. Dirlo, invece di riportare un
-    // numero che sembra un errore.
+    // The zero case is not "0 deleted": it happens when the selection held
+    // only the active chat, which the loop skips. Say so, instead of reporting
+    // a number that reads like an error.
     const n = removed.length;
     new Notice(
       n === 0
-        ? "Nessuna conversazione eliminata: la chat attiva non si elimina da qui."
+        ? "No conversation deleted: the active chat can't be deleted from here."
         : n === 1
-          ? "1 conversazione eliminata."
-          : `${n} conversazioni eliminate.`
+          ? "1 conversation deleted."
+          : `${n} conversations deleted.`
     );
   }
 

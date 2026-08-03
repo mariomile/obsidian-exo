@@ -41,7 +41,7 @@ describe("groupByTime", () => {
       convo("older", { updatedAt: NOW - 90 * DAY }),
     ];
     const groups = groupByTime(all, NOW);
-    expect(groups.map((g) => g.label)).toEqual(["Oggi", "Ieri", "Questa settimana", "Questo mese", "Più vecchie"]);
+    expect(groups.map((g) => g.label)).toEqual(["Today", "Yesterday", "This week", "This month", "Older"]);
     expect(groups[0].items.map((c) => c.id)).toEqual(["today"]);
     expect(groups[4].items.map((c) => c.id)).toEqual(["older"]);
   });
@@ -49,13 +49,13 @@ describe("groupByTime", () => {
   it("omits empty groups entirely — a filtered-down set should not draw blank headers", () => {
     const all = [convo("today", { updatedAt: NOW - 3_600_000 })];
     const groups = groupByTime(all, NOW);
-    expect(groups).toEqual([{ label: "Oggi", items: all }]);
+    expect(groups).toEqual([{ label: "Today", items: all }]);
   });
 
   it("treats a missing updatedAt as Older rather than crashing or sorting first", () => {
     const all = [convo("noDate", { updatedAt: undefined })];
     const groups = groupByTime(all, NOW);
-    expect(groups.map((g) => g.label)).toEqual(["Più vecchie"]);
+    expect(groups.map((g) => g.label)).toEqual(["Older"]);
   });
 
   it("preserves the caller's ordering within a bucket", () => {

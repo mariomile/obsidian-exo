@@ -9,7 +9,7 @@
  * the one call site that matters (opening the gallery).
  */
 
-export type TimeGroupLabel = "Oggi" | "Ieri" | "Questa settimana" | "Questo mese" | "Più vecchie";
+export type TimeGroupLabel = "Today" | "Yesterday" | "This week" | "This month" | "Older";
 
 export interface TimeGroup<T> {
   label: TimeGroupLabel;
@@ -41,11 +41,11 @@ export function groupByTime<T extends { updatedAt?: number }>(items: T[], now: n
   const monthStart = todayStart - 30 * DAY_MS;
 
   const buckets: Record<TimeGroupLabel, T[]> = {
-    Oggi: [],
-    Ieri: [],
-    "Questa settimana": [],
-    "Questo mese": [],
-    "Più vecchie": [],
+    Today: [],
+    Yesterday: [],
+    "This week": [],
+    "This month": [],
+    Older: [],
   };
 
   for (const item of items) {
@@ -53,14 +53,14 @@ export function groupByTime<T extends { updatedAt?: number }>(items: T[], now: n
     // A missing updatedAt sorts into "Older" rather than crashing or floating
     // to the top — it is the least-informative bucket, matching the least
     // information the item carries.
-    if (t === undefined || t < monthStart) buckets["Più vecchie"].push(item);
-    else if (t >= todayStart) buckets["Oggi"].push(item);
-    else if (t >= yesterdayStart) buckets["Ieri"].push(item);
-    else if (t >= weekStart) buckets["Questa settimana"].push(item);
-    else buckets["Questo mese"].push(item);
+    if (t === undefined || t < monthStart) buckets.Older.push(item);
+    else if (t >= todayStart) buckets.Today.push(item);
+    else if (t >= yesterdayStart) buckets.Yesterday.push(item);
+    else if (t >= weekStart) buckets["This week"].push(item);
+    else buckets["This month"].push(item);
   }
 
-  const order: TimeGroupLabel[] = ["Oggi", "Ieri", "Questa settimana", "Questo mese", "Più vecchie"];
+  const order: TimeGroupLabel[] = ["Today", "Yesterday", "This week", "This month", "Older"];
   return order.filter((label) => buckets[label].length > 0).map((label) => ({ label, items: buckets[label] }));
 }
 
