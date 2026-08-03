@@ -107,3 +107,25 @@ export function resumableFrom(s: {
   if (!s.vaultBase) return true;
   return s.probe() !== "absent";
 }
+
+/**
+ * Which of `ids` have a session file this action could actually free.
+ * Reuses the same on-disk check the resume badge trusts — never a second
+ * definition of "eligible" that could drift from what the badge shows.
+ *
+ * `activeId` is excluded unconditionally, even when its own session is
+ * genuinely resumable: freeing the conversation the user is actively writing
+ * in would be freeing the session out from under the next message.
+ */
+export function eligibleForFreeing(
+  ids: readonly string[],
+  sessionIdOf: (id: string) => string | undefined,
+  onDisk: ReadonlySet<string>,
+  activeId?: string,
+): string[] {
+  return ids.filter((id) => {
+    if (id === activeId) return false;
+    const sid = sessionIdOf(id);
+    return !!sid && onDisk.has(sid);
+  });
+}

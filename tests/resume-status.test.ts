@@ -3,6 +3,7 @@ import {
   projectDirName,
   resumeStatus,
   resumableFrom,
+  eligibleForFreeing,
   type SessionFileProbe,
 } from "../src/core/resume-status";
 
@@ -104,5 +105,39 @@ describe("resumableFrom", () => {
     const probe = probing("absent");
     expect(resumableFrom({ ...base, vaultBase: "", probe })).toBe(true);
     expect(probe).not.toHaveBeenCalled();
+  });
+});
+
+describe("eligibleForFreeing", () => {
+  // Mirrors the exact set the resume badge trusts: this function must never
+  // invent its own notion of "on disk" that could drift from what the badge
+  // is already showing the user.
+  const onDisk = new Set(["sess-a", "sess-c"]);
+
+  it("keeps a resumable id, drops one whose session file is gone, and drops one with no session at all", () => {
+    // Three conversations in one list, each hitting a different branch, so the
+    // filter can't be satisfied by a rule that only handles the single-case
+    // scenario ("everything true" or "everything false").
+    const ids = ["alive", "expired", "never-replied"];
+    const sessionOf = (id: string) =>
+      ({ alive: "sess-a", expired: "sess-missing", "never-replied": undefined })[id];
+    expect(eligibleForFreeing(ids, sessionOf, onDisk)).toEqual(["alive"]);
+  });
+
+  it("excludes the active conversation even though its own session is genuinely resumable", () => {
+    // The active id has a session id that IS in onDisk — a real resumable
+    // session, not a decoy. It must still be excluded, and only because it is
+    // active: the sibling with the identical session state stays eligible.
+    const ids = ["active", "other"];
+    const sessionOf = () => "sess-a";
+    expect(eligibleForFreeing(ids, sessionOf, onDisk, "active")).toEqual(["other"]);
+  });
+
+  it("returns an id with no session id at all as ineligible, not a thrown error", () => {
+    expect(eligibleForFreeing(["x"], () => undefined, onDisk)).toEqual([]);
+  });
+
+  it("returns an empty array when the only candidate is the active conversation", () => {
+    expect(eligibleForFreeing(["active"], () => "sess-a", onDisk, "active")).toEqual([]);
   });
 });
