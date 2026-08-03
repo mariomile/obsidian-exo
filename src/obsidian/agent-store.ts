@@ -13,6 +13,7 @@
  * without a real Obsidian `App`.
  */
 import type { App, TFile } from "obsidian";
+import { readFile } from "fs/promises";
 import {
   isAgentSidecar,
   mergeAgents,
@@ -22,6 +23,7 @@ import {
   reconcileInvocable,
   resolveAgent,
   serializeAgentSidecar,
+  stripFrontmatter,
   type AgentBrain,
   type AgentContract,
   type AgentDef,
@@ -379,6 +381,31 @@ export class AgentStore {
    *  content-based heuristic would re-scaffold it forever. */
   private hasSidecarFor(slug: string): boolean {
     return this.sidecarSlugs.has(slug);
+  }
+}
+
+/**
+ * An agent's own instructions — its markdown body, frontmatter stripped — for
+ * engines with no native subagent mechanism tied to the file itself (Codex):
+ * this is what rides as the session's system prompt when there is no isolated
+ * subagent available to load it the way Claude's `Agent`/`Task` tool does.
+ *
+ * Vault-scope brains are read through the Vault API (respects Sync and the
+ * in-memory cache); every other scope (`~/.claude`, `~/.codex`, installed
+ * plugins) is an absolute filesystem path, per `capability-desc.ts`'s own
+ * scope split, so it falls back to a direct read. Returns "" rather than
+ * throwing — a missing body degrades a run to Exo's own persona, it does not
+ * fail it.
+ */
+export async function readAgentBrainBody(app: App, brain: AgentBrain): Promise<string> {
+  if (!brain.path) return "";
+  try {
+    const raw =
+      brain.source === "vault" ? await app.vault.adapter.read(brain.path) : await readFile(brain.path, "utf8");
+    return stripFrontmatter(raw).trim();
+  } catch (err) {
+    console.warn(`[Exo] could not read agent brain body for "${brain.slug}":`, err);
+    return "";
   }
 }
 

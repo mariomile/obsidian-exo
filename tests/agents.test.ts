@@ -28,6 +28,7 @@ import {
   unattendedTriggerEntries,
   replaceTriggerAt,
   removeTriggerAt,
+  stripFrontmatter,
   addTrigger,
   type AgentBrain,
   type AgentContract,
@@ -482,14 +483,6 @@ describe("buildAgentBindingOutbound", () => {
     const notify = mergeAgents([brain("x", { name: "X" })], [{ ...defaultContract("x"), autonomy: "notify" }])[0];
     expect(buildAgentBindingOutbound(notify, "y")).toContain("report only");
   });
-  it("uses Codex multi-agent primitives and includes the agent definition", () => {
-    const codexDef = { ...def, brain: { ...def.brain, prompt: "You are the vault ghostwriter." } };
-    const out = buildAgentBindingOutbound(codexDef, "write it", "codex");
-    expect(out).toContain("spawn_agent");
-    expect(out).toContain("wait_agent");
-    expect(out).toContain("You are the vault ghostwriter.");
-    expect(out).not.toContain("subagent_type");
-  });
 });
 
 describe("parseAgentCommand", () => {
@@ -612,5 +605,19 @@ describe("replaceTriggerAt / removeTriggerAt / addTrigger", () => {
     // Add a tag trigger.
     triggers = addTrigger(triggers, t("tag #x"));
     expect(unattendedTriggerEntries(triggers).map((e) => e.trigger.on)).toEqual(["vault-event", "tag"]);
+  });
+});
+
+describe("stripFrontmatter", () => {
+  it("removes the block, keeping the body", () => {
+    expect(stripFrontmatter(["---", "name: X", "---", "", "body text"].join("\n"))).toBe("\nbody text");
+  });
+
+  it("is a no-op when there is no frontmatter", () => {
+    expect(stripFrontmatter("just a body")).toBe("just a body");
+  });
+
+  it("handles CRLF line endings", () => {
+    expect(stripFrontmatter("---\r\nname: X\r\n---\r\nbody")).toBe("body");
   });
 });

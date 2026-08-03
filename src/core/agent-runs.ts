@@ -16,7 +16,14 @@ import {
   currentSlotStart,
   type Cadence,
 } from "./automations";
-import { triggerLabel, triggerKey, type AgentAutonomy, type AgentDef, type AgentTrigger } from "./agents";
+import {
+  triggerLabel,
+  triggerKey,
+  type AgentAutonomy,
+  type AgentBrain,
+  type AgentDef,
+  type AgentTrigger,
+} from "./agents";
 import { journalContract } from "./agent-journal";
 import { parseProposalCandidates, type ProposalCandidate } from "./proposals";
 
@@ -332,35 +339,21 @@ export function agentRunName(agent: AgentDef, reason: string): string {
 }
 
 /**
- * The prompt an unattended run receives.
- *
- * It states the trigger, the tier, and the scope, then hands off to the agent's
- * own definition — Exo never restates the agent's job, because the job lives in
- * the brain file the CLI already loads.
+ * The middle section shared by every run prompt: the task, the empty-run
+ * sentinel, scope, autonomy tier, memory, and the propose/journal contracts.
+ * Identical whether the model is delegating to an isolated subagent (Claude)
+ * or acting as the agent directly in the current session (Codex — see
+ * `buildDirectAgentRunPrompt`) — only the opening framing differs between the
+ * two, so only that part is duplicated.
  */
-export function buildAgentRunPrompt(
+function agentRunBody(
   agent: AgentDef,
-  reason: string,
-  memory?: { path: string; excerpt: string },
-  /** A specific task, when this run was delegated rather than scheduled. */
-  task?: { from: string; text: string },
-  /** Where the run report lands — named so a `propose` run knows prose has a home. */
-  reportsHint = "your run report"
-): string {
-  const { brain, contract } = agent;
-  // `null` marks a line that dropped out conditionally; "" is a deliberate blank.
-  const lines: (string | null)[] = [
-    `<agent-run trigger="${reason}">`,
-    task
-      ? `This is a run of the "${brain.name}" agent, delegated by ${task.from}. No human is watching; there is nobody to ask.`
-      : `This is an unattended, scheduled run of the "${brain.name}" agent. No human is watching; there is nobody to ask.`,
-    // `run_in_background: false` is load-bearing: the Agent tool backgrounds by
-    // default, so without it this session spawns the subagent, sees no result,
-    // and cheerfully reports that the work "has started" — a run that takes 25s
-    // and changes nothing.
-    `Delegate the work to that subagent, and WAIT for it: Agent({ subagent_type: "${brain.invocable}", prompt: <the task below>, run_in_background: false }).`,
-    "Do not report that you started it. Report what it actually did, in its words — your reply IS the record of this run, and there is no later turn in which to come back with the result.",
-    "",
+  task: { from: string; text: string } | undefined,
+  memory: { path: string; excerpt: string } | undefined,
+  reportsHint: string
+): (string | null)[] {
+  const { contract } = agent;
+  return [
     task
       ? `Task from ${task.from}: ${task.text.trim()}\n\nDo that specific task, not this agent's standing job. If it turns out to be unnecessary or impossible, say so in one line and stop.`
       : "Standing task: do this agent's regular job as defined in its own agent file.",
@@ -386,7 +379,93 @@ export function buildAgentRunPrompt(
     "Close with a short summary a human can scan in ten seconds.",
     contract.autonomy === "propose" ? proposalContract(reportsHint) : null,
     contract.output === "journal" ? journalContract() : null,
+  ];
+}
+
+/**
+ * The prompt an unattended run receives when the engine can delegate to an
+ * isolated subagent (Claude's `Agent`/`Task` tool, which loads
+ * `.claude/agents/<slug>.md` and enforces its own `tools:` scope).
+ *
+ * It states the trigger, the tier, and the scope, then hands off to the agent's
+ * own definition — Exo never restates the agent's job, because the job lives in
+ * the brain file the CLI already loads.
+ */
+export function buildAgentRunPrompt(
+  agent: AgentDef,
+  reason: string,
+  memory?: { path: string; excerpt: string },
+  /** A specific task, when this run was delegated rather than scheduled. */
+  task?: { from: string; text: string },
+  /** Where the run report lands — named so a `propose` run knows prose has a home. */
+  reportsHint = "your run report"
+): string {
+  const { brain } = agent;
+  // `null` marks a line that dropped out conditionally; "" is a deliberate blank.
+  const lines: (string | null)[] = [
+    `<agent-run trigger="${reason}">`,
+    task
+      ? `This is a run of the "${brain.name}" agent, delegated by ${task.from}. No human is watching; there is nobody to ask.`
+      : `This is an unattended, scheduled run of the "${brain.name}" agent. No human is watching; there is nobody to ask.`,
+    // `run_in_background: false` is load-bearing: the Agent tool backgrounds by
+    // default, so without it this session spawns the subagent, sees no result,
+    // and cheerfully reports that the work "has started" — a run that takes 25s
+    // and changes nothing.
+    `Delegate the work to that subagent, and WAIT for it: Agent({ subagent_type: "${brain.invocable}", prompt: <the task below>, run_in_background: false }).`,
+    "Do not report that you started it. Report what it actually did, in its words — your reply IS the record of this run, and there is no later turn in which to come back with the result.",
+    "",
+    ...agentRunBody(agent, task, memory, reportsHint),
     "</agent-run>",
+  ];
+  return lines.filter((l): l is string => l !== null).join("\n");
+}
+
+/**
+ * The prompt for a DIRECT run — no subagent delegation, for engines with no
+ * mechanism to spawn one tied to `.claude/agents/*.md` (Codex today: its own
+ * `collabAgentToolCall` is a different primitive with no notion of a named
+ * persona file). The agent's own instructions ride separately as this
+ * session's system prompt (`buildAgentSystemPrompt`), so this message is only
+ * the task, addressed to the model as if it already IS the agent — there is no
+ * "delegate to X" step because there is nothing to delegate to.
+ */
+export function buildDirectAgentRunPrompt(
+  agent: AgentDef,
+  reason: string,
+  memory?: { path: string; excerpt: string },
+  task?: { from: string; text: string },
+  reportsHint = "your run report"
+): string {
+  const { brain } = agent;
+  const lines: (string | null)[] = [
+    `<agent-run trigger="${reason}">`,
+    task
+      ? `You are the "${brain.name}" agent, running because ${task.from} asked for something specific. No human is watching; there is nobody to ask.`
+      : `You are the "${brain.name}" agent, running unattended on its own schedule. No human is watching; there is nobody to ask.`,
+    "",
+    ...agentRunBody(agent, task, memory, reportsHint),
+    "</agent-run>",
+  ];
+  return lines.filter((l): l is string => l !== null).join("\n");
+}
+
+/**
+ * The identity override for a DIRECT run or a direct interactive binding
+ * (Codex): since there is no isolated subagent, "binding" means the current
+ * session adopts the agent's own instructions in place of Exo's usual system
+ * prompt. `body` is the agent file's markdown with its frontmatter already
+ * stripped — the exact text a Claude subagent would load too, so the persona
+ * itself is identical between engines even though the delivery mechanism and
+ * the isolation it gets are not.
+ */
+export function buildAgentSystemPrompt(brain: AgentBrain, body: string): string {
+  const lines: (string | null)[] = [
+    `You are "${brain.name}", a named agent defined in this vault's \`.claude/agents/\` folder.`,
+    brain.description ? `Remit: ${brain.description}` : null,
+    "",
+    "Your instructions:",
+    "",
+    body.trim(),
   ];
   return lines.filter((l): l is string => l !== null).join("\n");
 }

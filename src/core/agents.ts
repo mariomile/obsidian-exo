@@ -155,6 +155,11 @@ export function frontmatterBlock(raw: string): string | null {
   return m ? m[1] : null;
 }
 
+/** Everything after the frontmatter block — a no-op when there is none. */
+export function stripFrontmatter(raw: string): string {
+  return raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+}
+
 function unquote(value: string): string {
   const t = value.trim();
   if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
@@ -664,18 +669,19 @@ export function agentsWithTrigger<K extends AgentTrigger["on"]>(
 /* ---------------------------- turn binding ---------------------------- */
 
 /**
- * Provider-only rider that turns `@agent` from a hint into an instruction.
+ * Provider-only rider that turns `@agent` from a hint into an instruction —
+ * Claude only. Claude has a true subagent primitive (`Agent`/`Task` with
+ * `subagent_type`) that loads `.claude/agents/<slug>.md` into an isolated
+ * context, so binding there means "delegate to that subagent and wait."
  *
- * Today selecting an agent in the composer inserts text and hopes the model
- * reads it. This makes the delegation explicit while staying inside the
- * engine's own subagent machinery — Exo does not run a second brain, it just
- * stops being ambiguous about which one the engine should use.
+ * Codex has no equivalent — its own `collabAgentToolCall` is an unrelated
+ * primitive with no notion of a named persona file, so there is nothing to
+ * delegate to. A Codex binding instead overrides the CURRENT session's
+ * system prompt for one turn (`buildAgentSystemPrompt` + `AgentSession.send`'s
+ * `systemPromptOverride`) — the model directly becomes the agent, with no
+ * isolation and no enforced tool scoping, unlike Claude's real subagent.
  */
-export function buildAgentBindingOutbound(
-  def: AgentDef,
-  visibleText: string,
-  provider: "claude" | "codex" = "claude",
-): string {
+export function buildAgentBindingOutbound(def: AgentDef, visibleText: string): string {
   const { brain, contract } = def;
   const lines = [
     "<agent-binding>",
@@ -683,10 +689,7 @@ export function buildAgentBindingOutbound(
     // Wait for it: the Agent tool backgrounds by default, and a bound turn that
     // answers "I've started it" instead of answering the question is worse than
     // not having bound at all.
-    provider === "claude"
-      ? `Delegate this request to that subagent and WAIT for its result: Agent({ subagent_type: "${brain.invocable}", prompt: <the user's request>, run_in_background: false }).`
-      : "Delegate this request with spawn_agent, include the agent definition below in its task, and WAIT for the result with wait_agent before answering.",
-    provider === "codex" && brain.prompt ? `Agent definition:\n${brain.prompt}` : "",
+    `Delegate this request to that subagent and WAIT for its result: Agent({ subagent_type: "${brain.invocable}", prompt: <the user's request>, run_in_background: false }).`,
     brain.description ? `Its remit: ${brain.description}` : "",
     contract.scope.read.length ? `It reads: ${contract.scope.read.join(", ")}.` : "",
     contract.scope.write.length

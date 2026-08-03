@@ -1,7 +1,7 @@
 import { App } from "obsidian";
 import { readdir, readFile, stat } from "fs/promises";
 import { homedir } from "os";
-import type { AgentSource } from "./agents";
+import { stripFrontmatter, type AgentSource } from "./agents";
 
 /** name → one-line description, per capability kind. Names keep their CLI
  *  form: plugin-scoped entries are `plugin:name`, everything else is bare. */
@@ -37,7 +37,7 @@ export function frontmatterDescription(raw: string): string | undefined {
 /** First non-empty body line (frontmatter stripped, heading/quote markers
  *  removed) — fallback for commands written without a frontmatter block. */
 export function firstBodyLine(raw: string): string | undefined {
-  const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  const body = stripFrontmatter(raw);
   for (const line of body.split(/\r?\n/)) {
     const t = line.replace(/^#{1,6}\s+/, "").replace(/^>\s*/, "").trim();
     if (t) return t;

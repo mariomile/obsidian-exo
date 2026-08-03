@@ -90,9 +90,6 @@ dependency-free and Obsidian-free).
 
 - **`@agent`** in the composer binds **the turn**.
 - **`/as <agent>`** binds **the conversation**; `/as off` clears it.
-- Both emit a provider-only `<agent-binding>` rider naming an explicit
-  `Agent({ subagent_type })` delegation — never touching the visible or
-  persisted message, exactly like Research Mode.
 
 **The invocable id is not the filename.** Verified against a live `system/init`
 capability snapshot: `.claude/agents/career-coach.md` with `name: Career Coach`
@@ -100,6 +97,56 @@ is invoked as `"Career Coach"`, and a plugin's `foo.agent.md` as
 `"plugin:foo"`. So the id is scope prefix + frontmatter name.
 `reconcileInvocable()` snaps ids to the engine's own roster when the match is
 unambiguous, and refuses to guess when it is not.
+
+### Provider parity — and where it deliberately isn't
+
+Claude and Codex have unrelated subagent primitives, so binding takes two
+different shapes underneath the same `@agent` / `/as` UI. This asymmetry is
+load-bearing, not an oversight — see `docs/architecture.md`'s "no second
+brain": Exo defers to whatever delegation primitive each engine actually has,
+rather than emulating one engine's mechanism on top of the other.
+
+- **Claude** has a true subagent primitive (`Agent`/`Task` with
+  `subagent_type`) that loads `.claude/agents/<slug>.md` into an **isolated**
+  context. Binding emits a provider-only `<agent-binding>` rider
+  (`buildAgentBindingOutbound`) naming an explicit
+  `Agent({ subagent_type, run_in_background: false })` delegation — never
+  touching the visible or persisted message, exactly like Research Mode. The
+  engine itself enforces the brain's `tools:` frontmatter restriction.
+
+- **Codex** has no equivalent — its own `collabAgentToolCall` is an unrelated,
+  generic collaboration-thread primitive with no notion of a named persona
+  file. There is nothing to delegate *to*. Binding instead overrides the
+  **current session's own system prompt for one turn**: `readAgentBrainBody`
+  reads the brain's markdown (frontmatter stripped, vault-relative or
+  absolute path depending on scope), `buildAgentSystemPrompt` wraps it with an
+  identity line, and `AgentSession.send`'s `systemPromptOverride` parameter
+  threads it into that one `turn/start` call's `developer_instructions`
+  (`collaborationMode()` in `providers/codex-app-server.ts`) — never written
+  back to the session's own `SessionOpts`, so the next turn reverts to
+  whatever the conversation's system prompt already was. The outbound message
+  carries no rider text at all; the model directly *becomes* the agent for
+  that turn.
+
+  **The trade-off this creates, and it does not go away:** a Codex-bound turn
+  has **no subagent isolation** (the parent conversation's history stays in
+  context — the persona is layered on top of it, not run apart from it) and
+  **does not enforce** the brain's `tools:` restriction (there is no engine
+  mechanism to enforce it against; it is advisory prose only). Unattended
+  Codex agent runs (`buildDirectAgentRunPrompt` + `HeadlessOpts.systemPrompt`
+  in `headless.ts`, wired from `main.ts#runAgent`) get a fresh, dedicated
+  session per run, so isolation-from-a-*prior-conversation* is not an issue
+  there — but the tool-scope caveat still applies: the sandbox
+  (`read-only`/`workspace-write`) and Exo's own permission gate around
+  `runHeadlessPlaybook` are what actually bound a Codex agent run, not the
+  brain's declared `tools:` list.
+
+  Verified live against the real `codex` CLI (2026-08-03): a turn with
+  Ghostwriter's real `.claude/agents/ghostwriter.md` body threaded through
+  `systemPromptOverride` had the model reply *"I'm Ghostwriter, turning
+  Mario's raw drafts and notes into polished posts in his authentic voice"* —
+  confirming the override actually reaches the engine's `developer_instructions`
+  and is not silently dropped.
 
 ## Autonomy
 
@@ -190,8 +237,14 @@ this invariant.
 ## Files
 
 `core/agents.ts` (registry, binding, `/as`) · `core/agent-runs.ts` (gates, run
-prompt, invoke gate) · `core/agent-triggers.ts` (event matching) ·
-`core/agent-ledger.ts` (ledger + memory) · `core/agent-seeds.ts` (seeds) ·
-`obsidian/agent-store.ts` (join, scaffold, ledger IO) ·
-`obsidian/agent-triggers.ts` (debounce, arming) · `ui/agents-view.ts` (pane) ·
-plus wiring in `main.ts`, `view.ts`, `ui/composer.ts`, `obsidian/tools.ts`.
+prompt — `buildAgentRunPrompt`/Claude and `buildDirectAgentRunPrompt`/Codex,
+`buildAgentSystemPrompt`, invoke gate) · `core/agent-triggers.ts` (event
+matching) · `core/agent-ledger.ts` (ledger + memory) · `core/agent-seeds.ts`
+(seeds) · `obsidian/agent-store.ts` (join, scaffold, ledger IO,
+`readAgentBrainBody`) · `obsidian/agent-triggers.ts` (debounce, arming) ·
+`ui/agents-view.ts` (pane) · `providers/types.ts` (`AgentSession.send`'s
+`systemPromptOverride` param) · `providers/codex-app-server.ts`
+(`collaborationMode` threads the override into `developer_instructions` for
+one turn) · `headless.ts` (`HeadlessOpts.systemPrompt` passthrough) · plus
+wiring in `main.ts` (`runAgent`), `view.ts` (`runTurn`), `ui/composer.ts`,
+`obsidian/tools.ts`.

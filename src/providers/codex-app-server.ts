@@ -54,10 +54,12 @@ type ThreadItem = {
   output?: unknown;
 };
 
-function collaborationMode(opts: SessionOpts): Record<string, unknown> {
+function collaborationMode(opts: SessionOpts, systemPromptOverride?: string): Record<string, unknown> {
   const plan = opts.permissionMode === "plan";
   const reasoningEffort = opts.effort && opts.effort !== "default" ? opts.effort : plan ? "medium" : null;
-  const developerInstructions = [EXO_HOUSE_RULES, opts.systemPrompt, opts.memoryPreamble]
+  // A per-turn override (named-agent binding) replaces the session's own
+  // systemPrompt for this turn only — it is never written back to `opts`.
+  const developerInstructions = [EXO_HOUSE_RULES, systemPromptOverride ?? opts.systemPrompt, opts.memoryPreamble]
     .filter(Boolean)
     .join("\n\n");
   return {
@@ -760,7 +762,12 @@ export class CodexSession implements AgentSession {
     });
   }
 
-  async send(message: string, onEvent: (event: AgentEvent) => void, images?: ImageAttachment[]): Promise<void> {
+  async send(
+    message: string,
+    onEvent: (event: AgentEvent) => void,
+    images?: ImageAttachment[],
+    systemPromptOverride?: string
+  ): Promise<void> {
     if (this.disposed) throw new Error(`Session disposed (${this.disposedReason ?? "unknown"}).`);
     if (this.turnInFlight) throw new Error("A turn is already in flight.");
     this.turnInFlight = true;
@@ -796,7 +803,7 @@ export class CodexSession implements AgentSession {
         cwd: this.opts.cwd,
         approvalPolicy: approvalPolicy(this.opts.approvalPolicy),
         approvalsReviewer: "user",
-        collaborationMode: collaborationMode(this.opts),
+        collaborationMode: collaborationMode(this.opts, systemPromptOverride),
         ...(this.opts.model && this.opts.model !== "default" ? { model: this.opts.model } : {}),
         ...(this.opts.effort && this.opts.effort !== "default" ? { effort: this.opts.effort } : {}),
       }));

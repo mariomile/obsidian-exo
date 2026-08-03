@@ -491,7 +491,11 @@ class ClaudeSession implements AgentSession {
   send(
     message: string,
     onEvent: (e: AgentEvent) => void,
-    images?: import("./types").ImageAttachment[]
+    images?: import("./types").ImageAttachment[],
+    // Codex-only per-turn override (see AgentSession.send doc) — Claude's own
+    // Agent tool gives real subagent isolation instead, so there's nothing to
+    // thread this into here.
+    _systemPromptOverride?: string
   ): Promise<void> {
     if (this.disposed) {
       return Promise.reject(new Error(`Session disposed (${this.disposedReason ?? "unknown"}).`));

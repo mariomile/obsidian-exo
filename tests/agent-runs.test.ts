@@ -12,10 +12,13 @@ import {
   NOTHING_TO_REPORT,
   writeModeFor,
   agentRunName,
+  buildDirectAgentRunPrompt,
+  buildAgentSystemPrompt,
   salvageProposalCandidates,
   buildAgentRunPrompt,
 } from "../src/core/agent-runs";
 import { mergeAgents, defaultContract, parseTrigger, type AgentBrain, type AgentContract } from "../src/core/agents";
+import { JOURNAL_MARKER } from "../src/core/agent-journal";
 import { parseProposalCandidates } from "../src/core/proposals";
 
 const at = (y: number, mo: number, d: number, h = 0, mi = 0) => new Date(y, mo - 1, d, h, mi).getTime();
@@ -336,6 +339,66 @@ describe("buildAgentRunPrompt — the proposal channel", () => {
     const p = buildAgentRunPrompt(agent("a", { autonomy: "propose" }), "x");
     for (const kind of ["task", "loop", "decision", "playbook"]) expect(p).toContain(`\`${kind}\``);
     expect(p).toContain("INERT until a human accepts");
+  });
+});
+
+describe("buildDirectAgentRunPrompt — no delegation, no subagent", () => {
+  it("never mentions the Agent tool or subagent_type — there is nothing to delegate to", () => {
+    const p = buildDirectAgentRunPrompt(agent("a"), "daily 08:00");
+    expect(p).not.toContain("Agent(");
+    expect(p).not.toContain("subagent_type");
+    expect(p).not.toContain("Delegate");
+  });
+
+  it("addresses the model AS the agent, in second person", () => {
+    expect(buildDirectAgentRunPrompt(agent("a"), "daily 08:00")).toMatch(/^<agent-run[^>]*>\nYou are the "A" agent/);
+  });
+
+  it("still carries every shared clause: sentinel, scope, tier, memory, proposals, journal", () => {
+    const p = buildDirectAgentRunPrompt(
+      agent("a", { autonomy: "propose", output: "journal", scope: { read: ["x/**"], write: [] } }),
+      "hourly",
+      { path: "m.md", excerpt: "learned X" }
+    );
+    expect(p).toContain(NOTHING_TO_REPORT);
+    expect(p).toContain("Read scope: x/**");
+    expect(p).toContain(AGENT_PROPOSAL_FENCE);
+    expect(p).toContain(JOURNAL_MARKER);
+    expect(p).toContain("learned X");
+  });
+
+  it("frames a delegated task the same way as the subagent variant, minus delegation", () => {
+    const p = buildDirectAgentRunPrompt(agent("a"), "invoked by exo", undefined, { from: "exo", text: "check X" });
+    expect(p).toContain("running because exo asked for something specific");
+    expect(p).toContain("Task from exo: check X");
+  });
+
+  it("shares the same body as buildAgentRunPrompt — only the head differs", () => {
+    const delegated = buildAgentRunPrompt(agent("a", { autonomy: "act", scope: { read: [], write: ["p/**"] } }), "x");
+    const direct = buildDirectAgentRunPrompt(agent("a", { autonomy: "act", scope: { read: [], write: ["p/**"] } }), "x");
+    const bodyOf = (p: string) => p.split("\n\n").slice(1).join("\n\n"); // drop the opening two lines
+    expect(bodyOf(direct)).toBe(bodyOf(delegated));
+  });
+});
+
+describe("buildAgentSystemPrompt", () => {
+  const gw = { ...brain("ghostwriter", "Ghostwriter"), description: "Drafts posts in Mario's voice" };
+
+  it("states the agent's identity and remit, then its instructions verbatim", () => {
+    const out = buildAgentSystemPrompt(gw, "## Sacred Rules\nNever overwrite the draft.");
+    expect(out).toContain('You are "Ghostwriter"');
+    expect(out).toContain("Drafts posts in Mario's voice");
+    expect(out).toContain("## Sacred Rules\nNever overwrite the draft.");
+  });
+
+  it("trims the body but changes nothing inside it", () => {
+    expect(buildAgentSystemPrompt(gw, "\n\n  body with internal  spacing kept  \n\n")).toContain(
+      "body with internal  spacing kept"
+    );
+  });
+
+  it("omits the remit line when the brain has no description", () => {
+    expect(buildAgentSystemPrompt(brain("x", "X"), "do things")).not.toContain("Remit:");
   });
 });
 

@@ -133,11 +133,23 @@ tier, scope globs, `can_call`). The split is forced by fact: `.claude/` is
 gitignored and does not sync to mobile, so trigger config kept there would be
 neither versioned nor visible on a phone.
 
-Principle 1 does the work here. Binding a turn to an agent (`@agent`, `/as`)
-emits an explicit `Agent({ subagent_type })` delegation as a provider-only
-rider — Exo does not run the agent, it stops being ambiguous about which one the
-engine should. Consequently there is no per-agent `SessionOpts` field and no
-`sessionSigOf()` entry to keep in sync.
+Principle 1 does the work here, but it cuts differently per engine, because
+Claude and Codex don't share a delegation primitive. On **Claude**, binding a
+turn (`@agent`, `/as`) emits an explicit `Agent({ subagent_type })` delegation
+as a provider-only rider — Exo does not run the agent, it stops being
+ambiguous about which one the engine should, and the engine's own subagent
+gives real isolation and enforces the brain's `tools:` scope. **Codex has no
+subagent primitive to delegate to** (`collabAgentToolCall` is an unrelated,
+generic collaboration-thread mechanism), so binding there overrides the
+current turn's own system prompt with the brain's instructions instead
+(`AgentSession.send`'s `systemPromptOverride`, threaded into Codex's
+`developer_instructions` for that one `turn/start` call and never persisted
+to the session) — the model directly becomes the agent, with no isolation
+from the surrounding conversation and no engine-level enforcement of the
+brain's declared tools. Either way there is no per-agent `SessionOpts` field
+and no `sessionSigOf()` entry to keep in sync — the Codex override is a
+per-turn parameter, not a session-level config change. Detail and the trade-off:
+`docs/specs/2026-08-01-agents-design.md`.
 
 Autonomy is the part Exo genuinely adds: schedule triggers ride the existing
 30-minute heartbeat, and event triggers (`vault-event`, `tag`, `note-mention`)

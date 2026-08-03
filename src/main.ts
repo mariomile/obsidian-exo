@@ -63,7 +63,7 @@ import {
   type Unsubscribe,
 } from "./core/convo-state";
 import { TaskStore, adaptAppToTaskVault } from "./obsidian/task-store";
-import { AgentStore, createAgentStore } from "./obsidian/agent-store";
+import { AgentStore, createAgentStore, readAgentBrainBody } from "./obsidian/agent-store";
 import type { AgentDef } from "./core/agents";
 import { AgentTriggerDriver, makeNoteReader, todayDailyNotePath } from "./obsidian/agent-triggers";
 import { extractJournalLine, journalLine } from "./core/agent-journal";
@@ -74,6 +74,8 @@ import {
   agentRunName,
   type DueAgentRun,
   buildAgentRunPrompt,
+  buildDirectAgentRunPrompt,
+  buildAgentSystemPrompt,
   dueScheduledAgentRuns,
   extractProposalBlock,
   isEmptyRun,
@@ -2966,12 +2968,22 @@ export default class ExoPlugin extends Plugin {
       if (this.settings.provider === "codex" && this.settings.obsidianToolsEnabled) {
         headlessOpts.codexBridge = (await this.ensureCodexBridge()) ?? undefined;
       }
-      const result = await runHeadlessPlaybook(
-        this.app,
-        this.settings,
-        buildAgentRunPrompt(agent, reason, memory, task, this.paths.reports),
-        headlessOpts
-      );
+      // Claude delegates to a true isolated subagent via an inline Agent()
+      // instruction (buildAgentRunPrompt). Codex has no such primitive — its own
+      // `collabAgentToolCall` is unrelated and has no notion of a named persona
+      // file — so a Codex run instead adopts the agent's own instructions as
+      // this session's system prompt and gets a plain first-person task prompt.
+      const prompt =
+        this.settings.provider === "codex"
+          ? buildDirectAgentRunPrompt(agent, reason, memory, task, this.paths.reports)
+          : buildAgentRunPrompt(agent, reason, memory, task, this.paths.reports);
+      if (this.settings.provider === "codex") {
+        headlessOpts.systemPrompt = buildAgentSystemPrompt(
+          agent.brain,
+          await readAgentBrainBody(this.app, agent.brain)
+        );
+      }
+      const result = await runHeadlessPlaybook(this.app, this.settings, prompt, headlessOpts);
       const proposed = await this.collectAgentProposals(agent, result.output, startedAt);
       // A note is earned, not automatic. An agent watching a folder runs far
       // more often than it finds anything, and a report per run turns a quiet

@@ -280,6 +280,38 @@ describe("CodexSession app-server lifecycle", () => {
     session.dispose();
   });
 
+  it("threads a per-turn systemPrompt override into developer_instructions without persisting it", async () => {
+    const { session, child } = await readySession({ systemPrompt: "base prompt" });
+    const first = session.send("hello", () => {}, undefined, "you are Ghostwriter for this turn");
+    const firstStart = await child.next("turn/start");
+    const firstInstructions = String(
+      (firstStart.params?.collaborationMode as { settings?: { developer_instructions?: string } })?.settings
+        ?.developer_instructions
+    );
+    expect(firstInstructions).toContain("you are Ghostwriter for this turn");
+    expect(firstInstructions).not.toContain("base prompt");
+    child.reply(firstStart, { turn: { id: "turn-1" } });
+    child.push({ method: "turn/started", params: { turn: { id: "turn-1" } } });
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await first;
+
+    // The next turn, with no override, falls back to the session's own prompt —
+    // the override from the previous turn must not have leaked into `opts`.
+    const second = session.send("again", () => {});
+    const secondStart = await child.next("turn/start");
+    const secondInstructions = String(
+      (secondStart.params?.collaborationMode as { settings?: { developer_instructions?: string } })?.settings
+        ?.developer_instructions
+    );
+    expect(secondInstructions).toContain("base prompt");
+    expect(secondInstructions).not.toContain("Ghostwriter");
+    child.reply(secondStart, { turn: { id: "turn-2" } });
+    child.push({ method: "turn/started", params: { turn: { id: "turn-2" } } });
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-2", status: "completed" } } });
+    await second;
+    session.dispose();
+  });
+
   it("routes Codex request_user_input through the owning Exo conversation", async () => {
     const requestUserInput = vi.fn(async () => ({ audience: "Founders" }));
     const { session, child } = await readySession({ requestUserInput });

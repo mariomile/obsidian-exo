@@ -30,6 +30,11 @@ export interface HeadlessOpts {
   write?: boolean;
   /** Isolated Codex bridge owned by this run; released with the session. */
   codexBridge?: { bridge: CodexBridge; scriptPath: string; release: () => void };
+  /** Session-level system prompt override — a named agent's own instructions
+   *  for a Codex run, which has no subagent primitive to delegate to instead
+   *  (see `buildAgentSystemPrompt`). Ignored by Claude, which keeps its
+   *  delegation instruction inline in the prompt text via `buildAgentRunPrompt`. */
+  systemPrompt?: string;
 }
 
 function vaultPath(app: App): string {
@@ -120,6 +125,7 @@ export async function runHeadlessPlaybook(
       cwd: vaultPath(app),
       permissionMode: "default",
       toolsEnabled: true, // reads allowed; writes gated by the resolver / sandbox below
+      systemPrompt: opts.systemPrompt,
       // External tools (Dia-style digest sources: Gmail/Slack/Calendar via MCP)
       // opt in per settings: fastStartup=false lets the CLI load external MCP
       // servers; the resolver below still auto-denies anything that mutates.

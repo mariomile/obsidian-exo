@@ -182,8 +182,18 @@ export interface AgentSession {
   rateLimit?: RateLimitInfo | null;
   /** Invoked once when the init snapshot lands (may be before the first send). */
   onCaps?: ((caps: SessionCaps) => void) | null;
-  /** Send one user turn; resolves when that turn completes. */
-  send(message: string, onEvent: (e: AgentEvent) => void, images?: ImageAttachment[]): Promise<void>;
+  /** Send one user turn; resolves when that turn completes.
+   *  `systemPromptOverride`, when given, replaces `SessionOpts.systemPrompt` for
+   *  this ONE turn only — the session's own prompt is unaffected on the next
+   *  send(). This is how a named-agent binding takes over a Codex turn without
+   *  spawning a new session or true subagent isolation (Claude ignores it: its
+   *  Agent tool gives a real isolated subagent instead). */
+  send(
+    message: string,
+    onEvent: (e: AgentEvent) => void,
+    images?: ImageAttachment[],
+    systemPromptOverride?: string
+  ): Promise<void>;
   /** Inject a user message into the in-flight turn. Returns true when it was
    *  accepted into a running turn, false
    *  when there's nothing to steer or the provider can't steer this input (caller

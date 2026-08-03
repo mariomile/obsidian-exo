@@ -11,6 +11,8 @@
  * into its own memory file. Neither writes the other's half.
  */
 
+import { stripFrontmatter } from "./agents";
+
 export type AgentRunOutcome = "ok" | "failed" | "refused";
 
 export interface AgentRunRecord {
@@ -203,7 +205,7 @@ export function initialAgentMemory(name: string, slug: string, today = ""): stri
 /** Trim an agent's memory to the block that rides into a run prompt. Keeps the
  *  tail (most recent learnings) when the file has outgrown the budget. */
 export function agentMemoryExcerpt(raw: string, maxChars = 4000): string {
-  const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
+  const body = stripFrontmatter(raw).trim();
   if (body.length <= maxChars) return body;
   const tail = body.slice(body.length - maxChars);
   const cut = tail.indexOf("\n");
