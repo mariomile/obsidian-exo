@@ -145,6 +145,8 @@ import {
   type AgentCommandResult,
   type AgentDef,
 } from "./core/agents";
+import { buildAgentSystemPrompt } from "./core/agent-runs";
+import { readAgentBrainBody } from "./obsidian/agent-store";
 
 export type { AskQuestion } from "./core/model";
 
@@ -732,12 +734,21 @@ export class ChatView extends ItemView {
     this.composer.refreshResearch();
     this.composer.refreshAgentChip();
     this.composer.refreshContext();
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => {
-        this.composer.refreshContext();
-        this.refreshSurfacing();
-      })
-    );
+    // active-leaf-change scatta a OGNI cambio o chiusura di tab, e le due chiamate
+    // qui sotto sono lavoro vero: refreshContext ricostruisce la riga di card del
+    // contesto, refreshSurfacing rende markdown (renderTailSurfacing).
+    // Misurato 2026-08-03 strumentando i listener sul vault reale: 28.7ms per
+    // evento, la metà dei ~57ms che TUTTI i plugin spendono su quell'evento — il
+    // singolo maggior contributore al lag "chiudere un tab sembra lento".
+    // Niente qui deve essere sincrono col click: debounced con la stessa ricetta
+    // del resize sotto, così scorrere N tab fa il lavoro UNA volta a riposo invece
+    // di N, e il cambio tab lascia libero il frame in cui avviene.
+    const refreshForLeafChange = debounce(() => {
+      this.composer.refreshContext();
+      this.refreshSurfacing();
+    }, 120, true);
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => refreshForLeafChange()));
+    this.register(() => refreshForLeafChange.cancel());
     // Resizing the pane can flip a short transcript into overflow (or back) without
     // any content change — keep the tail "Related" section in sync with that too.
     // Debounced: a drag emits a continuous stream of resize ticks, and each tail
@@ -6424,6 +6435,14 @@ export class ChatView extends ItemView {
     // Resolved before the session work below so a missing/renamed agent simply
     // yields null and the turn proceeds as normal chat.
     const boundAgent = await this.resolveTurnAgent(c, opts?.agent);
+    // Codex has no subagent primitive to delegate to (see buildAgentBindingOutbound's
+    // doc comment) — binding instead overrides THIS turn's system prompt with the
+    // agent's own instructions. Read once here; undefined for Claude turns (which
+    // keep true subagent delegation) and for unbound turns.
+    const codexAgentSystemPrompt =
+      boundAgent && c.provider === "codex"
+        ? buildAgentSystemPrompt(boundAgent.brain, await readAgentBrainBody(this.app, boundAgent.brain))
+        : undefined;
     const sendText = this.hoistOutbound(text);
     // Active-context assembly (2026-07-30): attached-note paths AND the ambient
     // selection the chip is showing — both read from the same composer state the
@@ -6977,9 +6996,10 @@ export class ChatView extends ItemView {
       // The agent binding wraps LAST so its instruction sits closest to the
       // user's text — and, like Research Mode, it never touches the visible or
       // persisted bubble.
-      const agentMessage = boundAgent ? buildAgentBindingOutbound(boundAgent, researchMessage, c.provider) : researchMessage;
+      const agentMessage =
+        boundAgent && c.provider === "claude" ? buildAgentBindingOutbound(boundAgent, researchMessage) : researchMessage;
       const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, recallBlock, agentMessage].filter(Boolean).join("\n\n");
-      await session.send(outbound, onEvent, imgs);
+      await session.send(outbound, onEvent, imgs, codexAgentSystemPrompt);
       // `session.send` can resolve cleanly even after a user Stop/Esc — the
       // adapter swallows the abort rather than throwing or emitting an
       // in-band "error" event, so `c.stopped` (set synchronously by stop())
