@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWhen, formatWhen, parseAutomationFile, serializeAutomation } from "./automation-model";
+import { parseWhen, formatWhen, parseAutomationFile, serializeAutomation, automationFromPlaybook, automationFromAgent } from "./automation-model";
 
 describe("when grammar", () => {
   it("parses schedules", () => {
@@ -75,5 +75,61 @@ describe("file round-trip", () => {
     expect(automation.enabled).toBe(false);
     expect(automation.when).toEqual([]);
     expect(automation.cooldownMs).toBe(15 * 60_000);
+  });
+});
+
+describe("migration mapping", () => {
+  it("maps a playbook automation to a file automation", () => {
+    const a = automationFromPlaybook(
+      { name: "Morning Digest", cadence: { kind: "daily", hour: 7 }, enabled: true, write: true },
+      "Summarize the day.",
+    );
+    expect(a.slug).toBe("morning-digest");
+    expect(a.mode).toBe("act");
+    expect(a.when).toEqual([{ on: "schedule", cadence: { kind: "daily", hour: 7 } }]);
+    expect(a.prompt).toBe("Summarize the day.");
+    expect(a.enabled).toBe(true);
+  });
+
+  it("keeps the daily-pulse system key", () => {
+    const a = automationFromPlaybook(
+      { name: "Daily Pulse", system: "daily-pulse", cadence: { kind: "daily", hour: 8 }, enabled: false, write: false },
+      "",
+    );
+    expect(a.system).toBe("daily-pulse");
+    expect(a.mode).toBe("report");
+  });
+
+  it("maps an agent contract, dropping note-mention", () => {
+    const def = {
+      brain: { slug: "inbox-triager", name: "Inbox Triager", invocable: "Inbox Triager", description: "Files inbox notes", source: "vault" as const },
+      contract: {
+        slug: "inbox-triager", enabled: true, icon: "inbox", autonomy: "act" as const, output: "journal" as const,
+        cooldownMs: 15 * 60_000, scope: { read: ["_inbox/**"], write: ["_inbox/**", "Atlas/**"] }, canCall: [],
+        triggers: [
+          { on: "vault-event" as const, event: "create" as const, path: "_inbox/**" },
+          { on: "note-mention" as const },
+        ],
+      },
+    };
+    const a = automationFromAgent(def);
+    expect(a).not.toBeNull();
+    expect(a!.agent).toBe("inbox-triager");
+    expect(a!.mode).toBe("act");
+    expect(a!.when).toEqual([{ on: "vault-event", event: "create", path: "_inbox/**" }]);
+    expect(a!.scope).toEqual(["_inbox/**", "Atlas/**"]);
+    expect(a!.icon).toBe("inbox");
+    expect(a!.description).toBe("Files inbox notes");
+  });
+
+  it("returns null for mention-only agents", () => {
+    const def = {
+      brain: { slug: "helper", name: "Helper", invocable: "Helper", source: "vault" as const },
+      contract: {
+        slug: "helper", enabled: true, icon: "bot", autonomy: "notify" as const, output: "report" as const,
+        cooldownMs: 0, scope: { read: [], write: [] }, canCall: [], triggers: [{ on: "note-mention" as const }],
+      },
+    };
+    expect(automationFromAgent(def)).toBeNull();
   });
 });

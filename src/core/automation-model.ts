@@ -14,14 +14,16 @@
  * always emits the canonical form so files converge on save.
  */
 
-import { type Cadence, cadenceLabel, parseCadenceInput } from "./automations";
+import { type Cadence, type AutomationConfig, cadenceLabel, parseCadenceInput } from "./automations";
 import {
+  type AgentDef,
   frontmatterBlock,
   stripFrontmatter,
   fmScalar,
   fmList,
   parseDuration,
   formatDuration,
+  slugifyAgent,
 } from "./agents";
 
 /* ------------------------------- types ------------------------------- */
@@ -210,4 +212,45 @@ export function serializeAutomation(a: Automation): string {
   lines.push(`enabled: ${a.enabled}`);
   lines.push("---", "", a.prompt, "");
   return lines.join("\n");
+}
+
+/* ------------------------------ migration ------------------------------ */
+
+/** A legacy settings playbook automation → a file automation. The prompt is
+ *  the matched custom prompt's body ("" for built-in system automations). */
+export function automationFromPlaybook(cfg: AutomationConfig, prompt: string): Automation {
+  return {
+    slug: slugifyAgent(cfg.name),
+    name: cfg.name,
+    description: "",
+    icon: cfg.system === "daily-pulse" ? "activity" : DEFAULT_AUTOMATION_ICON,
+    when: [{ on: "schedule", cadence: cfg.cadence }],
+    mode: cfg.write ? "act" : "report",
+    scope: [],
+    system: cfg.system,
+    cooldownMs: DEFAULT_AUTOMATION_COOLDOWN_MS,
+    enabled: cfg.enabled,
+    prompt,
+  };
+}
+
+/** A legacy agent contract → a file automation delegating to the brain, or
+ *  null when the agent has no unattended triggers (mention-only = invocation,
+ *  not automation). */
+export function automationFromAgent(def: AgentDef): Automation | null {
+  const when = def.contract.triggers.filter((t): t is AutomationWhen & { on: "schedule" | "vault-event" | "tag" } => t.on !== "note-mention");
+  if (!when.length) return null;
+  return {
+    slug: def.contract.slug,
+    name: def.brain.name,
+    description: def.brain.description ?? "",
+    icon: def.contract.icon,
+    when,
+    mode: def.contract.autonomy === "notify" ? "report" : def.contract.autonomy,
+    scope: def.contract.scope.write,
+    agent: def.contract.slug,
+    cooldownMs: def.contract.cooldownMs,
+    enabled: def.contract.enabled,
+    prompt: "",
+  };
 }
