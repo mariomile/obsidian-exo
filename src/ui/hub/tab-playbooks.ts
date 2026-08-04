@@ -1,5 +1,5 @@
 import { Notice, setIcon } from "obsidian";
-import { playbookScheduleLabel } from "../../core/automations";
+import { cadenceLabel } from "../../core/automations";
 import { buildRowScaffold, openExoSettings, type HubTabContext } from "./shared";
 
 /**
@@ -28,7 +28,12 @@ export async function renderPlaybooksTab(host: HTMLElement, ctx: HubTabContext):
     const desc = isWorkflow ? `workflow · ${steps} steps` : "prompt";
     const { row, right } = buildRowScaffold(p.name, undefined, desc);
 
-    const sched = playbookScheduleLabel(p.name, s.automations ?? []);
+    // Scheduled when an enabled automation file matches this playbook by name.
+    const auto = ctx.plugin.automationStore
+      .list()
+      .find((a) => a.enabled && a.name.toLowerCase() === p.name.toLowerCase());
+    const schedWhen = auto?.when.find((w) => w.on === "schedule");
+    const sched = schedWhen?.on === "schedule" ? cadenceLabel(schedWhen.cadence) : null;
     if (sched) {
       const badge = right.createSpan({ cls: "mva-conn-state mva-hub-sched" });
       setIcon(badge.createSpan({ cls: "mva-hub-sched-icon" }), "clock");

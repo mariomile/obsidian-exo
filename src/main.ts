@@ -2343,20 +2343,20 @@ export default class ExoPlugin extends Plugin {
 
   /** Run one playbook headlessly and write its report. Write-enabled runs also
    *  persist a restorable run record (files touched + pre-write snapshots). */
-  async runPlaybook(name: string, prompt: string, opts: { write?: boolean } = {}): Promise<boolean> {
+  async runPlaybook(name: string, prompt: string, opts: { write?: boolean; slug?: string } = {}): Promise<boolean> {
     if (/\{\{\s*[\w-]+\s*\}\}/.test(prompt)) {
       new Notice(`"${name}" has {{variables}} — run it from the composer instead.`);
       return false;
     }
     const startedAt = Date.now();
     new Notice(`Running playbook "${name}"…`);
-    const headlessOpts: HeadlessOpts = { ...opts };
+    const headlessOpts: HeadlessOpts = { write: opts.write };
     if (this.settings.provider === "codex" && this.settings.obsidianToolsEnabled) {
       headlessOpts.codexBridge = (await this.ensureCodexBridge()) ?? undefined;
     }
     const result = await runHeadlessPlaybook(this.app, this.settings, prompt, headlessOpts);
     const path = await writeReport(this.app, name, result, this.paths.reports);
-    if (opts.write) await this.recordAutomationRun(name, startedAt, result, path);
+    if (opts.write) await this.recordAutomationRun(name, startedAt, result, path, opts.slug);
     new Notice(
       result.ok ? `Playbook "${name}" done → ${path}` : `Playbook "${name}" failed (report: ${path})`
     );
@@ -2953,6 +2953,27 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
+  /** Manual "Run now" from the hub — bypasses the schedule and reuses the
+   *  same executors, so gates, snapshots and records behave identically. */
+  async runAutomationNow(a: Automation): Promise<boolean> {
+    if (a.system === "daily-pulse") return this.generateAndPersistDailyPulse(Date.now());
+    if (a.agent) {
+      const real = this.agentStore.get(a.agent);
+      if (!real) {
+        new Notice(`Agent "${a.agent}" not found.`);
+        return false;
+      }
+      const def: AgentDef = { brain: real.brain, contract: contractFromAutomation(a) };
+      return this.runAgent(def, "manual", `${agentLastRunKey(a.slug)}::manual`);
+    }
+    const ok = await this.runPlaybook(a.name, a.prompt, { write: a.mode === "act", slug: a.slug });
+    if (ok) {
+      this.settings.scheduledLastRun[agentLastRunKey(a.slug)] = Date.now();
+      await this.saveSettings();
+    }
+    return ok;
+  }
+
   /** Gate one due automation run, then route it to the right executor:
    *  agent-backed → the agent runner (subagent delegation, memory, journal);
    *  prompt-only → the playbook runner. Sequential — one at a time. */
@@ -2977,7 +2998,7 @@ export default class ExoPlugin extends Plugin {
       // Prompt-only automation → the proven playbook executor.
       this.agentRunsInFlight.add(run.runKey);
       try {
-        const ok = await this.runPlaybook(automation.name, automation.prompt, { write: automation.mode === "act" });
+        const ok = await this.runPlaybook(automation.name, automation.prompt, { write: automation.mode === "act", slug: automation.slug });
         if (ok) {
           this.settings.scheduledLastRun[run.runKey] = Date.now();
           this.settings.scheduledLastRun[agentLastRunKey(run.agent.brain.slug)] = Date.now();
@@ -3089,7 +3110,7 @@ export default class ExoPlugin extends Plugin {
       // has no work to perform.
       const restoreId =
         write && result.writes.length > 0
-          ? await this.recordAutomationRun(name, startedAt, result, path)
+          ? await this.recordAutomationRun(name, startedAt, result, path, agent.contract.slug)
           : null;
       // The ledger records every run, successful or not — a failed run that
       // leaves no trace is how a quietly broken agent stays invisible.
@@ -3298,7 +3319,8 @@ export default class ExoPlugin extends Plugin {
     name: string,
     startedAt: number,
     result: HeadlessResult,
-    reportPath: string
+    reportPath: string,
+    slug?: string
   ): Promise<string | null> {
     try {
       const checkpoint = [...result.checkpoint.entries()].filter(
@@ -3312,6 +3334,7 @@ export default class ExoPlugin extends Plugin {
         reportPath,
         writes: result.writes,
         checkpoint,
+        slug,
       };
       await this.saveAutomationRuns(pruneRuns([rec, ...(await this.loadAutomationRuns())], 20));
       return rec.id;

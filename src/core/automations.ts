@@ -47,6 +47,19 @@ export interface AutomationRunRecord {
   /** Set when Mario marked the run as reviewed (review-queue flow) — reviewed
    *  and restored runs both leave the "to review" pool. */
   reviewedAt?: number;
+  /** Automation file slug this run belongs to — absent on pre-v2 records,
+   *  which the hub lists under a collapsed "Older runs" bucket. */
+  slug?: string;
+}
+
+/** Runs of one automation, newest first. */
+export function runsForSlug(records: AutomationRunRecord[], slug: string): AutomationRunRecord[] {
+  return records.filter((r) => r.slug === slug).sort((a, b) => b.startedAt - a.startedAt);
+}
+
+/** Pre-v2 records with no owning automation — shown once, collapsed. */
+export function legacyRuns(records: AutomationRunRecord[]): AutomationRunRecord[] {
+  return records.filter((r) => !r.slug).sort((a, b) => b.startedAt - a.startedAt);
 }
 
 /** Write runs still waiting for review — the Cockpit attention pool. */

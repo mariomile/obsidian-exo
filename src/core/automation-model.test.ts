@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { runsForSlug, legacyRuns } from "./automations";
 import { parseWhen, formatWhen, parseAutomationFile, serializeAutomation, automationFromPlaybook, automationFromAgent, contractFromAutomation, legacyConfigFromAutomation } from "./automation-model";
 
 describe("when grammar", () => {
@@ -166,5 +167,16 @@ describe("executor bridges", () => {
     }));
     expect(cfg).toEqual({ name: "X", system: "daily-pulse", cadence: { kind: "daily", hour: 8 }, enabled: true, write: false });
     expect(legacyConfigFromAutomation(auto({}))).toBeNull();
+  });
+});
+
+describe("run buckets", () => {
+  const rec = (over: Partial<import("./automations").AutomationRunRecord>) => ({
+    id: "r", name: "X", startedAt: 1, ok: true, reportPath: "", writes: [], checkpoint: [] as [string, string | null][], ...over,
+  });
+  it("splits per-slug and legacy runs", () => {
+    const records = [rec({ id: "a", slug: "x", startedAt: 1 }), rec({ id: "b", slug: "x", startedAt: 5 }), rec({ id: "c" })];
+    expect(runsForSlug(records, "x").map((r) => r.id)).toEqual(["b", "a"]);
+    expect(legacyRuns(records).map((r) => r.id)).toEqual(["c"]);
   });
 });
