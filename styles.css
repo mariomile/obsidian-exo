@@ -2,6 +2,23 @@
    Built entirely on Obsidian's native CSS variables so it adapts to ANY theme.
    The only fixed colors are per-provider brand accents (Claude / Codex). */
 
+/* @settings
+
+name: Exo
+id: exo
+settings:
+    -
+        id: exo-font-size
+        title: Exo font size
+        description: Chat answer and composer text size — independent of the note editor and the rest of the interface.
+        type: variable-number-slider
+        default: 14
+        min: 10
+        max: 22
+        step: 1
+        format: px
+*/
+
 /* Geometry & timing tokens live on :root (not .mva-root) so they resolve in
    Obsidian Modals too — a Modal renders in `.modal-container`, OUTSIDE `.mva-root`,
    where a var() scoped to `.mva-root` is undefined and radii silently collapse to
@@ -12,6 +29,7 @@
   --mva-r3: 13px;
   --mva-t: 0.14s ease;
   --mva-ease-out: var(--mv-lift, cubic-bezier(0.22, 1, 0.36, 1));
+  --exo-font-size: 14px;
 }
 .mva-root {
   --mva-brand: var(--interactive-accent);
@@ -905,14 +923,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 
 .mva-bubble {
-  /* mv-kit §7: an Exo answer is prose you READ — the same kind of content as
-     the note open beside it — so it takes the vault's reading size, not a
-     chat-chrome size. It was pinned at 14px next to a 16px note: two reading
-     sizes in one app with no reason for the difference. In a ~400px sidebar
-     16px still yields ~50 characters per line, inside the 45-75 comfortable
-     measure, so the larger type costs no legibility. Decided on design
-     grounds 2026-07-26; revert = restore the 14px literal. */
-  font-size: var(--font-text-size, 14px);
+  /* mv-kit §7: decoupled from --font-text-size 2026-08-04. The 2026-07-26
+     share assumed a 16px note (~50 chars/line in a 400px sidebar, within the
+     45-75 comfortable measure); Cosmos has since pushed the editor to 24px,
+     which no longer fits that measure in a narrow sidebar. Exo now reads at
+     its own dedicated size (--exo-font-size, Style Settings → Exo), not tied
+     to the note editor or to the rest of the interface's UI scale. */
+  font-size: var(--exo-font-size, 14px);
   /* Leading tracks Cosmos' intentional desktop/phone split (1.6 / 1.55)
      instead of pinning one number. Fallback = the pre-wave literal, so a
      Cosmos-less install renders exactly as before. */
@@ -2091,14 +2108,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   resize: none;
   /* mv-kit §7: what you TYPE and what you read back are the same prose, so the
      composer matches the bubble on both size and leading — otherwise the text
-     visibly re-flows the instant your message becomes a bubble. The "~3 lines"
-     intent below is preserved by re-deriving min-height at the new metrics
-     (3 x 16px x 1.55 = 74px of text + 13px of vertical padding), not by
-     leaving the old number to silently show 2.5 lines. */
-  min-height: 87px;
+     visibly re-flows the instant your message becomes a bubble. Follows
+     .mva-bubble's --exo-font-size (Style Settings → Exo). The "~3 lines"
+     intent below is re-derived at the new metrics
+     (3 x 14px x 1.55 = 65px of text + 13px of vertical padding). */
+  min-height: 78px;
   max-height: 200px;
   padding: 9px 11px 4px;
-  font-size: var(--font-text-size, 14px);
+  font-size: var(--exo-font-size, 14px);
   line-height: var(--line-height-normal, 1.55);
   color: var(--text-normal);
   background: transparent;
