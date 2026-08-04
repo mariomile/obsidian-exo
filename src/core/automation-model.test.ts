@@ -138,7 +138,7 @@ describe("migration mapping", () => {
 describe("executor bridges", () => {
   const auto = (over: Partial<import("./automation-model").Automation>) => ({
     slug: "x", name: "X", description: "", icon: "zap",
-    when: [], mode: "report" as const, scope: [], cooldownMs: 15 * 60_000,
+    when: [], mode: "report" as const, scope: [], canCall: [], cooldownMs: 15 * 60_000,
     enabled: true, prompt: "Do it.", ...over,
   });
 

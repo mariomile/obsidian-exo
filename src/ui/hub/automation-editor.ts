@@ -56,6 +56,7 @@ export function openAutomationEditor(host: HTMLElement, ctx: HubTabContext): voi
         when: [{ on: "schedule", cadence: { kind: "daily", hour: 7 } }],
         mode: "report",
         scope: [],
+        canCall: [],
         cooldownMs: DEFAULT_AUTOMATION_COOLDOWN_MS,
         enabled: true,
         prompt: "",

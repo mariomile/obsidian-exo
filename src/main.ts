@@ -3228,7 +3228,10 @@ export default class ExoPlugin extends Plugin {
     const caller = this.agentContext?.slug ?? "exo";
     const depth = this.agentContext?.depth ?? 0;
     const callee = this.agentStore.resolve(target);
-    const callerAgent = caller === "exo" ? null : this.agentStore.get(caller);
+    // The caller's powers come from its automation file (can_call lives
+    // there since v2); an unbound agent has no delegation allowlist.
+    const callerAgent =
+      caller === "exo" ? null : this.automationDefs().find((d) => d.brain.slug === caller) ?? null;
 
     const gate = gateAgentInvoke(caller, callee, callerAgent, depth);
     if (!gate.ok) return `Refused (${gate.reason}): ${gate.detail}.`;

@@ -14,6 +14,7 @@ import { ItemView, Notice, WorkspaceLeaf, setIcon } from "obsidian";
 import type ExoPlugin from "../main";
 import { clickable } from "./dom";
 import { triggerLabel, formatDuration, type AgentDef } from "../core/agents";
+import { contractFromAutomation } from "../core/automation-model";
 import { agentLastRunKey, nextScheduledSlot, writeModeFor } from "../core/agent-runs";
 import { runsForAgent, type AgentRunRecord } from "../core/agent-ledger";
 
@@ -136,7 +137,11 @@ export class AgentsView extends ItemView {
   }
 
   private renderRow(list: HTMLElement, agent: AgentDef): void {
-    const { brain, contract } = agent;
+    const { brain } = agent;
+    // Since v2 the contract sidecars are gone: what this row shows is the
+    // agent's automation file, when one binds it — else the inert default.
+    const auto = this.plugin.automationStore.list().find((x) => x.agent === brain.slug);
+    const contract = auto ? contractFromAutomation(auto) : agent.contract;
     const now = Date.now();
     const row = list.createDiv({ cls: "mva-ag-row" });
     row.toggleClass("is-off", !contract.enabled);
@@ -252,13 +257,14 @@ export class AgentsView extends ItemView {
   /* ------------------------------ actions ------------------------------ */
 
   private async toggle(agent: AgentDef): Promise<void> {
-    const next = !agent.contract.enabled;
-    // Turning an agent ON with no triggers changes nothing on its own — say so
-    // rather than letting the user believe they just automated something.
-    await this.plugin.agentStore.setEnabled(agent.brain.slug, next, new Date().toISOString().slice(0, 10));
-    if (next && !agent.contract.triggers.length) {
-      new Notice(`${agent.brain.name} is on, but has no triggers — it will only run when you ask.`);
+    // Autonomy lives in the automation file since v2 — the toggle pauses or
+    // resumes the agent's automation. An unbound agent has nothing to toggle.
+    const auto = this.plugin.automationStore.list().find((a) => a.agent === agent.brain.slug);
+    if (!auto) {
+      new Notice(`${agent.brain.name} has no automation — it only runs when you ask. Create one in the Capabilities hub.`);
+      return;
     }
+    await this.plugin.automationStore.save({ ...auto, enabled: !auto.enabled });
     await this.refresh();
   }
 

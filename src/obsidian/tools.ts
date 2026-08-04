@@ -35,7 +35,17 @@ import {
   parseCadenceInput,
   unreviewedWriteRuns,
 } from "../core/automations";
-import { triggerLabel, parseTrigger, parseDuration, formatDuration, type AgentTrigger } from "../core/agents";
+import { parseDuration, formatDuration } from "../core/agents";
+import {
+  formatWhen,
+  modeSentence,
+  parseWhen,
+  whenSentence,
+  type Automation,
+  type AutomationMode,
+  DEFAULT_AUTOMATION_COOLDOWN_MS,
+} from "../core/automation-model";
+import { automationSlug } from "./automation-store";
 import { ok, err, getExo, type Result } from "./tool-kit";
 import { buildCapabilityTools, CAPABILITY_READ_TOOLS } from "./capability-tools";
 
@@ -1041,11 +1051,14 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       if (!(await exo.agentsReady())) return ok("Named agents are disabled in Exo settings.");
       const agents = exo.agentStore.list();
       if (!agents.length) return ok("No agents found. Agent prompts live in `.claude/agents/*.md`.");
-      const lines = agents.map(({ brain, contract }) => {
-        const triggers = contract.triggers.map(triggerLabel).join(", ") || "manual only";
-        const scope = contract.scope.write.length ? `writes ${contract.scope.write.join(", ")}` : "no write scope";
+      const autos = exo.automationStore.list();
+      const lines = agents.map(({ brain }) => {
+        const auto = autos.find((a) => a.agent === brain.slug);
+        const say = auto
+          ? `${auto.enabled ? "automated" : "automation paused"} · ${auto.when.map(whenSentence).join(" · ") || "no when-lines"} · ${modeSentence(auto.mode)}`
+          : "mention/manual only";
         return [
-          `- ${brain.name} (@${brain.slug}) — ${contract.enabled ? "enabled" : "disabled"} · ${contract.autonomy} · ${scope} · ${triggers}`,
+          `- ${brain.name} (@${brain.slug}) — ${say}`,
           brain.description ? `    ${brain.description}` : "",
         ]
           .filter(Boolean)
@@ -1073,17 +1086,15 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   const manageAgent = tool(
     "manage_agent",
-    "Change a named agent's contract: turn it on or off, set its autonomy tier, where it reports, its cooldown, its read/write scope, or its triggers. Use it when Mario asks to change how or when an agent runs (\"make the triager run every 2 hours\", \"stop the librarian\", \"let it write into Atlas\"). Triggers replace the whole list and use the one-line form: `schedule daily 08`, `schedule weekly mon 08`, `schedule hourly`, `vault-event create _inbox/**`, `tag #needs/post`, `note-mention`. Widening `write` or setting autonomy to `act` lets the agent edit notes unattended — confirm with Mario before doing either.",
+    "Change how a named agent runs unattended by editing its automation file: on/off, mode (report | propose | act), cooldown, write scope, delegation allowlist, or its when-lines. When the agent has no automation yet, one is created. `when` replaces the whole list and uses the readable form: `daily 08:00`, `weekly mon 07:00`, `hourly`, `on create in _inbox/**`, `on tag #x`. Setting mode `act` or widening `write` lets the agent edit notes unattended — confirm with Mario before doing either.",
     {
       agent: z.string().describe("Slug or name of the agent."),
       enabled: z.boolean().optional(),
-      autonomy: z.enum(["notify", "propose", "act"]).optional(),
-      output: z.enum(["report", "journal", "silent"]).optional(),
+      mode: z.enum(["report", "propose", "act"]).optional(),
       cooldown: z.string().optional().describe("e.g. 30m, 2h, 1d"),
-      read: z.array(z.string()).optional().describe("Replaces the read globs."),
-      write: z.array(z.string()).optional().describe("Replaces the write globs. [] means no autonomous writes."),
+      write: z.array(z.string()).optional().describe("Replaces the write scope. [] means no autonomous writes."),
       can_call: z.array(z.string()).optional().describe("Replaces the delegation allowlist."),
-      triggers: z.array(z.string()).optional().describe("Replaces every trigger. [] leaves the agent manual-only."),
+      when: z.array(z.string()).optional().describe("Replaces every when-line. [] leaves the agent mention/manual-only."),
     },
     async (args) => {
       const exo = getExo(app);
@@ -1092,85 +1103,94 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       const found = exo.agentStore.resolve(args.agent);
       if (!found) return err(`No agent named "${args.agent}".`);
 
-      const c = { ...found.contract, scope: { ...found.contract.scope } };
+      const store = exo.automationStore;
+      const slug = found.brain.slug;
+      const existing = store.list().find((a) => a.agent === slug) ?? null;
+      const a: Automation = existing
+        ? { ...existing, when: [...existing.when], scope: [...existing.scope], canCall: [...existing.canCall] }
+        : {
+            slug,
+            name: found.brain.name,
+            description: found.brain.description ?? "",
+            icon: "bot",
+            when: [],
+            mode: "report",
+            scope: [],
+            canCall: [],
+            cooldownMs: DEFAULT_AUTOMATION_COOLDOWN_MS,
+            enabled: false,
+            agent: slug,
+            prompt: "",
+          };
       const changed: string[] = [];
 
-      if (args.enabled !== undefined && args.enabled !== c.enabled) {
-        c.enabled = args.enabled;
+      if (args.enabled !== undefined && args.enabled !== a.enabled) {
+        a.enabled = args.enabled;
         changed.push(args.enabled ? "enabled" : "disabled");
       }
-      if (args.autonomy && args.autonomy !== c.autonomy) {
-        c.autonomy = args.autonomy;
-        changed.push(`autonomy → ${args.autonomy}`);
-      }
-      if (args.output && args.output !== c.output) {
-        c.output = args.output;
-        changed.push(`output → ${args.output}`);
+      if (args.mode && args.mode !== a.mode) {
+        a.mode = args.mode as AutomationMode;
+        changed.push(`mode → ${args.mode}`);
       }
       if (args.cooldown) {
         const ms = parseDuration(args.cooldown);
         if (ms === null) return err(`Unparseable cooldown "${args.cooldown}" — use forms like 30m, 2h, 1d.`);
-        c.cooldownMs = ms;
+        a.cooldownMs = ms;
         changed.push(`cooldown → ${formatDuration(ms)}`);
       }
-      if (args.read) {
-        c.scope.read = args.read;
-        changed.push(`read → ${args.read.join(", ") || "(none)"}`);
-      }
       if (args.write) {
-        c.scope.write = args.write;
+        a.scope = args.write;
         changed.push(`write → ${args.write.join(", ") || "(none)"}`);
       }
       if (args.can_call) {
-        c.canCall = args.can_call.filter((x) => x !== c.slug);
-        changed.push(`can_call → ${c.canCall.join(", ") || "(none)"}`);
+        a.canCall = args.can_call.filter((x) => x !== slug);
+        changed.push(`can_call → ${a.canCall.join(", ") || "(none)"}`);
       }
-      if (args.triggers) {
-        const parsed: AgentTrigger[] = [];
-        for (const line of args.triggers) {
-          const t = parseTrigger(line);
-          // Refuse the whole edit rather than silently dropping a trigger the
+      if (args.when) {
+        const parsed = [];
+        for (const line of args.when) {
+          const w = parseWhen(line);
+          // Refuse the whole edit rather than silently dropping a line the
           // user believes they just set.
-          if (!t) return err(`Unparseable trigger "${line}". Use forms like: schedule daily 08 · vault-event create _inbox/** · tag #x · note-mention`);
-          parsed.push(t);
+          if (!w) return err(`Unparseable when "${line}". Use forms like: daily 08:00 · weekly mon 07:00 · hourly · on create in _inbox/** · on tag #x`);
+          parsed.push(w);
         }
-        c.triggers = parsed;
-        changed.push(`triggers → ${parsed.map(triggerLabel).join(" · ") || "(manual only)"}`);
+        a.when = parsed;
+        changed.push(`when → ${parsed.map(formatWhen).join(" · ") || "(manual only)"}`);
       }
 
       if (!changed.length) return ok(`${found.brain.name} already matches that — nothing changed.`);
-      await exo.agentStore.saveContract(c, new Date().toISOString().slice(0, 10));
+      await store.save(a);
       await exo.refreshAgentsUI();
       const warn =
-        c.autonomy === "act" && c.scope.write.length === 0
-          ? " Note: autonomy is `act` but no write globs are declared, so every write will still be refused."
+        a.mode === "act" && a.scope.length === 0
+          ? " Note: mode is `act` but the write scope is empty, so every write will still be refused."
           : "";
-      return ok(`${found.brain.name}: ${changed.join(", ")}.${warn}`);
+      return ok(`${found.brain.name}: ${changed.join(", ")}. Saved to ${store.filePath(a.slug)}.${warn}`);
     }
   );
 
   const listAutomations = tool(
     "list_automations",
-    "List Exo's automations (scheduled playbook runs): cadence, on/paused, read-only vs write mode, last/next run — plus available playbooks and recent write runs with their review state and run ids. Use it before managing automations or when Mario asks what runs automatically.",
+    "List Exo's automations (the files under the automations folder): what each one is, when it runs, its mode (report/propose/act), on/paused, last/next run — plus recent write runs with their review state and run ids. Use it before managing automations or when Mario asks what runs automatically.",
     {},
     async () => {
       const exo = getExo(app);
       if (!exo) return ok("Exo plugin not reachable.");
-      const s = exo.settings;
+      const store = exo.automationStore;
       const now = Date.now();
       const lines: string[] = [];
-      if (!s.automations.length) lines.push("No automations configured.");
-      for (const a of s.automations) {
-        const last = s.scheduledLastRun[automationLastRunKey(a)] ?? 0;
-        const next = a.enabled ? ` · next ${formatDueIn(nextDueAt(a.cadence, last, now) - now)}` : "";
-        const mode = a.system === "daily-pulse"
-          ? `writes ${paths.review} (marker-safe)`
-          : a.write ? "writes (checkpointed, restorable)" : "read-only";
-        lines.push(
-          `- ${a.name} — ${cadenceLabel(a.cadence)} · ${a.enabled ? "on" : "paused"} · ${mode}${next}`
-        );
+      const autos = store.list();
+      if (!autos.length) lines.push("No automations yet.");
+      for (const a of autos) {
+        const say = a.when.map(whenSentence).join(" · ") || "never (no when-lines)";
+        const via = a.agent ? ` · via agent ${a.agent}` : "";
+        lines.push(`- [${a.slug}] ${a.name} — ${say} · ${modeSentence(a.mode)} · ${a.enabled ? "on" : "paused"}${via}`);
       }
-      lines.push("", `Playbooks: ${s.customPrompts.map((p) => p.name).join(", ") || "(none)"}`);
+      for (const e of store.errors()) {
+        lines.push(`- [${e.slug}] UNREADABLE: ${e.problem}`);
+      }
+      lines.push("", `Playbooks (reusable prompts): ${exo.settings.customPrompts.map((p) => p.name).join(", ") || "(none)"}`);
       const runs = await exo.loadAutomationRuns();
       if (runs.length) {
         lines.push("", "Recent write runs:");
@@ -1204,69 +1224,89 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   const manageAutomation = tool(
     "manage_automation",
-    `Create, update, pause, resume, delete, or run an Exo automation. \`name\` is the playbook name (must exist for create — see list_automations). Cadence: kind hourly|daily|weekly, hour 0–23, day 0–6 or a day name. \`write: true\` lets scheduled runs edit vault notes (checkpointed + restorable) — confirm with Mario before enabling it. run_now executes the playbook immediately (may take minutes) and reports to ${paths.reports}/.`,
+    `Create, update, pause, resume, delete (archive), or run an Exo automation — a readable file the scheduler executes. \`when\` lines use the readable grammar: \`daily 08:00\`, \`weekly mon 07:00\`, \`hourly\`, \`on create in _inbox/**\`, \`on tag #x\`. Mode \`act\` lets runs edit vault notes (checkpointed + restorable) — confirm with Mario before setting it. run_now executes immediately (may take minutes) and reports to ${paths.reports}/.`,
     {
       action: z.enum(["create", "update", "pause", "resume", "delete", "run_now"]),
-      name: z.string(),
-      cadence_kind: z.enum(["hourly", "daily", "weekly"]).optional(),
-      hour: z.number().optional(),
-      day: z.union([z.number(), z.string()]).optional(),
-      write: z.boolean().optional(),
+      name: z.string().describe("Automation name (or slug for existing ones)."),
+      description: z.string().optional(),
+      prompt: z.string().optional().describe("The playbook body. Required for create unless agent is set."),
+      agent: z.string().optional().describe("Bind to a named agent instead of a prompt."),
+      when: z.array(z.string()).optional().describe("Replaces every when-line."),
+      mode: z.enum(["report", "propose", "act"]).optional(),
+      write_scope: z.array(z.string()).optional().describe("Folders/globs act|propose runs may write in."),
     },
     async (args) => {
       const exo = getExo(app);
       if (!exo) return ok("Exo plugin not reachable.");
-      const s = exo.settings;
-      const auto = s.automations.find(
-        (a) => !a.system && a.name.toLowerCase() === args.name.toLowerCase()
-      );
-      const playbook = s.customPrompts.find((p) => p.name.toLowerCase() === args.name.toLowerCase());
+      const store = exo.automationStore;
+      const slug = automationSlug(args.name);
+      const auto =
+        store.get(slug)
+        ?? store.list().find((x) => x.name.toLowerCase() === args.name.toLowerCase())
+        ?? null;
 
       if (args.action === "run_now") {
-        if (!playbook) return ok(`No playbook named "${args.name}" — see list_automations.`);
-        const write = args.write ?? auto?.write ?? false;
-        const okRun = await exo.runPlaybook(playbook.name, playbook.prompt, { write });
-        if (okRun) {
-          s.scheduledLastRun[playbook.name] = Date.now();
-          await exo.saveSettings();
-        }
+        if (!auto) return ok(`No automation named "${args.name}" — see list_automations.`);
+        const okRun = await exo.runAutomationNow(auto);
         return ok(okRun ? `Run completed — report in ${paths.reports}/.` : `Run failed — see the report in ${paths.reports}/.`);
       }
+
+      const parseWhens = (linesIn: string[]) => {
+        const parsed = [];
+        for (const line of linesIn) {
+          const w = parseWhen(line);
+          if (!w) return null;
+          parsed.push(w);
+        }
+        return parsed;
+      };
+
       if (args.action === "create") {
-        if (!playbook) return ok(`No playbook named "${args.name}" — create it first with save_playbook.`);
         if (auto) return ok(`Automation "${auto.name}" already exists — use update.`);
-        const cadence = parseCadenceInput(args.cadence_kind ?? "daily", args.hour, args.day);
-        if (!cadence) return ok("Invalid cadence — hour must be 0–23, day 0–6 or a day name.");
-        s.automations.push({ name: playbook.name, cadence, enabled: true, write: args.write ?? false });
-        // First fire at the next slot, not this instant.
-        s.scheduledLastRun[playbook.name] = Date.now();
-        await exo.saveSettings();
-        return ok(`Automation created: ${playbook.name} — ${cadenceLabel(cadence)}, ${args.write ? "writes" : "read-only"}.`);
+        if (!args.prompt && !args.agent) return ok("Give the automation a prompt, or bind it to an agent.");
+        const when = args.when ? parseWhens(args.when) : [];
+        if (when === null) return err("Unparseable when-line — use forms like: daily 08:00 · on create in _inbox/**");
+        const a: Automation = {
+          slug,
+          name: args.name,
+          description: args.description ?? "",
+          icon: "zap",
+          when,
+          mode: (args.mode as AutomationMode) ?? "report",
+          scope: args.write_scope ?? [],
+          canCall: [],
+          cooldownMs: DEFAULT_AUTOMATION_COOLDOWN_MS,
+          enabled: true,
+          agent: args.agent,
+          prompt: args.prompt ?? "",
+        };
+        await store.save(a);
+        return ok(`Automation created: ${a.name} (${store.filePath(slug)}) — ${a.when.map(formatWhen).join(" · ") || "no when-lines yet"}, ${modeSentence(a.mode)}.`);
       }
+
       if (!auto) return ok(`No automation named "${args.name}" — see list_automations.`);
       if (args.action === "delete") {
-        s.automations.splice(s.automations.indexOf(auto), 1);
-        await exo.saveSettings();
-        return ok(`Automation "${auto.name}" deleted (the playbook itself is untouched).`);
+        await store.archive(auto.slug);
+        return ok(`Automation "${auto.name}" archived to .archive/automations/.`);
       }
       if (args.action === "pause" || args.action === "resume") {
-        auto.enabled = args.action === "resume";
-        await exo.saveSettings();
-        return ok(`Automation "${auto.name}" ${auto.enabled ? "resumed" : "paused"}.`);
+        await store.save({ ...auto, enabled: args.action === "resume" });
+        return ok(`Automation "${auto.name}" ${args.action === "resume" ? "resumed" : "paused"}.`);
       }
       // update
-      if (args.cadence_kind || args.hour !== undefined || args.day !== undefined) {
-        const cadence = parseCadenceInput(
-          args.cadence_kind ?? auto.cadence.kind,
-          args.hour ?? (auto.cadence.kind !== "hourly" ? auto.cadence.hour : undefined),
-          args.day ?? (auto.cadence.kind === "weekly" ? auto.cadence.day : undefined)
-        );
-        if (!cadence) return ok("Invalid cadence — hour must be 0–23, day 0–6 or a day name.");
-        auto.cadence = cadence;
+      const a = { ...auto, when: [...auto.when], scope: [...auto.scope], canCall: [...auto.canCall] };
+      if (args.when) {
+        const when = parseWhens(args.when);
+        if (when === null) return err("Unparseable when-line — use forms like: daily 08:00 · on create in _inbox/**");
+        a.when = when;
       }
-      if (args.write !== undefined) auto.write = args.write;
-      await exo.saveSettings();
-      return ok(`Automation updated: ${auto.name} — ${cadenceLabel(auto.cadence)}, ${auto.enabled ? "on" : "paused"}, ${auto.write ? "writes" : "read-only"}.`);
+      if (args.description !== undefined) a.description = args.description;
+      if (args.prompt !== undefined) a.prompt = args.prompt;
+      if (args.agent !== undefined) a.agent = args.agent || undefined;
+      if (args.mode) a.mode = args.mode as AutomationMode;
+      if (args.write_scope) a.scope = args.write_scope;
+      await store.save(a);
+      return ok(`Automation updated: ${a.name} — ${a.when.map(formatWhen).join(" · ") || "no when-lines"}, ${a.enabled ? "on" : "paused"}, ${modeSentence(a.mode)}.`);
     }
   );
 

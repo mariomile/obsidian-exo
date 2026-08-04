@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AutomationConfig } from "../src/core/automations";
-import { createDailyPulseAutomation } from "../src/core/daily-pulse";
+import type { Automation } from "../src/core/automation-model";
 import { buildObsidianTools } from "../src/obsidian/tools";
 
 function toolHandler(app: unknown, name: string) {
@@ -9,57 +8,103 @@ function toolHandler(app: unknown, name: string) {
   return definition.handler;
 }
 
-function fakeApp(automations: AutomationConfig[]) {
+const automation = (over: Partial<Automation>): Automation => ({
+  slug: "x",
+  name: "X",
+  description: "",
+  icon: "zap",
+  when: [{ on: "schedule", cadence: { kind: "daily", hour: 7 } }],
+  mode: "report",
+  scope: [],
+  canCall: [],
+  cooldownMs: 15 * 60_000,
+  enabled: true,
+  prompt: "Do it.",
+  ...over,
+});
+
+function fakeApp(autos: Automation[]) {
+  const items = new Map(autos.map((a) => [a.slug, a]));
   const exo = {
-    settings: {
-      automations,
-      customPrompts: [{ name: "Daily Pulse", prompt: "User playbook" }],
-      scheduledLastRun: {
-        "system:daily-pulse": Date.now(),
-      },
-    },
+    settings: { customPrompts: [{ name: "Distill", prompt: "distill" }] },
     saveSettings: vi.fn(async () => undefined),
     loadAutomationRuns: vi.fn(async () => []),
     restoreAutomationRun: vi.fn(async () => []),
     markAutomationRunReviewed: vi.fn(async () => undefined),
     runPlaybook: vi.fn(async () => true),
+    runAutomationNow: vi.fn(async () => true),
+    automationStore: {
+      list: () => [...items.values()],
+      get: (slug: string) => items.get(slug) ?? null,
+      errors: () => [],
+      save: vi.fn(async (a: Automation) => void items.set(a.slug, a)),
+      archive: vi.fn(async (slug: string) => void items.delete(slug)),
+      filePath: (slug: string) => `_system/automations/${slug}.md`,
+    },
   };
-  return {
-    app: { plugins: { plugins: { exo } } },
-    exo,
-  };
+  return { app: { plugins: { plugins: { exo } } }, exo };
 }
 
-describe("automation tools with system automations", () => {
-  it("uses the system persistence key and describes marker-safe Daily Pulse writes", async () => {
-    const system = { ...createDailyPulseAutomation(), enabled: true };
-    const { app } = fakeApp([system]);
-
+describe("automation tools (v2, file-backed)", () => {
+  it("lists automations as sentences with slug, mode and state", async () => {
+    const { app } = fakeApp([
+      automation({ slug: "morning-digest", name: "Morning Digest" }),
+      automation({
+        slug: "inbox-triager",
+        name: "Inbox Triager",
+        agent: "inbox-triager",
+        mode: "act",
+        enabled: false,
+        when: [{ on: "vault-event", event: "create", path: "_inbox/**" }],
+      }),
+    ]);
     const result = await toolHandler(app, "list_automations")({}, {});
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-    expect(text).toContain("writes _system/review.md (marker-safe)");
-    expect(text).not.toContain("due now");
-    expect(text).not.toContain("checkpointed, restorable");
+    expect(text).toContain("[morning-digest] Morning Digest — Runs daily at 07:00 · read-only · on");
+    expect(text).toContain("[inbox-triager] Inbox Triager — Runs when a note is created in _inbox/ · can edit notes · paused · via agent inbox-triager");
   });
 
-  it("never mutates a same-name system automation through playbook management", async () => {
-    const system = { ...createDailyPulseAutomation(), enabled: true };
-    const playbookAutomation: AutomationConfig = {
-      name: "Daily Pulse",
-      cadence: { kind: "weekly", day: 1, hour: 9 },
-      enabled: true,
-      write: false,
-    };
-    const { app, exo } = fakeApp([system, playbookAutomation]);
+  it("pauses through the store, never through settings", async () => {
+    const { app, exo } = fakeApp([automation({ slug: "morning-digest", name: "Morning Digest" })]);
+    await toolHandler(app, "manage_automation")({ action: "pause", name: "Morning Digest" }, {});
+    expect(exo.automationStore.save).toHaveBeenCalledWith(expect.objectContaining({ slug: "morning-digest", enabled: false }));
+    expect(exo.saveSettings).not.toHaveBeenCalled();
+  });
 
-    await toolHandler(app, "manage_automation")({
-      action: "pause",
-      name: "Daily Pulse",
+  it("creates a file automation with parsed when-lines", async () => {
+    const { app, exo } = fakeApp([]);
+    const result = await toolHandler(app, "manage_automation")({
+      action: "create",
+      name: "Weekly Review Prep",
+      prompt: "Prepare the weekly review.",
+      when: ["weekly mon 07:00"],
+      mode: "report",
     }, {});
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("Automation created");
+    expect(exo.automationStore.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "weekly-review-prep",
+        when: [{ on: "schedule", cadence: { kind: "weekly", day: 1, hour: 7 } }],
+      })
+    );
+  });
 
-    expect(system.enabled).toBe(true);
-    expect(playbookAutomation.enabled).toBe(false);
-    expect(exo.saveSettings).toHaveBeenCalledTimes(1);
+  it("refuses an unparseable when-line without saving", async () => {
+    const { app, exo } = fakeApp([automation({ slug: "morning-digest", name: "Morning Digest" })]);
+    const result = await toolHandler(app, "manage_automation")({
+      action: "update",
+      name: "Morning Digest",
+      when: ["whenever i feel like it"],
+    }, {});
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("Unparseable");
+    expect(exo.automationStore.save).not.toHaveBeenCalled();
+  });
+
+  it("run_now routes through runAutomationNow", async () => {
+    const { app, exo } = fakeApp([automation({ slug: "morning-digest", name: "Morning Digest" })]);
+    await toolHandler(app, "manage_automation")({ action: "run_now", name: "Morning Digest" }, {});
+    expect(exo.runAutomationNow).toHaveBeenCalledWith(expect.objectContaining({ slug: "morning-digest" }));
   });
 });

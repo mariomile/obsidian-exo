@@ -52,6 +52,8 @@ export interface Automation {
   agent?: string;
   /** Built-in executor passthrough (Daily Pulse). */
   system?: "daily-pulse";
+  /** Agent slugs this automation's runs may delegate to via `invoke_agent`. */
+  canCall: string[];
   /** Minimum ms between two event-triggered runs. */
   cooldownMs: number;
   enabled: boolean;
@@ -188,6 +190,7 @@ export function parseAutomationFile(
     mode,
     scope: fmList(fm, "scope"),
     agent: fmScalar(fm, "agent"),
+    canCall: fmList(fm, "can_call"),
     system: systemRaw === "daily-pulse" ? "daily-pulse" : undefined,
     cooldownMs,
     enabled: fmScalar(fm, "enabled") === "true",
@@ -207,6 +210,7 @@ export function serializeAutomation(a: Automation): string {
   lines.push(`mode: ${a.mode}`);
   if (a.scope.length) lines.push(`scope: [${a.scope.join(", ")}]`);
   if (a.agent) lines.push(`agent: ${a.agent}`);
+  if (a.canCall.length) lines.push(`can_call: [${a.canCall.join(", ")}]`);
   if (a.system) lines.push(`system: ${a.system}`);
   lines.push(`cooldown: ${formatDuration(a.cooldownMs)}`);
   lines.push(`enabled: ${a.enabled}`);
@@ -227,6 +231,7 @@ export function automationFromPlaybook(cfg: AutomationConfig, prompt: string): A
     when: [{ on: "schedule", cadence: cfg.cadence }],
     mode: cfg.write ? "act" : "report",
     scope: [],
+    canCall: [],
     system: cfg.system,
     cooldownMs: DEFAULT_AUTOMATION_COOLDOWN_MS,
     enabled: cfg.enabled,
@@ -249,6 +254,7 @@ export function automationFromAgent(def: AgentDef): Automation | null {
     mode: def.contract.autonomy === "notify" ? "report" : def.contract.autonomy,
     scope: def.contract.scope.write,
     agent: def.contract.slug,
+    canCall: def.contract.canCall,
     cooldownMs: def.contract.cooldownMs,
     enabled: def.contract.enabled,
     prompt: "",
@@ -275,7 +281,7 @@ export function contractFromAutomation(a: Automation): import("./agents").AgentC
     output: a.mode === "act" ? "journal" : "report",
     cooldownMs: a.cooldownMs,
     scope: { read: [], write: a.scope },
-    canCall: [],
+    canCall: a.canCall,
     triggers: a.when,
   };
 }

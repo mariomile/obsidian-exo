@@ -1,6 +1,7 @@
+import type { Automation } from "../core/automation-model";
 import type { App } from "obsidian";
 import type { AutomationConfig, AutomationRunRecord } from "../core/automations";
-import type { AgentContract, AgentDef } from "../core/agents";
+import type { AgentDef } from "../core/agents";
 
 /** The shape every in-process tool returns. Free-form human-readable text —
  *  the agent reads it, not a parser. */
@@ -23,14 +24,24 @@ export interface ExoToolHost {
   loadAutomationRuns(): Promise<AutomationRunRecord[]>;
   restoreAutomationRun(id: string): Promise<string[]>;
   markAutomationRunReviewed(id: string): Promise<void>;
-  runPlaybook(name: string, prompt: string, opts?: { write?: boolean }): Promise<boolean>;
+  runPlaybook(name: string, prompt: string, opts?: { write?: boolean; slug?: string }): Promise<boolean>;
+  /** Unified automation files — the store behind the Automations tab. */
+  automationStore: {
+    list(): Automation[];
+    get(slug: string): Automation | null;
+    errors(): { slug: string; problem: string }[];
+    save(a: Automation): Promise<void>;
+    archive(slug: string): Promise<void>;
+    filePath(slug: string): string;
+  };
+  /** Manual run of one automation through the shared executors. */
+  runAutomationNow(a: Automation): Promise<boolean>;
   /** Resolves false when named agents are disabled in settings. */
   agentsReady(): Promise<boolean>;
   agentStore: {
     list(): AgentDef[];
     orphans(): string[];
     resolve(query: string): AgentDef | null;
-    saveContract(contract: AgentContract, today?: string): Promise<void>;
   };
   /** Delegate to another agent; resolves to a human-readable result or refusal. */
   invokeAgentFromAgent(target: string, task: string): Promise<string>;
