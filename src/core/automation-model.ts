@@ -254,3 +254,36 @@ export function automationFromAgent(def: AgentDef): Automation | null {
     prompt: "",
   };
 }
+
+/* --------------------------- executor bridges --------------------------- */
+
+/**
+ * The synthetic contract an automation presents to the run machinery.
+ *
+ * The gates, the event matcher and the headless executor all speak
+ * `AgentContract`; automations reuse that engine instead of growing a second
+ * one. Mode maps as: report → notify (report note only), propose → propose,
+ * act → act with journal output (the work is the point — a report per quiet
+ * run would be a second inbox).
+ */
+export function contractFromAutomation(a: Automation): import("./agents").AgentContract {
+  return {
+    slug: a.slug,
+    enabled: a.enabled,
+    icon: a.icon,
+    autonomy: a.mode === "report" ? "notify" : a.mode,
+    output: a.mode === "act" ? "journal" : "report",
+    cooldownMs: a.cooldownMs,
+    scope: { read: [], write: a.scope },
+    canCall: [],
+    triggers: a.when,
+  };
+}
+
+/** Legacy `AutomationConfig` view for slot runners that still take one
+ *  (Daily Pulse). Null when the automation has no schedule. */
+export function legacyConfigFromAutomation(a: Automation): AutomationConfig | null {
+  const sched = a.when.find((w) => w.on === "schedule");
+  if (sched?.on !== "schedule") return null;
+  return { name: a.name, system: a.system, cadence: sched.cadence, enabled: a.enabled, write: a.mode === "act" };
+}

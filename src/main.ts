@@ -44,6 +44,7 @@ import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessOpts, type HeadlessResult } from "./headless";
 import { automationLastRunKey, migrateScheduledRuns, isDue, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
 import { AutomationStore, adaptAppToAutomationVault, migrateToAutomationFiles } from "./obsidian/automation-store";
+import { contractFromAutomation, legacyConfigFromAutomation, type Automation } from "./core/automation-model";
 import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle, classifyTitleOutcome } from "./core/title";
@@ -65,7 +66,7 @@ import {
 } from "./core/convo-state";
 import { TaskStore, adaptAppToTaskVault } from "./obsidian/task-store";
 import { AgentStore, createAgentStore, readAgentBrainBody } from "./obsidian/agent-store";
-import type { AgentDef } from "./core/agents";
+import { defaultContract, type AgentDef } from "./core/agents";
 import { AgentTriggerDriver, makeNoteReader, todayDailyNotePath } from "./obsidian/agent-triggers";
 import { extractJournalLine, journalLine } from "./core/agent-journal";
 import { agentRunId } from "./core/agent-ledger";
@@ -1672,9 +1673,9 @@ export default class ExoPlugin extends Plugin {
     if (!this.settings.agentsEnabled) return false;
     if (!this.agentRefresh) {
       this.agentRefresh = (async () => {
+        // No contract scaffolding: v2 archived the sidecars — autonomy lives
+        // in automation files now, and re-scaffolding would resurrect them.
         await this.agentStore.refresh();
-        const written = await this.agentStore.scaffoldMissing(new Date().toISOString().slice(0, 10));
-        if (written.length) await this.agentStore.refresh();
       })().catch(() => undefined);
     }
     await this.agentRefresh;
@@ -1745,7 +1746,7 @@ export default class ExoPlugin extends Plugin {
           void this.agentsReady();
           return [];
         }
-        return this.agentStore.list();
+        return this.automationDefs();
       },
       memoryRoot: () => this.paths.root,
       readNote: makeNoteReader(this.app),
@@ -1813,22 +1814,7 @@ export default class ExoPlugin extends Plugin {
 
   /** Apply the shared run gates to an event-triggered run, then execute it. */
   private async dispatchTriggeredRun(run: DueAgentRun): Promise<void> {
-    const gate = gateAgentRun({
-      agent: run.agent,
-      lastRunAt: this.settings.scheduledLastRun[agentLastRunKey(run.agent.brain.slug)] ?? 0,
-      now: Date.now(),
-      running: this.agentRunsInFlight.size,
-      maxConcurrent: ExoPlugin.AGENT_MAX_CONCURRENT,
-      inFlightKeys: this.agentRunsInFlight,
-      runKey: run.runKey,
-      budgetAvailable: this.checkBackgroundBudget(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE),
-      canSpawn: !Platform.isMobile,
-    });
-    if (!gate.ok) {
-      console.info(`[Exo] agent trigger skipped (${gate.reason}): ${gate.detail}`);
-      return;
-    }
-    await this.runAgent(run.agent, run.reason, run.runKey);
+    await this.runDueAutomation(run);
   }
 
   /** Vault setup — create every memory-layer path Exo reads/writes that's
@@ -2776,7 +2762,7 @@ export default class ExoPlugin extends Plugin {
           attemptedAt: now,
           warnings: generated.warnings,
           itemCount: generated.itemCount,
-          config: this.settings.automations.find(isDailyPulseAutomation),
+          config: this.automationStore.list().map(legacyConfigFromAutomation).find((c) => c && isDailyPulseAutomation(c)) ?? undefined,
           reviewed,
         });
         return true;
@@ -2895,40 +2881,116 @@ export default class ExoPlugin extends Plugin {
     });
   }
 
+  /**
+   * The run machinery's view of the automation files: one synthetic
+   * `AgentDef` per enabled, non-system automation. Agent-backed automations
+   * borrow the real brain (and keep responding to @mentions with the
+   * automation's own powers); prompt-only automations get a synthetic brain
+   * and are routed to the playbook executor by `runDueAutomation`. Brains
+   * without an automation stay invocable by mention with safe `propose`
+   * autonomy — mention is invocation, not automation.
+   */
+  private automationDefs(): AgentDef[] {
+    const out: AgentDef[] = [];
+    const boundBrains = new Set<string>();
+    for (const a of this.automationStore.list()) {
+      if (a.system) continue; // Daily Pulse runs through its own slot runner
+      const contract = contractFromAutomation(a);
+      if (a.agent) {
+        const real = this.agentStore.get(a.agent);
+        if (!real) continue; // brain deleted — the hub shows the problem
+        boundBrains.add(a.agent);
+        out.push({ brain: real.brain, contract: { ...contract, triggers: [...contract.triggers, { on: "note-mention" }] } });
+      } else {
+        out.push({
+          brain: { slug: a.slug, name: a.name, invocable: "", description: a.description, source: "vault", prompt: a.prompt },
+          contract,
+        });
+      }
+    }
+    if (this.settings.agentsEnabled) {
+      for (const def of this.agentStore.list()) {
+        if (boundBrains.has(def.brain.slug)) continue;
+        out.push({
+          brain: def.brain,
+          contract: { ...defaultContract(def.brain.slug), enabled: true, autonomy: "propose", triggers: [{ on: "note-mention" }] },
+        });
+      }
+    }
+    return out;
+  }
+
+  /** The automation behind a synthetic def, when there is one. */
+  private automationFor(def: AgentDef): Automation | null {
+    const bySlug = this.automationStore.get(def.contract.slug);
+    return bySlug && !bySlug.system ? bySlug : null;
+  }
+
   private scheduledRunsBusy = false;
   private async checkScheduledRuns(): Promise<void> {
     if (this.scheduledRunsBusy) return;
-    const autos = this.settings.automations.filter((a) => a.enabled);
-    if (!autos.length) return;
+    if (!this.automationStore.isLoaded()) return;
     this.scheduledRunsBusy = true;
     try {
-      for (const a of autos) {
-        const now = Date.now();
-        if (isDailyPulseAutomation(a)) {
-          try {
-            await this.runScheduledDailyPulse(a, now);
-          } catch (err) {
-            console.warn("[Exo] Daily Pulse failed:", err);
-          }
-          continue;
-        }
-        const p = this.settings.customPrompts.find((x) => x.name.toLowerCase() === a.name.toLowerCase());
-        if (!p) continue;
-        if (!isDue(a.cadence, this.settings.scheduledLastRun[p.name] ?? 0, now)) continue;
+      // System automations (Daily Pulse) keep their dedicated slot runner.
+      for (const a of this.automationStore.list()) {
+        if (!a.system || !a.enabled) continue;
+        const legacy = legacyConfigFromAutomation(a);
+        if (!legacy) continue;
         try {
-          const succeeded = await this.runPlaybook(p.name, p.prompt, { write: a.write }); // sequential — one at a time
-          if (succeeded) {
-            this.settings.scheduledLastRun[p.name] = Date.now();
-            await this.saveSettings();
-          }
+          await this.runScheduledDailyPulse(legacy, Date.now());
         } catch (err) {
-          console.warn(`[Exo] automation "${p.name}" failed:`, err);
+          console.warn("[Exo] Daily Pulse failed:", err);
         }
       }
-      await this.checkScheduledAgents();
+      // Everything else — playbook or agent-backed — through the shared gates.
+      const due = dueScheduledAgentRuns(this.automationDefs(), this.settings.scheduledLastRun, Date.now());
+      for (const run of due) {
+        await this.runDueAutomation(run);
+      }
     } finally {
       this.scheduledRunsBusy = false;
     }
+  }
+
+  /** Gate one due automation run, then route it to the right executor:
+   *  agent-backed → the agent runner (subagent delegation, memory, journal);
+   *  prompt-only → the playbook runner. Sequential — one at a time. */
+  private async runDueAutomation(run: DueAgentRun): Promise<void> {
+    const gate = gateAgentRun({
+      agent: run.agent,
+      lastRunAt: this.settings.scheduledLastRun[agentLastRunKey(run.agent.brain.slug)] ?? 0,
+      now: Date.now(),
+      running: this.agentRunsInFlight.size,
+      maxConcurrent: ExoPlugin.AGENT_MAX_CONCURRENT,
+      inFlightKeys: this.agentRunsInFlight,
+      runKey: run.runKey,
+      budgetAvailable: this.checkBackgroundBudget(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE),
+      canSpawn: !Platform.isMobile,
+    });
+    if (!gate.ok) {
+      console.info(`[Exo] automation run skipped (${gate.reason}): ${gate.detail}`);
+      return;
+    }
+    const automation = this.automationFor(run.agent);
+    if (automation && !automation.agent) {
+      // Prompt-only automation → the proven playbook executor.
+      this.agentRunsInFlight.add(run.runKey);
+      try {
+        const ok = await this.runPlaybook(automation.name, automation.prompt, { write: automation.mode === "act" });
+        if (ok) {
+          this.settings.scheduledLastRun[run.runKey] = Date.now();
+          this.settings.scheduledLastRun[agentLastRunKey(run.agent.brain.slug)] = Date.now();
+          await this.saveSettings();
+        }
+      } catch (err) {
+        console.warn(`[Exo] automation "${automation.name}" failed:`, err);
+      } finally {
+        this.agentRunsInFlight.delete(run.runKey);
+      }
+      return;
+    }
+    await this.runAgent(run.agent, run.reason, run.runKey);
   }
 
   /* ------------------------------ agent runs ----------------------------- */
@@ -2953,36 +3015,6 @@ export default class ExoPlugin extends Plugin {
    */
   agentContext: { slug: string; depth: number } | null = null;
 
-  /**
-   * Fire any scheduled agents that are due. Runs inside `checkScheduledRuns`'s
-   * busy guard, on the SAME 30-minute heartbeat as automations — deliberately no
-   * second timer, so there is one place where unattended work can start.
-   */
-  private async checkScheduledAgents(): Promise<void> {
-    if (!(await this.agentsReady())) return;
-    const due = dueScheduledAgentRuns(this.agentStore.list(), this.settings.scheduledLastRun, Date.now());
-    for (const run of due) {
-      const gate = gateAgentRun({
-        agent: run.agent,
-        lastRunAt: this.settings.scheduledLastRun[agentLastRunKey(run.agent.brain.slug)] ?? 0,
-        now: Date.now(),
-        running: this.agentRunsInFlight.size,
-        maxConcurrent: ExoPlugin.AGENT_MAX_CONCURRENT,
-        inFlightKeys: this.agentRunsInFlight,
-        runKey: run.runKey,
-        budgetAvailable: this.checkBackgroundBudget(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE),
-      canSpawn: !Platform.isMobile,
-      });
-      if (!gate.ok) {
-        // Refusals are logged, never silent: a skipped run reads as "nothing to
-        // do" otherwise, which is exactly the failure mode that hides a stuck
-        // cooldown or an exhausted budget.
-        console.info(`[Exo] agent run skipped (${gate.reason}): ${gate.detail}`);
-        continue;
-      }
-      await this.runAgent(run.agent, run.reason, run.runKey);
-    }
-  }
 
   /**
    * Execute one agent run through the headless profile — the same bounded

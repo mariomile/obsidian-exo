@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWhen, formatWhen, parseAutomationFile, serializeAutomation, automationFromPlaybook, automationFromAgent } from "./automation-model";
+import { parseWhen, formatWhen, parseAutomationFile, serializeAutomation, automationFromPlaybook, automationFromAgent, contractFromAutomation, legacyConfigFromAutomation } from "./automation-model";
 
 describe("when grammar", () => {
   it("parses schedules", () => {
@@ -131,5 +131,40 @@ describe("migration mapping", () => {
       },
     };
     expect(automationFromAgent(def)).toBeNull();
+  });
+});
+
+describe("executor bridges", () => {
+  const auto = (over: Partial<import("./automation-model").Automation>) => ({
+    slug: "x", name: "X", description: "", icon: "zap",
+    when: [], mode: "report" as const, scope: [], cooldownMs: 15 * 60_000,
+    enabled: true, prompt: "Do it.", ...over,
+  });
+
+  it("synthesizes a contract from an automation", () => {
+    const c = contractFromAutomation(auto({
+      mode: "act", scope: ["_inbox/**"],
+      when: [{ on: "vault-event", event: "create", path: "_inbox/**" }],
+    }));
+    expect(c.autonomy).toBe("act");
+    expect(c.output).toBe("journal");
+    expect(c.triggers).toEqual([{ on: "vault-event", event: "create", path: "_inbox/**" }]);
+    expect(c.scope.write).toEqual(["_inbox/**"]);
+    expect(c.enabled).toBe(true);
+  });
+
+  it("report mode maps to notify autonomy with report output", () => {
+    const c = contractFromAutomation(auto({}));
+    expect(c.autonomy).toBe("notify");
+    expect(c.output).toBe("report");
+  });
+
+  it("builds a legacy config for slot runners", () => {
+    const cfg = legacyConfigFromAutomation(auto({
+      system: "daily-pulse",
+      when: [{ on: "schedule", cadence: { kind: "daily", hour: 8 } }],
+    }));
+    expect(cfg).toEqual({ name: "X", system: "daily-pulse", cadence: { kind: "daily", hour: 8 }, enabled: true, write: false });
+    expect(legacyConfigFromAutomation(auto({}))).toBeNull();
   });
 });
