@@ -43,6 +43,9 @@ export interface ExoPaths {
   agents: string;
   /** Append-only run ledger, one file per month. */
   agentRuns: string;
+  /** Unified automations — one readable `<slug>.md` per automation (name,
+   *  description, when, mode, scope in frontmatter; prompt as the body). */
+  automations: string;
   /** Per-agent compounding memory — a scope under vault memory, not a new store. */
   agentMemory: string;
   openLoops: string;
@@ -78,6 +81,7 @@ export function exoPaths(root: string): ExoPaths {
     mentions: `${r}/mentions`,
     agents: `${r}/agents`,
     agentRuns: `${r}/agents/runs`,
+    automations: `${r}/automations`,
     agentMemory: `${memory}/agents`,
     openLoops: `${memory}/open-loops.md`,
     knownFalse: `${memory}/known-false.md`,

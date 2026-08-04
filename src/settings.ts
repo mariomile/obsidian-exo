@@ -176,6 +176,9 @@ export interface MVASettings {
   /** Structured automations (playbook + slot cadence + write flag) — the
    *  scheduler in main.ts and the Cockpit Automations panel read these. */
   automations: AutomationConfig[];
+  /** One-shot guard for the unified automation-files migration (v2): settings
+   *  playbooks + agent contract sidecars → `<memoryRoot>/automations/*.md`. */
+  automationsMigrated: boolean;
   /** Load external MCP tools (Gmail/Slack/Calendar…) in headless playbook runs —
    *  Dia-style digest sources. Read-only enforced by the headless resolver
    *  (core/headless-tools.ts): read tools auto-allowed, mutations auto-denied. */
@@ -297,6 +300,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   cockpitOnStartup: false,
   scheduledRuns: "",
   automations: [],
+  automationsMigrated: false,
   playbookExternalTools: false,
   seededDigest: false,
   seededDailyPulse: false,

@@ -43,6 +43,7 @@ import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
 import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessOpts, type HeadlessResult } from "./headless";
 import { automationLastRunKey, migrateScheduledRuns, isDue, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
+import { AutomationStore, adaptAppToAutomationVault, migrateToAutomationFiles } from "./obsidian/automation-store";
 import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle, classifyTitleOutcome } from "./core/title";
@@ -266,6 +267,9 @@ export default class ExoPlugin extends Plugin {
    * `agentsReady()` so a disabled feature costs nothing at boot.
    */
   agentStore!: AgentStore;
+  /** Unified automations — one readable file per automation under
+   *  `<memoryRoot>/automations/`. Loaded at layout-ready; watched thereafter. */
+  automationStore!: AutomationStore;
   private agentRefresh: Promise<void> | null = null;
   /** Event-driven agent triggers. Disarmed until layout-ready. */
   private agentTriggers: AgentTriggerDriver | null = null;
@@ -352,6 +356,7 @@ export default class ExoPlugin extends Plugin {
       this.agentWriteQueue,
       () => this.lastSessionCaps?.agents ?? []
     );
+    this.automationStore = new AutomationStore(adaptAppToAutomationVault(this.app), this.paths);
 
     const proposalRoot = this.manifest.dir;
     const adapter = this.app.vault.adapter;
@@ -1676,6 +1681,35 @@ export default class ExoPlugin extends Plugin {
     return true;
   }
 
+  /** Load the unified automation files and run the one-shot v2 migration
+   *  (settings playbooks + agent contract sidecars → automation files). */
+  private async readyAutomations(): Promise<void> {
+    try {
+      await this.automationStore.refresh();
+      if (!this.settings.automationsMigrated) {
+        const { ok, notices } = await migrateToAutomationFiles(
+          this.automationStore,
+          this.agentStore,
+          this.settings,
+          adaptAppToAutomationVault(this.app),
+          this.paths,
+        );
+        if (notices.length) {
+          console.info("[Exo] automations migration:", notices.join(" · "));
+          new Notice(`Exo automations: ${notices.filter((n) => !n.startsWith("FAILED")).length} migrated${ok ? "" : " — some items failed, see console"}`);
+        }
+        if (ok) {
+          this.settings.automationsMigrated = true;
+          this.invalidateAgents();
+        }
+        await this.saveSettings();
+        await this.automationStore.refresh();
+      }
+    } catch (err) {
+      console.warn("[Exo] automations load failed:", err);
+    }
+  }
+
   /** Drop the cached registry so the next consumer rescans (settings changed,
    *  a contract was edited by hand, a new agent file appeared). */
   invalidateAgents(): void {
@@ -1760,8 +1794,21 @@ export default class ExoPlugin extends Plugin {
       // then arm. Failure here must not block the rest of the plugin.
       void this.agentsReady()
         .catch(() => false)
-        .then(() => driver.arm());
+        .then(() => driver.arm())
+        .then(() => this.readyAutomations());
     });
+
+    // Automation files are meant to be hand-editable too — re-scan on any
+    // change inside the automations folder so the hub and scheduler never act
+    // on a stale parse.
+    const watchAutomations = (path: string) => {
+      if (!this.automationStore.owns(path)) return;
+      void this.automationStore.refresh().then(() => this.refreshAgentsUI());
+    };
+    this.registerEvent(this.app.vault.on("modify", (file) => watchAutomations(file.path)));
+    this.registerEvent(this.app.vault.on("create", (file) => watchAutomations(file.path)));
+    this.registerEvent(this.app.vault.on("delete", (file) => watchAutomations(file.path)));
+    this.registerEvent(this.app.vault.on("rename", (file) => watchAutomations(file.path)));
   }
 
   /** Apply the shared run gates to an event-triggered run, then execute it. */
