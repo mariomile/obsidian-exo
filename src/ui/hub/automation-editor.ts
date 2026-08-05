@@ -185,11 +185,23 @@ export function openAutomationEditor(host: HTMLElement, ctx: HubTabContext): voi
   const renderModes = () => {
     modes.empty();
     for (const c of MODE_CHOICES) {
+      // Proposals are collected from an agent run's output by the Proposal
+      // Kernel; a bare playbook run has no such pass. Offering the tier here
+      // without a bound agent would promise a review queue that never fills.
+      const unavailable = c.value === "propose" && !draft.agent;
       const card = modes.createDiv({ cls: "mva-auto2-mode", attr: { role: "button", tabindex: "0" } });
       card.toggleClass("is-current", draft.mode === c.value);
+      card.toggleClass("is-unavailable", unavailable);
       card.createDiv({ cls: "mva-auto2-mode-label", text: c.label });
-      card.createDiv({ cls: "mva-auto2-mode-hint", text: c.hint });
+      card.createDiv({
+        cls: "mva-auto2-mode-hint",
+        text: unavailable ? "Needs an agent — pick one below." : c.hint,
+      });
       clickable(card, () => {
+        if (unavailable) {
+          new Notice("Proposals come from an agent run — bind an agent first.");
+          return;
+        }
         draft.mode = c.value;
         renderModes();
         renderScope();
@@ -220,7 +232,10 @@ export function openAutomationEditor(host: HTMLElement, ctx: HubTabContext): voi
       none.createSpan({ text: "None" });
       clickable(none, () => {
         draft.agent = undefined;
+        if (draft.mode === "propose") draft.mode = "report";
         syncAgentChip();
+        renderModes();
+        renderScope();
         agentPopover.close();
       });
       for (const def of agents) {
@@ -233,6 +248,7 @@ export function openAutomationEditor(host: HTMLElement, ctx: HubTabContext): voi
         clickable(opt, () => {
           draft.agent = def.brain.slug;
           syncAgentChip();
+          renderModes();
           agentPopover.close();
         });
       }

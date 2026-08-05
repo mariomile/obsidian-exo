@@ -1264,6 +1264,9 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       if (args.action === "create") {
         if (auto) return ok(`Automation "${auto.name}" already exists — use update.`);
         if (!args.prompt && !args.agent) return ok("Give the automation a prompt, or bind it to an agent.");
+        if (args.mode === "propose" && !args.agent) {
+          return ok("Mode `propose` needs a bound agent — proposals are collected from an agent run. Use `report`, or set `agent`.");
+        }
         const when = args.when ? parseWhens(args.when) : [];
         if (when === null) return err("Unparseable when-line — use forms like: daily 08:00 · on create in _inbox/**");
         const a: Automation = {
@@ -1303,7 +1306,12 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       if (args.description !== undefined) a.description = args.description;
       if (args.prompt !== undefined) a.prompt = args.prompt;
       if (args.agent !== undefined) a.agent = args.agent || undefined;
-      if (args.mode) a.mode = args.mode as AutomationMode;
+      if (args.mode) {
+        if (args.mode === "propose" && !(args.agent ?? a.agent)) {
+          return ok("Mode `propose` needs a bound agent — proposals are collected from an agent run. Use `report`, or set `agent`.");
+        }
+        a.mode = args.mode as AutomationMode;
+      }
       if (args.write_scope) a.scope = args.write_scope;
       await store.save(a);
       return ok(`Automation updated: ${a.name} — ${a.when.map(formatWhen).join(" · ") || "no when-lines"}, ${a.enabled ? "on" : "paused"}, ${modeSentence(a.mode)}.`);

@@ -6295,3 +6295,5 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-auto2-prompt { resize: vertical; min-height: 120px; font-family: inherit; }
 .mva-auto2-ed-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .mva-auto2-remove { color: var(--text-muted); }
+.mva-auto2-mode.is-unavailable { opacity: 0.5; }
+.mva-auto2-mode.is-unavailable:hover { background: transparent; }

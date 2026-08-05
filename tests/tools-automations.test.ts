@@ -102,6 +102,19 @@ describe("automation tools (v2, file-backed)", () => {
     expect(exo.automationStore.save).not.toHaveBeenCalled();
   });
 
+  it("refuses propose mode without a bound agent", async () => {
+    const { app, exo } = fakeApp([]);
+    const result = await toolHandler(app, "manage_automation")({
+      action: "create",
+      name: "Suggester",
+      prompt: "Suggest things.",
+      mode: "propose",
+    }, {});
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("needs a bound agent");
+    expect(exo.automationStore.save).not.toHaveBeenCalled();
+  });
+
   it("run_now routes through runAutomationNow", async () => {
     const { app, exo } = fakeApp([automation({ slug: "morning-digest", name: "Morning Digest" })]);
     await toolHandler(app, "manage_automation")({ action: "run_now", name: "Morning Digest" }, {});

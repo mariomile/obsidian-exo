@@ -82,7 +82,7 @@ export async function renderAutomationsTab(host: HTMLElement, ctx: HubTabContext
     ctx.rerender();
   };
 
-  renderLegacyRuns(host, runs, ctx);
+  renderLegacyRuns(host, runs, autos.map((a) => a.name), ctx);
 }
 
 /* ------------------------------- one card ------------------------------- */
@@ -116,7 +116,7 @@ function renderCard(
   if (problem) main.createDiv({ cls: "mva-auto2-warn", text: problem.problem });
 
   // Last-run line — click to expand this automation's timeline.
-  const own = runsForSlug(runs, a.slug);
+  const own = runsForSlug(runs, a.slug, a.name);
   const meta = main.createDiv({ cls: "mva-auto2-meta" });
   if (a.system === "daily-pulse") meta.setText(dailyPulseMetaLabel(ctx.plugin.settings.dailyPulseReviewState));
   else if (own.length) meta.setText(`last run ${formatAge(own[0].startedAt, Date.now(), "—")}${own[0].ok ? "" : " · failed"}`);
@@ -171,8 +171,13 @@ function renderCard(
 /* ---------------------------- run timeline ---------------------------- */
 
 /** Pre-v2 records that no automation owns — visible but out of the way. */
-function renderLegacyRuns(host: HTMLElement, runs: AutomationRunRecord[], ctx: HubTabContext): void {
-  const old = legacyRuns(runs);
+function renderLegacyRuns(
+  host: HTMLElement,
+  runs: AutomationRunRecord[],
+  claimedNames: string[],
+  ctx: HubTabContext
+): void {
+  const old = legacyRuns(runs, claimedNames);
   if (!old.length) return;
   const key = "auto-runs:legacy";
   const head = host.createDiv({ cls: "mva-pv-label mva-auto2-legacy", text: `Older runs (${old.length})` });

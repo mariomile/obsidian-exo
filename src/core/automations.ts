@@ -52,14 +52,35 @@ export interface AutomationRunRecord {
   slug?: string;
 }
 
-/** Runs of one automation, newest first. */
-export function runsForSlug(records: AutomationRunRecord[], slug: string): AutomationRunRecord[] {
-  return records.filter((r) => r.slug === slug).sort((a, b) => b.startedAt - a.startedAt);
+/**
+ * Runs of one automation, newest first.
+ *
+ * Pre-v2 records carry no slug, only the display name the run was started
+ * under — so an upgraded vault would show "never ran" for automations that
+ * demonstrably ran this morning. They are claimed by exact name match: a
+ * read-time join, so nothing is rewritten and nothing is guessed.
+ */
+export function runsForSlug(records: AutomationRunRecord[], slug: string, name?: string): AutomationRunRecord[] {
+  return records
+    .filter((r) => (r.slug ? r.slug === slug : name !== undefined && claimsRunName(name, r.name)))
+    .sort((a, b) => b.startedAt - a.startedAt);
 }
 
-/** Pre-v2 records with no owning automation — shown once, collapsed. */
-export function legacyRuns(records: AutomationRunRecord[]): AutomationRunRecord[] {
-  return records.filter((r) => !r.slug).sort((a, b) => b.startedAt - a.startedAt);
+/**
+ * Whether a pre-v2 record belongs to an automation, by the two names the old
+ * writers produced: a playbook run stored the bare name ("Morning Digest"),
+ * an agent run stored `agentRunName` ("Inbox Triager (create _inbox x.md)").
+ * Both are exact shapes, not a fuzzy match — anything else stays unclaimed.
+ */
+function claimsRunName(automationName: string, recordName: string): boolean {
+  return recordName === automationName || recordName.startsWith(`${automationName} (`);
+}
+
+/** Pre-v2 records no automation claims — shown once, collapsed. */
+export function legacyRuns(records: AutomationRunRecord[], claimedNames: string[] = []): AutomationRunRecord[] {
+  return records
+    .filter((r) => !r.slug && !claimedNames.some((name) => claimsRunName(name, r.name)))
+    .sort((a, b) => b.startedAt - a.startedAt);
 }
 
 /** Write runs still waiting for review — the Cockpit attention pool. */
@@ -199,7 +220,20 @@ export function migrateScheduledRuns(raw: string): AutomationConfig[] {
 
 /* ---------------------------- run records ---------------------------- */
 
-/** Keep the newest `max` run records (by startedAt), newest first. */
+/**
+ * Keep the newest `max` run records (by startedAt), newest first — except
+ * write runs still awaiting review, which are kept whatever their age.
+ *
+ * Those records ARE the restore points: pruning one throws away the only
+ * snapshot of notes an automation edited while nobody was watching. Since
+ * read-only runs are recorded too, a busy day of quiet runs could otherwise
+ * push a pending rollback off the end of the list.
+ */
 export function pruneRuns(records: AutomationRunRecord[], max: number): AutomationRunRecord[] {
-  return [...records].sort((a, b) => b.startedAt - a.startedAt).slice(0, Math.max(0, max));
+  const newestFirst = [...records].sort((a, b) => b.startedAt - a.startedAt);
+  const pending = newestFirst.filter((r) => r.writes.length > 0 && !r.reviewedAt && !r.restoredAt);
+  const rest = newestFirst.filter((r) => !pending.includes(r));
+  return [...pending, ...rest.slice(0, Math.max(0, max - pending.length))].sort(
+    (a, b) => b.startedAt - a.startedAt
+  );
 }

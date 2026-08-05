@@ -17,7 +17,7 @@ import {
   serializeAutomation,
   type Automation,
 } from "../core/automation-model";
-import { automationFromAgent, automationFromPlaybook } from "../core/automation-model";
+import { automationFromAgent, automationFromPlaybook, scheduleRunKeys } from "../core/automation-model";
 import { slugifyAgent } from "../core/agents";
 import type { ExoPaths } from "../core/paths";
 import { adaptAppToAgentVault, type AgentVaultAdapter } from "./agent-store";
@@ -133,6 +133,9 @@ export class AutomationStore {
 export interface LegacyAutomationSettings {
   automations: AutomationConfig[];
   customPrompts: { name: string; prompt: string }[];
+  /** Per-slot "last ran at". Re-keyed by the migration: playbook automations
+   *  used to be keyed by prompt NAME, automations are keyed by run key. */
+  scheduledLastRun: Record<string, number>;
 }
 
 /**
@@ -164,6 +167,10 @@ export async function migrateToAutomationFiles(
       const a = automationFromPlaybook(cfg, prompt);
       if (store.get(a.slug)) continue; // already migrated (re-run after partial failure)
       await store.save(a);
+      // Carry the old "last ran" forward under the new key. Without this every
+      // migrated schedule reads as never-run and the whole set fires at once on
+      // the first heartbeat after the upgrade.
+      carryLastRun(legacy, a, legacy.scheduledLastRun[cfg.name]);
       if (prompt) migratedPromptNames.add(cfg.name.toLowerCase());
       notices.push(`migrated schedule "${cfg.name}"`);
     } catch (err) {
@@ -179,6 +186,9 @@ export async function migrateToAutomationFiles(
       if (!a) continue;
       if (!store.get(a.slug)) {
         await store.save(a);
+        // Agent schedules already used this key shape (slug + trigger), so the
+        // existing value survives; only a missing one is stamped.
+        carryLastRun(legacy, a, undefined);
         notices.push(`migrated agent "${def.brain.name}"`);
       }
       const sidecar = `${paths.agents}/${def.contract.slug}.md`;
@@ -199,6 +209,15 @@ export async function migrateToAutomationFiles(
     legacy.customPrompts = legacy.customPrompts.filter((p) => !migratedPromptNames.has(p.name.toLowerCase()));
   }
   return { ok, notices };
+}
+
+/** Stamp the automation's schedule keys, preferring a carried-over value and
+ *  falling back to "now" — an unstamped key means "never ran", i.e. due. */
+function carryLastRun(legacy: LegacyAutomationSettings, a: Automation, previous: number | undefined): void {
+  for (const key of scheduleRunKeys(a)) {
+    if (legacy.scheduledLastRun[key]) continue;
+    legacy.scheduledLastRun[key] = previous && previous > 0 ? previous : Date.now();
+  }
 }
 
 /** Convenience for tests and main: slug a new automation name safely. */

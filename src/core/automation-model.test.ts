@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { runsForSlug, legacyRuns } from "./automations";
-import { parseWhen, formatWhen, parseAutomationFile, serializeAutomation, automationFromPlaybook, automationFromAgent, contractFromAutomation, legacyConfigFromAutomation } from "./automation-model";
+import { runsForSlug, legacyRuns, pruneRuns } from "./automations";
+import { parseWhen, formatWhen, parseAutomationFile, serializeAutomation, automationFromPlaybook, automationFromAgent, contractFromAutomation, legacyConfigFromAutomation, scheduleRunKeys } from "./automation-model";
 
 describe("when grammar", () => {
   it("parses schedules", () => {
@@ -170,6 +170,22 @@ describe("executor bridges", () => {
   });
 });
 
+describe("schedule keys", () => {
+  it("names one key per schedule slot and ignores event triggers", () => {
+    const a = parseAutomationFile("digest", [
+      "---", "name: Digest", "when:", '  - "daily 07:00"', '  - "on create in _inbox/**"',
+      '  - "weekly mon 08:00"', "---", "Body",
+    ].join("\n")).automation;
+    const keys = scheduleRunKeys(a);
+    // One key per schedule; the event trigger contributes none.
+    expect(keys.length).toBe(2);
+    expect(keys[0]).toContain("agent:digest::schedule");
+    expect(keys[0]).toContain("daily");
+    expect(keys[1]).toContain("weekly");
+    expect(keys[0]).not.toBe(keys[1]);
+  });
+});
+
 describe("run buckets", () => {
   const rec = (over: Partial<import("./automations").AutomationRunRecord>) => ({
     id: "r", name: "X", startedAt: 1, ok: true, reportPath: "", writes: [], checkpoint: [] as [string, string | null][], ...over,
@@ -178,5 +194,61 @@ describe("run buckets", () => {
     const records = [rec({ id: "a", slug: "x", startedAt: 1 }), rec({ id: "b", slug: "x", startedAt: 5 }), rec({ id: "c" })];
     expect(runsForSlug(records, "x").map((r) => r.id)).toEqual(["b", "a"]);
     expect(legacyRuns(records).map((r) => r.id)).toEqual(["c"]);
+  });
+
+  it("claims pre-v2 records by exact name so an upgrade keeps its history", () => {
+    const records = [
+      rec({ id: "old", name: "Morning Digest", startedAt: 2 }),
+      rec({ id: "new", slug: "morning-digest", name: "Morning Digest", startedAt: 9 }),
+      rec({ id: "stray", name: "Something Else" }),
+    ];
+    expect(runsForSlug(records, "morning-digest", "Morning Digest").map((r) => r.id)).toEqual(["new", "old"]);
+    expect(legacyRuns(records, ["Morning Digest"]).map((r) => r.id)).toEqual(["stray"]);
+  });
+
+  it("claims agent-run records by their \"Name (reason)\" shape", () => {
+    const records = [
+      rec({ id: "evt", name: "Inbox Triager (create _inbox Paseo.md)", startedAt: 3 }),
+      rec({ id: "manual", name: "Inbox Triager", startedAt: 1 }),
+      rec({ id: "other", name: "Inbox Triager Deluxe", startedAt: 2 }),
+    ];
+    expect(runsForSlug(records, "inbox-triager", "Inbox Triager").map((r) => r.id)).toEqual(["evt", "manual"]);
+    expect(legacyRuns(records, ["Inbox Triager"]).map((r) => r.id)).toEqual(["other"]);
+  });
+
+  it("does not claim by name when the automation name is not given", () => {
+    const records = [rec({ id: "old", name: "Morning Digest" })];
+    expect(runsForSlug(records, "morning-digest")).toEqual([]);
+  });
+});
+
+describe("pruneRuns", () => {
+  const rec = (over: Partial<import("./automations").AutomationRunRecord>) => ({
+    id: "r", name: "X", startedAt: 1, ok: true, reportPath: "", writes: [] as string[],
+    checkpoint: [] as [string, string | null][], ...over,
+  });
+
+  it("keeps the newest records", () => {
+    const records = [rec({ id: "a", startedAt: 1 }), rec({ id: "b", startedAt: 2 }), rec({ id: "c", startedAt: 3 })];
+    expect(pruneRuns(records, 2).map((r) => r.id)).toEqual(["c", "b"]);
+  });
+
+  it("never drops a write run still awaiting review — it wins the budget", () => {
+    const pending = rec({ id: "old-write", startedAt: 1, writes: ["a.md"] });
+    const chatter = [2, 3, 4, 5].map((t) => rec({ id: `q${t}`, startedAt: t }));
+    // Budget of 2: the pending restore point survives and the newest quiet run
+    // takes the other slot; the older quiet runs age out.
+    expect(pruneRuns([pending, ...chatter], 2).map((r) => r.id)).toEqual(["q5", "old-write"]);
+  });
+
+  it("keeps every pending restore point even past the budget", () => {
+    const pendings = [1, 2, 3].map((t) => rec({ id: `w${t}`, startedAt: t, writes: ["a.md"] }));
+    expect(pruneRuns(pendings, 1).map((r) => r.id)).toEqual(["w3", "w2", "w1"]);
+  });
+
+  it("lets a reviewed write run age out like anything else", () => {
+    const reviewed = rec({ id: "old-write", startedAt: 1, writes: ["a.md"], reviewedAt: 9 });
+    const chatter = [2, 3].map((t) => rec({ id: `q${t}`, startedAt: t }));
+    expect(pruneRuns([reviewed, ...chatter], 2).map((r) => r.id)).toEqual(["q3", "q2"]);
   });
 });

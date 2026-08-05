@@ -15,6 +15,7 @@
  */
 
 import { type Cadence, type AutomationConfig, cadenceLabel, parseCadenceInput } from "./automations";
+import { agentTriggerRunKey } from "./agent-runs";
 import {
   type AgentDef,
   frontmatterBlock,
@@ -284,6 +285,18 @@ export function contractFromAutomation(a: Automation): import("./agents").AgentC
     canCall: a.canCall,
     triggers: a.when,
   };
+}
+
+/**
+ * The scheduler keys this automation's schedule slots occupy.
+ *
+ * Exported because two places must agree on them: the migration (which seeds
+ * them so an upgrade doesn't read every automation as "never ran" and fire
+ * them all at the next heartbeat) and a manual Run now (which stamps them so
+ * running by hand at 06:59 doesn't get repeated by the 07:00 slot).
+ */
+export function scheduleRunKeys(a: Automation): string[] {
+  return a.when.filter((w) => w.on === "schedule").map((w) => agentTriggerRunKey(a.slug, w));
 }
 
 /** Legacy `AutomationConfig` view for slot runners that still take one

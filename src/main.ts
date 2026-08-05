@@ -44,7 +44,7 @@ import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessOpts, type HeadlessResult } from "./headless";
 import { automationLastRunKey, migrateScheduledRuns, isDue, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
 import { AutomationStore, adaptAppToAutomationVault, migrateToAutomationFiles } from "./obsidian/automation-store";
-import { contractFromAutomation, legacyConfigFromAutomation, type Automation } from "./core/automation-model";
+import { contractFromAutomation, legacyConfigFromAutomation, scheduleRunKeys, type Automation } from "./core/automation-model";
 import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle, classifyTitleOutcome } from "./core/title";
@@ -66,7 +66,7 @@ import {
 } from "./core/convo-state";
 import { TaskStore, adaptAppToTaskVault } from "./obsidian/task-store";
 import { AgentStore, createAgentStore, readAgentBrainBody } from "./obsidian/agent-store";
-import { defaultContract, type AgentDef } from "./core/agents";
+import type { AgentDef } from "./core/agents";
 import { AgentTriggerDriver, makeNoteReader, todayDailyNotePath } from "./obsidian/agent-triggers";
 import { extractJournalLine, journalLine } from "./core/agent-journal";
 import { agentRunId } from "./core/agent-ledger";
@@ -2356,7 +2356,12 @@ export default class ExoPlugin extends Plugin {
     }
     const result = await runHeadlessPlaybook(this.app, this.settings, prompt, headlessOpts);
     const path = await writeReport(this.app, name, result, this.paths.reports);
-    if (opts.write) await this.recordAutomationRun(name, startedAt, result, path, opts.slug);
+    // Every automation run is recorded, not just the ones that wrote. The
+    // records started life as restore points, so read-only runs left no trace
+    // — which made an automation's own timeline read "never ran" the morning
+    // after it ran. A record with no checkpoint is history; only one WITH a
+    // checkpoint is a restore point, and the UI keys off `writes`/`checkpoint`.
+    if (opts.slug || opts.write) await this.recordAutomationRun(name, startedAt, result, path, opts.slug);
     new Notice(
       result.ok ? `Playbook "${name}" done → ${path}` : `Playbook "${name}" failed (report: ${path})`
     );
@@ -2908,15 +2913,11 @@ export default class ExoPlugin extends Plugin {
         });
       }
     }
-    if (this.settings.agentsEnabled) {
-      for (const def of this.agentStore.list()) {
-        if (boundBrains.has(def.brain.slug)) continue;
-        out.push({
-          brain: def.brain,
-          contract: { ...defaultContract(def.brain.slug), enabled: true, autonomy: "propose", triggers: [{ on: "note-mention" }] },
-        });
-      }
-    }
+    // Brains with no automation are NOT listed. A brain here would carry a
+    // `note-mention` trigger, and an enabled one fires a run because a human
+    // typed its name in a note — unattended work nobody opted into. Mention
+    // stays invocation: chat, `invoke_agent`, Run now. Only an agent bound to
+    // an enabled automation answers a mention, which is the opt-in.
     return out;
   }
 
@@ -2967,11 +2968,17 @@ export default class ExoPlugin extends Plugin {
       return this.runAgent(def, "manual", `${agentLastRunKey(a.slug)}::manual`);
     }
     const ok = await this.runPlaybook(a.name, a.prompt, { write: a.mode === "act", slug: a.slug });
-    if (ok) {
-      this.settings.scheduledLastRun[agentLastRunKey(a.slug)] = Date.now();
-      await this.saveSettings();
-    }
+    if (ok) await this.stampAutomationRun(a);
     return ok;
+  }
+
+  /** Mark an automation as just-run: the cooldown key AND every schedule slot,
+   *  so running by hand at 06:59 is not repeated by the 07:00 slot. */
+  private async stampAutomationRun(a: Automation): Promise<void> {
+    const now = Date.now();
+    this.settings.scheduledLastRun[agentLastRunKey(a.slug)] = now;
+    for (const key of scheduleRunKeys(a)) this.settings.scheduledLastRun[key] = now;
+    await this.saveSettings();
   }
 
   /** Gate one due automation run, then route it to the right executor:
@@ -2999,11 +3006,7 @@ export default class ExoPlugin extends Plugin {
       this.agentRunsInFlight.add(run.runKey);
       try {
         const ok = await this.runPlaybook(automation.name, automation.prompt, { write: automation.mode === "act", slug: automation.slug });
-        if (ok) {
-          this.settings.scheduledLastRun[run.runKey] = Date.now();
-          this.settings.scheduledLastRun[agentLastRunKey(run.agent.brain.slug)] = Date.now();
-          await this.saveSettings();
-        }
+        if (ok) await this.stampAutomationRun(automation);
       } catch (err) {
         console.warn(`[Exo] automation "${automation.name}" failed:`, err);
       } finally {
@@ -3108,10 +3111,11 @@ export default class ExoPlugin extends Plugin {
       // that decided nothing needed doing would otherwise leave a Restore
       // button that restores nothing — an affordance promising a rollback it
       // has no work to perform.
-      const restoreId =
-        write && result.writes.length > 0
-          ? await this.recordAutomationRun(name, startedAt, result, path, agent.contract.slug)
-          : null;
+      // Recorded either way (see runPlaybook) — but only a run that actually
+      // wrote earns a restore id. An `act` agent that decided nothing needed
+      // doing would otherwise leave a Restore button with nothing to roll back.
+      const recordId = await this.recordAutomationRun(name, startedAt, result, path, agent.contract.slug);
+      const restoreId = write && result.writes.length > 0 ? recordId : null;
       // The ledger records every run, successful or not — a failed run that
       // leaves no trace is how a quietly broken agent stays invisible.
       await this.agentStore.appendRun({
@@ -3339,7 +3343,7 @@ export default class ExoPlugin extends Plugin {
         checkpoint,
         slug,
       };
-      await this.saveAutomationRuns(pruneRuns([rec, ...(await this.loadAutomationRuns())], 20));
+      await this.saveAutomationRuns(pruneRuns([rec, ...(await this.loadAutomationRuns())], 60));
       return rec.id;
     } catch (err) {
       console.warn("[Exo] couldn't persist the automation run record:", err);
