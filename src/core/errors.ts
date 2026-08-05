@@ -46,6 +46,16 @@ export function describeCliFailure(raw: string): { message: string; hint?: strin
     };
   }
 
+  // Exo itself reloaded mid-turn (plugin update/reload) — the CLI session is
+  // untouched on disk, so this reads exactly like a dropped connection: retry
+  // resumes it, nothing was lost.
+  if (/session disposed \(view-unload\)/.test(m)) {
+    return {
+      message: "Exo reloaded mid-response — retry to resume.",
+      hint: "Your conversation is safe; Exo will reconnect with its saved context.",
+    };
+  }
+
   // Mid-turn engine crash — recoverable, the session resumes on the next message.
   if (/error_during_execution|\[ede_diagnostic\]/.test(m)) {
     return {

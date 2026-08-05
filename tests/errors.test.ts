@@ -33,6 +33,13 @@ describe("describeCliFailure", () => {
     }
   });
 
+  it("maps a view-unload session disposal to a reload-recoverable message", () => {
+    const r = describeCliFailure("Session disposed (view-unload).");
+    expect(r?.message).toMatch(/reloaded mid-response/i);
+    expect(r?.message).toMatch(/retry/i);
+    expect(r?.hint).toMatch(/conversation is safe/i);
+  });
+
   it("maps ENOENT / not-found to a binary-path message", () => {
     for (const raw of ["spawn claude ENOENT", "claude: command not found", "claude not found"]) {
       const r = describeCliFailure(raw);

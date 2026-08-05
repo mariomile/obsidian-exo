@@ -104,8 +104,16 @@ describe("isRecoverableSessionError", () => {
     "Claude session ended unexpectedly.",
     "Claude session ended — sending again starts a fresh session.",
     "Session stream ended unexpectedly.",
+    "Session disposed (view-unload).",
   ])("matches recoverable session death: %s", (msg) => {
     expect(isRecoverableSessionError(msg)).toBe(true);
+  });
+
+  it("does NOT treat other dispose reasons as recoverable — only view-unload races a live send()", () => {
+    // user-delete/rewind/tab-close etc. never fire while a turn is in flight, so
+    // their dispose message should keep surfacing as a plain (non-recoverable) error.
+    expect(isRecoverableSessionError("Session disposed (user-delete).")).toBe(false);
+    expect(isRecoverableSessionError("Session disposed (rewind).")).toBe(false);
   });
 
   it.each([

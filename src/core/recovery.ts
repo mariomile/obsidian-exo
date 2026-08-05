@@ -11,8 +11,12 @@ import { isEndedSessionFailure } from "./errors";
  * API/usage error that should just surface.
  *
  * Matches (case-insensitive): an expired / missing / invalid session, a crashed
- * CLI process ("process exited with code …"), and a failed/errored resume
- * attempt. A plain API error (e.g. "API error 400: bad request") must NOT match.
+ * CLI process ("process exited with code …"), a failed/errored resume attempt,
+ * and a `view-unload` disposal (the plugin was reloaded mid-turn — see
+ * `dropSession(c, "view-unload")` in view.ts's `onClose()`; it is the only
+ * dispose reason that can race a live `send()`, since every other reason fires
+ * from an explicit user action that only runs when nothing is streaming). A
+ * plain API error (e.g. "API error 400: bad request") must NOT match.
  */
 export function isRecoverableSessionError(msg: string): boolean {
   const m = (msg || "").toLowerCase();
@@ -20,6 +24,7 @@ export function isRecoverableSessionError(msg: string): boolean {
     return true;
   }
   if (isEndedSessionFailure(m)) return true;
+  if (/session disposed \(view-unload\)/.test(m)) return true;
   // A resume that itself failed/errored is recoverable (escalates to fresh+recap).
   if (m.includes("resume") && (m.includes("failed") || m.includes("error"))) return true;
   return false;
