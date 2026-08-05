@@ -79,3 +79,7 @@ console.log(`  package.json       version = ${version}`);
 if (hasNpmLock) console.log(`  package-lock.json  version = ${version} (project fields only)`);
 console.log(`  versions.json      "${version}": "${prevMinApp}"`);
 console.log(`\nNext: pnpm build`);
+// Il gate per-repo verifica questo plugin da solo. I difetti che sfuggono sono
+// composizionali — vivono fra due plugin — e si vedono solo a suite montata.
+// Non può stare in CI: serve un Obsidian in esecuzione.
+console.log(`Poi, a Obsidian aperto: ~/Dev\\ Projects/marioverse-kit/suite-smoke.sh`);
