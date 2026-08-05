@@ -1506,7 +1506,11 @@ export default class ExoPlugin extends Plugin {
   ): Promise<string> {
     // Model floor is Sonnet (product policy: never Haiku for background
     // passes) — default to the W0 backgroundModel setting, not a hardcoded id.
-    const { signal, timeoutMs = 15_000, onUsage } = opts;
+    // 90s, not 15s: a cold session + trivial turn measured ~35s on 2026-08-05
+    // (CLI 2.1.220) — the binary itself spawns in 40ms, the cost is session
+    // init + the API round trip. A 15s default could never succeed, so every
+    // call site already overrode it; the default was a trap for the next one.
+    const { signal, timeoutMs = 90_000, onUsage } = opts;
     const model = opts.model || this.settings.backgroundModel || "claude-sonnet-5";
     const ctrl = new AbortController();
     const onAbort = () => ctrl.abort();
@@ -1914,7 +1918,7 @@ export default class ExoPlugin extends Plugin {
     let tokens: number | null = null;
     const out = await this.runUtilityPass(prompt, {
       signal,
-      timeoutMs: 90_000, // long-transcript extraction can exceed the 15s default
+      timeoutMs: 90_000, // explicit: long-transcript extraction is slower than a plain turn
       onUsage: (t) => {
         tokens = t;
       },
