@@ -104,7 +104,12 @@ export function parseWhen(line: string): AutomationWhen | null {
   }
 
   m = s.match(/^on\s+tag\s+#?([^\s#]+)$/i);
-  if (m) return { on: "tag", tag: m[1] };
+  // Canonical internal form keeps the "#", matching the shared AgentTrigger
+  // convention (core/agents.ts parseTrigger) that the trigger-matching engine
+  // and event reader (obsidian/agent-triggers.ts makeNoteReader) both expect —
+  // tags flow through as `#foo`, never bare. A bare tag here silently never
+  // matches, since matchVaultEvent compares against `#`-prefixed note tags.
+  if (m) return { on: "tag", tag: `#${m[1]}` };
 
   return null;
 }
@@ -113,7 +118,7 @@ export function parseWhen(line: string): AutomationWhen | null {
 export function formatWhen(w: AutomationWhen): string {
   if (w.on === "schedule") return cadenceLabel(w.cadence);
   if (w.on === "vault-event") return `on ${w.event} in ${w.path}`;
-  return `on tag #${w.tag}`;
+  return `on tag ${w.tag}`;
 }
 
 const EVENT_VERBS: Record<string, string> = {
@@ -136,7 +141,7 @@ export function whenSentence(w: AutomationWhen): string {
     const where = w.path.replace(/\/\*\*$/, "/");
     return `Runs when a note is ${EVENT_VERBS[w.event]} in ${where}`;
   }
-  return `Runs when a note is tagged #${w.tag}`;
+  return `Runs when a note is tagged ${w.tag}`;
 }
 
 export function modeSentence(mode: AutomationMode): string {

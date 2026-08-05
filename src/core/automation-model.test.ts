@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runsForSlug, legacyRuns, pruneRuns } from "./automations";
+import type { AgentDef } from "./agents";
+import { matchVaultEvent } from "./agent-triggers";
 import { parseWhen, formatWhen, parseAutomationFile, serializeAutomation, automationFromPlaybook, automationFromAgent, contractFromAutomation, legacyConfigFromAutomation, scheduleRunKeys } from "./automation-model";
 
 describe("when grammar", () => {
@@ -14,7 +16,8 @@ describe("when grammar", () => {
   it("parses events and tags", () => {
     expect(parseWhen("on create in _inbox/")).toEqual({ on: "vault-event", event: "create", path: "_inbox/**" });
     expect(parseWhen("on modify in Journal/Daily")).toEqual({ on: "vault-event", event: "modify", path: "Journal/Daily/**" });
-    expect(parseWhen("on tag #todo")).toEqual({ on: "tag", tag: "todo" });
+    expect(parseWhen("on tag #todo")).toEqual({ on: "tag", tag: "#todo" });
+    expect(parseWhen("on tag todo")).toEqual({ on: "tag", tag: "#todo" }); // bare form also normalizes
   });
 
   it("rejects garbage", () => {
@@ -28,6 +31,29 @@ describe("when grammar", () => {
       expect(w).not.toBeNull();
       expect(parseWhen(formatWhen(w!))).toEqual(w);
     }
+  });
+});
+
+describe("tag trigger interop with the shared matching engine", () => {
+  it("produces a tag AutomationWhen that matchVaultEvent actually fires on", () => {
+    // Regression: parseWhen used to strip the "#", producing {tag: "todo"}
+    // while note tags read from Obsidian's cache (and every other tag trigger
+    // in the codebase, via core/agents.ts parseTrigger) are always "#"-prefixed
+    // — so the comparison in matchVaultEvent's `current.has(trigger.tag)` never
+    // matched and the trigger silently never fired. Caught live, not by a unit
+    // test, because the old unit test asserted the bug's own (bare) output as
+    // correct instead of checking against the engine it feeds.
+    const when = parseWhen("on tag #e2e-fire");
+    expect(when).not.toBeNull();
+    const agent: AgentDef = {
+      brain: { slug: "x", name: "X", invocable: "X", source: "vault" },
+      contract: { ...contractFromAutomation({
+        slug: "x", name: "X", description: "", icon: "zap", when: [when!], mode: "report",
+        scope: [], canCall: [], cooldownMs: 900000, enabled: true, prompt: "",
+      }) },
+    };
+    const fired = matchVaultEvent([agent], { path: "note.md", kind: "create", tags: ["#e2e-fire"] });
+    expect(fired.length).toBe(1);
   });
 });
 

@@ -396,7 +396,7 @@ function whenPicker(
         const tagRow = pop.createDiv({ cls: "mva-auto-popfield" });
         tagRow.createSpan({ cls: "mva-pv-label", text: "Tag" });
         const tag = tagRow.createEl("input", { cls: "mva-pv-input", attr: { type: "text", placeholder: "#todo" } });
-        tag.value = `#${current.tag}`;
+        tag.value = current.tag;
         tag.onchange = () => {
           const parsed = parseWhen(`on tag ${tag.value}`);
           if (parsed) onPick(parsed);
@@ -429,6 +429,6 @@ function defaultWhenFor(kind: string, prev: AutomationWhen | null): AutomationWh
   if (kind === "hourly") return { on: "schedule", cadence: { kind: "hourly" } };
   if (kind === "daily") return { on: "schedule", cadence: { kind: "daily", hour } };
   if (kind === "weekly") return { on: "schedule", cadence: { kind: "weekly", day: 1, hour } };
-  if (kind === "tag") return { on: "tag", tag: "todo" };
+  if (kind === "tag") return { on: "tag", tag: "#todo" };
   return { on: "vault-event", event: kind as "create" | "modify" | "rename", path };
 }

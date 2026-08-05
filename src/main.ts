@@ -2965,11 +2965,30 @@ export default class ExoPlugin extends Plugin {
         return false;
       }
       const def: AgentDef = { brain: real.brain, contract: contractFromAutomation(a) };
+      // runAgent guards itself against a second concurrent call with the same
+      // key (agentRunsInFlight), so the agent-bound path needs nothing extra.
       return this.runAgent(def, "manual", `${agentLastRunKey(a.slug)}::manual`);
     }
-    const ok = await this.runPlaybook(a.name, a.prompt, { write: a.mode === "act", slug: a.slug });
-    if (ok) await this.stampAutomationRun(a);
-    return ok;
+    // The prompt-only path calls runPlaybook directly, which has no dedup of
+    // its own — a double "Run now" (a slow CLI plus an impatient second click)
+    // would otherwise fire two overlapping headless processes against the same
+    // automation, and for `act` mode that means two uncoordinated writers on
+    // the same file. Observed live during testing: a stacked pair of manual
+    // runs left an `act` automation's target file with duplicated content from
+    // both processes racing their edits.
+    const key = `${agentLastRunKey(a.slug)}::manual`;
+    if (this.agentRunsInFlight.has(key)) {
+      new Notice(`"${a.name}" is already running.`);
+      return false;
+    }
+    this.agentRunsInFlight.add(key);
+    try {
+      const ok = await this.runPlaybook(a.name, a.prompt, { write: a.mode === "act", slug: a.slug });
+      if (ok) await this.stampAutomationRun(a);
+      return ok;
+    } finally {
+      this.agentRunsInFlight.delete(key);
+    }
   }
 
   /** Mark an automation as just-run: the cooldown key AND every schedule slot,
