@@ -4595,6 +4595,18 @@ export class ChatView extends ItemView {
     this.renderText(ctx, false);
     this.clearCaret(ctx);
     this.closeStepsRun(ctx, interrupted, /* force */ true); // turn is over — fold regardless of tracked subagents
+    // closeStepsRun above only forces the steps-run CARD closed when a subagent
+    // never resolves — it doesn't touch the per-tab agent badge. Any id still in
+    // runningTasks here never got its "tool-call-result" (turn interrupted,
+    // errored, or the app died mid-flight): its liveTasks row is stuck "running"
+    // forever, since liveStatus() — the only thing that stamps doneAt and
+    // schedules eviction — is never reached for it. The badge only grows.
+    // The turn is over, so every one of these is orphaned by definition: force
+    // them terminal now instead of leaving a phantom spinner behind.
+    if (ctx.runningTasks.size > 0) {
+      for (const id of ctx.runningTasks) this.liveStatus(ctx.convo, id, interrupted ? "stopped" : "error");
+      ctx.runningTasks.clear();
+    }
     // Final-cleanup fallback: the tracked ref covers every live path, but the
     // turn is over — sweep the transcript so no caret can survive a desync.
     ctx.convo.listEl.querySelectorAll(".mva-caret").forEach((el) => el.remove());
