@@ -12,7 +12,7 @@
  * `.mva-btn` buttons, popovers never native selects. Cards are geometry +
  * hover, no schema chips: the file's vocabulary stays in the file.
  */
-import { TFile, setIcon } from "obsidian";
+import { Notice, TFile, setIcon } from "obsidian";
 import { clickable } from "../dom";
 import { NoteDiffModal } from "../note-diff";
 import { basename as noteBasename } from "../../obsidian/graph";
@@ -34,6 +34,14 @@ import { openAutomationEditor, editingState } from "./automation-editor";
 export async function renderAutomationsTab(host: HTMLElement, ctx: HubTabContext): Promise<void> {
   host.empty();
 
+  // The automation being edited can vanish under us — deleted on another
+  // device, or the file removed by hand. Without this the editor would quietly
+  // become a blank "New automation" form still claiming to edit something.
+  if (editingState.active && editingState.slug && !ctx.plugin.automationStore.get(editingState.slug)) {
+    editingState.active = false;
+    editingState.slug = null;
+    new Notice("That automation is gone — showing the list instead.");
+  }
   if (editingState.active) {
     openAutomationEditor(host, ctx);
     return;
@@ -120,7 +128,10 @@ function renderCard(
   const meta = main.createDiv({ cls: "mva-auto2-meta" });
   if (a.system === "daily-pulse") meta.setText(dailyPulseMetaLabel(ctx.plugin.settings.dailyPulseReviewState));
   else if (own.length) meta.setText(`last run ${formatAge(own[0].startedAt, Date.now(), "—")}${own[0].ok ? "" : " · failed"}`);
-  else meta.setText("never ran");
+  // Not "never ran": until v2 only write runs were recorded, so an automation
+  // that reported every morning still has no history to show. Say what is
+  // actually true — there are no records — rather than a claim about the past.
+  else meta.setText("no runs recorded yet");
   const runsKey = `auto-runs:${a.slug}`;
   if (own.length) {
     meta.addClass("is-openable");
