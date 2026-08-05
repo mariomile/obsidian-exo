@@ -247,16 +247,15 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-tab-mark.is-error {
   background: var(--text-error);
 }
-/* Weight and area = blocked on you. This is the only state that breaks out of
-   the 6px slot, because it is the only one where the work is stopped and you
-   are the reason. Escalating inside the mark would put it on the same plane as
-   the others; it is not on the same plane. Placed after `.is-active` on
-   purpose: same specificity, and when a tab is both, the ring should report
-   the thing you have to act on. */
+/* Weight = blocked on you. This is the only state that breaks out of the 6px
+   slot, because it is the only one where the work is stopped and you are the
+   reason. Escalating inside the mark would put it on the same plane as the
+   others; it is not on the same plane. Mario 2026-08-05: the ring this used to
+   carry (inset box-shadow) read as visual noise in the strip — dropped; the
+   mark's own fill (below) plus the bolder title still say "act on this". */
 .mva-tab.is-blocked {
   color: var(--text-normal);
   font-weight: 500;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
 }
 /* The mark joins the escalation while blocked. At (0,3,0) this out-specifies
    every state fill above, so on a blocked tab the mark is accent whatever the
