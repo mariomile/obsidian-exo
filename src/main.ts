@@ -119,6 +119,11 @@ import {
 } from "./core/foundry-distill";
 import { ProposalsModal } from "./ui/proposals-modal";
 import {
+  readSessionCapsCache,
+  removeSessionCapsCache,
+  writeSessionCapsCache,
+} from "./session-caps-cache";
+import {
   initialAutoCommitState,
   recordVaultWrite,
   isCommitDue,
@@ -230,6 +235,7 @@ export default class ExoPlugin extends Plugin {
    *  checks and interactive settings changes cannot race saveData(). */
   private readonly settingsWriteQueue = new WriteQueue();
   private readonly dreamSnapshotWriteQueue = new WriteQueue();
+  private readonly sessionCapsWriteQueue = new WriteQueue();
   /**
    * THE ONE shared write path for every append to the Orchestration Board
    * tasks ledger (`paths.tasks`). Both the `add_task` SDK
@@ -345,7 +351,8 @@ export default class ExoPlugin extends Plugin {
     await this.loadSettings();
     // Seed the capability snapshot from the last app run, so menus and panels
     // are rich before the first session's init arrives (refreshed on every init).
-    this.lastSessionCaps = this.settings.cachedSessionCaps ?? null;
+    // Own file (session-caps-cache.json), not settings — see saveSessionCapsCache.
+    this.lastSessionCaps = await this.loadSessionCapsCache();
 
     // ONE shared TaskStore for the whole plugin — built on `tasksWriteQueue` so
     // it can never race the lower-level `createBacklogTask` call in
@@ -2161,6 +2168,21 @@ export default class ExoPlugin extends Plugin {
     } catch {
       /* ignore */
     }
+  }
+
+  // Mechanics (file path, read/write/corrupt-handling) live in
+  // session-caps-cache.ts — these three are thin wrappers that own only the
+  // WriteQueue serialization, same division of labor as workflow-signal-store.
+  async saveSessionCapsCache(caps: import("./providers/types").SessionCaps): Promise<boolean> {
+    return this.sessionCapsWriteQueue.enqueue(() =>
+      writeSessionCapsCache(this.app.vault.adapter, this.manifest.dir, caps)
+    );
+  }
+  async loadSessionCapsCache(): Promise<import("./providers/types").SessionCaps | null> {
+    return readSessionCapsCache(this.app.vault.adapter, this.manifest.dir);
+  }
+  async clearSessionCapsCache(): Promise<void> {
+    return removeSessionCapsCache(this.app.vault.adapter, this.manifest.dir);
   }
   /**
    * Manual dream pass: compute the deterministic plan, optionally run the Dream

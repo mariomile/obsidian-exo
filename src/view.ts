@@ -1138,8 +1138,8 @@ export class ChatView extends ItemView {
       // Settings MCP manager + cockpit read live status here; the persisted copy
       // seeds menus/panels on the next app run, before any session has spawned.
       this.plugin.lastSessionCaps = caps;
-      this.plugin.settings.cachedSessionCaps = caps;
-      void this.plugin.saveSettings();
+      // Own file, not settings — see main.ts saveSessionCapsCache.
+      void this.plugin.saveSessionCapsCache(caps);
       // A registered MCP server reporting a failure status means its tools are
       // silently absent — the "all my vault tools vanished, senza motivo" case.
       // Surface it once (not just as a dot in a panel). "unknown" is skipped: it's

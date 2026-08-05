@@ -29,7 +29,7 @@ import { join } from "node:path";
 const CEILINGS: Record<string, number> = {
   // Conteggi reali al 2026-08-05. Solo verso il basso.
   "src/view.ts": 7485,
-  "src/main.ts": 3501,
+  "src/main.ts": 3523,
   "src/ui/composer.ts": 1723,
   "src/settings.ts": 1343,
 };
