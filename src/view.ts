@@ -504,7 +504,17 @@ export class ChatView extends ItemView {
       this.recapResizeObserver?.disconnect();
       this.recapResizeObserver = null;
     });
-    this.registerEvent(this.app.workspace.on("layout-change", () => this.applyWideMode()));
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        this.applyWideMode();
+        // Moving Exo's OWN leaf (sidebar <-> main panel) doesn't reliably fire
+        // active-leaf-change — this leaf was already active, only its location
+        // moved — so the debounced handler above can miss it and the "Current
+        // Document" card is left showing the note active in the pane Exo just
+        // left. Cheap and idempotent to re-run here on every layout-change.
+        this.composer.refreshContext();
+      })
+    );
     // Strip density: the same debounce shape as the two observers above, for the
     // same reason — a drag emits a continuous stream of ticks.
     //

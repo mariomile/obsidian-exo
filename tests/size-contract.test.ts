@@ -33,7 +33,10 @@ const CEILINGS: Record<string, number> = {
   // +10 il 2026-08-06: TabAgents { count, spinning } — il badge per-tab non
   // passava da summarizeLiveTasks e la sua signature non distingueva
   // running/detached, lasciando lo spinner bloccato su un lavoro concluso.
-  "src/view.ts": 7159,
+  // +10 il 2026-08-06: refreshContext() su layout-change — spostare la leaf
+  // di Exo sidebar<->main non fa scattare active-leaf-change in modo
+  // affidabile, lasciando la card "Current Document" sulla nota vecchia.
+  "src/view.ts": 7169,
   // +4 il 2026-08-06: call-site della migrazione one-shot cachedSessionCaps
   // (logica in session-caps-cache.ts) — non estraibile oltre, è già solo glue
   // sul metodo loadSettings() del plugin.
