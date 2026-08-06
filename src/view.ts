@@ -62,9 +62,9 @@ import {
   summarizeLiveTasks,
   liveTaskDotClass,
   liveTaskStatusText,
-  fadedTaskIds,
   type LiveTaskStatus,
 } from "./core/live-tasks";
+import { LiveTaskRegistry } from "./ui/live-task-registry";
 import { Composer } from "./ui/composer";
 import type {
   AssistantCtx,
@@ -295,6 +295,15 @@ export class ChatView extends ItemView {
   private agentChipEl: HTMLElement | null = null;
   /** The enumerable list popover for `agentChipEl`, when open. */
   private agentPopoverEl: HTMLElement | null = null;
+  /** Sole owner of every conversation's live-task map. Repaints both agent
+   *  affordances on any mutation, so no caller has to remember to. */
+  private readonly liveTasks = new LiveTaskRegistry(
+    () => {
+      this.refreshAgentIndicators();
+      this.renderAgentPopover();
+    },
+    (fn, ms) => void window.setTimeout(fn, ms),
+  );
   /** Inner scroll host inside listWrap. Holds the (swapped-per-conversation)
    *  `.mva-list` and any full-pane overlay (gallery/capabilities). Split out from
    *  listWrap so the composer — now a bottom sibling of the list — survives the
@@ -1616,7 +1625,7 @@ export class ChatView extends ItemView {
         stopped: c.stopped,
         poisoned: !!c.resumeRisky,
       });
-      const agents = this.agentCount(c);
+      const agents = c.liveTasks.size;
       const pinned = c.pinned === true;
       const isActive = c === this.active;
       // Untitled and empty renders as the placeholder, which the title string
@@ -3976,6 +3985,7 @@ export class ChatView extends ItemView {
       todosEl: null,
       bgTasks: new Map(),
       runningTasks: new Set(),
+      liveTaskIds: new Set(),
       taskCards: new Map(),
       nestedRows: new Map(),
       workingEl: null,
@@ -4314,18 +4324,12 @@ export class ChatView extends ItemView {
     this.renderText(ctx, false);
     this.clearCaret(ctx);
     this.closeStepsRun(ctx, interrupted, /* force */ true); // turn is over — fold regardless of tracked subagents
-    // closeStepsRun above only forces the steps-run CARD closed when a subagent
-    // never resolves — it doesn't touch the per-tab agent badge. Any id still in
-    // runningTasks here never got its "tool-call-result" (turn interrupted,
-    // errored, or the app died mid-flight): its liveTasks row is stuck "running"
-    // forever, since liveUpsert() — which stamps doneAt and schedules eviction
-    // for any terminal status — is never reached for it. The badge only grows.
-    // The turn is over, so every one of these is orphaned by definition: force
-    // them terminal now instead of leaving a phantom spinner behind.
-    if (ctx.runningTasks.size > 0) {
-      for (const id of ctx.runningTasks) this.liveStatus(ctx.convo, id, interrupted ? "stopped" : "error");
-      ctx.runningTasks.clear();
-    }
+    // closeStepsRun folds the CARD; this settles the BADGE. Policy lives in
+    // `core/live-task-lifecycle` (tested). Walks `liveTaskIds`, not
+    // `runningTasks` — the latter is subagents only, which is why Stop used to
+    // leave Bash and Workflow rows spinning forever.
+    this.liveTasks.settleTurn(ctx, interrupted ? "interrupted" : "completed");
+    ctx.runningTasks.clear();
     // Final-cleanup fallback: the tracked ref covers every live path, but the
     // turn is over — sweep the transcript so no caret can survive a desync.
     ctx.convo.listEl.querySelectorAll(".mva-caret").forEach((el) => el.remove());
@@ -4977,7 +4981,7 @@ export class ChatView extends ItemView {
           this.addToolBadge(card, "↳ background task");
           task.badgeEl.setText(name === "KillShell" ? "stopped" : "running");
           if (name === "KillShell") {
-            this.liveStatus(ctx.convo, this.bgIdForShell(ctx, sid), "stopped");
+            this.liveTasks.setStatus(ctx.convo, this.bgIdForShell(ctx, sid), "stopped");
           }
           break;
         }
@@ -4987,7 +4991,7 @@ export class ChatView extends ItemView {
 
   /** Find the live-task id (original background Bash tool-call id) for a shell
    *  id — background Bash entries are keyed by their launching tool-call id, not
-   *  the shell id KillShell/BashOutput reference. Guard: `liveStatus(c, "", …)`
+   *  the shell id KillShell/BashOutput reference. Guard: `setStatus(c, "", …)`
    *  is a harmless no-op (`liveTasks.get("")` → undefined). */
   private bgIdForShell(ctx: AssistantCtx, sid: string): string {
     for (const [id, task] of ctx.bgTasks) if (task.shellId === sid) return id;
@@ -5647,49 +5651,6 @@ export class ChatView extends ItemView {
     this.refreshTabs();
   }
 
-  /** Terminal live-task rows linger this long before eviction, so a
-   *  done/error/stopped entry is visible rather than vanishing instantly. */
-  private static readonly LIVE_FADE_MS = 2000;
-
-  /** How many background agents a conversation owns RIGHT NOW: every live task
-   *  tracked on the convo — subagents, background Bash, and Workflow runs —
-   *  regardless of whether the turn that spawned them is still streaming. Read
-   *  from `Convo.liveTasks` (not the live turn context), so the chip survives
-   *  turn end while the work itself is still going (keep-alive L1). */
-  private agentCount(c: Convo): number {
-    return c.liveTasks.size;
-  }
-
-  /** Insert or update a live task on a convo and refresh the chip. The single
-   *  mutation point so the count/label and any open popover stay in sync — also
-   *  stamps `doneAt` and schedules the fade eviction for any non-"running"
-   *  status, so every caller (subagent, background shell, workflow progress)
-   *  gets eviction for free instead of only callers that remember liveStatus. */
-  private liveUpsert(c: Convo, rec: LiveTaskRecord): void {
-    if (rec.status !== "running") rec.doneAt = Date.now();
-    c.liveTasks.set(rec.id, rec);
-    this.refreshAgentIndicators();
-    this.renderAgentPopover();
-    if (rec.status !== "running") {
-      window.setTimeout(() => this.liveRemove(c, rec.id), ChatView.LIVE_FADE_MS);
-    }
-  }
-
-  /** Mark a live task terminal (done/error/stopped) in place, keeping its
-   *  existing label/cardEl — thin wrapper over liveUpsert. */
-  private liveStatus(c: Convo, id: string, status: LiveTaskStatus): void {
-    const rec = c.liveTasks.get(id);
-    if (rec) this.liveUpsert(c, { ...rec, status });
-  }
-
-  /** Evict a live task and refresh the chip. */
-  private liveRemove(c: Convo, id: string): void {
-    if (c.liveTasks.delete(id)) {
-      this.refreshAgentIndicators();
-      this.renderAgentPopover();
-    }
-  }
-
   /** (Re)draw the popover rows from the active convo's live tasks. No-op when the
    *  popover is closed; auto-closes when the list empties. */
   private renderAgentPopover(): void {
@@ -5715,7 +5676,7 @@ export class ChatView extends ItemView {
       setIcon(x, "x");
       this.clickable(x, (e) => {
         e.stopPropagation();
-        if (c) this.liveRemove(c, rec.id);
+        if (c) this.liveTasks.remove(c, rec.id);
       });
     }
   }
@@ -5734,26 +5695,12 @@ export class ChatView extends ItemView {
     window.setTimeout(() => el.removeClass("mva-flash"), 1000);
   }
 
-  /** Turn-start reconciliation: drop live tasks whose card was cleaned (orphaned by
-   *  a finished turn) or whose terminal fade window has elapsed. The keep-alive L1
-   *  backstop — without a session-level event pump (L2, out of scope), a task that
-   *  finished with no active stream can't self-clear; this sweeps it on the next turn. */
+  /** Turn-start reconciliation. Orphan-ness is asked of the CONVERSATION's own
+   *  transcript, never of the document: `switchTo` detaches a background tab's
+   *  whole list, so `isConnected` would report every one of its cards orphaned
+   *  and wipe the live tasks of any chat the user wasn't looking at. */
   private reconcileLiveTasks(c: Convo): void {
-    let changed = false;
-    for (const [id, rec] of c.liveTasks) {
-      if (!rec.cardEl.isConnected) {
-        c.liveTasks.delete(id);
-        changed = true;
-      }
-    }
-    for (const id of fadedTaskIds([...c.liveTasks.values()], Date.now(), ChatView.LIVE_FADE_MS)) {
-      c.liveTasks.delete(id);
-      changed = true;
-    }
-    if (changed) {
-      this.refreshAgentIndicators();
-      this.renderAgentPopover();
-    }
+    this.liveTasks.reconcile(c, (rec) => !c.listEl.contains(rec.cardEl));
   }
 
   /** Refresh both per-chat agent affordances: the per-tab count badges (via
@@ -5761,7 +5708,7 @@ export class ChatView extends ItemView {
    *  open chat's own agents. Strictly local — a background chat's work never leaks
    *  into the chat you're looking at; you see its count on its own tab. Label and
    *  spinner come from the core `summarizeLiveTasks` projection, so terminal
-   *  (fading) rows still count until evicted by `liveRemove`. */
+   *  (fading) rows still count until evicted by the registry. */
   private refreshAgentIndicators(): void {
     this.refreshTabs(); // the count is a rendered fact: a state transition
     const chip = this.agentChipEl;
@@ -6380,7 +6327,7 @@ export class ChatView extends ItemView {
               const subCard = ctx.cards.get(e.id)?.card;
               if (subCard) {
                 const m = toolMeta(e.name, e.input);
-                this.liveUpsert(c, {
+                this.liveTasks.register(ctx, {
                   id: e.id,
                   kind: "subagent",
                   label: m.target || m.label, // description if present, else "Subagent"
@@ -6394,7 +6341,7 @@ export class ChatView extends ItemView {
             const bg = ctx.bgTasks.get(e.id);
             if (bg) {
               const m = toolMeta(e.name, e.input);
-              this.liveUpsert(c, {
+              this.liveTasks.register(ctx, {
                 id: e.id,
                 kind: "bash",
                 label: m.target || "background task",
@@ -6434,10 +6381,10 @@ export class ChatView extends ItemView {
             this.markTaskDone(ctx, e.id); // Task's own result → mark section done
             // A subagent finished → transition its live-task row to terminal
             // (delete returns true only when it was a tracked Task, so plain
-            // tools don't refresh). liveStatus refreshes the chip and schedules
+            // tools don't refresh). setStatus refreshes the chip and schedules
             // the fade-out eviction.
             if (ctx.runningTasks.delete(e.id)) {
-              this.liveStatus(c, e.id, e.ok ? "done" : "error");
+              this.liveTasks.setStatus(c, e.id, e.ok ? "done" : "error");
             }
           }
           const wp = ctx.writeById.get(e.id);
@@ -6628,21 +6575,31 @@ export class ChatView extends ItemView {
           if (e.status) run.status = e.status;
           applyWorkflowProgress(run, e.entries);
           const refs = ctx.cards.get(e.toolUseId);
+          // Painting the label is optional: the card belongs to the turn that
+          // LAUNCHED the workflow, and a terminal `task_updated` routinely lands
+          // on a later turn whose `ctx.cards` lacks the id. Gating the state
+          // transition on that lookup left such workflows "running" forever.
           if (refs) {
             if (!refs.wfEl) {
               refs.wfEl = createSpan({ cls: "mva-tool-wf" });
               refs.statusEl.parentElement?.insertBefore(refs.wfEl, refs.elapsedEl);
             }
             refs.wfEl.setText(summarizeWorkflowRun(run).label);
-            const wfStatus: LiveTaskStatus =
-              run.status === "completed" ? "done" : run.status === "failed" ? "error" : "running";
-            this.liveUpsert(c, {
+          }
+          const wfStatus: LiveTaskStatus =
+            run.status === "completed" ? "done" : run.status === "failed" ? "error" : "running";
+          const wfPrev = c.liveTasks.get(e.toolUseId);
+          const wfCard = refs?.card ?? wfPrev?.cardEl;
+          // No card on either side → nothing to scroll to; but an existing row
+          // must still move status, which is the point of this branch.
+          if (wfCard) {
+            this.liveTasks.register(ctx, {
               id: e.toolUseId,
               kind: "workflow",
               label: `${run.name ?? "workflow"} · ${summarizeWorkflowRun(run).label}`,
               status: wfStatus,
-              startedAt: c.liveTasks.get(e.toolUseId)?.startedAt ?? Date.now(),
-              cardEl: refs.card,
+              startedAt: wfPrev?.startedAt ?? Date.now(),
+              cardEl: wfCard,
             });
           }
           break;

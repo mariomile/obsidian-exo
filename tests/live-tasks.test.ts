@@ -3,7 +3,6 @@ import {
   summarizeLiveTasks,
   liveTaskDotClass,
   liveTaskStatusText,
-  fadedTaskIds,
   type LiveTask,
 } from "../src/core/live-tasks";
 
@@ -57,16 +56,3 @@ describe("liveTaskDotClass / liveTaskStatusText", () => {
   });
 });
 
-describe("fadedTaskIds", () => {
-  it("evicts terminal rows older than fadeMs, keeps running and fresh", () => {
-    const tasks = [
-      t("run", "running"),
-      t("old", "done", { doneAt: 100 }),
-      t("fresh", "error", { doneAt: 900 }),
-    ];
-    expect(fadedTaskIds(tasks, 1200, 500)).toEqual(["old"]);
-  });
-  it("terminal without doneAt is not evicted (grace until stamped)", () => {
-    expect(fadedTaskIds([t("x", "done")], 9999, 500)).toEqual([]);
-  });
-});

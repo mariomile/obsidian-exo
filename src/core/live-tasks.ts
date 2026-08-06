@@ -33,8 +33,6 @@ export interface LiveTasksSummary {
   chipLabel: string;
 }
 
-const isTerminal = (s: LiveTaskStatus): boolean => s !== "running";
-
 export function summarizeLiveTasks(tasks: LiveTask[]): LiveTasksSummary {
   let running = 0;
   for (const t of tasks) if (t.status === "running") running++;
@@ -61,12 +59,3 @@ export function liveTaskStatusText(status: LiveTaskStatus): string {
   return status;
 }
 
-/** Ids of terminal tasks whose `doneAt` is older than `fadeMs` — safe to evict.
- *  Terminal tasks without a `doneAt` stamp are kept (grace until stamped). */
-export function fadedTaskIds(tasks: LiveTask[], now: number, fadeMs: number): string[] {
-  const out: string[] = [];
-  for (const t of tasks) {
-    if (isTerminal(t.status) && t.doneAt != null && now - t.doneAt >= fadeMs) out.push(t.id);
-  }
-  return out;
-}

@@ -262,9 +262,16 @@ export interface AssistantCtx {
   /** Background Bash tasks this turn: tool-call id → card + badge + parsed shell id. */
   bgTasks: Map<string, { cardEl: HTMLElement; badgeEl: HTMLElement; shellId?: string }>;
   /** Task (subagent) tool-calls currently in flight (added on start, removed on
-   *  result). With bgTasks, drives the per-chat "N agents running" indicators —
-   *  the count of background work THIS conversation owns right now. */
+   *  result). Drives steps-run folding, which asks "is a subagent still going?" */
   runningTasks: Set<string>;
+  /** EVERY live-task id this turn registered on its conversation — subagents,
+   *  background Bash, and Workflow runs alike. Distinct from `runningTasks`,
+   *  which holds subagents only and is emptied as each result lands: this one
+   *  is append-only for the life of the turn, because it answers a different
+   *  question — "what did I put on the convo that I now have to settle?".
+   *  Without it, turn end could only reach subagents, so a Bash or Workflow
+   *  killed by Stop span in the agent badge forever. */
+  liveTaskIds: Set<string>;
   /** Task (subagent) cards this turn: Task tool-call id → nested activity section. */
   taskCards: Map<string, { container: HTMLElement; summaryEl: HTMLElement; rowsEl: HTMLElement; count: number }>;
   /** Subagent mini-rows this turn (live-only): tool-call id → status dot + parent. */
