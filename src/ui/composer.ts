@@ -24,7 +24,7 @@ import { basename as noteBasename } from "../obsidian/graph";
 import { clickable } from "./dom";
 import { openablePopover } from "./popover";
 import { PromptVarsModal, extractVars, fillVars } from "./prompt-vars";
-import type { Convo } from "../view";
+import type { Convo } from "./convo-types";
 import {
   badgeState,
   formatClock,

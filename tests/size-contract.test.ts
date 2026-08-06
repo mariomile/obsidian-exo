@@ -27,8 +27,10 @@ import { join } from "node:path";
  */
 
 const CEILINGS: Record<string, number> = {
-  // Conteggi reali al 2026-08-05. Solo verso il basso.
-  "src/view.ts": 7485,
+  // Conteggi reali al 2026-08-05, abbassati il 2026-08-06 dopo l'estrazione dei
+  // tipi in `ui/convo-types.ts` e della classificazione in
+  // `core/workflow-classify.ts`. Solo verso il basso.
+  "src/view.ts": 7192,
   "src/main.ts": 3523,
   "src/ui/composer.ts": 1723,
   "src/settings.ts": 1343,
