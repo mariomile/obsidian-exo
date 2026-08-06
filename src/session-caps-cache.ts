@@ -1,3 +1,4 @@
+import type { MVASettings } from "./settings";
 import type { SessionCaps } from "./providers/types";
 
 /**
@@ -72,4 +73,22 @@ export async function removeSessionCapsCache(
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * One-shot cleanup for installs that saved data.json before this migration:
+ * `cachedSessionCaps` isn't in DEFAULT_SETTINGS anymore, so the
+ * `Object.assign({}, DEFAULT_SETTINGS, await loadData())` in loadSettings()
+ * can't strip it — every future saveSettings() would keep re-serializing the
+ * orphaned ~46KB key forever otherwise. Returns whether it removed anything,
+ * so the caller only pays for a save when there was something to clean.
+ */
+export function stripLegacyCachedSessionCaps(settings: MVASettings): boolean {
+  // Not on MVASettings anymore — that's exactly the point. Cast is the honest
+  // way to reach a key the type no longer declares but a loaded data.json
+  // still might carry.
+  const raw = settings as unknown as Record<string, unknown>;
+  if (!("cachedSessionCaps" in raw)) return false;
+  delete raw.cachedSessionCaps;
+  return true;
 }

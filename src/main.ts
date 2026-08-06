@@ -121,6 +121,7 @@ import { ProposalsModal } from "./ui/proposals-modal";
 import {
   readSessionCapsCache,
   removeSessionCapsCache,
+  stripLegacyCachedSessionCaps,
   writeSessionCapsCache,
 } from "./session-caps-cache";
 import {
@@ -1965,6 +1966,9 @@ export default class ExoPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // See session-caps-cache.ts: strips the orphaned pre-migration key that
+    // Object.assign above can't drop on its own.
+    if (stripLegacyCachedSessionCaps(this.settings)) await this.saveSettings();
     // Codex app-server no longer accepts the legacy `on-failure` policy.
     if (this.settings.codexApproval === "on-failure") {
       this.settings.codexApproval = "on-request";

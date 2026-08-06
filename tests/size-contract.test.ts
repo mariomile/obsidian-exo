@@ -31,7 +31,10 @@ const CEILINGS: Record<string, number> = {
   // tipi in `ui/convo-types.ts` e della classificazione in
   // `core/workflow-classify.ts`. Solo verso il basso.
   "src/view.ts": 7149,
-  "src/main.ts": 3523,
+  // +4 il 2026-08-06: call-site della migrazione one-shot cachedSessionCaps
+  // (logica in session-caps-cache.ts) — non estraibile oltre, è già solo glue
+  // sul metodo loadSettings() del plugin.
+  "src/main.ts": 3527,
   "src/ui/composer.ts": 1723,
   "src/settings.ts": 1343,
 };
