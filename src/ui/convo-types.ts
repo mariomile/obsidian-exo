@@ -113,6 +113,18 @@ export interface Convo {
   session: AgentSession | null;
   sessionSig: string;
   streaming: boolean;
+  /** Reservation flag ONLY, claimed synchronously the instant runTurn is
+   *  called (before any await) so a second call on the same convo can't slip
+   *  in during the window before `streaming` itself is actually set, several
+   *  awaits later. Nothing else should read or branch on it. Runtime-only. */
+  turnClaimed?: boolean;
+  /** Generation counter pairing with `turnClaimed`. runTurn's own queue-drain
+   *  recurses into itself from inside its own finally, releasing then
+   *  re-claiming synchronously so the continuation doesn't deadlock on the
+   *  reservation the OUTER call still holds. Each claim stamps its own
+   *  generation so that outer call's cleanup can tell it no longer owns the
+   *  flag and must not clear it out from under the continuation. Runtime-only. */
+  turnClaimGen?: number;
   stopped: boolean; // set by stop() so the turn renders as "Stopped", not an error
   /** When the FIRST Stop/Esc of the current turn was requested. Runtime-only —
    *  feeds stopAction's grace window so a second impatient press within a

@@ -6116,7 +6116,42 @@ export class ChatView extends ItemView {
     return caps?.commands?.length ? hoistSlashCommand(text, new Set(caps.commands)) : text;
   }
 
+  /** Thin wrapper: claims `c.turnClaimed` synchronously, before any await, so
+   *  a second call on the same convo (a double-clicked Retry, a queued
+   *  follow-up racing a fresh send) cannot also proceed — every caller checks
+   *  `c.streaming` first, but that's set several awaits into `runTurnBody`'s
+   *  own preamble, leaving a window a second call could slip through. See
+   *  `turnClaimed`/`turnClaimGen` on `Convo` for why a dedicated, generation-
+   *  stamped flag rather than `c.streaming` itself: `runTurnBody`'s own
+   *  queue-drain recurses into this SAME function, from inside its own
+   *  finally, before this wrapper's finally has released — the generation
+   *  check is what stops that from deadlocking or double-releasing. */
   private async runTurn(
+    c: Convo,
+    text: string,
+    images?: ImageAttachment[],
+    opts?: {
+      sendPrefix?: string;
+      isRecoveryRetry?: boolean;
+      reuseUserTurn?: boolean;
+      researchMode?: ResearchModeState;
+      agent?: string;
+    }
+  ): Promise<void> {
+    if (c.turnClaimed) {
+      this.diag.push("turn", "declined: already claimed (concurrent runTurn on this convo)");
+      return;
+    }
+    c.turnClaimed = true;
+    const myClaim = (c.turnClaimGen = (c.turnClaimGen ?? 0) + 1);
+    try {
+      await this.runTurnBody(c, text, images, opts);
+    } finally {
+      if (c.turnClaimGen === myClaim) c.turnClaimed = false;
+    }
+  }
+
+  private async runTurnBody(
     c: Convo,
     text: string,
     images?: ImageAttachment[],
@@ -6978,6 +7013,10 @@ export class ChatView extends ItemView {
                 agent: next.agent,
               }
             : undefined;
+        // Hand the claim to the continuation (release + immediate re-claim
+        // inside runTurn's own guard) — see turnClaimGen for why this call's
+        // own finally won't then clear a reservation it no longer owns.
+        c.turnClaimed = false;
         void this.runTurn(c, next.text, next.images, retryOpts);
       } else {
         // Turn (and any queue) is fully settled — safe to surface related notes again.
