@@ -235,7 +235,7 @@ describe("deriveTabState", () => {
 });
 
 describe("tabAriaLabel", () => {
-  const quiet = { agents: 0, pinned: false };
+  const quiet = { agents: { count: 0, spinning: false }, pinned: false };
 
   it("says nothing extra when the tab is idle", () => {
     // The mark draws nothing; the label adds nothing. Absence on both channels.
@@ -267,14 +267,34 @@ describe("tabAriaLabel", () => {
     // the badge's own labels stop being announced: whatever the tab shows and
     // this string omits becomes sighted-only.
     expect(
-      tabAriaLabel("Vault refactor", { state: "streaming", needsInput: false }, { agents: 2, pinned: true })
+      tabAriaLabel(
+        "Vault refactor",
+        { state: "streaming", needsInput: false },
+        { agents: { count: 2, spinning: true }, pinned: true }
+      )
     ).toBe("Vault refactor, pinned, running, 2 agents");
   });
 
   it("keeps the agent count singular at one", () => {
-    expect(tabAriaLabel("T", { state: "idle", needsInput: false }, { agents: 1, pinned: false })).toBe(
-      "T, 1 agent"
-    );
+    expect(
+      tabAriaLabel("T", { state: "idle", needsInput: false }, { agents: { count: 1, spinning: true }, pinned: false })
+    ).toBe("T, 1 agent");
+  });
+
+  it("says 'background', never 'agent', once nothing is actually running", () => {
+    // A task that DETACHED at turn end is not running — Exo cannot poll it, so
+    // the label must not claim knowledge it doesn't have. This is the aria
+    // twin of the tab badge bug: a spinning "N agents" left over from before
+    // the turn ended, on a tab that is no longer doing anything Exo can see.
+    expect(
+      tabAriaLabel("T", { state: "idle", needsInput: false }, { agents: { count: 1, spinning: false }, pinned: false })
+    ).toBe("T, 1 background");
+  });
+
+  it("'background' does not inflect — unlike 'agent(s)' it reads the same at any count", () => {
+    expect(
+      tabAriaLabel("T", { state: "idle", needsInput: false }, { agents: { count: 3, spinning: false }, pinned: false })
+    ).toBe("T, 3 background");
   });
 });
 
@@ -284,7 +304,7 @@ describe("tabSignature", () => {
     placeholder: false,
     state: "idle",
     needsInput: false,
-    agents: 0,
+    agents: { count: 0, spinning: false },
     pinned: false,
     active: false,
     density: "wide",
@@ -304,7 +324,7 @@ describe("tabSignature", () => {
     ["placeholder", { placeholder: true }],
     ["state", { state: "streaming" }],
     ["needsInput", { needsInput: true, reason: "perm" }],
-    ["agents", { agents: 1 }],
+    ["agents", { agents: { count: 1, spinning: false } }],
     ["pinned", { pinned: true }],
     ["active", { active: true }],
     // The one that would have failed silently: in `dense` a non-active tab has
@@ -337,6 +357,17 @@ describe("tabSignature", () => {
     // Otherwise a stale reason would keep the signature different from the
     // freshly-unblocked one and repaint forever.
     expect(tabSignature(facts({ needsInput: false, reason: "perm" }))).toBe(tabSignature(facts()));
+  });
+
+  it("changes when a task detaches even though the count stays the same", () => {
+    // This is the actual bug: a task going from running to detached (Exo can no
+    // longer poll it, so it must stop spinning and stop being called "running")
+    // does not change `count`. If the signature only carried `count`, the
+    // reconciler would treat the tab as unchanged and leave a stale spinning
+    // "N agents running" badge on a tab that has nothing left to report.
+    expect(tabSignature(facts({ agents: { count: 1, spinning: true } }))).not.toBe(
+      tabSignature(facts({ agents: { count: 1, spinning: false } }))
+    );
   });
 
   it("does not collide across field boundaries", () => {

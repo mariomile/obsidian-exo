@@ -382,10 +382,19 @@ const STATE_WORDS: Record<TabState, string> = {
  * label stop being announced the moment this attribute exists: anything the tab
  * shows and this string omits is a fact only sighted users get.
  */
+/** Per-tab agent affordance: how many, and whether Exo actually knows any of
+ *  them are still going. A task that DETACHED at turn end (background Bash,
+ *  a Workflow whose stream closed) is not running — Exo cannot poll it — so
+ *  `spinning` must be false for a tab whose only live tasks are detached. */
+export interface TabAgents {
+  count: number;
+  spinning: boolean;
+}
+
 export function tabAriaLabel(
   title: string,
   vm: TabVM,
-  extra: { agents: number; pinned: boolean },
+  extra: { agents: TabAgents; pinned: boolean },
 ): string {
   const parts = [title];
   if (extra.pinned) parts.push("pinned");
@@ -394,8 +403,11 @@ export function tabAriaLabel(
   if (vm.needsInput) {
     parts.push(vm.reason === "ask" ? "waiting for your answer" : "waiting for permission");
   }
-  // Last: it is context, not the thing you have to act on.
-  if (extra.agents > 0) parts.push(`${extra.agents} agent${extra.agents > 1 ? "s" : ""}`);
+  // Last: it is context, not the thing you have to act on. "Agent(s)" only
+  // while Exo actually knows one is running; otherwise "background" — which,
+  // unlike "agent(s)", does not inflect with the count.
+  const { count, spinning } = extra.agents;
+  if (count > 0) parts.push(spinning ? `${count} agent${count > 1 ? "s" : ""}` : `${count} background`);
   return parts.join(", ");
 }
 
@@ -422,7 +434,7 @@ export interface TabFacts {
   needsInput: boolean;
   reason?: NeedsInputReason;
   /** Live background tasks this conversation owns right now. */
-  agents: number;
+  agents: TabAgents;
   pinned: boolean;
   active: boolean;
   /** How the strip is rendering right now. A non-active tab paints a title, a
@@ -451,7 +463,7 @@ export function tabSignature(f: TabFacts): string {
     // Only meaningful while blocked; normalized so a stale reason left on a
     // no-longer-blocked tab cannot keep the signature alive.
     f.needsInput ? (f.reason ?? "?") : "",
-    String(f.agents),
+    `${f.agents.count}:${f.agents.spinning ? "s" : ""}`,
     f.pinned ? "pin" : "",
     f.active ? "act" : "",
     f.density,

@@ -99,7 +99,7 @@ import {
   pinnedFirst,
   nextFocusAfterRemoval,
 } from "./core/working-set";
-import type { TabVM, TabFacts } from "./core/working-set";
+import type { TabAgents, TabVM, TabFacts } from "./core/working-set";
 import { chooseDensity } from "./core/strip-density";
 import type { StripDensity } from "./core/strip-density";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
@@ -1625,7 +1625,11 @@ export class ChatView extends ItemView {
         stopped: c.stopped,
         poisoned: !!c.resumeRisky,
       });
-      const agents = c.liveTasks.size;
+      // Whether the icon spins and whether the aria-label says "agent(s)" or
+      // "background" both hinge on `spinner`, not on the raw count — a task
+      // that DETACHED at turn end is still counted but is not running.
+      const liveSum = summarizeLiveTasks([...c.liveTasks.values()]);
+      const agents: TabAgents = { count: liveSum.count, spinning: liveSum.spinner };
       const pinned = c.pinned === true;
       const isActive = c === this.active;
       // Untitled and empty renders as the placeholder, which the title string
@@ -1796,19 +1800,25 @@ export class ChatView extends ItemView {
     // Per-tab agent count: how many subagents/background tasks THIS chat is
     // running right now — local to its own tab, so a busy background chat is
     // visible at a glance without leaking into the chat you're reading.
-    if (agents > 0) {
+    if (agents.count > 0) {
       const badge = tab.createSpan({
         cls: "mva-tab-agents",
-        attr: { "aria-label": `${agents} agent${agents > 1 ? "s" : ""} running` },
+        attr: {
+          "aria-label": agents.spinning
+            ? `${agents.count} agent${agents.count > 1 ? "s" : ""} running`
+            : `${agents.count} background task${agents.count > 1 ? "s" : ""}`,
+        },
       });
       // Motion budget: one moving element per tab. While the tab is streaming
       // the mark carries the motion and this stays a static numeral — two
       // animations on one tab compete for attention instead of informing.
+      // Detached work never spins either way: Exo cannot poll it, so claiming
+      // motion here would claim knowledge the badge does not have.
       const icon = badge.createSpan({
-        cls: "mva-tab-agents-icon" + (vm.state === "streaming" ? "" : " is-spinning"),
+        cls: "mva-tab-agents-icon" + (vm.state === "streaming" || !agents.spinning ? "" : " is-spinning"),
       });
       setIcon(icon, "loader");
-      badge.createSpan({ text: String(agents) });
+      badge.createSpan({ text: String(agents.count) });
     }
 
     // The × goes with the title in dense mode: keeping it would either double

@@ -16,7 +16,7 @@
  *    own transcript, never inferred from document attachment.
  */
 
-import type { LiveTask, LiveTaskStatus } from "./live-tasks";
+import { isSettled, type LiveTask, type LiveTaskStatus } from "./live-tasks";
 
 /** How a turn ended. `disposed` covers the session going away under it (tab
  *  close, new session in tab, provider switch) — indistinguishable from an
@@ -48,8 +48,11 @@ export function planTurnEndTerminals(
     if (t.status !== "running") continue; // already settled — never re-settle
     if (!registeredThisTurn.has(t.id)) continue; // not this turn's to settle
     if (reason === "completed") {
-      if (t.kind !== "subagent") continue; // bash/workflow may still be running
-      out.push({ id: t.id, status: "error" }); // never got its result
+      // A subagent resolves inside its own turn, so one still running here
+      // never got its result. Bash and Workflow genuinely may still be going —
+      // but this turn's stream is closed, so Exo will never hear about them
+      // again. Detach rather than claim either outcome.
+      out.push({ id: t.id, status: t.kind === "subagent" ? "error" : "detached" });
     } else {
       out.push({ id: t.id, status: "stopped" }); // session gone with the work
     }
@@ -85,7 +88,14 @@ export function planLiveTaskSweep(
       out.push(t.id);
       continue; // one reason is enough — never report an id twice
     }
-    if (t.status !== "running" && t.doneAt != null && now - t.doneAt >= fadeMs) out.push(t.id);
+    // Detached rows clear at the next turn: `reconcile` runs only at turn
+    // start, and by then "something was backgrounded last turn, outcome
+    // unknown" is stale. Bounded to one turn, so they cannot pile up.
+    if (t.status === "detached") {
+      out.push(t.id);
+      continue;
+    }
+    if (isSettled(t.status) && t.doneAt != null && now - t.doneAt >= fadeMs) out.push(t.id);
   }
   return out;
 }

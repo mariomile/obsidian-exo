@@ -19,12 +19,19 @@ describe("planTurnEndTerminals — a turn only settles what it can speak for", (
     expect(out).toEqual([{ id: "a", status: "error" }]);
   });
 
-  it("a clean finish LEAVES background bash running — that is the point of it", () => {
-    expect(planTurnEndTerminals([task("b", "bash")], ids("b"), "completed")).toEqual([]);
+  it("a clean finish DETACHES background bash — Exo cannot poll it, so it must not claim 'running'", () => {
+    // The turn's stream is closed; nothing will ever report this task's outcome
+    // again. `detached` says only what's true: started, outcome unknown. See
+    // live-task-detached.test.ts for the full rationale.
+    expect(planTurnEndTerminals([task("b", "bash")], ids("b"), "completed")).toEqual([
+      { id: "b", status: "detached" },
+    ]);
   });
 
-  it("a clean finish LEAVES a workflow running — it outlives the turn by design", () => {
-    expect(planTurnEndTerminals([task("w", "workflow")], ids("w"), "completed")).toEqual([]);
+  it("a clean finish DETACHES a workflow too — same reasoning, it outlives the turn by design", () => {
+    expect(planTurnEndTerminals([task("w", "workflow")], ids("w"), "completed")).toEqual([
+      { id: "w", status: "detached" },
+    ]);
   });
 
   it("an interrupt settles every kind: the session that owned them is gone", () => {

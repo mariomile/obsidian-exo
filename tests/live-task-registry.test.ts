@@ -134,7 +134,7 @@ describe("LiveTaskRegistry — settling a turn", () => {
     expect([...c.liveTasks.values()].map((t) => t.status)).toEqual(["stopped", "stopped", "stopped"]);
   });
 
-  it("a clean finish settles orphaned subagents but leaves background work alone", () => {
+  it("a clean finish settles orphaned subagents but only detaches background work", () => {
     const { reg } = harness();
     const c = convo();
     const ctx = ctxFor(c);
@@ -144,7 +144,7 @@ describe("LiveTaskRegistry — settling a turn", () => {
     reg.settleTurn(ctx, "completed");
 
     expect(c.liveTasks.get("sub")?.status).toBe("error");
-    expect(c.liveTasks.get("sh")?.status).toBe("running");
+    expect(c.liveTasks.get("sh")?.status).toBe("detached");
   });
 
   it("never settles work another turn registered — that is keep-alive L1", () => {

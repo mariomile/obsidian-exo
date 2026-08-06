@@ -14,7 +14,7 @@
  * is testable with plain objects.
  */
 
-import type { LiveTaskStatus } from "../core/live-tasks";
+import { isSettled, type LiveTaskStatus } from "../core/live-tasks";
 import { planLiveTaskSweep, planTurnEndTerminals, type TurnEndReason } from "../core/live-task-lifecycle";
 import type { AssistantCtx, Convo, LiveTaskRecord } from "./convo-types";
 
@@ -41,10 +41,14 @@ export class LiveTaskRegistry {
    * only the ones that remember to ask for it.
    */
   upsert(c: Convo, rec: LiveTaskRecord): void {
-    if (rec.status !== "running") rec.doneAt = Date.now();
+    // Only an OUTCOME is stamped and faded. `detached` is neither running nor
+    // finished: it must not vanish on a timer, because nothing was shown to the
+    // user that two seconds would be enough to read.
+    const settled = isSettled(rec.status);
+    if (settled) rec.doneAt = Date.now();
     c.liveTasks.set(rec.id, rec);
     this.onChange();
-    if (rec.status !== "running") this.schedule(() => this.remove(c, rec.id), LIVE_FADE_MS);
+    if (settled) this.schedule(() => this.remove(c, rec.id), LIVE_FADE_MS);
   }
 
   /**
