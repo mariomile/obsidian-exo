@@ -5942,25 +5942,25 @@ export class ChatView extends ItemView {
   }
 
   /** Insert or update a live task on a convo and refresh the chip. The single
-   *  mutation point so the count/label and any open popover stay in sync. */
+   *  mutation point so the count/label and any open popover stay in sync — also
+   *  stamps `doneAt` and schedules the fade eviction for any non-"running"
+   *  status, so every caller (subagent, background shell, workflow progress)
+   *  gets eviction for free instead of only callers that remember liveStatus. */
   private liveUpsert(c: Convo, rec: LiveTaskRecord): void {
+    if (rec.status !== "running") rec.doneAt = Date.now();
     c.liveTasks.set(rec.id, rec);
     this.refreshAgentIndicators();
     this.renderAgentPopover();
+    if (rec.status !== "running") {
+      window.setTimeout(() => this.liveRemove(c, rec.id), ChatView.LIVE_FADE_MS);
+    }
   }
 
-  /** Mark a live task terminal (done/error/stopped), stamp `doneAt`, and schedule
-   *  its eviction after the fade window so the row lingers briefly then leaves. */
+  /** Mark a live task terminal (done/error/stopped) in place, keeping its
+   *  existing label/cardEl — thin wrapper over liveUpsert. */
   private liveStatus(c: Convo, id: string, status: LiveTaskStatus): void {
     const rec = c.liveTasks.get(id);
-    if (!rec) return;
-    rec.status = status;
-    rec.doneAt = Date.now();
-    this.refreshAgentIndicators();
-    this.renderAgentPopover();
-    if (status !== "running") {
-      window.setTimeout(() => this.liveRemove(c, id), ChatView.LIVE_FADE_MS);
-    }
+    if (rec) this.liveUpsert(c, { ...rec, status });
   }
 
   /** Evict a live task and refresh the chip. */
