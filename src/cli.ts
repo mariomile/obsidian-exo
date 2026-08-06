@@ -377,6 +377,45 @@ export function mcpLogin(cli: ResolvedCli, name: string, cwd: string): Promise<{
   });
 }
 
+/** Clear stored OAuth credentials for an MCP server via `claude mcp logout <name>`.
+ *  Unlike {@link mcpLogin} this is local and synchronous (no browser round-trip),
+ *  so a short timeout is enough. Same never-rejects contract. */
+export function mcpLogout(cli: ResolvedCli, name: string, cwd: string): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    if (!name.trim()) return resolve({ ok: false, output: "No server name." });
+    let out = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (result: { ok: boolean; output: string }): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      resolve(result);
+    };
+    const append = (d: Buffer | string) => {
+      out += d.toString();
+      if (out.length > 8000) out = out.slice(-8000);
+    };
+    try {
+      const c = spawn(cli.bin, ["mcp", "logout", name], { cwd, env: { ...process.env, PATH: cli.pathEnv } });
+      c.stdout.on("data", append);
+      c.stderr.on("data", append);
+      c.on("error", (e: Error) => finish({ ok: false, output: e.message }));
+      c.on("close", (code: number | null) => finish({ ok: code === 0, output: out.trim() }));
+      timer = setTimeout(() => {
+        try {
+          c.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+        finish({ ok: false, output: out.trim() || "Logout timed out." });
+      }, 15_000);
+    } catch (e) {
+      finish({ ok: false, output: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
 /* ------------------------------ errors -------------------------------- */
 
 export function makeAbortError(): Error {

@@ -15,7 +15,7 @@ import { parseMcpJson, summarizeServer } from "../../core/mcp-config";
 import { mcpSections, matchesQuery } from "../../core/hub-sections";
 import { findToolRule, toolPermissionStatus } from "../../core/permissions";
 import { MCP_DOCS_DIR, mcpDocPath, mcpDocTemplate, isSafeDocName, hasMcpDocContent, summarizeMcpDoc } from "../../core/mcp-docs";
-import { resolveCli, mcpLogin } from "../../cli";
+import { resolveCli, mcpLogin, mcpLogout } from "../../cli";
 import { McpServerModal } from "../mcp-server-modal";
 import { reconcileList, type CardModel } from "../keyed-reconcile";
 import { buildAccordionRow, buildGroupHeader, buildRowScaffold, buildSearchBox, type HubTabContext } from "./shared";
@@ -23,19 +23,28 @@ import { buildAccordionRow, buildGroupHeader, buildRowScaffold, buildSearchBox, 
 /**
  * The MCP tab — control surface AND marketplace over what other tools already
  * have on the system: add a server, edit/enable/disable/remove vault-owned
- * ones, reconnect a failed one, re-authenticate one that needs OAuth, and
- * one-tap import servers other tools already have (never creating a duplicate).
+ * ones, reconnect a failed one, authenticate/de-authenticate any of them
+ * (including claude.ai account connectors), and one-tap import servers other
+ * tools already have (never creating a duplicate).
  *
  * Action model by row:
  *  - vault-owned MCP → Edit · Enable/Disable · Remove (+ Reconnect/Re-auth on failure)
  *  - inherited / live-only MCP (global, connectors, plugins) → Reconnect (failed)
- *    or Re-auth (needs-auth); config is managed at its own source, so no edit
+ *    · Re-auth (needs-auth or disabled) · Disconnect (connected); config itself
+ *    is still managed at its own source (no Edit), but auth is not — `claude mcp
+ *    login`/`logout` work on any server name regardless of where it's configured.
  *  - importable MCP (Codex) → Connect
  *
  * Reconnect respawns the active Exo session (which resumes, so the conversation
  * survives) to re-attempt connections and pick up new OAuth creds / .mcp.json
- * edits. Re-auth shells out to `claude mcp login <name>` (browser OAuth), then
- * reconnects.
+ * edits. Re-auth shells out to `claude mcp login <name>` (browser OAuth) —
+ * for a claude.ai connector this is a server-side grant (the CLI just opens
+ * the authorize URL; there's no local token to hold), so it only takes effect
+ * on the *next* session start, not this one. Disconnect shells out to
+ * `claude mcp logout <name>` to clear the local credential; for a claude.ai
+ * connector this does NOT flip the account-level enable/disable toggle (that
+ * still lives in claude.ai's own settings) — it only revokes what this CLI
+ * can use, which is enough to stop it appearing in Exo's session.
  */
 
 /** Read every MCP source, normalize, and diff against what Exo already has.
@@ -208,14 +217,25 @@ function buildMcpRow(it: DiscoveryItem, ourNames: Set<string>, documented: Set<s
     // real reason (needs-auth / failed / disabled) so the user knows why.
     const label = !it.status || it.status === "connected" ? "active" : it.status;
     right.createSpan({ cls: "mva-conn-state", text: label });
-    // Recovery actions apply to ANY server (ours, inherited, connector) since
-    // reconnect respawns the session and `claude mcp login` resolves by name.
+    // Recovery + auth actions apply to ANY server (ours, inherited, connector)
+    // since reconnect respawns the session and `claude mcp login`/`logout`
+    // resolve by name regardless of where the server is configured.
     if (it.status === "failed") {
       const b = right.createEl("button", { cls: "mva-btn", text: "Reconnect" });
       b.onclick = () => void doReconnect(ctx, b);
-    } else if (it.status === "needs-auth") {
+    } else if (it.status === "needs-auth" || it.status === "disabled") {
+      // "disabled" here covers a claude.ai connector turned off at its own
+      // source: login can't flip that account-level toggle, but it's the
+      // only lever this panel has, and it does take a token that's merely
+      // expired (vs. truly account-disabled) back to connected.
       const b = right.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Re-auth" });
       b.onclick = () => void doReauth(ctx, it, b);
+    } else if (!ourNames.has(it.name) && (!it.status || it.status === "connected")) {
+      // Connected inherited/connector/plugin server — no .mcp.json entry to
+      // Enable/Disable here, but the credential this CLI holds can still be
+      // revoked, which is enough to stop it appearing in Exo's next session.
+      const b = right.createEl("button", { cls: "mva-btn mva-btn-danger", text: "Disconnect" });
+      b.onclick = () => void doLogout(ctx, it, b);
     }
     // Quiet indicators only — a colour-and-icon glance at whether this server
     // has notes or a standing rule, not the detail itself (that's the
@@ -379,6 +399,29 @@ async function doReauth(ctx: HubTabContext, it: DiscoveryItem, btn: HTMLButtonEl
   } catch (e) {
     new Notice(`Re-auth failed: ${e instanceof Error ? e.message : String(e)}`);
     btn.disabled = false;
+  }
+}
+
+async function doLogout(ctx: HubTabContext, it: DiscoveryItem, btn: HTMLButtonElement): Promise<void> {
+  btn.disabled = true;
+  btn.setText("Disconnecting…");
+  try {
+    const cli = await resolveCli("claude", ctx.plugin.settings.claudeBin);
+    const res = await mcpLogout(cli, it.name, ctx.base());
+    if (!res.ok) {
+      const tail = res.output ? res.output.split("\n").filter(Boolean).slice(-1)[0] : "";
+      new Notice(`Disconnect failed for "${it.name}".${tail ? ` ${tail}` : ""}`);
+      btn.disabled = false;
+      btn.setText("Disconnect");
+      return;
+    }
+    new Notice(`Disconnected "${it.name}". Reconnecting…`);
+    await ctx.plugin.reloadMcpConnections();
+    ctx.rerender();
+  } catch (e) {
+    new Notice(`Disconnect failed: ${e instanceof Error ? e.message : String(e)}`);
+    btn.disabled = false;
+    btn.setText("Disconnect");
   }
 }
 
