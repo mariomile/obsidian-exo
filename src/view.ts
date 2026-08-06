@@ -6205,6 +6205,14 @@ export class ChatView extends ItemView {
       // exchange from the UI. The atomic write keeps this cheap and safe.
       this.persist();
     }
+    // A previous turn's working row can outlive the `ctx` that owned it: its
+    // finally (the only place that removes it) never ran if that turn's
+    // promise chain never settled (stop-escalation dispose, or a concurrent
+    // second runTurn racing this convo — see the guard timing below). It then
+    // keeps pulsing "esc to stop" for work that's gone, indistinguishable from
+    // Exo being stuck. Same idiom as the caret sweep in finalizeTurn: only this
+    // new turn's own row can legitimately exist from here.
+    c.listEl.querySelectorAll(".mva-working").forEach((el) => el.remove());
     const ctx = this.addAssistantTurn(c, text);
     c.currentCtx = ctx; // target for this conversation's ask_user cards
     this.reconcileLiveTasks(c); // drop orphaned/faded entries before this turn adds new ones

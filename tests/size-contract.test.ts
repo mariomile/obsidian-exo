@@ -36,7 +36,10 @@ const CEILINGS: Record<string, number> = {
   // +10 il 2026-08-06: refreshContext() su layout-change — spostare la leaf
   // di Exo sidebar<->main non fa scattare active-leaf-change in modo
   // affidabile, lasciando la card "Current Document" sulla nota vecchia.
-  "src/view.ts": 7169,
+  // +8 il 2026-08-06: sweep della working-row orfana a inizio turno — se il
+  // finally del ctx precedente non gira mai (dispose da stop-escalation, o
+  // race di due runTurn concorrenti), la row pulsa "esc to stop" per sempre.
+  "src/view.ts": 7177,
   // +4 il 2026-08-06: call-site della migrazione one-shot cachedSessionCaps
   // (logica in session-caps-cache.ts) — non estraibile oltre, è già solo glue
   // sul metodo loadSettings() del plugin.
