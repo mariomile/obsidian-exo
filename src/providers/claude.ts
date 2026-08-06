@@ -311,7 +311,17 @@ class ClaudeSession implements AgentSession {
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
       this.denyPending?.();
-      this.onEvent?.({ kind: "error", message: m });
+      // Only surface this as a TURN error while a turn is actually in flight.
+      // `onEvent` is assigned per-send (below) and never cleared, so without
+      // this guard a pump failure that happens while IDLE — CLI crash, machine
+      // sleep, `claude` upgraded underneath us — routes into the handler of the
+      // LAST COMPLETED turn: it appends an error card + Retry under a finished,
+      // correct answer, fires an OS notification with nothing running, and
+      // pushes an error segment into that turn's `ctx.segments` — the same array
+      // already stored in `c.messages`, so the corruption is persisted and
+      // survives a reload. Checked before `settleTurn`, which clears the handle.
+      // Codex guards the identical emit in `failTransport`.
+      if (this.resolveTurn) this.onEvent?.({ kind: "error", message: m });
       this.settleTurn(err instanceof Error ? err : new Error(m));
     } finally {
       this.ended = true;

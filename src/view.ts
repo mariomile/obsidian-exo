@@ -17,7 +17,6 @@ import { ADAPTERS } from "./providers/registry";
 import type {
   AgentEvent,
   AgentSession,
-  ContextUsage,
   ImageAttachment,
   PermissionMode,
   ProviderId,
@@ -42,7 +41,6 @@ import {
   recordStep,
   pendingDelta,
   advanceWatermark,
-  type CadenceState,
 } from "./core/observer-cadence";
 import { readBootContext } from "./obsidian/memory";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
@@ -57,18 +55,24 @@ import { clickable } from "./ui/dom";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { hoistSlashCommand } from "./core/slash";
-import type { GoalState } from "./core/goal-loop";
 import { setGoal, clearGoal, advance, resumeGoal, buildContinuationPrompt } from "./core/goal-loop";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
+import { classifyTurnOutput } from "./core/workflow-classify";
 import {
   summarizeLiveTasks,
   liveTaskDotClass,
   liveTaskStatusText,
   fadedTaskIds,
-  type LiveTask,
   type LiveTaskStatus,
 } from "./core/live-tasks";
-import { Composer, type ComposerDraft } from "./ui/composer";
+import { Composer } from "./ui/composer";
+import type {
+  AssistantCtx,
+  Convo,
+  ConvoData,
+  LiveTaskRecord,
+  ToolCard,
+} from "./ui/convo-types";
 import { renderEmptyState } from "./ui/empty-state";
 import { isVaultSetUp, memorySetupNeeded } from "./core/vault-setup";
 import { buildRelatedChips } from "./ui/related";
@@ -79,7 +83,6 @@ import {
   type Segment,
   type Checkpoint,
   type Message,
-  type PersistedMessage,
 } from "./core/model";
 import { maxIdSuffix, makeIdAllocator } from "./core/ids";
 import { partitionConvos } from "./core/persistence";
@@ -125,7 +128,6 @@ import { isReadOnlyExternalTool } from "./core/headless-tools";
 import {
   createWorkflowSignal,
   evaluateWorkflowEligibility,
-  type WorkflowOutputType,
 } from "./core/workflow-signals";
 import { planInputParts, planStateText } from "./core/plan";
 import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
@@ -182,262 +184,6 @@ export const EXO_ICON = "exo-star";
 
 const MAX_PERSIST_OUTPUT = 2000;
 const MAX_CHECKPOINT_FILE = 64_000; // don't persist a rewind snapshot larger than this (bloat guard)
-
-interface ToolCard {
-  card: HTMLElement;
-  statusEl: HTMLElement;
-  bodyEl: HTMLElement;
-  elapsedEl: HTMLElement;
-  startedAt: number;
-  /** Live workflow status span — created on the first workflow-progress event
-   *  for this card (Workflow launches only). */
-  wfEl?: HTMLElement;
-}
-
-/* ----- persisted data model (types in ./core/model) ----- */
-interface ConvoData {
-  id: string;
-  title: string;
-  provider: ProviderId;
-  model: string;
-  sessionId?: string;
-  updatedAt?: number;
-  usage?: ContextUsage;
-  researchMode?: ResearchModeState;
-  /** Slug of the agent this conversation is bound to via `/as` (persisted). */
-  agent?: string;
-  /** True for chats the user archived (persisted to the separate archive store,
-   *  never evicted). Absent/false for live chats. */
-  archived?: boolean;
-  /** Explicit user protection: never a retention cleanup candidate, never
-   *  auto-retired from the tab strip. Persisted. */
-  pinned?: boolean;
-  /** When this conversation left the tab strip (retired or archived). Feeds the
-   *  history's "Recently retired" group. Absent = never been in the strip,
-   *  or still in it. Persisted. */
-  retiredAt?: number;
-  /** When this conversation was last the focused tab. The strip's LRU key.
-   *  Persisted so the retire order survives a reload: every site that assigns it
-   *  (`switchTo`, `setActiveSilently`) schedules a conversation-store write, not
-   *  just the settings write that saves the tab set. */
-  lastActiveAt?: number;
-  /** Manually-assigned Session-Cockpit column (persisted). Absent = default. */
-  boardStatus?: SessionLane;
-  messages: PersistedMessage[];
-}
-
-/** A live task plus its scroll-to target card. The DOM-free `LiveTask` fields
- *  feed the pure core; `cardEl` is view-only. */
-export type LiveTaskRecord = LiveTask & { cardEl: HTMLElement };
-
-export interface Convo {
-  id: string;
-  listEl: HTMLElement;
-  title: string;
-  sessionId?: string;
-  /** True when the user archived this chat: hidden from the board's active
-   *  Session-Cockpit lanes and moved to a separate untrimmed store (never
-   *  evicted). Persisted. */
-  archived?: boolean;
-  /** Explicit user protection: never a retention cleanup candidate, never
-   *  auto-retired from the tab strip. Persisted. */
-  pinned?: boolean;
-  /** When this conversation left the tab strip (retired or archived). Feeds the
-   *  history's "Recently retired" group. Absent = never been in the strip,
-   *  or still in it. Persisted. */
-  retiredAt?: number;
-  /** When this conversation was last the focused tab. The strip's LRU key.
-   *  Persisted so the retire order survives a reload: every site that assigns it
-   *  (`switchTo`, `setActiveSilently`) schedules a conversation-store write, not
-   *  just the settings write that saves the tab set. */
-  lastActiveAt?: number;
-  /** Manually-assigned Session-Cockpit column (persisted). When set and the chat
-   *  is idle, its card sits here instead of the default review lane; running /
-   *  needs-input still auto-override. */
-  boardStatus?: SessionLane;
-  provider: ProviderId;
-  model: string;
-  allow: Set<string>;
-  updatedAt?: number;
-  /** Last known context-window usage of this conversation's session — kept
-   *  per-convo (and persisted) so tab switches and restarts restore the ring
-   *  instead of blanking it until the next turn completes. */
-  usage?: ContextUsage;
-  messages: Message[];
-  // Per-conversation runtime (enables parallel conversations).
-  session: AgentSession | null;
-  sessionSig: string;
-  streaming: boolean;
-  stopped: boolean; // set by stop() so the turn renders as "Stopped", not an error
-  /** When the FIRST Stop/Esc of the current turn was requested. Runtime-only —
-   *  feeds stopAction's grace window so a second impatient press within a
-   *  normal interrupt round-trip doesn't force-dispose a healthy session.
-   *  Cleared at the next turn's start (runTurn) alongside `stopped`. */
-  stopRequestedAt?: number;
-  /** Active `/goal`. In-memory: not persisted across reloads. */
-  goal?: GoalState;
-  pendingPerm: (() => void) | null; // cancels an open permission card on stop
-  pendingAsk: (() => void) | null; // cancels an open ask card on stop
-  /** A turn completed on this conversation while it was not the focused tab.
-   *  Runtime-only, never persisted (same discipline as `aiTitleAttempts`): after
-   *  a reload there is nothing you "have not seen". */
-  unread?: boolean;
-  queue: {
-    text: string;
-    images?: ImageAttachment[];
-    sendPrefix?: string;
-    isRecoveryRetry?: boolean;
-    researchMode?: ResearchModeState;
-    /** Agent slug bound to this queued message (`@agent` picked before send). */
-    agent?: string;
-  }[];
-  pendingEl: HTMLElement | null; // container for queued-message chips
-  /** The in-flight assistant turn of THIS conversation (null when idle) — the
-   *  target for its session's ask_user cards, so parallel conversations can't
-   *  cross-render into each other's transcripts. */
-  currentCtx: AssistantCtx | null;
-  /** Live background work this conversation owns RIGHT NOW — subagents, background
-   *  Bash, and Workflow agents. Lives on the Convo (NOT the per-turn AssistantCtx)
-   *  so it OUTLIVES the turn: keep-alive Level 1. Keyed by tool-call id (subagent/
-   *  bash) or Workflow tool_use id. Drives the expandable agents chip. Runtime-only. */
-  liveTasks: Map<string, LiveTaskRecord>;
-  /** The discreet "Related" section appended below the last turn when the
-   *  transcript doesn't fill the viewport (null when not shown). */
-  tailSurfaceEl: HTMLElement | null;
-  /** True once the proactive ≥75% compaction nudge has been shown for this
-   *  conversation — one-shot, so it never re-appears after dismiss or compaction. */
-  compactNudged?: boolean;
-  /** Unsent composer draft (text + attachments), stashed when the user switches
-   *  away so every chat keeps its own composer — runtime-only, never persisted. */
-  draft?: ComposerDraft;
-  /** Provider-only prefix for the NEXT turn (Codex compact emulation: the
-   *  recap that reseeds a fresh session). Consumed once, never UI/persisted. */
-  pendingSendPrefix?: string;
-  /** Persisted per-conversation Research Mode; never shared across tabs. */
-  researchMode: ResearchModeState;
-  /** Slug of the agent this whole conversation is bound to (`/as <agent>`).
-   *  Persisted. Deliberately does NOT alter `SessionOpts`: the binding is a
-   *  provider-only rider that routes the turn to the engine's own subagent, so
-   *  it can never desync `sessionSigOf()` or force a session respawn. */
-  agent?: string;
-  /** Count of AI-title generation attempts fired for this conversation — counts
-   *  fires, not successes (a call that times out still consumes one). Feeds
-   *  `isAiTitleDue` (core/title.ts), which allows at most 2: one after the first
-   *  assistant turn, and — if the title is still not `aiTitleApplied` — one more
-   *  after a later turn. Runtime-only (never persisted). */
-  aiTitleAttempts?: number;
-  /** True once a real AI title has actually landed and been swapped into
-   *  `c.title`. The authoritative "no more retries" signal — deliberately a
-   *  separate explicit flag rather than inferred by comparing `c.title` against
-   *  the shape of a derived placeholder, since a user's own text can
-   *  coincidentally look like a finished title. Runtime-only (never persisted). */
-  aiTitleApplied?: boolean;
-  /** Proactive recall (design 2026-07-09): ids of store entries already injected
-   *  into THIS conversation's outbound turns, so each memory is paid for once and
-   *  then lives in cached history. Runtime-only — never persisted (a reloaded
-   *  conversation re-injects from scratch, which is correct: the cached history is
-   *  gone too). Mirrors the runtime-only pattern of `aiTitleAttempts` above. */
-  injectedMemoryIds?: Set<string>;
-  /** Controller for the in-flight AI-title call, so disposing the conversation
-   *  (close/delete/reset) aborts it. Runtime-only. */
-  titleAbort?: AbortController | null;
-  /** Runtime-only (never persisted): set when a turn ended poisoned but its
-   *  on-disk sessionId was KEPT for a resume-first recovery. If a turn started
-   *  with this true also poisons, recovery escalates to a fresh session + recap
-   *  (see runTurn's two-stage recovery). Cleared on any healthy turn. */
-  resumeRisky?: boolean;
-  /** Observer cadence (W2-3) — runtime-only, never persisted. `cadence` is the
-   *  pure per-conversation step-counter/watermark state (used only in
-   *  `observerCadence: "every-n-steps"`; harmless dead weight otherwise).
-   *  `cadenceTurnFlushLen` is how many chars of THIS turn's accumulated
-   *  assistant text a step pass already sent — reset at the top of each new
-   *  turn — so the end-of-turn pass only sends the unsent tail. */
-  cadence?: CadenceState;
-  cadenceTurnFlushLen?: number;
-}
-
-interface AssistantCtx {
-  el: HTMLElement;
-  bodyEl: HTMLElement;
-  cards: Map<string, ToolCard>;
-  segById: Map<string, Segment>;
-  segments: Segment[];
-  /** Stable across recovery retry because it derives from the persisted user turn. */
-  turnId: string;
-  curTextEl: HTMLElement | null;
-  /** Chars of curRaw already rendered into stable (final) blocks. */
-  stableLen: number;
-  /** Live tail element re-rendered each tick (holds the not-yet-stable suffix). */
-  tailEl: HTMLElement | null;
-  /** The live streaming caret (at most one per turn), tracked so cleanup is O(1). */
-  caretEl: HTMLElement | null;
-  /** Turn finalized (flushRender ran). A render tick's caret placement resolves on
-   *  a microtask, so a tick in flight when the turn ends could otherwise re-add a
-   *  caret AFTER cleanup. This flag is the airtight invariant — no caret may be
-   *  placed once true — closing the whole orphaned-caret race class. */
-  finalized: boolean;
-  /** Incremental block-boundary scan state over curRaw (O(delta) per tick):
-   *  chars already scanned (complete lines only) … */
-  scanPos: number;
-  /** … whether scanPos sits inside a ``` fence … */
-  fenceOpen: boolean;
-  /** … and the last safe (non-fenced blank-line) boundary found so far. */
-  lastBoundary: number;
-  curTextSeg: { t: "text"; md: string } | null;
-  curRaw: string;
-  fullText: string;
-  userText: string;
-  thinkingEl: HTMLElement | null;
-  /** Open steps-timeline run (contiguous thinking + generic tool work). Null
-   *  when no run is open; closed (folded to "N steps") when reply text resumes,
-   *  an excluded card appears, or the turn ends. */
-  stepsRun: StepsRun | null;
-  sources: Set<string>;
-  touched: TouchedNote[];
-  /** Tool-use id → file path, for write tools (to reveal the note on result). */
-  writeById: Map<string, string>;
-  /** Tool-call ids that touched a note (top-level, non-subagent-nested). Their
-   *  live `.mva-tool` row is streaming-only feedback — removed once the turn
-   *  settles, since the touched-notes footer then carries the same fact. */
-  noteTouchIds: Set<string>;
-  /** Tool-call id → owning steps run, so dissolving note rows at turn end can
-   *  re-count (or remove) the folded run they live in. */
-  runById: Map<string, StepsRun>;
-  /** Notes already revealed this turn (dedupe). */
-  revealed: Set<string>;
-  /** Vault-relative paths that got a preview card this turn (dedupe, first write wins). */
-  artifacts: Set<string>;
-  /** Vault-relative paths that did NOT exist when first written this turn (newly created). */
-  createdPaths: Set<string>;
-  convo: Convo;
-  /** Per-turn debounce timer, so parallel conversations don't fight over a shared one. */
-  renderTimer: number | null;
-  /** Live TodoWrite panel for this turn (re-rendered on each update). */
-  todosEl: HTMLElement | null;
-  /** Background Bash tasks this turn: tool-call id → card + badge + parsed shell id. */
-  bgTasks: Map<string, { cardEl: HTMLElement; badgeEl: HTMLElement; shellId?: string }>;
-  /** Task (subagent) tool-calls currently in flight (added on start, removed on
-   *  result). With bgTasks, drives the per-chat "N agents running" indicators —
-   *  the count of background work THIS conversation owns right now. */
-  runningTasks: Set<string>;
-  /** Task (subagent) cards this turn: Task tool-call id → nested activity section. */
-  taskCards: Map<string, { container: HTMLElement; summaryEl: HTMLElement; rowsEl: HTMLElement; count: number }>;
-  /** Subagent mini-rows this turn (live-only): tool-call id → status dot + parent. */
-  nestedRows: Map<string, { dotEl: HTMLElement; parentId: string }>;
-  /** Working-indicator row (Feature 1) — star + phase label + elapsed + esc hint.
-   *  Always re-appended as the last child of bodyEl so it trails the transcript. */
-  workingEl: HTMLElement | null;
-  workingLabel: HTMLElement | null;
-  workingElapsed: HTMLElement | null;
-  /** Interactive cards (permission / ask_user / plan) currently awaiting the
-   *  user. While > 0 the card IS the feedback, so the working row hides. */
-  openCards: number;
-  /** A text segment is actively streaming — the caret is the live feedback, so
-   *  the working row hides. Reset when the segment ends (thinking, tool, turn). */
-  textStreaming: boolean;
-  /** System-notification dedupe keys fired this turn (Feature 3): "done" | "waiting" | "error". */
-  notified: Set<string>;
-}
 
 let convoSeed = 0;
 
@@ -1742,15 +1488,7 @@ export class ChatView extends ItemView {
     this.listHost.empty();
     this.listHost.appendChild(c.listEl);
     if (c.listEl.childElementCount === 0) this.renderEmptyState();
-    this.refreshProviderUI();
-    this.syncSendButton();
-    this.composer.updateUsage(c.usage ?? null);
-    this.composer.setDraft(c.draft);
-    this.composer.refreshResearch();
-    this.composer.refreshAgentChip();
-    // Reflect the newly-active convo's session quota (if any) on the badge.
-    this.composer.setLastRateLimit((c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null);
-    this.composer.updateRateBadge();
+    this.syncActiveSurfaces(c);
     this.renderTabs();
     this.applyWorkingSet();
     this.persistTabs();
@@ -1767,6 +1505,33 @@ export class ChatView extends ItemView {
     this.rebuildOutline();
     this.updateRecap();
     this.prewarm();
+  }
+
+  /** Every surface that renders the ACTIVE conversation's own state, in one
+   *  place. `switchTo` and `setActiveSilently` are the only two doors onto
+   *  `this.active`, and each used to hand-enumerate its own subset — so they
+   *  drifted in both directions: `switchTo` forgot the goal pill and the agent
+   *  chip, `setActiveSilently` forgot research, the agent chip, and the rate
+   *  badge. A stale goal pill is not merely cosmetic: its buttons close over the
+   *  convo they were rendered for, so "Continue +N" on a pill left over from the
+   *  previous tab starts a real, token-burning turn on a chat you are not
+   *  looking at. Anything conversation-scoped belongs HERE, never in a caller —
+   *  that is the only thing that keeps the two doors from drifting again. */
+  private syncActiveSurfaces(c: Convo): void {
+    this.refreshProviderUI();
+    this.syncSendButton();
+    this.composer.updateUsage(c.usage ?? null);
+    this.composer.setDraft(c.draft);
+    this.composer.refreshGoal(c);
+    this.composer.refreshResearch();
+    this.composer.refreshAgentChip();
+    // Reflect the newly-active convo's session quota (if any) on the badge.
+    this.composer.setLastRateLimit((c.session as { rateLimit?: RateLimitInfo | null } | null)?.rateLimit ?? null);
+    this.composer.updateRateBadge();
+    // The chip reads `this.active.liveTasks`, so a change of active IS a state
+    // transition it has to observe; the popover re-renders or closes with it.
+    this.refreshAgentIndicators();
+    this.renderAgentPopover();
   }
 
   /* ----------------------------- tab bar ---------------------------- */
@@ -2399,6 +2164,17 @@ export class ChatView extends ItemView {
       this.convos.find((x) => x.id === convoId) ??
       (this.active?.id === convoId ? this.active : undefined);
     if (!c) return false;
+    // `setStreaming` un-archives on turn start under the rule "never leave a
+    // live, token-burning turn invisible on the board" — but it only enforced
+    // that on the way IN. Archiving mid-stream is the same violation from the
+    // other side: this path never drops the session, so the turn keeps running
+    // and keeps spending while its card is filtered out of every board lane,
+    // and `setStreaming(c, true)` will not fire again to bring it back. Refuse,
+    // like the other conversation-mutating commands that decline mid-turn
+    // (compactActive, rewindTo, handleGoalCommand, resumeGoalLoop,
+    // reloadMcpConnections). Un-archiving mid-stream stays allowed: it can only
+    // make a live turn MORE visible.
+    if (archived && c.streaming) return false;
     c.archived = archived;
     if (archived) {
       // "Archived" and "open in the working set" are contradictory states. Leave
@@ -3386,11 +3162,7 @@ export class ChatView extends ItemView {
     next.listEl.hide(); // gallery is on top; reveal happens on hideGallery/switchTo
     this.listHost.appendChild(next.listEl);
     if (next.listEl.childElementCount === 0) this.renderEmptyState();
-    this.refreshProviderUI();
-    this.syncSendButton();
-    this.composer.updateUsage(next.usage ?? null);
-    this.composer.setDraft(next.draft);
-    this.composer.refreshGoal(next);
+    this.syncActiveSurfaces(next);
     this.renderTabs();
     this.persistTabs();
     // Same reason as switchTo: `lastActiveAt` and the cleared `retiredAt` are
@@ -3902,7 +3674,16 @@ export class ChatView extends ItemView {
     // up (false skips / spurious injections) — make both outcomes readable.
     if (isBackReference(message)) this.diag.push("recall", "skipped (back-reference)");
     else if (picked.length) this.diag.push("recall", `injected ${picked.length}`);
-    for (const e of picked) c.injectedMemoryIds.add(e.id);
+    // NOT stamped here. `injectedMemoryIds` means "already paid for in this
+    // conversation's outbound history", and until `session.send` actually
+    // carries them they have been paid for by nobody. Stamping at SELECTION
+    // time burned them on a turn that died before send (`ensureSession` throws
+    // — CLI missing, session expired): the user retries, recall re-runs, every
+    // id is already excluded, and the model answers without the memory while
+    // the affordance above the bubble still claims "N memories recalled".
+    // There is no compensating removal on any failure path, so those entries
+    // were unreachable for the rest of the conversation. `runTurn` stamps them
+    // once the send is committed.
     return picked;
   }
 
@@ -4537,8 +4318,8 @@ export class ChatView extends ItemView {
     // never resolves — it doesn't touch the per-tab agent badge. Any id still in
     // runningTasks here never got its "tool-call-result" (turn interrupted,
     // errored, or the app died mid-flight): its liveTasks row is stuck "running"
-    // forever, since liveStatus() — the only thing that stamps doneAt and
-    // schedules eviction — is never reached for it. The badge only grows.
+    // forever, since liveUpsert() — which stamps doneAt and schedules eviction
+    // for any terminal status — is never reached for it. The badge only grows.
     // The turn is over, so every one of these is orphaned by definition: force
     // them terminal now instead of leaving a phantom spinner behind.
     if (ctx.runningTasks.size > 0) {
@@ -6949,6 +6730,14 @@ export class ChatView extends ItemView {
       const agentMessage =
         boundAgent && c.provider === "claude" ? buildAgentBindingOutbound(boundAgent, researchMessage) : researchMessage;
       const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, recallBlock, agentMessage].filter(Boolean).join("\n\n");
+      // Recalled memories are "paid for" only now, with `outbound` built and the
+      // session alive — everything that could still fail is the send itself, and
+      // a failed send re-recalls on the next attempt rather than answering
+      // without a memory it already claimed to have injected. See the note in
+      // `selectTurnRecall`, which deliberately does NOT stamp at selection time.
+      if (recalled.length && c.injectedMemoryIds) {
+        for (const e of recalled) c.injectedMemoryIds.add(e.id);
+      }
       await session.send(outbound, onEvent, imgs, codexAgentSystemPrompt);
       // `session.send` can resolve cleanly even after a user Stop/Esc — the
       // adapter swallows the abort rather than throwing or emitting an
@@ -7307,30 +7096,10 @@ export class ChatView extends ItemView {
     const tools = ctx.segments.filter((segment): segment is Extract<Segment, { t: "tool" }> =>
       segment.t === "tool"
     );
-    const toolNames = tools.map((tool) => tool.name);
-    const hasArtifact = ctx.segments.some((segment) => segment.t === "artifact");
-    const hasVaultWrite = tools.some((tool) => WRITE_TOOLS.test(tool.name));
-    const structuredOutput = hasArtifact
-      || hasVaultWrite
-      || /(?:^|\n)(?:#{1,3}\s|\|.+\||```(?:json|csv)|[-*]\s+\[[ xX]\])/m.test(ctx.fullText);
-    const outputType: WorkflowOutputType = hasArtifact
-      ? "artifact"
-      : hasVaultWrite
-        ? "vault-write"
-        : structuredOutput
-          ? "structured"
-          : /(?:^|\n)(?:#{1,3}\s|[-*]\s|\d+\.\s)/m.test(ctx.fullText)
-            ? "markdown"
-            : "message";
-    const sensitive = tools.some((tool) =>
-      tool.name === "Bash"
-      || tool.name === "Shell"
-      || WRITE_TOOLS.test(tool.name)
-      || (
-        tool.name.startsWith("mcp__")
-        && !tool.name.startsWith("mcp__obsidian__")
-        && !isReadOnlyExternalTool(tool.name)
-      )
+    const { toolNames, structuredOutput, outputType, sensitive } = classifyTurnOutput(
+      tools,
+      ctx.fullText,
+      ctx.segments.some((segment) => segment.t === "artifact"),
     );
     const eligibility = evaluateWorkflowEligibility({
       succeeded: true,
