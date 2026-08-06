@@ -7,12 +7,15 @@ import { join } from "path";
 const prod = process.argv[2] === "production";
 
 // Deploy target: `.obsidian-plugin-dir` (gitignored) holds the absolute path to
-// the DEV vault's `.obsidian/plugins/exo`. It must never point at the live vault:
-// overwriting main.js there reloads the running plugin, which destroys the
-// ChatView and kills any in-flight turn with "Session disposed (view-unload)"
-// (2026-08-05 investigation). Milestone deploys to the live vault are explicit
-// and one-shot, so the env var wins over the file:
-//   OBSIDIAN_PLUGIN_DIR=~/Vaults/marioverse.ai/.obsidian/plugins/exo pnpm build
+// `.obsidian/plugins/exo`, and by decision (2026-08-06) that's the LIVE
+// marioverse.ai vault — single-vault workflow, no separate dev vault. Copying
+// main.js here does NOT reload the running plugin by itself; only an explicit
+// reload (disable/enable, or a full Obsidian restart) does. That reload is
+// what destroys the ChatView and kills any in-flight turn with "Session
+// disposed (view-unload)" (2026-08-05 investigation) — so treat *reloading*,
+// not building, as the one-shot, deliberate step. The env var still overrides
+// the file when a one-off different target is needed:
+//   OBSIDIAN_PLUGIN_DIR=/path/to/other/vault/.obsidian/plugins/exo pnpm build
 const deployDir =
   process.env.OBSIDIAN_PLUGIN_DIR ||
   (existsSync(".obsidian-plugin-dir") ? readFileSync(".obsidian-plugin-dir", "utf8").trim() : null);

@@ -467,39 +467,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   margin-left: 4px;
   padding-left: 8px;
 }
-/* The hover label. It reveals the title OVER the neighbours, never between
-   them: expanding in flow would push the tabs the user is aiming at out from
-   under the cursor. A child of the row rather than of the tab, positioned by
-   `showTabHover` — `.mva-tabs` scrolls (dense does not guarantee a fit: pinned
-   tabs are exempt from the strip cap) and a scroll container clips positioned
-   descendants, while letting one escape grows `.view-content`'s scroll width
-   into a horizontal scrollbar on the whole chat. Measured, both of them.
-
-   Flat inset ring, no drop shadow — same chrome-flat surface as the active tab
-   twenty pixels away. `pointer-events: none` so the tab underneath keeps every
-   click it had. */
-.mva-tab-hover {
-  position: absolute;
-  top: 2px;
-  height: 28px;
-  max-width: 220px;
-  padding: 0 10px;
-  border-radius: var(--mva-r2);
-  background: var(--background-secondary);
-  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
-  color: var(--text-normal);
-  font-size: 12px;
-  line-height: 28px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  z-index: 2;
-}
-.mva-tab-hover.is-hidden {
-  display: none;
-}
-
 /* Chat column + Recap Rail wrapper. A plain vertical flex by default (the chat
    behaves exactly as before); becomes a row only in the wide full-page layout. */
 .mva-main-row {

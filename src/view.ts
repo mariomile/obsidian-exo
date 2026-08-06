@@ -526,13 +526,6 @@ export class ChatView extends ItemView {
   /** Last count painted into `tabsOverflowEl`. Same ethic as the tab signature:
    *  repaint on a real change, not on every render. -1 = never painted. */
   private overflowPainted = -1;
-  /** The dense-mode hover label: the title of the tab under the cursor. A
-   *  sibling of `tabsEl`, never a child of a tab — see `showTabHover` for the
-   *  measurement that forced that. */
-  private tabHoverEl!: HTMLElement;
-  /** The tab the label is currently describing, so a repaint that discards that
-   *  node can take the label down with it. */
-  private tabHoverAnchor: HTMLElement | null = null;
   /** Current strip density. Runtime-only: recomputed from the live row width on
    *  every resize and on every change of tab count, never persisted — it is a
    *  property of the pane the strip happens to be in, not of the session. */
@@ -666,22 +659,6 @@ export class ChatView extends ItemView {
     const addTab = this.tabsTailEl.createDiv({ cls: "mva-tab-add", attr: { "aria-label": "New tab" } });
     setIcon(addTab, "plus");
     this.clickable(addTab, () => this.newConversation());
-    // The dense-mode hover label. Absolutely positioned against the ROW, so it
-    // is out of the flex flow and belongs to neither container: putting it in
-    // `tabsEl` would make it an unkeyed child of the reconciled list, and
-    // putting it inside a tab would put it inside a scroll container.
-    // `aria-hidden`: its text is a duplicate of the title the hovered tab's own
-    // `aria-label` already carries, and in browse mode a screen reader walks the
-    // DOM — it would meet the same conversation twice, once as a tab and once as
-    // a floating label with no role. It is a pointer affordance only.
-    this.tabHoverEl = this.tabsRowEl.createDiv({
-      cls: "mva-tab-hover is-hidden",
-      attr: { "aria-hidden": "true" },
-    });
-    // Same reason as `overflowPainted` above: `onOpen` can run again on the same
-    // view, and an anchor surviving the row it pointed into would keep a label
-    // alive that has nothing left to describe.
-    this.tabHoverAnchor = null;
     // Chat column + Recap Rail as flex-row siblings. In the sidebar (not wide)
     // the row is a plain column and the recap host stays display:none (CSS); the
     // chat behaves exactly as before.
@@ -1832,7 +1809,6 @@ export class ChatView extends ItemView {
     this.tabsRowEl.toggleClass("is-hidden", ids.length <= 1);
     if (ids.length <= 1) {
       reconcileList(this.tabsEl, []); // drop the lone tab, as the old empty() did
-      this.hideTabHover(); // the row is going away; so must anything it was showing
       // Keep the field honest. Left at the old count it would describe a render
       // that no longer exists, while `is-dense` sits on a display:none row — dead
       // state rather than a bug (the row is unmeasurable, so nothing can flip),
@@ -1905,10 +1881,6 @@ export class ChatView extends ItemView {
       });
     }
     reconcileList(this.tabsEl, models);
-    // A repaint can discard the very node the hover label is describing (the
-    // density flip does exactly that, to every tab at once). The label outlives
-    // its anchor's `mouseleave`, so it has to be taken down here.
-    if (this.tabHoverAnchor && !this.tabHoverAnchor.isConnected) this.hideTabHover();
   }
 
   /**
@@ -1945,41 +1917,6 @@ export class ChatView extends ItemView {
     this.stripDensity = next;
     this.tabsRowEl.toggleClass("is-dense", next === "dense");
     return true;
-  }
-
-  /**
-   * Show the dense-mode hover label for `tab`.
-   *
-   * It is a child of the strip ROW and positioned by hand, rather than an
-   * `position: absolute` child of the tab, because of what the real tree does:
-   * `.mva-tabs` is a scroll container (`overflow-x: auto`) and clips positioned
-   * descendants, and dense mode cannot simply turn that off — pinned tabs are
-   * exempt from the strip cap, so a dense strip is not guaranteed to fit and
-   * still has to scroll. Letting the label escape instead was measured on the
-   * live pane: `.view-content` computes `overflow: auto`, and its scrollWidth
-   * went from 457px to 1390px — a horizontal scrollbar on the whole chat.
-   *
-   * Clamped to the row for the same reason: the label may cover its neighbours,
-   * which is the point, but it may never reach past the row that holds it.
-   */
-  private showTabHover(tab: HTMLElement, title: string): void {
-    const el = this.tabHoverEl;
-    if (!el) return;
-    el.setText(title);
-    el.removeClass("is-hidden");
-    const row = this.tabsRowEl.getBoundingClientRect();
-    const at = tab.getBoundingClientRect();
-    // Anchored just past the tab, so the mark it is naming stays visible; pushed
-    // back left only as far as it takes to keep its right edge inside the row.
-    // The 10 is the row's right gutter (`.mva-tabstrip`'s padding).
-    const rightLimit = row.width - 10 - el.offsetWidth;
-    el.style.left = `${Math.max(0, Math.min(at.right - row.left + 4, rightLimit))}px`;
-    this.tabHoverAnchor = tab;
-  }
-
-  private hideTabHover(): void {
-    this.tabHoverAnchor = null;
-    this.tabHoverEl?.addClass("is-hidden");
   }
 
   /**
@@ -2103,7 +2040,7 @@ export class ChatView extends ItemView {
     // The × goes with the title in dense mode: keeping it would either double
     // every dense tab (12px icon + 6px gap against an 18px tab, and the strip
     // stops fitting again) or make it appear on hover, which reflows the strip
-    // under the cursor — the one thing the hover label exists to avoid. Closing
+    // under the cursor — the one thing the tooltip below exists to avoid. Closing
     // does NOT go with it: the context menu below carries it in both densities.
     if (!bare) {
       const x = tab.createSpan({ cls: "mva-tab-x", attr: { "aria-label": "Close tab" } });
@@ -2114,10 +2051,11 @@ export class ChatView extends ItemView {
       });
     }
     if (bare) {
-      // The title, on hover, over the neighbours. Wired per node like the ×
-      // above, so the listeners die with the tab the reconciler discards.
-      tab.addEventListener("mouseenter", () => this.showTabHover(tab, title));
-      tab.addEventListener("mouseleave", () => this.hideTabHover());
+      // Dense mode drops the title from the tab itself; the native tooltip is
+      // where it reads in full — platform-positioned and platform-dismissed,
+      // instead of a hand-tracked floating label that could drift once its tab
+      // moved out from under it.
+      setTooltip(tab, title);
     }
     this.clickable(tab, () => this.switchTo(c));
     // Right-click is where a tab's own actions live. Wired per node like the ×
