@@ -43,10 +43,9 @@ const CEILINGS: Record<string, number> = {
   // slot sincrono (turnClaimed + turnClaimGen) prima di ogni await, così un
   // secondo runTurn sulla stessa convo non può più partire in parallelo.
   "src/view.ts": 7216,
-  // +4 il 2026-08-06: call-site della migrazione one-shot cachedSessionCaps
-  // (logica in session-caps-cache.ts) — non estraibile oltre, è già solo glue
-  // sul metodo loadSettings() del plugin.
-  "src/main.ts": 3527,
+  // Abbassato il 2026-08-07 dopo l'estrazione della registrazione e
+  // attivazione delle view in `ui/view-registry.ts`. Solo verso il basso.
+  "src/main.ts": 3492,
   "src/ui/composer.ts": 1723,
   "src/settings.ts": 1343,
 };
