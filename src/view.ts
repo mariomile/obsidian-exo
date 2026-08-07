@@ -2814,10 +2814,18 @@ export class ChatView extends ItemView {
     });
   }
 
-  /** Permanently drop a conversation (from the gallery). If it's the active tab,
-   *  switch to a neighbor — or a fresh convo when none remain — exactly like the
-   *  close-tab flow, but keep the gallery open and just remove its card. */
-  private deleteConvo(c: Convo, card: HTMLElement, grid: HTMLElement): void {
+  /**
+   * Remove a conversation from the store and settle the tab strip. No DOM
+   * arguments: the gallery's card cleanup is the caller's job, so every surface
+   * (gallery, chats sidebar) shares one mutation instead of one per renderer.
+   * Returns false when the id is unknown.
+   *
+   * If it's the active tab, switch to a neighbor — or a fresh convo when none
+   * remain — exactly like the close-tab flow.
+   */
+  deleteConversation(id: string): boolean {
+    const c = this.convos.find((x) => x.id === id);
+    if (!c) return false;
     this.dropSession(c, "user-delete");
     // Visual order captured BEFORE either splice below, same reasoning as
     // `closeTab` / `setConvoArchived`: pinned status is still readable off
@@ -2844,15 +2852,25 @@ export class ChatView extends ItemView {
       this.persistTabs();
     }
 
-    card.remove();
-    // This card may have been part of a pending bulk selection: drop it so the
-    // bulk bar never announces more conversations than it can actually delete.
+    // This conversation may have been part of a pending bulk selection: drop it
+    // so the bulk bar never announces more conversations than it can actually
+    // delete.
     if (this.gallerySelection.delete(c.id)) this.renderBulkBar();
     // ...and out of the retention proposal, which the banner's "Seleziona" reads
     // straight into a selection. Left in, a dangling id would make the bar
     // over-report and the delete under-deliver.
-    this.retentionCandidateIds = this.retentionCandidateIds.filter((id) => id !== c.id);
+    this.retentionCandidateIds = this.retentionCandidateIds.filter((x) => x !== c.id);
     this.convoSizeCache.delete(c.id);
+    this.persist();
+    return true;
+  }
+
+  /** Permanently drop a conversation from the gallery: the store mutation above,
+   *  plus the card cleanup that only this surface owns — the gallery stays open,
+   *  so its DOM has to settle in place instead of being rebuilt. */
+  private deleteConvo(c: Convo, card: HTMLElement, grid: HTMLElement): void {
+    this.deleteConversation(c.id);
+    card.remove();
     // Group headers are SIBLINGS of the cards, not wrappers, so removing the
     // last card of a group leaves its header standing above the next group's
     // cards. A header owns exactly the cards that immediately follow it, so
@@ -2864,7 +2882,6 @@ export class ChatView extends ItemView {
     if (!grid.querySelector(".mva-card")) {
       grid.createDiv({ cls: "mva-empty-sub", text: "No conversations yet." });
     }
-    this.persist();
   }
 
   /* ------------------------ gallery bulk selection ---------------------- */
