@@ -27,22 +27,10 @@ import { join } from "node:path";
  */
 
 const CEILINGS: Record<string, number> = {
-  // Conteggi reali al 2026-08-05, abbassati il 2026-08-06 dopo l'estrazione dei
-  // tipi in `ui/convo-types.ts` e della classificazione in
-  // `core/workflow-classify.ts`. Solo verso il basso.
-  // +10 il 2026-08-06: TabAgents { count, spinning } — il badge per-tab non
-  // passava da summarizeLiveTasks e la sua signature non distingueva
-  // running/detached, lasciando lo spinner bloccato su un lavoro concluso.
-  // +10 il 2026-08-06: refreshContext() su layout-change — spostare la leaf
-  // di Exo sidebar<->main non fa scattare active-leaf-change in modo
-  // affidabile, lasciando la card "Current Document" sulla nota vecchia.
-  // +8 il 2026-08-06: sweep della working-row orfana a inizio turno — se il
-  // finally del ctx precedente non gira mai (dispose da stop-escalation, o
-  // race di due runTurn concorrenti), la row pulsa "esc to stop" per sempre.
-  // +39 il 2026-08-06: chiusa la race alla radice — runTurn ora reclama uno
-  // slot sincrono (turnClaimed + turnClaimGen) prima di ogni await, così un
-  // secondo runTurn sulla stessa convo non può più partire in parallelo.
-  "src/view.ts": 7216,
+  // Abbassato il 2026-08-07 dopo l'estrazione dei renderer delle card della
+  // gallery in `ui/gallery-cards.ts` e lo split di deleteConvo. Solo verso il
+  // basso.
+  "src/view.ts": 7049,
   // Abbassato il 2026-08-07 dopo l'estrazione della registrazione e
   // attivazione delle view in `ui/view-registry.ts`. Solo verso il basso.
   "src/main.ts": 3492,

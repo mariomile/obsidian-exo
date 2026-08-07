@@ -52,6 +52,7 @@ import { assembleContext, formatContextDebug } from "./core/context-assembly";
 import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
+import { renderHistoryGroup, setCardSelected } from "./ui/gallery-cards";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { hoistSlashCommand } from "./core/slash";
@@ -217,15 +218,15 @@ export class ChatView extends ItemView {
   private spawnSeq = new WeakMap<Convo, number>();
 
   private convos: Convo[] = [];
-  private active!: Convo;
+  active!: Convo;
   /** Ids of conversations shown in the tab bar (ordered). Subset of `convos`. */
-  private openTabs: string[] = [];
+  openTabs: string[] = [];
   /** Ids proposed for cleanup by the last persist (over-budget). Advisory:
    *  nothing is ever deleted without explicit confirmation. Runtime-only. */
   private retentionCandidateIds: string[] = [];
   /** Ids selezionati nella cronologia per un'azione bulk. Runtime-only, azzerato
    *  a ogni apertura della gallery. */
-  private gallerySelection = new Set<string>();
+  gallerySelection = new Set<string>();
   /** Active history filter chips. Runtime-only, cleared on every gallery open —
    *  same lifetime as `gallerySelection`, so reopening the history is always a
    *  clean slate and never a filter the user forgot they left on. */
@@ -1482,7 +1483,7 @@ export class ChatView extends ItemView {
     this.persist(); // `retiredAt` lives in the conversation store, not in settings
   }
 
-  private switchTo(c: Convo): void {
+  switchTo(c: Convo): void {
     if (c === this.active) return;
     this.saveActive();
     this.active.draft = this.composer.getDraft();
@@ -2392,7 +2393,7 @@ export class ChatView extends ItemView {
     void this.showGallery(preset);
   }
 
-  private hideGallery(): void {
+  hideGallery(): void {
     // The bulk bar's armed state owns a document-level listener; the bar is about
     // to be removed with its container, so drop it here or it outlives the DOM.
     this.bulkDisarm?.();
@@ -2450,7 +2451,7 @@ export class ChatView extends ItemView {
    *  uninformative: there is no context to lose. The gallery always shows the
    *  focused chat even when it is empty, so without this the freshly opened
    *  "New chat" card would permanently wear a warning about losing nothing. */
-  private resumeStatusOf(c: Convo): ResumeStatus {
+  resumeStatusOf(c: Convo): ResumeStatus {
     if (c.messages.length === 0) return "unknown";
     return resumeStatus(c, c.provider === "claude" ? this.sessionsOnDisk : null);
   }
@@ -2635,10 +2636,10 @@ export class ChatView extends ItemView {
       const rest = filtered.filter((c) => !retiredIds.has(c.id));
 
       if (retiredGroup.length > 0) {
-        this.renderHistoryGroup(grid, "Recently retired", retiredGroup, doneConvoIds, true);
+        renderHistoryGroup(this, grid, "Recently retired", retiredGroup, doneConvoIds, true);
       }
       for (const g of groupByTime(rest, now)) {
-        this.renderHistoryGroup(grid, g.label, g.items, doneConvoIds);
+        renderHistoryGroup(this, grid, g.label, g.items, doneConvoIds);
       }
 
       if (filtered.length === 0) {
@@ -2655,163 +2656,6 @@ export class ChatView extends ItemView {
     // so callers cannot accidentally reset the search box by passing "".
     this.galleryRerender = () => renderGrid(search.value);
     renderGrid("");
-  }
-
-  /** One temporal group: a header row plus its cards. The cards stay DIRECT
-   *  children of the grid — the group header is a sibling, not a wrapper — so
-   *  every existing `.mva-card` consumer (bulk selection, `visibleCardIds`,
-   *  `refreshSelectionUI`) keeps working without knowing groups exist. */
-  private renderHistoryGroup(
-    grid: HTMLElement,
-    label: string,
-    items: Convo[],
-    doneConvoIds: Set<string>,
-    retiredContext = false,
-  ): void {
-    if (items.length === 0) return;
-    grid.createDiv({ cls: "mva-gallery-group-header", text: label });
-    for (const c of items) this.renderCard(grid, c, doneConvoIds, retiredContext);
-  }
-
-  private renderCard(
-    grid: HTMLElement,
-    c: Convo,
-    doneConvoIds: Set<string>,
-    retiredContext = false,
-  ): void {
-    const card = grid.createDiv({ cls: "mva-card" });
-    // Cards carry their id in the DOM: the bulk bar needs a DOM-to-id mapping
-    // that survives the grid re-render the search box triggers.
-    card.dataset.convoId = c.id;
-    // A conversation is "active" when it's the focused tab, and "open" when it's
-    // any of the tabs currently in the tab strip. Both get a visible marker so the
-    // gallery mirrors what's open above it.
-    const isActive = c === this.active;
-    const isOpen = this.openTabs.includes(c.id);
-    if (isActive) card.addClass("is-active");
-    if (isOpen) card.addClass("is-open");
-    this.setCardSelected(card, this.gallerySelection.has(c.id));
-    this.addCardDelete(card, grid, c);
-    const head = card.createDiv({ cls: "mva-card-head" });
-    const dot = head.createSpan({ cls: "mva-dot" });
-    dot.style.background = ADAPTERS[c.provider].brandColor;
-    dot.style.color = ADAPTERS[c.provider].brandColor;
-
-    // Detect placeholder conversations and render with distinct styling for consistency
-    const isPlaceholder = !c.title || (c.title === "New chat" && c.messages.length === 0);
-    const titleEl = head.createSpan({ cls: "mva-card-title" + (isPlaceholder ? " is-placeholder" : "") });
-
-    if (isPlaceholder) {
-      setIcon(titleEl, "pencil");
-      titleEl.append("New chat");
-    } else {
-      titleEl.setText(c.title || "New chat");
-    }
-
-    // Why this chat left the active board: a completed orchestration task
-    // ("Done") beats a plain manual archive ("Archived") when both are true.
-    const badges = head.createDiv({ cls: "mva-card-badges" });
-    if (doneConvoIds.has(c.id)) {
-      badges.createSpan({ cls: "mva-card-status-badge is-done", text: "Done" });
-    } else if (c.archived) {
-      badges.createSpan({ cls: "mva-card-status-badge is-archived", text: "Archived" });
-    }
-    // Only the exception is drawn: a conversation that resumes with its full
-    // context says nothing, exactly like an idle tab draws no mark. `unknown`
-    // draws nothing either — see resumeStatus's contract. Not an `else` on the
-    // block above: a chat can be archived AND no longer resumable, and hiding
-    // the second fact behind the first would lose the one that costs context.
-    if (this.resumeStatusOf(c) === "restarts") {
-      // One word, deliberately. The badge cluster is `flex: 0 0 auto` and never
-      // wraps or compresses, so every character it costs comes straight out of
-      // `.mva-card-title` — and cards are ~180px wide. The full sentence in
-      // title/aria-label is ~105px of a ~152px head, leaving about three
-      // characters of title; with "Archived" and "Active" alongside it the
-      // demanded width doubles the space available and `overflow: hidden` clips
-      // the Open/Active badge off the card. "Restart" is one word, ~45px, in
-      // line with "Active", and matches the one-word badge family. The full
-      // sentence lives in title/aria-label, so the meaning is a hover or a
-      // screen reader away, not lost.
-      badges.createSpan({
-        cls: "mva-card-status-badge is-restarts",
-        text: "Restart",
-        attr: {
-          title: "Restarts from scratch: the session is no longer available.",
-          "aria-label": "Restarts from scratch: the session is no longer available.",
-        },
-      });
-    }
-    if (isOpen) {
-      badges.createSpan({
-        cls: "mva-card-open-badge" + (isActive ? " is-active" : ""),
-        text: isActive ? "Active" : "Open",
-      });
-    }
-
-    const preview = this.convoPreview(c);
-    card.createDiv({ cls: "mva-card-preview", text: preview || "Empty conversation" });
-
-    const meta = card.createDiv({ cls: "mva-card-meta" });
-    meta.createSpan({ text: ADAPTERS[c.provider].displayName });
-    const count = c.messages.filter((m) => m.role === "user").length;
-    meta.createSpan({ text: `${count} message${count === 1 ? "" : "s"}` });
-    if (c.updatedAt) meta.createSpan({ text: this.formatDate(c.updatedAt) });
-    // Only inside the retired group: elsewhere the retirement date answers a
-    // question nobody asked, here it explains why the card is in this group.
-    if (retiredContext && c.retiredAt) {
-      meta.createSpan({ text: `ritirata ${this.formatRelative(c.retiredAt)}` });
-    }
-
-    this.clickable(card, (e) => {
-      // Cmd/Ctrl-click toggles selection; a plain click still opens the chat.
-      // Once anything is selected, a plain click toggles too — otherwise the
-      // first stray click would blow away a multi-selection.
-      const mod = e as MouseEvent | KeyboardEvent;
-      if (mod.metaKey || mod.ctrlKey || this.gallerySelection.size > 0) {
-        if (this.gallerySelection.has(c.id)) this.gallerySelection.delete(c.id);
-        else this.gallerySelection.add(c.id);
-        this.setCardSelected(card, this.gallerySelection.has(c.id));
-        this.renderBulkBar();
-        return;
-      }
-      this.hideGallery();
-      this.switchTo(c);
-    });
-  }
-
-  /** Trash button on a gallery card: two-step confirm (arm → delete), reusing the
-   *  note-revert arming pattern. Never bubbles to the card's open handler. */
-  private addCardDelete(card: HTMLElement, grid: HTMLElement, c: Convo): void {
-    const del = card.createSpan({ cls: "mva-gal-del", attr: { "aria-label": "Delete conversation" } });
-    setIcon(del, "trash-2");
-    let armed = false;
-    let disarmTimer: number | null = null;
-    const outside = (ev: MouseEvent) => {
-      if (ev.target !== del && !del.contains(ev.target as Node)) disarm();
-    };
-    const disarm = () => {
-      armed = false;
-      del.removeClass("is-armed");
-      del.setAttr("aria-label", "Delete conversation");
-      if (disarmTimer) {
-        window.clearTimeout(disarmTimer);
-        disarmTimer = null;
-      }
-      document.removeEventListener("click", outside, true);
-    };
-    this.clickable(del, (e) => {
-      e.stopPropagation();
-      if (!armed) {
-        armed = true;
-        del.addClass("is-armed");
-        del.setAttr("aria-label", "Click again to delete");
-        disarmTimer = window.setTimeout(disarm, 3000);
-        document.addEventListener("click", outside, true);
-        return;
-      }
-      disarm();
-      this.deleteConvo(c, card, grid);
-    });
   }
 
   /**
@@ -2865,35 +2709,7 @@ export class ChatView extends ItemView {
     return true;
   }
 
-  /** Permanently drop a conversation from the gallery: the store mutation above,
-   *  plus the card cleanup that only this surface owns — the gallery stays open,
-   *  so its DOM has to settle in place instead of being rebuilt. */
-  private deleteConvo(c: Convo, card: HTMLElement, grid: HTMLElement): void {
-    this.deleteConversation(c.id);
-    card.remove();
-    // Group headers are SIBLINGS of the cards, not wrappers, so removing the
-    // last card of a group leaves its header standing above the next group's
-    // cards. A header owns exactly the cards that immediately follow it, so
-    // "no card right after me" is precisely "my group is now empty" — one pass
-    // over a static NodeList settles every header, in any order.
-    grid.querySelectorAll<HTMLElement>(".mva-gallery-group-header").forEach((h) => {
-      if (!h.nextElementSibling?.classList.contains("mva-card")) h.remove();
-    });
-    if (!grid.querySelector(".mva-card")) {
-      grid.createDiv({ cls: "mva-empty-sub", text: "No conversations yet." });
-    }
-  }
-
   /* ------------------------ gallery bulk selection ---------------------- */
-
-  /** Paint selection state on a card. The class and `aria-pressed` move together
-   *  so selection is never visible to sighted users only: `clickable()` gives
-   *  every card `role="button"`, and a button with no `aria-pressed` announces
-   *  no state at all. */
-  private setCardSelected(card: HTMLElement, selected: boolean): void {
-    card.toggleClass("is-selected", selected);
-    card.setAttr("aria-pressed", String(selected));
-  }
 
   /** Ids of the cards the grid is currently painting — i.e. what the user can
    *  actually see, after the search box has had its say. */
@@ -2930,7 +2746,7 @@ export class ChatView extends ItemView {
   private refreshSelectionUI(): void {
     this.galleryEl?.querySelectorAll<HTMLElement>(".mva-card").forEach((el) => {
       const id = el.dataset.convoId;
-      this.setCardSelected(el, !!id && this.gallerySelection.has(id));
+      setCardSelected(el, !!id && this.gallerySelection.has(id));
     });
     this.renderBulkBar();
   }
@@ -2939,7 +2755,7 @@ export class ChatView extends ItemView {
    *  Rebuilt on every selection change AND on every grid re-render, which also
    *  disarms a pending delete: neither growing the selection nor changing the
    *  filter can inherit a confirmation the user gave for a different set. */
-  private renderBulkBar(): void {
+  renderBulkBar(): void {
     // Always drop the previous bar's arm state first — it owns a timer and a
     // document-level listener that must not outlive the element.
     this.bulkDisarm?.();
@@ -3216,7 +3032,7 @@ export class ChatView extends ItemView {
     this.persist();
   }
 
-  private convoPreview(c: Convo): string {
+  convoPreview(c: Convo): string {
     let s = "";
     for (const m of c.messages) {
       const part =
@@ -3258,7 +3074,7 @@ export class ChatView extends ItemView {
     return false;
   }
 
-  private formatDate(ts: number): string {
+  formatDate(ts: number): string {
     const d = new Date(ts);
     const now = new Date();
     const sameDay = d.toDateString() === now.toDateString();
@@ -3274,7 +3090,7 @@ export class ChatView extends ItemView {
    *  24-hour periods: a chat retired yesterday at 23:00 and read this morning
    *  is "ieri", not "oggi". `Math.round` because a DST day is 23 or 25 hours
    *  long and the quotient would otherwise land just off the integer. */
-  private formatRelative(ts: number): string {
+  formatRelative(ts: number): string {
     const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / DAY_MS);
     if (days <= 0) return "oggi";
     if (days === 1) return "ieri";
