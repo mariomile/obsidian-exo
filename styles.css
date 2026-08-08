@@ -6313,16 +6313,21 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   transition: background var(--mva-t);
 }
 .mva-chats-row:hover { background: var(--background-modifier-hover); }
-/* The active chat is marked by a rail, not a fill: a filled row would compete
-   with the live tier's own accent and read as a second kind of urgency. */
+/* A chat that is open as a tab gets a rail, not a fill. Deliberately NEUTRAL,
+   not accent: accent is reserved for the live tier, where it means "something
+   is happening right now". Painting "open in a tab" in the same colour made
+   seven idle rows look as urgent as a running turn — the rail says where you
+   already are, the colour says what needs you, and they must not be the same
+   signal. Suppressed on live rows, which carry their own lane rail. */
 .mva-chats-row.is-active::before {
   content: "";
   position: absolute;
   inset: 4px auto 4px 0;
   width: 2px;
   border-radius: var(--mva-r1, 6px);
-  background: var(--interactive-accent);
+  background: var(--background-modifier-border-hover);
 }
+.mva-chats-row.is-live.is-active::before { content: none; }
 
 /* Live tier — three lines, and the only place colour carries meaning. */
 .mva-chats-live { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
