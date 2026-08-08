@@ -68,7 +68,14 @@ export class ChatListView extends ItemView {
     this.contentEl.addClass("mva-root");
     this.contentEl.addClass("mva-chats");
     this.buildChrome();
-    this.paint();
+    // Freshness is wired BEFORE the first paint, deliberately. A paint that
+    // throws while the ChatView is still restoring — which is exactly what a
+    // plugin reload produces — must not be able to leave this pane with no
+    // subscription and no backstop. Painting first turned one transient failure
+    // into a permanently dead view: chrome on screen, zero rows, and nothing
+    // ever scheduled to try again. A render may fail and retry; a subscription
+    // that was never registered never retries.
+    //
     // onConvoState returns a plain Unsubscribe, NOT an Obsidian EventRef, so it
     // cannot go through registerEvent — hold it and release it in onClose.
     this.convoUnsub = this.plugin.onConvoState(() => this.paint());
@@ -79,6 +86,7 @@ export class ChatListView extends ItemView {
     // timer fires after onClose and paints into detached DOM. Timer ids are a
     // shared space, so registerInterval clears a setTimeout just as well.
     this.registerInterval(window.setTimeout(() => this.paint(), 800));
+    this.paint();
   }
 
   async onClose(): Promise<void> {
