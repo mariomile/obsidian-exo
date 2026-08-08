@@ -2712,7 +2712,12 @@ export class ChatView extends ItemView {
    * remain — exactly like the close-tab flow.
    */
   deleteConversation(id: string): boolean {
-    const c = this.convos.find((x) => x.id === id);
+    // Same active fallback as `setConvoArchived` / `archiveAndCloseTab` /
+    // `applyRename`: the active convo is not always in `convos` (several paths
+    // push it lazily), and `listChatRows` reads `allConvos()`, so the sidebar
+    // can offer a row this lookup would miss. Without it, deleting the active
+    // chat in that window is a silent no-op.
+    const c = this.convos.find((x) => x.id === id) ?? (this.active?.id === id ? this.active : undefined);
     if (!c) return false;
     this.dropSession(c, "user-delete");
     // Visual order captured BEFORE either splice below, same reasoning as

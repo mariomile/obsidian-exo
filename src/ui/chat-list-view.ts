@@ -5,7 +5,9 @@
  * It is a READER, not an owner. The conversations live in `ChatView`; this pane
  * projects them through `plugin.listChatRows()` and mutates only through the
  * plugin wrappers. Clicking a row reveals the conversation in whatever Exo pane
- * is open — the list never moves the chat and never spawns one.
+ * is open — a row click never moves the chat and never spawns one. (The header
+ * `+` does spawn one; that is an explicit gesture, not a side effect of
+ * browsing.)
  *
  * All tiering, filtering and grouping is decided by `core/chat-rows`, which is
  * pure; this file owns the DOM, the clock read, and the gestures.
@@ -73,8 +75,10 @@ export class ChatListView extends ItemView {
     this.registerInterval(window.setInterval(() => this.paint(), BACKSTOP_MS));
     // The ChatView may still be restoring when this first paints — one delayed
     // catch-up picks the conversations up without waiting for the backstop.
-    // Same reasoning as board-view.ts:166.
-    window.setTimeout(() => this.paint(), 800);
+    // Same reasoning as board-view.ts:166. Registered, not bare: an unmanaged
+    // timer fires after onClose and paints into detached DOM. Timer ids are a
+    // shared space, so registerInterval clears a setTimeout just as well.
+    this.registerInterval(window.setTimeout(() => this.paint(), 800));
   }
 
   async onClose(): Promise<void> {
@@ -173,7 +177,10 @@ export class ChatListView extends ItemView {
     if (kind === "open-exo") {
       box.createDiv({ cls: "mva-chats-empty-text", text: "Open Exo to see your chats" });
       const btn = box.createEl("button", { cls: "mva-btn", text: "Open Exo" });
-      btn.onclick = () => void this.plugin.activateView();
+      // Repaint on the promise, not on the next backstop tick: mounting a
+      // ChatView emits no convo-state, so without this the pane the user just
+      // acted on sits empty for up to BACKSTOP_MS and the button reads as dead.
+      btn.onclick = () => void this.plugin.activateView().then(() => this.paint());
       return;
     }
     if (kind === "no-chats") {
@@ -260,8 +267,11 @@ export class ChatListView extends ItemView {
     );
     menu.addItem((i) =>
       i.setTitle("Archive").setIcon("archive").onClick(() => {
+        // Three causes reach this false — a streaming turn, no mounted ChatView,
+        // an id the store no longer holds — and the row cannot tell them apart,
+        // so the message names the state rather than guessing the cause.
         if (!this.plugin.setConvoArchived(r.id, true)) {
-          new Notice("Couldn't archive this chat — a streaming turn has to finish first.");
+          new Notice("Couldn't archive this chat. Open Exo and let any running turn finish.");
           return;
         }
         this.paint();
@@ -271,12 +281,22 @@ export class ChatListView extends ItemView {
       i
         .setTitle(armed ? "Confirm delete" : "Delete")
         .setIcon("trash-2")
+        // The armed item re-opens under the cursor, so a double-click on Delete
+        // would land on Confirm without the user ever reading it. The warning
+        // styling is what makes the second menu look different from the first.
+        .setWarning(armed)
         .onClick(() => {
           if (!armed) {
             window.setTimeout(() => this.rowMenu(e, r, true), 0);
             return;
           }
-          this.plugin.deleteConversation(r.id);
+          // The only destructive action here, and the only one that can no-op:
+          // an unknown id returns false. Say so rather than repainting an
+          // unchanged row and letting it read as a dead click.
+          if (!this.plugin.deleteConversation(r.id)) {
+            new Notice("Couldn't delete this chat — it is no longer in the store.");
+            return;
+          }
           this.paint();
         }),
     );
@@ -288,7 +308,7 @@ export class ChatListView extends ItemView {
       // The mutation rejects a blank title and an unknown id (core/title-ownership
       // applyRename) — both surface here, because neither is visible from the row.
       if (!this.plugin.renameConversation(r.id, title)) {
-        new Notice("Rename failed — the title can't be empty.");
+        new Notice("Couldn't rename this chat. The title can't be empty, and Exo has to be open.");
         return;
       }
       this.paint();

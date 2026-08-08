@@ -6303,6 +6303,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 0 6px 12px;
 }
 
+/* The three body siblings are structural, not decorative: reconcileList orders
+   by child index, so the live list, the groups and the empty box must be
+   separate containers or a header would take an index and shuffle the rows.
+   Declared here rather than left unstyled so a later layout pass cannot
+   silently repurpose them. */
+.mva-chats-groups { display: flex; flex-direction: column; }
+.mva-chats-empty:empty { display: none; }
+
 /* Rows — shared skeleton. Transparent at rest by standing rule; hover and
    active are the only painted states. */
 .mva-chats-row {
