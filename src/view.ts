@@ -106,6 +106,7 @@ import type { StripDensity } from "./core/strip-density";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
 import type { HistoryFilter, FilterableConvo } from "./core/history";
 import { isAiTitleDue } from "./core/title";
+import { canAutoTitle, applyRename } from "./core/title-ownership";
 import { projectDirName, resumeStatus, resumableFrom, eligibleForFreeing } from "./core/resume-status";
 import type { ResumeStatus, SessionFileProbe } from "./core/resume-status";
 import { reconcileList } from "./ui/keyed-reconcile";
@@ -1149,6 +1150,7 @@ export class ChatView extends ItemView {
         retiredAt: d.retiredAt,
         lastActiveAt: d.lastActiveAt,
         boardStatus: d.boardStatus,
+        titleLocked: d.titleLocked === true,
         provider,
         model,
         allow: new Set(),
@@ -1229,6 +1231,7 @@ export class ChatView extends ItemView {
       ...(c.retiredAt ? { retiredAt: c.retiredAt } : {}),
       ...(c.lastActiveAt ? { lastActiveAt: c.lastActiveAt } : {}),
       ...(c.boardStatus ? { boardStatus: c.boardStatus } : {}),
+      ...(c.titleLocked ? { titleLocked: true } : {}),
       messages: c.messages.map((message) =>
         persistMessage(message, {
           maxToolOutput: MAX_PERSIST_OUTPUT,
@@ -2266,6 +2269,16 @@ export class ChatView extends ItemView {
     return true;
   }
 
+  /** Rename a conversation; `applyRename` (core/title-ownership) owns the lookup-and-lock rule. */
+  renameConversation(id: string, title: string): boolean {
+    const c = applyRename(this.convos, this.active, id, title);
+    if (!c) return false;
+    c.titleAbort?.abort(); // cancel an in-flight AI title so it can't race the lock
+    this.renderTabs();
+    this.persist();
+    return true;
+  }
+
   /** The board × action: archive a conversation AND close its sidebar tab. The
    *  card leaves the board, the tab closes, and the chat is kept in the separate
    *  archive store (retrievable via "Show archived"). Returns false if not found. */
@@ -3273,6 +3286,7 @@ export class ChatView extends ItemView {
       .then((title) => {
         if (ctrl.signal.aborted || !title) return; // aborted/failed → keep placeholder
         if (!this.convos.includes(c)) return; // conversation removed meanwhile
+        if (!canAutoTitle(c, "ai")) return; // user named it — do not overwrite
         c.title = title;
         c.aiTitleApplied = true; // authoritative "don't retry" signal — see isAiTitleDue
         this.renderTabs();
@@ -3755,12 +3769,8 @@ export class ChatView extends ItemView {
 
   private addUserTurn(c: Convo, text: string, images?: ImageAttachment[]): HTMLElement {
     this.clearEmptyState(c);
-    // Derive the tab title from the first user message. The untitled state is
-    // represented inconsistently across the view — every render site falls back
-    // with `c.title || "New chat"`, so a falsy title still *shows* as "New chat"
-    // while failing an exact `=== "New chat"` check. Treat any falsy title OR the
-    // literal default as untitled so the first message always names the tab.
-    if (!c.title || c.title === "New chat") {
+    // Derive the tab title from the first message; canAutoTitle (core/title-ownership) decides what's untitled and whether it's locked.
+    if (canAutoTitle(c, "first-message")) {
       const derived = text.replace(/\s+/g, " ").trim().slice(0, 40);
       c.title = derived || (images?.length ? "Image" : "New chat");
       this.refreshTabs(); // the title is a rendered fact: a state transition
