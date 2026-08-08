@@ -68,6 +68,12 @@ export interface ConvoData {
   lastActiveAt?: number;
   /** Manually-assigned Session-Cockpit column (persisted). Absent = default. */
   boardStatus?: SessionLane;
+  /** The user named this conversation by hand. Both auto-title paths must
+   *  respect it. Written only when true; absent reads as false, so every
+   *  existing conversations.json stays valid unchanged. Deliberately NOT
+   *  `aiTitleApplied`, which answers a different question — that one is retry
+   *  policy ("did we already generate one"), this one is ownership. */
+  titleLocked?: boolean;
   messages: PersistedMessage[];
 }
 
@@ -189,6 +195,12 @@ export interface Convo {
    *  the shape of a derived placeholder, since a user's own text can
    *  coincidentally look like a finished title. Runtime-only (never persisted). */
   aiTitleApplied?: boolean;
+  /** The user named this conversation by hand (`renameConversation`). Both
+   *  auto-title paths (`canAutoTitle`, core/title-ownership) must respect it.
+   *  Persisted only when true. Deliberately separate from `aiTitleApplied`:
+   *  this is ownership, not retry policy — collapsing them would let a failed
+   *  generation reopen a user's title. */
+  titleLocked?: boolean;
   /** Proactive recall (design 2026-07-09): ids of store entries already injected
    *  into THIS conversation's outbound turns, so each memory is paid for once and
    *  then lives in cached history. Runtime-only — never persisted (a reloaded

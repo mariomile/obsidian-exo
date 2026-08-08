@@ -27,26 +27,19 @@ import { join } from "node:path";
  */
 
 const CEILINGS: Record<string, number> = {
-  // Conteggi reali al 2026-08-05, abbassati il 2026-08-06 dopo l'estrazione dei
-  // tipi in `ui/convo-types.ts` e della classificazione in
-  // `core/workflow-classify.ts`. Solo verso il basso.
-  // +10 il 2026-08-06: TabAgents { count, spinning } — il badge per-tab non
-  // passava da summarizeLiveTasks e la sua signature non distingueva
-  // running/detached, lasciando lo spinner bloccato su un lavoro concluso.
-  // +10 il 2026-08-06: refreshContext() su layout-change — spostare la leaf
-  // di Exo sidebar<->main non fa scattare active-leaf-change in modo
-  // affidabile, lasciando la card "Current Document" sulla nota vecchia.
-  // +8 il 2026-08-06: sweep della working-row orfana a inizio turno — se il
-  // finally del ctx precedente non gira mai (dispose da stop-escalation, o
-  // race di due runTurn concorrenti), la row pulsa "esc to stop" per sempre.
-  // +39 il 2026-08-06: chiusa la race alla radice — runTurn ora reclama uno
-  // slot sincrono (turnClaimed + turnClaimGen) prima di ogni await, così un
-  // secondo runTurn sulla stessa convo non può più partire in parallelo.
-  "src/view.ts": 7216,
-  // +4 il 2026-08-06: call-site della migrazione one-shot cachedSessionCaps
-  // (logica in session-caps-cache.ts) — non estraibile oltre, è già solo glue
-  // sul metodo loadSettings() del plugin.
-  "src/main.ts": 3527,
+  // Alzato deliberatamente il 2026-08-08 a 7100 — budget riservato per la feature
+  // exo-chats. Abbassare il tetto al conteggio esatto dopo ogni estrazione
+  // lasciava zero margine, quindi l'estrazione non comprava niente di
+  // spendibile: la prima feature vera dopo un'estrazione sforava comunque. 7100
+  // resta ben sotto i 7216 da cui questo branch è partito, quindi view.ts esce
+  // comunque più piccolo di come è entrato. Alzare ulteriormente per qualsiasi
+  // ALTRO motivo resta vietato: la risposta a un futuro sforamento è estrarre il
+  // resto della gallery (showGallery più il cluster di selezione bulk), non un
+  // numero più grande.
+  "src/view.ts": 7100,
+  // Abbassato il 2026-08-07 dopo l'estrazione della registrazione e
+  // attivazione delle view in `ui/view-registry.ts`. Solo verso il basso.
+  "src/main.ts": 3492,
   "src/ui/composer.ts": 1723,
   "src/settings.ts": 1343,
 };

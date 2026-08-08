@@ -8,10 +8,20 @@ import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DiagLog } from "./core/diag";
 import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { handoffPrefix } from "./core/handoff";
-import { BoardView, BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
+import { BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { CockpitView, COCKPIT_VIEW_TYPE, COCKPIT_ICON } from "./ui/cockpit-view";
 import { AgentsView, AGENTS_VIEW_TYPE } from "./ui/agents-view";
 import { HubView, HUB_VIEW_TYPE, HUB_ICON, type HubTab } from "./ui/hub/hub-view";
+import {
+  registerExoViews,
+  activateView as activateChatView,
+  activateBoard as activateBoardView,
+  activateHub as activateHubView,
+  activateConnections as activateConnectionsView,
+  activateAgents as activateAgentsView,
+  activateChats as activateChatsView,
+} from "./ui/view-registry";
+import * as convoBridge from "./ui/convo-bridge";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
 import { resolveCli, cliDiagnostics, updateClaudeCli } from "./cli";
@@ -456,15 +466,7 @@ export default class ExoPlugin extends Plugin {
         '</g>',
     );
 
-    this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
-    // The board view is always REGISTERED (so a leaf restored from the saved
-    // workspace layout can render) but only ENTERED via a gated ribbon/command.
-    // If it opens while orchestration is off it renders a "disabled" placeholder
-    // and never starts the driver (see BoardView.onOpen).
-    this.registerView(BOARD_VIEW_TYPE, (leaf) => new BoardView(leaf, this));
-    this.registerView(COCKPIT_VIEW_TYPE, (leaf) => new CockpitView(leaf, this));
-    this.registerView(HUB_VIEW_TYPE, (leaf) => new HubView(leaf, this));
-    this.registerView(AGENTS_VIEW_TYPE, (leaf) => new AgentsView(leaf, this));
+    registerExoViews(this);
 
     // In-note AI: a floating toolbar over the selection (Edit / Continue / Ask
     // Exo). Registered once; gated live behind the `inlineAi` setting, so
@@ -540,9 +542,8 @@ export default class ExoPlugin extends Plugin {
     });
 
     const withView = (fn: (v: ChatView) => void) => () => {
-      const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-      if (view instanceof ChatView) fn(view);
-      else void this.activateView();
+      const view = convoBridge.chatView(this.app);
+      if (view) fn(view); else void this.activateView();
     };
     this.addCommand({ id: "new-tab", name: "New tab", callback: withView((v) => v.cmdNewTab()) });
     this.addCommand({
@@ -621,6 +622,11 @@ export default class ExoPlugin extends Plugin {
       id: "open-cockpit",
       name: "Open Cockpit",
       callback: () => void this.openCockpit(),
+    });
+    this.addCommand({
+      id: "open-chat-list",
+      name: "Open Exo chats",
+      callback: () => void this.activateChats(),
     });
     this.addCommand({
       id: "open-proposals",
@@ -914,58 +920,27 @@ export default class ExoPlugin extends Plugin {
   }
 
   async activateView(): Promise<void> {
-    const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(VIEW_TYPE)[0] ?? null;
-    if (!leaf) {
-      leaf = workspace.getRightLeaf(false);
-      await leaf?.setViewState({ type: VIEW_TYPE, active: true });
-    }
-    if (leaf) {
-      workspace.revealLeaf(leaf);
-      if (leaf.view instanceof ChatView) leaf.view.focusComposer();
-    }
+    await activateChatView(this);
   }
 
-  /**
-   * Open the Orchestration Board in the MAIN workspace pane (a new tab, not the
-   * sidebar). Reuses an already-open board leaf if present. Only ever invoked
-   * from the gated ribbon/command, so the flag is on by the time we get here.
-   */
   async activateBoard(): Promise<void> {
-    const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(BOARD_VIEW_TYPE)[0] ?? null;
-    if (!leaf) {
-      // Main-area tab (not the sidebar) — the board is a full-width surface.
-      leaf = workspace.getLeaf(true);
-      await leaf.setViewState({ type: BOARD_VIEW_TYPE, active: true });
-    }
-    workspace.revealLeaf(leaf);
+    await activateBoardView(this);
   }
 
-  /** Open the Capabilities hub, optionally deep-linking to a tab. */
   async activateHub(tab?: HubTab): Promise<void> {
-    const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(HUB_VIEW_TYPE)[0] ?? null;
-    if (!leaf) {
-      leaf = workspace.getLeaf(true);
-      await leaf.setViewState({ type: HUB_VIEW_TYPE, active: true });
-    }
-    workspace.revealLeaf(leaf);
-    if (tab && leaf.view instanceof HubView) leaf.view.showTab(tab);
+    await activateHubView(this, tab);
   }
 
   async activateConnections(): Promise<void> {
-    await this.activateHub();
+    await activateConnectionsView(this);
   }
 
   async activateAgents(): Promise<void> {
-    const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(AGENTS_VIEW_TYPE)[0] ?? null;
-    if (!leaf) {
-      leaf = workspace.getLeaf(true);
-      await leaf.setViewState({ type: AGENTS_VIEW_TYPE, active: true });
-    }
-    workspace.revealLeaf(leaf);
+    await activateAgentsView(this);
+  }
+
+  async activateChats(): Promise<void> {
+    await activateChatsView(this);
   }
 
   async openCockpit(): Promise<void> {
@@ -1024,9 +999,7 @@ export default class ExoPlugin extends Plugin {
    */
   async askExo(query: string, autoSend = true, opts?: { source?: string }): Promise<void> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView)
-      view.askInNewConversation(query, autoSend, { sendPrefix: handoffPrefix(opts?.source) });
+    convoBridge.chatView(this.app)?.askInNewConversation(query, autoSend, { sendPrefix: handoffPrefix(opts?.source) });
   }
 
   private vaultPath(): string {
@@ -1117,9 +1090,7 @@ export default class ExoPlugin extends Plugin {
    * is gone. Pure read — never mutates chat state.
    */
   readConvoState(convoId: string): { exists: boolean; streaming: boolean; hasPending: boolean } {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) return view.readConvoState(convoId);
-    return { exists: false, streaming: false, hasPending: false };
+    return convoBridge.chatView(this.app)?.readConvoState(convoId) ?? { exists: false, streaming: false, hasPending: false };
   }
 
   /**
@@ -1129,8 +1100,7 @@ export default class ExoPlugin extends Plugin {
    * open (the documented "leaf open" scope boundary). Pure read.
    */
   listSessionSnapshots(): SessionSnapshot[] {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.listSessionSnapshots() : [];
+    return convoBridge.chatView(this.app)?.listSessionSnapshots() ?? [];
   }
 
   /**
@@ -1138,20 +1108,17 @@ export default class ExoPlugin extends Plugin {
    * when no ChatView leaf is open or the convo id is unknown.
    */
   setConvoArchived(convoId: string, archived: boolean): boolean {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.setConvoArchived(convoId, archived) : false;
+    return convoBridge.chatView(this.app)?.setConvoArchived(convoId, archived) ?? false;
   }
 
   /** Set a conversation's manually-assigned board column (Session Cockpit drag). */
   setConvoBoardStatus(convoId: string, status: SessionLane): boolean {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.setConvoBoardStatus(convoId, status) : false;
+    return convoBridge.chatView(this.app)?.setConvoBoardStatus(convoId, status) ?? false;
   }
 
   /** The board × action: archive a conversation and close its sidebar tab. */
   archiveAndCloseTab(convoId: string): boolean {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.archiveAndCloseTab(convoId) : false;
+    return convoBridge.chatView(this.app)?.archiveAndCloseTab(convoId) ?? false;
   }
 
   /** Reconnect MCP servers on the active Exo session (Connections pane). Respawns
@@ -1163,9 +1130,8 @@ export default class ExoPlugin extends Plugin {
     error?: string;
     servers?: import("./providers/types").SessionCaps["mcpServers"];
   }> {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) return view.reloadMcpConnections();
-    return { ok: false, error: "Open an Exo chat first — reconnect runs on the active session." };
+    const view = convoBridge.chatView(this.app);
+    return view ? view.reloadMcpConnections() : { ok: false, error: "Open an Exo chat first — reconnect runs on the active session." };
   }
 
   /**
@@ -1192,8 +1158,7 @@ export default class ExoPlugin extends Plugin {
    */
   async startTaskConversation(prompt: string, opts?: { model?: string }): Promise<string> {
     await this.ensureChatView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.startTaskConversation(prompt, opts) : "";
+    return convoBridge.chatView(this.app)?.startTaskConversation(prompt, opts) ?? "";
   }
 
   /**
@@ -1205,8 +1170,7 @@ export default class ExoPlugin extends Plugin {
    */
   async revealConversation(convoId: string): Promise<boolean> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.revealConversation(convoId) : false;
+    return convoBridge.chatView(this.app)?.revealConversation(convoId) ?? false;
   }
 
   /** Plugin-level wrapper around `ChatView.insertIntoComposer` for the
@@ -1215,9 +1179,14 @@ export default class ExoPlugin extends Plugin {
    *  view on demand, same as `revealConversation`. */
   async insertIntoComposer(text: string): Promise<void> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) view.insertIntoComposer(text);
+    convoBridge.chatView(this.app)?.insertIntoComposer(text);
   }
+
+  /** Chats sidebar wrappers — bodies in `ui/convo-bridge.ts` (see it for the `null`-vs-`[]` contract). */
+  listChatRows(): ReturnType<typeof convoBridge.listChatRows> { return convoBridge.listChatRows(this.app); }
+  renameConversation(id: string, title: string): boolean { return convoBridge.renameConversation(this.app, id, title); }
+  deleteConversation(id: string): boolean { return convoBridge.deleteConversation(this.app, id); }
+  async newConversation(): Promise<void> { await this.activateView(); convoBridge.chatView(this.app)?.newConversation(); }
 
   /**
    * Periodic tick for the git auto-commit safety net (see core/git-autocommit
@@ -1359,8 +1328,7 @@ export default class ExoPlugin extends Plugin {
    *  in the composer, then focus it — the in-note "Ask Exo" action. */
   async attachSelectionToChat(text: string, sourcePath: string): Promise<void> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) view.attachSelection(text, sourcePath);
+    convoBridge.chatView(this.app)?.attachSelection(text, sourcePath);
   }
 
   /** Forward the active editor's current selection to the open chat view so it
@@ -1368,8 +1336,7 @@ export default class ExoPlugin extends Plugin {
    *  Unlike `attachSelectionToChat`, this never reveals/activates the view — it's
    *  passive ambient state: if no ChatView is open there's simply nothing to show. */
   reportSelection(text: string, sourcePath: string): void {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) view.setCurrentSelection(text, sourcePath);
+    convoBridge.chatView(this.app)?.setCurrentSelection(text, sourcePath);
   }
 
   /** Generate a concise 3-6 word chat title with Haiku. ALWAYS runs on the Claude
@@ -2684,17 +2651,15 @@ export default class ExoPlugin extends Plugin {
 
   /** Live attention data for the Cockpit (blocked / streaming conversations). */
   liveAttention(): { id: string; title: string; blocked: boolean; streaming: boolean }[] {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.convoAttention() : [];
+    return convoBridge.chatView(this.app)?.convoAttention() ?? [];
   }
 
   /** Open the chat view on a specific conversation (Cockpit "Resume" rows). */
   async openConvo(id: string): Promise<void> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView && !view.openConvoById(id)) {
-      new Notice("Conversation not found — it may have been deleted.");
-    }
+    // Two-step, not `?? false`: with no view there is nothing to report missing.
+    const view = convoBridge.chatView(this.app);
+    if (view && !view.openConvoById(id)) new Notice("Conversation not found — it may have been deleted.");
   }
 
   /** Deterministic production pipeline. Background-AI settings never gate it. */

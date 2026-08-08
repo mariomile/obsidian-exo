@@ -52,6 +52,7 @@ import { assembleContext, formatContextDebug } from "./core/context-assembly";
 import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
+import { renderHistoryGroup, setCardSelected } from "./ui/gallery-cards";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { hoistSlashCommand } from "./core/slash";
@@ -104,7 +105,9 @@ import { chooseDensity } from "./core/strip-density";
 import type { StripDensity } from "./core/strip-density";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
 import type { HistoryFilter, FilterableConvo } from "./core/history";
+import type { ChatRowSource } from "./core/chat-rows";
 import { isAiTitleDue } from "./core/title";
+import { canAutoTitle, applyRename } from "./core/title-ownership";
 import { projectDirName, resumeStatus, resumableFrom, eligibleForFreeing } from "./core/resume-status";
 import type { ResumeStatus, SessionFileProbe } from "./core/resume-status";
 import { reconcileList } from "./ui/keyed-reconcile";
@@ -217,15 +220,15 @@ export class ChatView extends ItemView {
   private spawnSeq = new WeakMap<Convo, number>();
 
   private convos: Convo[] = [];
-  private active!: Convo;
+  active!: Convo;
   /** Ids of conversations shown in the tab bar (ordered). Subset of `convos`. */
-  private openTabs: string[] = [];
+  openTabs: string[] = [];
   /** Ids proposed for cleanup by the last persist (over-budget). Advisory:
    *  nothing is ever deleted without explicit confirmation. Runtime-only. */
   private retentionCandidateIds: string[] = [];
   /** Ids selezionati nella cronologia per un'azione bulk. Runtime-only, azzerato
    *  a ogni apertura della gallery. */
-  private gallerySelection = new Set<string>();
+  gallerySelection = new Set<string>();
   /** Active history filter chips. Runtime-only, cleared on every gallery open —
    *  same lifetime as `gallerySelection`, so reopening the history is always a
    *  clean slate and never a filter the user forgot they left on. */
@@ -1014,6 +1017,7 @@ export class ChatView extends ItemView {
     setTooltip(apps, "Apps");
     apps.onclick = (e) => {
       const menu = new Menu();
+      menu.addItem((i) => i.setTitle("Chats").setIcon("messages-square").onClick(() => void this.plugin.activateChats()));
       menu.addItem((i) => i.setTitle("Cockpit").setIcon("hi-dashboard-speed").onClick(() => void this.plugin.openCockpit()));
       menu.addItem((i) => i.setTitle("Capabilities").setIcon("hi-puzzle").onClick(() => void this.plugin.activateHub()));
       if (this.plugin.settings.orchestrationEnabled) {
@@ -1148,6 +1152,7 @@ export class ChatView extends ItemView {
         retiredAt: d.retiredAt,
         lastActiveAt: d.lastActiveAt,
         boardStatus: d.boardStatus,
+        titleLocked: d.titleLocked === true,
         provider,
         model,
         allow: new Set(),
@@ -1228,6 +1233,7 @@ export class ChatView extends ItemView {
       ...(c.retiredAt ? { retiredAt: c.retiredAt } : {}),
       ...(c.lastActiveAt ? { lastActiveAt: c.lastActiveAt } : {}),
       ...(c.boardStatus ? { boardStatus: c.boardStatus } : {}),
+      ...(c.titleLocked ? { titleLocked: true } : {}),
       messages: c.messages.map((message) =>
         persistMessage(message, {
           maxToolOutput: MAX_PERSIST_OUTPUT,
@@ -1398,7 +1404,7 @@ export class ChatView extends ItemView {
     this.active.model = this.model;
   }
 
-  private newConversation(target?: { provider: ProviderId; model: string }): void {
+  newConversation(target?: { provider: ProviderId; model: string }): void {
     if (this.galleryEl) this.hideGallery();
     // Keep other conversations (and their live sessions) alive — parallel.
     this.saveActive();
@@ -1482,7 +1488,7 @@ export class ChatView extends ItemView {
     this.persist(); // `retiredAt` lives in the conversation store, not in settings
   }
 
-  private switchTo(c: Convo): void {
+  switchTo(c: Convo): void {
     if (c === this.active) return;
     this.saveActive();
     this.active.draft = this.composer.getDraft();
@@ -2182,6 +2188,35 @@ export class ChatView extends ItemView {
   }
 
   /**
+   * Every stored conversation, adapted for the chats sidebar. Deliberately NOT
+   * `listSessionSnapshots` above, which is scoped to open tabs plus whatever is
+   * running because the board would drown in the full history — the sidebar
+   * wants exactly the opposite. Filtering (archived, idle husks) belongs to
+   * `buildChatList` (core/chat-rows), not here: this reports facts, the pure
+   * core decides what to show. `provider` carries the display name, not the
+   * id, so the sidebar can render it as text without importing `ADAPTERS`.
+   */
+  listChatRows(): ChatRowSource[] {
+    const open = new Set(this.openTabs);
+    return this.allConvos().map((c) => ({
+      id: c.id,
+      title: c.title,
+      preview: this.convoPreview(c),
+      provider: ADAPTERS[c.provider].displayName,
+      model: c.model,
+      updatedAt: c.updatedAt,
+      archived: !!c.archived,
+      open: open.has(c.id),
+      streaming: c.streaming,
+      pendingPerm: c.pendingPerm != null,
+      pendingAsk: c.pendingAsk != null,
+      poisoned: !!c.resumeRisky,
+      stopped: c.stopped,
+      hasMessages: c.messages.length > 0,
+    }));
+  }
+
+  /**
    * Set or clear the archived flag on a conversation and persist. Used by the
    * board's Session Cockpit archive / un-archive actions (U6). Archiving hides
    * the chat from the board's active lanes and moves it to the separate
@@ -2261,6 +2296,16 @@ export class ChatView extends ItemView {
       (this.active?.id === convoId ? this.active : undefined);
     if (!c) return false;
     c.boardStatus = status;
+    this.persist();
+    return true;
+  }
+
+  /** Rename a conversation; `applyRename` (core/title-ownership) owns the lookup-and-lock rule. */
+  renameConversation(id: string, title: string): boolean {
+    const c = applyRename(this.convos, this.active, id, title);
+    if (!c) return false;
+    c.titleAbort?.abort(); // cancel an in-flight AI title so it can't race the lock
+    this.renderTabs();
     this.persist();
     return true;
   }
@@ -2392,7 +2437,7 @@ export class ChatView extends ItemView {
     void this.showGallery(preset);
   }
 
-  private hideGallery(): void {
+  hideGallery(): void {
     // The bulk bar's armed state owns a document-level listener; the bar is about
     // to be removed with its container, so drop it here or it outlives the DOM.
     this.bulkDisarm?.();
@@ -2450,7 +2495,7 @@ export class ChatView extends ItemView {
    *  uninformative: there is no context to lose. The gallery always shows the
    *  focused chat even when it is empty, so without this the freshly opened
    *  "New chat" card would permanently wear a warning about losing nothing. */
-  private resumeStatusOf(c: Convo): ResumeStatus {
+  resumeStatusOf(c: Convo): ResumeStatus {
     if (c.messages.length === 0) return "unknown";
     return resumeStatus(c, c.provider === "claude" ? this.sessionsOnDisk : null);
   }
@@ -2635,10 +2680,10 @@ export class ChatView extends ItemView {
       const rest = filtered.filter((c) => !retiredIds.has(c.id));
 
       if (retiredGroup.length > 0) {
-        this.renderHistoryGroup(grid, "Recently retired", retiredGroup, doneConvoIds, true);
+        renderHistoryGroup(this, grid, "Recently retired", retiredGroup, doneConvoIds, true);
       }
       for (const g of groupByTime(rest, now)) {
-        this.renderHistoryGroup(grid, g.label, g.items, doneConvoIds);
+        renderHistoryGroup(this, grid, g.label, g.items, doneConvoIds);
       }
 
       if (filtered.length === 0) {
@@ -2657,167 +2702,23 @@ export class ChatView extends ItemView {
     renderGrid("");
   }
 
-  /** One temporal group: a header row plus its cards. The cards stay DIRECT
-   *  children of the grid — the group header is a sibling, not a wrapper — so
-   *  every existing `.mva-card` consumer (bulk selection, `visibleCardIds`,
-   *  `refreshSelectionUI`) keeps working without knowing groups exist. */
-  private renderHistoryGroup(
-    grid: HTMLElement,
-    label: string,
-    items: Convo[],
-    doneConvoIds: Set<string>,
-    retiredContext = false,
-  ): void {
-    if (items.length === 0) return;
-    grid.createDiv({ cls: "mva-gallery-group-header", text: label });
-    for (const c of items) this.renderCard(grid, c, doneConvoIds, retiredContext);
-  }
-
-  private renderCard(
-    grid: HTMLElement,
-    c: Convo,
-    doneConvoIds: Set<string>,
-    retiredContext = false,
-  ): void {
-    const card = grid.createDiv({ cls: "mva-card" });
-    // Cards carry their id in the DOM: the bulk bar needs a DOM-to-id mapping
-    // that survives the grid re-render the search box triggers.
-    card.dataset.convoId = c.id;
-    // A conversation is "active" when it's the focused tab, and "open" when it's
-    // any of the tabs currently in the tab strip. Both get a visible marker so the
-    // gallery mirrors what's open above it.
-    const isActive = c === this.active;
-    const isOpen = this.openTabs.includes(c.id);
-    if (isActive) card.addClass("is-active");
-    if (isOpen) card.addClass("is-open");
-    this.setCardSelected(card, this.gallerySelection.has(c.id));
-    this.addCardDelete(card, grid, c);
-    const head = card.createDiv({ cls: "mva-card-head" });
-    const dot = head.createSpan({ cls: "mva-dot" });
-    dot.style.background = ADAPTERS[c.provider].brandColor;
-    dot.style.color = ADAPTERS[c.provider].brandColor;
-
-    // Detect placeholder conversations and render with distinct styling for consistency
-    const isPlaceholder = !c.title || (c.title === "New chat" && c.messages.length === 0);
-    const titleEl = head.createSpan({ cls: "mva-card-title" + (isPlaceholder ? " is-placeholder" : "") });
-
-    if (isPlaceholder) {
-      setIcon(titleEl, "pencil");
-      titleEl.append("New chat");
-    } else {
-      titleEl.setText(c.title || "New chat");
-    }
-
-    // Why this chat left the active board: a completed orchestration task
-    // ("Done") beats a plain manual archive ("Archived") when both are true.
-    const badges = head.createDiv({ cls: "mva-card-badges" });
-    if (doneConvoIds.has(c.id)) {
-      badges.createSpan({ cls: "mva-card-status-badge is-done", text: "Done" });
-    } else if (c.archived) {
-      badges.createSpan({ cls: "mva-card-status-badge is-archived", text: "Archived" });
-    }
-    // Only the exception is drawn: a conversation that resumes with its full
-    // context says nothing, exactly like an idle tab draws no mark. `unknown`
-    // draws nothing either — see resumeStatus's contract. Not an `else` on the
-    // block above: a chat can be archived AND no longer resumable, and hiding
-    // the second fact behind the first would lose the one that costs context.
-    if (this.resumeStatusOf(c) === "restarts") {
-      // One word, deliberately. The badge cluster is `flex: 0 0 auto` and never
-      // wraps or compresses, so every character it costs comes straight out of
-      // `.mva-card-title` — and cards are ~180px wide. The full sentence in
-      // title/aria-label is ~105px of a ~152px head, leaving about three
-      // characters of title; with "Archived" and "Active" alongside it the
-      // demanded width doubles the space available and `overflow: hidden` clips
-      // the Open/Active badge off the card. "Restart" is one word, ~45px, in
-      // line with "Active", and matches the one-word badge family. The full
-      // sentence lives in title/aria-label, so the meaning is a hover or a
-      // screen reader away, not lost.
-      badges.createSpan({
-        cls: "mva-card-status-badge is-restarts",
-        text: "Restart",
-        attr: {
-          title: "Restarts from scratch: the session is no longer available.",
-          "aria-label": "Restarts from scratch: the session is no longer available.",
-        },
-      });
-    }
-    if (isOpen) {
-      badges.createSpan({
-        cls: "mva-card-open-badge" + (isActive ? " is-active" : ""),
-        text: isActive ? "Active" : "Open",
-      });
-    }
-
-    const preview = this.convoPreview(c);
-    card.createDiv({ cls: "mva-card-preview", text: preview || "Empty conversation" });
-
-    const meta = card.createDiv({ cls: "mva-card-meta" });
-    meta.createSpan({ text: ADAPTERS[c.provider].displayName });
-    const count = c.messages.filter((m) => m.role === "user").length;
-    meta.createSpan({ text: `${count} message${count === 1 ? "" : "s"}` });
-    if (c.updatedAt) meta.createSpan({ text: this.formatDate(c.updatedAt) });
-    // Only inside the retired group: elsewhere the retirement date answers a
-    // question nobody asked, here it explains why the card is in this group.
-    if (retiredContext && c.retiredAt) {
-      meta.createSpan({ text: `ritirata ${this.formatRelative(c.retiredAt)}` });
-    }
-
-    this.clickable(card, (e) => {
-      // Cmd/Ctrl-click toggles selection; a plain click still opens the chat.
-      // Once anything is selected, a plain click toggles too — otherwise the
-      // first stray click would blow away a multi-selection.
-      const mod = e as MouseEvent | KeyboardEvent;
-      if (mod.metaKey || mod.ctrlKey || this.gallerySelection.size > 0) {
-        if (this.gallerySelection.has(c.id)) this.gallerySelection.delete(c.id);
-        else this.gallerySelection.add(c.id);
-        this.setCardSelected(card, this.gallerySelection.has(c.id));
-        this.renderBulkBar();
-        return;
-      }
-      this.hideGallery();
-      this.switchTo(c);
-    });
-  }
-
-  /** Trash button on a gallery card: two-step confirm (arm → delete), reusing the
-   *  note-revert arming pattern. Never bubbles to the card's open handler. */
-  private addCardDelete(card: HTMLElement, grid: HTMLElement, c: Convo): void {
-    const del = card.createSpan({ cls: "mva-gal-del", attr: { "aria-label": "Delete conversation" } });
-    setIcon(del, "trash-2");
-    let armed = false;
-    let disarmTimer: number | null = null;
-    const outside = (ev: MouseEvent) => {
-      if (ev.target !== del && !del.contains(ev.target as Node)) disarm();
-    };
-    const disarm = () => {
-      armed = false;
-      del.removeClass("is-armed");
-      del.setAttr("aria-label", "Delete conversation");
-      if (disarmTimer) {
-        window.clearTimeout(disarmTimer);
-        disarmTimer = null;
-      }
-      document.removeEventListener("click", outside, true);
-    };
-    this.clickable(del, (e) => {
-      e.stopPropagation();
-      if (!armed) {
-        armed = true;
-        del.addClass("is-armed");
-        del.setAttr("aria-label", "Click again to delete");
-        disarmTimer = window.setTimeout(disarm, 3000);
-        document.addEventListener("click", outside, true);
-        return;
-      }
-      disarm();
-      this.deleteConvo(c, card, grid);
-    });
-  }
-
-  /** Permanently drop a conversation (from the gallery). If it's the active tab,
-   *  switch to a neighbor — or a fresh convo when none remain — exactly like the
-   *  close-tab flow, but keep the gallery open and just remove its card. */
-  private deleteConvo(c: Convo, card: HTMLElement, grid: HTMLElement): void {
+  /**
+   * Remove a conversation from the store and settle the tab strip. No DOM
+   * arguments: the gallery's card cleanup is the caller's job, so every surface
+   * (gallery, chats sidebar) shares one mutation instead of one per renderer.
+   * Returns false when the id is unknown.
+   *
+   * If it's the active tab, switch to a neighbor — or a fresh convo when none
+   * remain — exactly like the close-tab flow.
+   */
+  deleteConversation(id: string): boolean {
+    // Same active fallback as `setConvoArchived` / `archiveAndCloseTab` /
+    // `applyRename`: the active convo is not always in `convos` (several paths
+    // push it lazily), and `listChatRows` reads `allConvos()`, so the sidebar
+    // can offer a row this lookup would miss. Without it, deleting the active
+    // chat in that window is a silent no-op.
+    const c = this.convos.find((x) => x.id === id) ?? (this.active?.id === id ? this.active : undefined);
+    if (!c) return false;
     this.dropSession(c, "user-delete");
     // Visual order captured BEFORE either splice below, same reasoning as
     // `closeTab` / `setConvoArchived`: pinned status is still readable off
@@ -2844,39 +2745,20 @@ export class ChatView extends ItemView {
       this.persistTabs();
     }
 
-    card.remove();
-    // This card may have been part of a pending bulk selection: drop it so the
-    // bulk bar never announces more conversations than it can actually delete.
+    // This conversation may have been part of a pending bulk selection: drop it
+    // so the bulk bar never announces more conversations than it can actually
+    // delete.
     if (this.gallerySelection.delete(c.id)) this.renderBulkBar();
     // ...and out of the retention proposal, which the banner's "Seleziona" reads
     // straight into a selection. Left in, a dangling id would make the bar
     // over-report and the delete under-deliver.
-    this.retentionCandidateIds = this.retentionCandidateIds.filter((id) => id !== c.id);
+    this.retentionCandidateIds = this.retentionCandidateIds.filter((x) => x !== c.id);
     this.convoSizeCache.delete(c.id);
-    // Group headers are SIBLINGS of the cards, not wrappers, so removing the
-    // last card of a group leaves its header standing above the next group's
-    // cards. A header owns exactly the cards that immediately follow it, so
-    // "no card right after me" is precisely "my group is now empty" — one pass
-    // over a static NodeList settles every header, in any order.
-    grid.querySelectorAll<HTMLElement>(".mva-gallery-group-header").forEach((h) => {
-      if (!h.nextElementSibling?.classList.contains("mva-card")) h.remove();
-    });
-    if (!grid.querySelector(".mva-card")) {
-      grid.createDiv({ cls: "mva-empty-sub", text: "No conversations yet." });
-    }
     this.persist();
+    return true;
   }
 
   /* ------------------------ gallery bulk selection ---------------------- */
-
-  /** Paint selection state on a card. The class and `aria-pressed` move together
-   *  so selection is never visible to sighted users only: `clickable()` gives
-   *  every card `role="button"`, and a button with no `aria-pressed` announces
-   *  no state at all. */
-  private setCardSelected(card: HTMLElement, selected: boolean): void {
-    card.toggleClass("is-selected", selected);
-    card.setAttr("aria-pressed", String(selected));
-  }
 
   /** Ids of the cards the grid is currently painting — i.e. what the user can
    *  actually see, after the search box has had its say. */
@@ -2913,7 +2795,7 @@ export class ChatView extends ItemView {
   private refreshSelectionUI(): void {
     this.galleryEl?.querySelectorAll<HTMLElement>(".mva-card").forEach((el) => {
       const id = el.dataset.convoId;
-      this.setCardSelected(el, !!id && this.gallerySelection.has(id));
+      setCardSelected(el, !!id && this.gallerySelection.has(id));
     });
     this.renderBulkBar();
   }
@@ -2922,7 +2804,7 @@ export class ChatView extends ItemView {
    *  Rebuilt on every selection change AND on every grid re-render, which also
    *  disarms a pending delete: neither growing the selection nor changing the
    *  filter can inherit a confirmation the user gave for a different set. */
-  private renderBulkBar(): void {
+  renderBulkBar(): void {
     // Always drop the previous bar's arm state first — it owns a timer and a
     // document-level listener that must not outlive the element.
     this.bulkDisarm?.();
@@ -3199,7 +3081,7 @@ export class ChatView extends ItemView {
     this.persist();
   }
 
-  private convoPreview(c: Convo): string {
+  convoPreview(c: Convo): string {
     let s = "";
     for (const m of c.messages) {
       const part =
@@ -3241,7 +3123,7 @@ export class ChatView extends ItemView {
     return false;
   }
 
-  private formatDate(ts: number): string {
+  formatDate(ts: number): string {
     const d = new Date(ts);
     const now = new Date();
     const sameDay = d.toDateString() === now.toDateString();
@@ -3257,7 +3139,7 @@ export class ChatView extends ItemView {
    *  24-hour periods: a chat retired yesterday at 23:00 and read this morning
    *  is "ieri", not "oggi". `Math.round` because a DST day is 23 or 25 hours
    *  long and the quotient would otherwise land just off the integer. */
-  private formatRelative(ts: number): string {
+  formatRelative(ts: number): string {
     const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / DAY_MS);
     if (days <= 0) return "oggi";
     if (days === 1) return "ieri";
@@ -3440,6 +3322,7 @@ export class ChatView extends ItemView {
       .then((title) => {
         if (ctrl.signal.aborted || !title) return; // aborted/failed → keep placeholder
         if (!this.convos.includes(c)) return; // conversation removed meanwhile
+        if (!canAutoTitle(c, "ai")) return; // user named it — do not overwrite
         c.title = title;
         c.aiTitleApplied = true; // authoritative "don't retry" signal — see isAiTitleDue
         this.renderTabs();
@@ -3922,12 +3805,8 @@ export class ChatView extends ItemView {
 
   private addUserTurn(c: Convo, text: string, images?: ImageAttachment[]): HTMLElement {
     this.clearEmptyState(c);
-    // Derive the tab title from the first user message. The untitled state is
-    // represented inconsistently across the view — every render site falls back
-    // with `c.title || "New chat"`, so a falsy title still *shows* as "New chat"
-    // while failing an exact `=== "New chat"` check. Treat any falsy title OR the
-    // literal default as untitled so the first message always names the tab.
-    if (!c.title || c.title === "New chat") {
+    // Derive the tab title from the first message; canAutoTitle (core/title-ownership) decides what's untitled and whether it's locked.
+    if (canAutoTitle(c, "first-message")) {
       const derived = text.replace(/\s+/g, " ").trim().slice(0, 40);
       c.title = derived || (images?.length ? "Image" : "New chat");
       this.refreshTabs(); // the title is a rendered fact: a state transition
