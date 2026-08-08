@@ -20,6 +20,7 @@ import {
   activateConnections as activateConnectionsView,
   activateAgents as activateAgentsView,
 } from "./ui/view-registry";
+import * as convoBridge from "./ui/convo-bridge";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
 import { resolveCli, cliDiagnostics, updateClaudeCli } from "./cli";
@@ -1094,8 +1095,7 @@ export default class ExoPlugin extends Plugin {
    * open (the documented "leaf open" scope boundary). Pure read.
    */
   listSessionSnapshots(): SessionSnapshot[] {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.listSessionSnapshots() : [];
+    return convoBridge.chatView(this.app)?.listSessionSnapshots() ?? [];
   }
 
   /**
@@ -1103,20 +1103,17 @@ export default class ExoPlugin extends Plugin {
    * when no ChatView leaf is open or the convo id is unknown.
    */
   setConvoArchived(convoId: string, archived: boolean): boolean {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.setConvoArchived(convoId, archived) : false;
+    return convoBridge.chatView(this.app)?.setConvoArchived(convoId, archived) ?? false;
   }
 
   /** Set a conversation's manually-assigned board column (Session Cockpit drag). */
   setConvoBoardStatus(convoId: string, status: SessionLane): boolean {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.setConvoBoardStatus(convoId, status) : false;
+    return convoBridge.chatView(this.app)?.setConvoBoardStatus(convoId, status) ?? false;
   }
 
   /** The board × action: archive a conversation and close its sidebar tab. */
   archiveAndCloseTab(convoId: string): boolean {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.archiveAndCloseTab(convoId) : false;
+    return convoBridge.chatView(this.app)?.archiveAndCloseTab(convoId) ?? false;
   }
 
   /** Reconnect MCP servers on the active Exo session (Connections pane). Respawns
@@ -1157,8 +1154,7 @@ export default class ExoPlugin extends Plugin {
    */
   async startTaskConversation(prompt: string, opts?: { model?: string }): Promise<string> {
     await this.ensureChatView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.startTaskConversation(prompt, opts) : "";
+    return convoBridge.chatView(this.app)?.startTaskConversation(prompt, opts) ?? "";
   }
 
   /**
@@ -1170,8 +1166,7 @@ export default class ExoPlugin extends Plugin {
    */
   async revealConversation(convoId: string): Promise<boolean> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.revealConversation(convoId) : false;
+    return convoBridge.chatView(this.app)?.revealConversation(convoId) ?? false;
   }
 
   /** Plugin-level wrapper around `ChatView.insertIntoComposer` for the
@@ -1180,9 +1175,14 @@ export default class ExoPlugin extends Plugin {
    *  view on demand, same as `revealConversation`. */
   async insertIntoComposer(text: string): Promise<void> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) view.insertIntoComposer(text);
+    convoBridge.chatView(this.app)?.insertIntoComposer(text);
   }
+
+  /** Chats sidebar wrappers — bodies in `ui/convo-bridge.ts` (see it for the `null`-vs-`[]` contract). */
+  listChatRows(): ReturnType<typeof convoBridge.listChatRows> { return convoBridge.listChatRows(this.app); }
+  renameConversation(id: string, title: string): boolean { return convoBridge.renameConversation(this.app, id, title); }
+  deleteConversation(id: string): boolean { return convoBridge.deleteConversation(this.app, id); }
+  async newConversation(): Promise<void> { await this.activateView(); convoBridge.chatView(this.app)?.newConversation(); }
 
   /**
    * Periodic tick for the git auto-commit safety net (see core/git-autocommit

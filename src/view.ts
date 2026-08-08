@@ -105,6 +105,7 @@ import { chooseDensity } from "./core/strip-density";
 import type { StripDensity } from "./core/strip-density";
 import { groupByTime, matchesFilters, startOfDay, DAY_MS } from "./core/history";
 import type { HistoryFilter, FilterableConvo } from "./core/history";
+import type { ChatRowSource } from "./core/chat-rows";
 import { isAiTitleDue } from "./core/title";
 import { canAutoTitle, applyRename } from "./core/title-ownership";
 import { projectDirName, resumeStatus, resumableFrom, eligibleForFreeing } from "./core/resume-status";
@@ -1402,7 +1403,7 @@ export class ChatView extends ItemView {
     this.active.model = this.model;
   }
 
-  private newConversation(target?: { provider: ProviderId; model: string }): void {
+  newConversation(target?: { provider: ProviderId; model: string }): void {
     if (this.galleryEl) this.hideGallery();
     // Keep other conversations (and their live sessions) alive — parallel.
     this.saveActive();
@@ -2182,6 +2183,35 @@ export class ChatView extends ItemView {
       archived: !!c.archived,
       boardStatus: c.boardStatus,
       updatedAt: c.updatedAt,
+    }));
+  }
+
+  /**
+   * Every stored conversation, adapted for the chats sidebar. Deliberately NOT
+   * `listSessionSnapshots` above, which is scoped to open tabs plus whatever is
+   * running because the board would drown in the full history — the sidebar
+   * wants exactly the opposite. Filtering (archived, idle husks) belongs to
+   * `buildChatList` (core/chat-rows), not here: this reports facts, the pure
+   * core decides what to show. `provider` carries the display name, not the
+   * id, so the sidebar can render it as text without importing `ADAPTERS`.
+   */
+  listChatRows(): ChatRowSource[] {
+    const open = new Set(this.openTabs);
+    return this.convos.map((c) => ({
+      id: c.id,
+      title: c.title,
+      preview: this.convoPreview(c),
+      provider: ADAPTERS[c.provider].displayName,
+      model: c.model,
+      updatedAt: c.updatedAt,
+      archived: !!c.archived,
+      open: open.has(c.id),
+      streaming: c.streaming,
+      pendingPerm: c.pendingPerm != null,
+      pendingAsk: c.pendingAsk != null,
+      poisoned: !!c.resumeRisky,
+      stopped: c.stopped,
+      hasMessages: c.messages.length > 0,
     }));
   }
 
