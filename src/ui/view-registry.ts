@@ -5,6 +5,7 @@ import { BoardView, BOARD_VIEW_TYPE } from "./board-view";
 import { CockpitView, COCKPIT_VIEW_TYPE } from "./cockpit-view";
 import { AgentsView, AGENTS_VIEW_TYPE } from "./agents-view";
 import { HubView, HUB_VIEW_TYPE, type HubTab } from "./hub/hub-view";
+import { ChatListView, CHATS_VIEW_TYPE } from "./chat-list-view";
 
 /** Every Exo view is registered here, in one place, so `main.ts` carries the
  *  plugin lifecycle and not a catalogue of panes. Registration is unconditional
@@ -20,6 +21,7 @@ export function registerExoViews(plugin: ExoPlugin): void {
   plugin.registerView(COCKPIT_VIEW_TYPE, (leaf) => new CockpitView(leaf, plugin));
   plugin.registerView(HUB_VIEW_TYPE, (leaf) => new HubView(leaf, plugin));
   plugin.registerView(AGENTS_VIEW_TYPE, (leaf) => new AgentsView(leaf, plugin));
+  plugin.registerView(CHATS_VIEW_TYPE, (leaf) => new ChatListView(leaf, plugin));
 }
 
 /** Open `viewType` as a main-pane tab, reusing an existing leaf if one is open. */
@@ -73,4 +75,21 @@ export async function activateConnections(plugin: ExoPlugin): Promise<void> {
 
 export async function activateAgents(plugin: ExoPlugin): Promise<void> {
   await activateInMain(plugin, AGENTS_VIEW_TYPE);
+}
+
+/**
+ * Open the chats list in the LEFT sidebar — the only left-mounted view Exo has,
+ * and the codebase's only `getLeftLeaf` call. Left on purpose: the chat itself
+ * lives on the right, so a list that opened there would fight it for the same
+ * strip. Placement is only a default; the leaf is a normal `ItemView` the user
+ * can drag anywhere, and Obsidian persists that choice in the workspace layout.
+ */
+export async function activateChats(plugin: ExoPlugin): Promise<void> {
+  const { workspace } = plugin.app;
+  let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(CHATS_VIEW_TYPE)[0] ?? null;
+  if (!leaf) {
+    leaf = workspace.getLeftLeaf(false);
+    await leaf?.setViewState({ type: CHATS_VIEW_TYPE, active: true });
+  }
+  if (leaf) workspace.revealLeaf(leaf);
 }

@@ -19,6 +19,7 @@ import {
   activateHub as activateHubView,
   activateConnections as activateConnectionsView,
   activateAgents as activateAgentsView,
+  activateChats as activateChatsView,
 } from "./ui/view-registry";
 import * as convoBridge from "./ui/convo-bridge";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
@@ -541,9 +542,8 @@ export default class ExoPlugin extends Plugin {
     });
 
     const withView = (fn: (v: ChatView) => void) => () => {
-      const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-      if (view instanceof ChatView) fn(view);
-      else void this.activateView();
+      const view = convoBridge.chatView(this.app);
+      if (view) fn(view); else void this.activateView();
     };
     this.addCommand({ id: "new-tab", name: "New tab", callback: withView((v) => v.cmdNewTab()) });
     this.addCommand({
@@ -622,6 +622,11 @@ export default class ExoPlugin extends Plugin {
       id: "open-cockpit",
       name: "Open Cockpit",
       callback: () => void this.openCockpit(),
+    });
+    this.addCommand({
+      id: "open-chat-list",
+      name: "Open Exo chats",
+      callback: () => void this.activateChats(),
     });
     this.addCommand({
       id: "open-proposals",
@@ -934,6 +939,10 @@ export default class ExoPlugin extends Plugin {
     await activateAgentsView(this);
   }
 
+  async activateChats(): Promise<void> {
+    await activateChatsView(this);
+  }
+
   async openCockpit(): Promise<void> {
     const { workspace } = this.app;
     let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(COCKPIT_VIEW_TYPE)[0] ?? null;
@@ -990,9 +999,7 @@ export default class ExoPlugin extends Plugin {
    */
   async askExo(query: string, autoSend = true, opts?: { source?: string }): Promise<void> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView)
-      view.askInNewConversation(query, autoSend, { sendPrefix: handoffPrefix(opts?.source) });
+    convoBridge.chatView(this.app)?.askInNewConversation(query, autoSend, { sendPrefix: handoffPrefix(opts?.source) });
   }
 
   private vaultPath(): string {
@@ -1083,9 +1090,7 @@ export default class ExoPlugin extends Plugin {
    * is gone. Pure read — never mutates chat state.
    */
   readConvoState(convoId: string): { exists: boolean; streaming: boolean; hasPending: boolean } {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) return view.readConvoState(convoId);
-    return { exists: false, streaming: false, hasPending: false };
+    return convoBridge.chatView(this.app)?.readConvoState(convoId) ?? { exists: false, streaming: false, hasPending: false };
   }
 
   /**
@@ -1125,9 +1130,8 @@ export default class ExoPlugin extends Plugin {
     error?: string;
     servers?: import("./providers/types").SessionCaps["mcpServers"];
   }> {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) return view.reloadMcpConnections();
-    return { ok: false, error: "Open an Exo chat first — reconnect runs on the active session." };
+    const view = convoBridge.chatView(this.app);
+    return view ? view.reloadMcpConnections() : { ok: false, error: "Open an Exo chat first — reconnect runs on the active session." };
   }
 
   /**
@@ -1324,8 +1328,7 @@ export default class ExoPlugin extends Plugin {
    *  in the composer, then focus it — the in-note "Ask Exo" action. */
   async attachSelectionToChat(text: string, sourcePath: string): Promise<void> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) view.attachSelection(text, sourcePath);
+    convoBridge.chatView(this.app)?.attachSelection(text, sourcePath);
   }
 
   /** Forward the active editor's current selection to the open chat view so it
@@ -1333,8 +1336,7 @@ export default class ExoPlugin extends Plugin {
    *  Unlike `attachSelectionToChat`, this never reveals/activates the view — it's
    *  passive ambient state: if no ChatView is open there's simply nothing to show. */
   reportSelection(text: string, sourcePath: string): void {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView) view.setCurrentSelection(text, sourcePath);
+    convoBridge.chatView(this.app)?.setCurrentSelection(text, sourcePath);
   }
 
   /** Generate a concise 3-6 word chat title with Haiku. ALWAYS runs on the Claude
@@ -2649,17 +2651,15 @@ export default class ExoPlugin extends Plugin {
 
   /** Live attention data for the Cockpit (blocked / streaming conversations). */
   liveAttention(): { id: string; title: string; blocked: boolean; streaming: boolean }[] {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view.convoAttention() : [];
+    return convoBridge.chatView(this.app)?.convoAttention() ?? [];
   }
 
   /** Open the chat view on a specific conversation (Cockpit "Resume" rows). */
   async openConvo(id: string): Promise<void> {
     await this.activateView();
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (view instanceof ChatView && !view.openConvoById(id)) {
-      new Notice("Conversation not found — it may have been deleted.");
-    }
+    // Two-step, not `?? false`: with no view there is nothing to report missing.
+    const view = convoBridge.chatView(this.app);
+    if (view && !view.openConvoById(id)) new Notice("Conversation not found — it may have been deleted.");
   }
 
   /** Deterministic production pipeline. Background-AI settings never gate it. */
