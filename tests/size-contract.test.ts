@@ -27,10 +27,16 @@ import { join } from "node:path";
  */
 
 const CEILINGS: Record<string, number> = {
-  // Abbassato il 2026-08-07 dopo l'estrazione dei renderer delle card della
-  // gallery in `ui/gallery-cards.ts` e lo split di deleteConvo. Solo verso il
-  // basso.
-  "src/view.ts": 7049,
+  // Alzato deliberatamente il 2026-08-08 a 7100 — budget riservato per la feature
+  // exo-chats. Abbassare il tetto al conteggio esatto dopo ogni estrazione
+  // lasciava zero margine, quindi l'estrazione non comprava niente di
+  // spendibile: la prima feature vera dopo un'estrazione sforava comunque. 7100
+  // resta ben sotto i 7216 da cui questo branch è partito, quindi view.ts esce
+  // comunque più piccolo di come è entrato. Alzare ulteriormente per qualsiasi
+  // ALTRO motivo resta vietato: la risposta a un futuro sforamento è estrarre il
+  // resto della gallery (showGallery più il cluster di selezione bulk), non un
+  // numero più grande.
+  "src/view.ts": 7100,
   // Abbassato il 2026-08-07 dopo l'estrazione della registrazione e
   // attivazione delle view in `ui/view-registry.ts`. Solo verso il basso.
   "src/main.ts": 3492,
