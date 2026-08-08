@@ -34,13 +34,13 @@ export function canAutoTitle(c: TitleOwnership, source: TitleSource): boolean {
  */
 export function applyRename<C extends TitleOwnership & { id: string }>(
   convos: C[],
-  active: C,
+  active: C | undefined,
   id: string,
   title: string,
 ): C | null {
   const next = title.trim();
   if (!next) return null;
-  const c = convos.find((x) => x.id === id) ?? (active.id === id ? active : undefined);
+  const c = convos.find((x) => x.id === id) ?? (active?.id === id ? active : undefined);
   if (!c) return null;
   c.title = next;
   c.titleLocked = true;
