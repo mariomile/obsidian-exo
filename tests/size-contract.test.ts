@@ -38,8 +38,15 @@ const CEILINGS: Record<string, number> = {
   // numero più grande.
   "src/view.ts": 7100,
   // Abbassato il 2026-08-07 dopo l'estrazione della registrazione e
-  // attivazione delle view in `ui/view-registry.ts`. Solo verso il basso.
-  "src/main.ts": 3492,
+  // attivazione delle view in `ui/view-registry.ts`, e di nuovo il 2026-08-08
+  // dopo l'estrazione degli SVG di addIcon in `ui/icons.ts` (3492 -> 3460
+  // reali). Il tetto resta a 3480, non a 3460: stessa scelta già fatta per
+  // view.ts sopra — fissarlo al conteggio esatto azzera il margine e rende
+  // impossibile aggiungere una riga senza estrarne un'altra nello stesso
+  // commit, cioè l'estrazione non compra niente di spendibile. 3480 è comunque
+  // sotto il 3492 da cui si partiva. Se finisce anche questo, si estrae:
+  // il candidato è il blocco dei comandi.
+  "src/main.ts": 3480,
   "src/ui/composer.ts": 1723,
   "src/settings.ts": 1343,
 };
