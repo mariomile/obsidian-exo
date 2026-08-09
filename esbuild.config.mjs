@@ -32,6 +32,11 @@ const deployPlugin = {
         for (const f of ["main.js", "manifest.json", "styles.css"]) {
           if (existsSync(f)) copyFileSync(f, join(deployDir, f));
         }
+        // Semantic chat recall runs OUT of process (see ui/chat-recall.ts), so
+        // its script ships beside the bundle rather than inside it.
+        if (existsSync("scripts/chat-recall.mjs")) {
+          copyFileSync("scripts/chat-recall.mjs", join(deployDir, "chat-recall.mjs"));
+        }
         console.log(`[deploy] copied to ${deployDir}`);
       } catch (e) {
         console.warn(`[deploy] failed: ${e?.message ?? e}`);

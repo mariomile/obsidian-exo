@@ -6491,3 +6491,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-normal);
 }
 .mva-chats-rename-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+/* Semantic "Related" section: rows that do NOT contain what you typed. Marked
+   by a softer label so the distinction is visible at a glance — merging them
+   into the results would make the filter look broken the first time it returns
+   something without your words in it. */
+.mva-chats-group[data-section="related"] .mva-chats-group-label { font-style: italic; }
+.mva-chats-group[data-section="related"] .mva-chats-row { opacity: 0.85; }

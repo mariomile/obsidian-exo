@@ -352,6 +352,44 @@ describe("buildChatList — search", () => {
   });
 });
 
+describe("buildChatList — semantic related tier", () => {
+  const sem = (sources: ChatRowSource[], query: string, semanticIds: string[]) =>
+    buildChatList(sources, { query, now: NOON, semanticIds });
+
+  it("adds a semantic hit the literal filter missed", () => {
+    const vm = sem([src({ id: "a", title: "Vault Blueprint" }), src({ id: "b", title: "Tag namespace" })], "zzz", ["b"]);
+    expect(vm.related.map((r) => r.id)).toEqual(["b"]);
+  });
+
+  it("never duplicates a row that already matched literally", () => {
+    const vm = sem([src({ id: "a", title: "Vault Blueprint" })], "vault", ["a"]);
+    expect(vm.related).toEqual([]);
+    expect(historyIds(vm)).toEqual(["a"]);
+  });
+
+  it("preserves the semantic ranking order", () => {
+    const vm = sem([src({ id: "a" }), src({ id: "b" }), src({ id: "c" })], "zzz", ["c", "a", "b"]);
+    expect(vm.related.map((r) => r.id)).toEqual(["c", "a", "b"]);
+  });
+
+  it("ignores semantic ids for conversations that are archived or gone", () => {
+    const vm = sem([src({ id: "a", archived: true })], "zzz", ["a", "ghost"]);
+    expect(vm.related).toEqual([]);
+  });
+
+  it("does nothing at all when no query is being typed", () => {
+    // Otherwise an idle sidebar would sprout a Related section out of nowhere.
+    const vm = buildChatList([src({ id: "a" })], { query: "", now: NOON, semanticIds: ["a"] });
+    expect(vm.related).toEqual([]);
+  });
+
+  it("counts related rows as matches, so a semantic-only hit is not an empty state", () => {
+    const vm = sem([src({ id: "a", title: "alpha" })], "zzz", ["a"]);
+    expect(vm.matched).toBe(1);
+    expect(vm.total).toBe(1);
+  });
+});
+
 describe("buildChatList — grouping", () => {
   it("buckets by calendar day, not by rolling 24 hours", () => {
     // 23:00 yesterday is "Yesterday" read at noon today, even though it is only

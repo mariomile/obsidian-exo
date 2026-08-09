@@ -7,8 +7,16 @@ import * as actions from "./chat-actions";
 /** The mounted ChatView, or null when none is — including when the leaf exists
  *  but is still a deferred placeholder, on which `instanceof` is false. */
 export function chatView(app: App): ChatView | null {
-  const view = app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-  return view instanceof ChatView ? view : null;
+  const leaf = app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+  if (!leaf) return null;
+  if (leaf.view instanceof ChatView) return leaf.view;
+  // The leaf exists but Obsidian has not materialised it yet (a restored tab
+  // that was never activated, or any tab right after a plugin reload). Ask for
+  // it and report null for now: the caller's next tick finds it. Without this
+  // the chats sidebar sits on "Open Exo to see your chats" while a fully
+  // populated conversation store is one deferred view away.
+  (leaf as unknown as { loadIfDeferred?: () => Promise<void> }).loadIfDeferred?.();
+  return null;
 }
 
 /**

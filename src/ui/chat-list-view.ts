@@ -17,6 +17,7 @@ import type ExoPlugin from "../main";
 import { buildChatList, relativeTime, modelLabel, type ChatRow, type ChatListMode } from "../core/chat-rows";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 import { clickable } from "./dom";
+import { recallChats, reindexChats, recallHost, isRecallUnavailable } from "./chat-recall";
 
 export const CHATS_VIEW_TYPE = "exo-chats";
 export const CHATS_ICON = "messages-square";
@@ -53,6 +54,13 @@ export class ChatListView extends ItemView {
    *  Recomputed every paint so the cursor can never point at a row that was
    *  filtered out or archived since the last keystroke. */
   private order: string[] = [];
+  /** Ids from the last semantic pass, and the query they answered. Both are
+   *  kept so a stale result can be recognised and dropped: the pass is ~0.8s
+   *  and the user keeps typing, so answers routinely arrive for a query that is
+   *  no longer on screen. */
+  private semanticIds: string[] = [];
+  private semanticFor = "";
+  private semanticTimer: number | null = null;
   /** Keyboard cursor. Applied as a class after reconciliation rather than
    *  carried in the row signature: putting it in the signature would rebuild two
    *  rows on every arrow press, which drops focus and defeats the point. */
@@ -89,6 +97,11 @@ export class ChatListView extends ItemView {
     // shared space, so registerInterval clears a setTimeout just as well.
     this.registerInterval(window.setTimeout(() => this.paint(), 800));
     this.paint();
+    // Bring the semantic index up to date in the background. Incremental and
+    // pipeline-free when nothing changed, so opening the pane costs ~50ms; the
+    // expensive case is a first build, which is exactly when you want it to
+    // happen unattended rather than on the first search.
+    void reindexChats(recallHost(this.pluginDir()));
   }
 
   async onClose(): Promise<void> {
@@ -121,6 +134,7 @@ export class ChatListView extends ItemView {
       // so Enter after typing opens the best match, not a stale row.
       this.cursor = null;
       this.paint();
+      this.scheduleSemantic();
     });
     search.addEventListener("keydown", (e) => this.onKey(e));
     this.searchEl = search;
@@ -171,6 +185,43 @@ export class ChatListView extends ItemView {
     return this.plugin.settings.chatsMode === "days" ? "days" : "activity";
   }
 
+  /* ------------------------------ semantic ------------------------------ */
+
+  /**
+   * Run the semantic pass once the typing stops. Debounced, not per keystroke:
+   * a query costs ~0.8s and spawning one per character would queue a dozen
+   * processes to answer questions the user has already moved past.
+   */
+  private scheduleSemantic(): void {
+    if (this.semanticTimer !== null) window.clearTimeout(this.semanticTimer);
+    const q = this.query.trim();
+    // Clearing the box must clear the Related section immediately — leaving it
+    // would show results for a search that is no longer on screen.
+    if (!q) {
+      this.semanticIds = [];
+      this.semanticFor = "";
+      return;
+    }
+    if (isRecallUnavailable()) return;
+    this.semanticTimer = window.setTimeout(() => {
+      void recallChats(recallHost(this.pluginDir()), q).then((ids) => {
+        // `null` means the pass could not run; keep whatever was already there
+        // rather than blanking a good section on a transient failure.
+        if (ids === null) return;
+        // The answer is only valid for the query it was asked about.
+        if (this.query.trim() !== q) return;
+        this.semanticIds = ids;
+        this.semanticFor = q;
+        this.paint();
+      });
+    }, 350);
+  }
+
+  private pluginDir(): string {
+    const base = this.app.vault.adapter as unknown as { basePath?: string };
+    return `${base.basePath ?? ""}/${this.plugin.manifest.dir ?? ""}`;
+  }
+
   /* -------------------------------- paint ------------------------------- */
 
   private paint(): void {
@@ -180,7 +231,13 @@ export class ChatListView extends ItemView {
     // One clock read per paint: grouping and the row labels must agree, and two
     // Date.now() calls a few lines apart can straddle a minute boundary.
     const now = Date.now();
-    const vm = buildChatList(sources, { query: this.query, now, mode: this.mode() });
+    const vm = buildChatList(sources, {
+      query: this.query,
+      now,
+      mode: this.mode(),
+      // Only feed the ranking back in if it answered the query on screen.
+      semanticIds: this.semanticFor === this.query.trim() ? this.semanticIds : [],
+    });
     if (vm.total === 0) return this.renderEmpty("no-chats");
     if (vm.matched === 0) return this.renderEmpty("no-matches");
     if (this.emptyKind !== null) {
@@ -197,10 +254,13 @@ export class ChatListView extends ItemView {
         { key: "active", label: "Active", items: vm.active },
         { key: "pinned", label: "Pinned", items: vm.pinned },
         ...vm.groups.map((g) => ({ key: `t:${g.label}`, label: g.label, items: g.items })),
+        // Last, and named for what it is: these rows do not contain what you
+        // typed, a model thinks they are about it.
+        { key: "related", label: "Related", items: vm.related },
       ].filter((s) => s.items.length > 0),
       now,
     );
-    this.order = [...vm.active, ...vm.pinned, ...vm.groups.flatMap((g) => g.items)].map((r) => r.id);
+    this.order = [...vm.active, ...vm.pinned, ...vm.groups.flatMap((g) => g.items), ...vm.related].map((r) => r.id);
     if (this.cursor && !this.order.includes(this.cursor)) this.cursor = null;
     this.paintCursor(false);
   }

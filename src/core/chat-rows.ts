@@ -93,6 +93,15 @@ export interface ChatListVM {
   pinned: ChatRow[];
   /** Everything else, bucketed by day. Rendered compact. */
   groups: TimeGroup<ChatRow>[];
+  /**
+   * Conversations the SEMANTIC pass found that the literal filter missed, in
+   * relevance order. Kept as its own tier rather than merged into the results:
+   * a row that is here because a model thinks it is related, not because it
+   * contains what you typed, has to say so — silently mixing the two makes the
+   * filter look broken the first time it returns something without your words
+   * in it. Empty unless a semantic ranking was supplied.
+   */
+  related: ChatRow[];
   /** Rows before the query filter. Distinguishes "no chats yet" from "no chats
    *  match" — different empty states, and collapsing them makes a search look
    *  like it deleted the user's data. */
@@ -222,11 +231,28 @@ function toRow(s: ChatRowSource): ChatRow {
  */
 export function buildChatList(
   sources: readonly ChatRowSource[],
-  opts: { query: string; now: number; mode?: ChatListMode },
+  opts: { query: string; now: number; mode?: ChatListMode; semanticIds?: readonly string[] },
 ): ChatListVM {
   const mode = opts.mode ?? "activity";
   const visible = sources.filter((s) => !s.archived && deriveLane(s).lane !== "idle");
-  const matched = opts.query.trim() ? visible.filter((s) => matchesQuery(s, opts.query)) : visible;
+  const searching = opts.query.trim().length > 0;
+  const matched = searching ? visible.filter((s) => matchesQuery(s, opts.query)) : visible;
+
+  // Semantic hits only ever ADD to a search, never reorder or replace it. The
+  // literal filter is the contract — if you typed a word, rows containing it
+  // stay where they are — and the semantic pass answers the different question
+  // "what else is about this", for the case where you cannot remember the word
+  // at all. It is skipped entirely when nothing is being searched.
+  const literal = new Set(matched.map((s) => s.id));
+  const related: ChatRow[] = [];
+  if (searching && opts.semanticIds?.length) {
+    const byId = new Map(visible.map((s) => [s.id, s]));
+    for (const id of opts.semanticIds) {
+      if (literal.has(id)) continue;
+      const s = byId.get(id);
+      if (s) related.push(toRow(s));
+    }
+  }
 
   const active: ChatRow[] = [];
   const pinned: ChatRow[] = [];
@@ -265,7 +291,11 @@ export function buildChatList(
     active,
     pinned,
     groups: groupByTime(history, opts.now),
+    related,
     total: visible.length,
-    matched: matched.length,
+    // Related rows count as matches: without them a search whose only hits are
+    // semantic would report zero and render the "no matches" empty state over a
+    // list that is about to show results.
+    matched: matched.length + related.length,
   };
 }

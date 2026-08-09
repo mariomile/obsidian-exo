@@ -42,6 +42,12 @@ jobs:
         run: |
           ASSETS="main.js manifest.json"
           [ -f styles.css ] && ASSETS="$ASSETS styles.css"
+          # Semantic chat recall runs out of process; its script ships beside
+          # the bundle, not inside it.
+          if [ -f scripts/chat-recall.mjs ]; then
+            cp scripts/chat-recall.mjs chat-recall.mjs
+            ASSETS="$ASSETS chat-recall.mjs"
+          fi
           # Idempotent: releases are usually cut manually (curated notes) before
           # the tag lands here. If one exists, refresh its assets with this
           # CI-built bundle instead of failing.
