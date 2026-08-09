@@ -22,8 +22,22 @@ describe("looksAutoTitled", () => {
     expect(looksAutoTitled("Sidebar work")).toBe(false);
   });
 
-  it("leaves a title longer than the cap alone", () => {
-    // Longer than the cap cannot be a slice of it, so somebody chose it.
+  it("catches the historical 48-character slice too", () => {
+    // Conversations from before 2026-06 carry these; a sweep that ignored them
+    // would leave the oldest chats broken forever.
+    expect(looksAutoTitled("d".repeat(48))).toBe(true);
+  });
+
+  it("catches sanitizeTitle's 60-character ceiling", () => {
+    // Landing exactly on the ceiling means the title model returned a sentence
+    // and it was cut, not that someone chose a 60-character name.
+    expect(looksAutoTitled("e".repeat(60))).toBe(true);
+    expect(looksAutoTitled("No, non l'ho toccato. Ho ricostruito il prompt (`.claude/age")).toBe(true);
+  });
+
+  it("leaves a length between the caps alone", () => {
+    // 59 is a long but complete generated title, not a truncation.
+    expect(looksAutoTitled("f".repeat(59))).toBe(false);
     expect(looksAutoTitled("b".repeat(SLICE_CAP + 1))).toBe(false);
   });
 
