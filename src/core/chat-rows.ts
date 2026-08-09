@@ -103,6 +103,31 @@ export function relativeTime(ts: number, now: number): string {
   return `${Math.floor(age / DAY)}d`;
 }
 
+/**
+ * Fold a string for matching: lowercase, and strip diacritics so `però` is
+ * reachable by typing `pero`. Italian titles are full of accents nobody types
+ * into a filter box, and an accent-sensitive search silently hides them.
+ */
+const fold = (s: string): string =>
+  s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+
+/**
+ * Does this conversation match the query? EVERY whitespace-separated token has
+ * to appear somewhere in the title or the preview, in any order.
+ *
+ * Deliberately not a contiguous substring: typing `gbrain garry` should find
+ * "GBrain di Garry Tan", and it does not under `includes(query)` because the
+ * words are separated by a `di` the user did not remember. Word-order
+ * independence is what makes a filter usable from memory rather than from
+ * recall of the exact phrasing.
+ */
+export function matchesQuery(s: { title: string; preview: string }, query: string): boolean {
+  const tokens = fold(query).split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  const hay = `${fold(s.title)} ${fold(s.preview)}`;
+  return tokens.every((t) => hay.includes(t));
+}
+
 /** Families rendered as acronyms rather than title-cased words. */
 const ACRONYMS = new Set(["gpt", "o1", "o3"]);
 
@@ -185,12 +210,7 @@ export function buildChatList(
   opts: { query: string; now: number },
 ): ChatListVM {
   const visible = sources.filter((s) => !s.archived && deriveLane(s).lane !== "idle");
-  const q = opts.query.trim().toLowerCase();
-  const matched = q
-    ? visible.filter(
-        (s) => s.title.toLowerCase().includes(q) || s.preview.toLowerCase().includes(q),
-      )
-    : visible;
+  const matched = opts.query.trim() ? visible.filter((s) => matchesQuery(s, opts.query)) : visible;
 
   const active: ChatRow[] = [];
   const pinned: ChatRow[] = [];

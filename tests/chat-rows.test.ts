@@ -252,6 +252,29 @@ describe("buildChatList — search", () => {
     expect(vm.matched).toBe(2);
   });
 
+  it("matches tokens in any order, across words the user did not remember", () => {
+    // The failure this replaced: `includes(query)` needs the words contiguous,
+    // so typing what you remember never found the chat.
+    const vm = build([src({ id: "a", title: "GBrain di Garry Tan — cosa rubare" })], "gbrain garry");
+    expect(vm.matched).toBe(1);
+  });
+
+  it("requires every token, not just one", () => {
+    const vm = build([src({ id: "a", title: "GBrain di Garry Tan" })], "gbrain notion");
+    expect(vm.matched).toBe(0);
+  });
+
+  it("spans title and preview together", () => {
+    const vm = build([src({ id: "a", title: "Vault Blueprint", preview: "phase four rollout" })], "blueprint rollout");
+    expect(vm.matched).toBe(1);
+  });
+
+  it("ignores diacritics, in both directions", () => {
+    // Nobody types the accent into a filter box.
+    expect(build([src({ id: "a", title: "Però funziona" })], "pero").matched).toBe(1);
+    expect(build([src({ id: "a", title: "Pero funziona" })], "però").matched).toBe(1);
+  });
+
   it("filters every tier, not only history", () => {
     const vm = build(
       [
