@@ -27,8 +27,18 @@ export interface ChatRowSource {
   model: string;
   updatedAt?: number;
   archived: boolean;
-  /** Currently a tab in the strip — drives the active-row highlight. */
+  /** Currently a tab in the strip. This is what makes a row part of the working
+   *  set, not merely a highlight: an open tab is a chat you have deliberately
+   *  kept to hand, so it earns a rich row whether or not a turn is running. */
   open: boolean;
+  /** Kept to hand across sessions. Independent of `open` — a pin survives
+   *  closing the tab, which is the entire point of pinning. */
+  pinned: boolean;
+  /** Last turn finished while the user was elsewhere — see `unseen` on ChatRow. */
+  unseen: boolean;
+  /** User turns, not total messages: it answers "how much of this is mine",
+   *  which is what makes a conversation feel long or throwaway. */
+  messageCount: number;
   // Live signals, consumed by deriveLane.
   streaming: boolean;
   pendingPerm: boolean;
@@ -46,20 +56,33 @@ export interface ChatRow {
   model: string;
   updatedAt?: number;
   open: boolean;
-  /** Present only on live-tier rows. */
+  pinned: boolean;
+  messageCount: number;
+  /** A turn completed here since the user last had this conversation in view.
+   *  The live tier answers "what is happening"; this answers the question that
+   *  actually matters more often — "what happened while I was not looking". */
+  unseen: boolean;
+  /** Present only while the conversation is running or blocked. */
   lane?: "running" | "needs-input";
   reason?: NeedsInputReason;
   badge?: SessionBadge;
 }
 
 export interface ChatListVM {
-  live: ChatRow[];
+  /** The working set: anything running or blocked, plus every open tab. Rendered
+   *  rich — title, preview, provider and model — because these are the rows you
+   *  are choosing between right now, and a bare title is not enough to choose. */
+  active: ChatRow[];
+  /** Pinned but not currently in the working set. A pin that is also open shows
+   *  up in `active` instead, with its pin marked, rather than in both places. */
+  pinned: ChatRow[];
+  /** Everything else, bucketed by day. Rendered compact. */
   groups: TimeGroup<ChatRow>[];
   /** Rows before the query filter. Distinguishes "no chats yet" from "no chats
    *  match" — different empty states, and collapsing them makes a search look
    *  like it deleted the user's data. */
   total: number;
-  /** Rows after the query filter, across both tiers. */
+  /** Rows after the query filter, across every tier. */
   matched: number;
 }
 
@@ -80,11 +103,17 @@ export function relativeTime(ts: number, now: number): string {
   return `${Math.floor(age / DAY)}d`;
 }
 
-/** Lane ordering inside the live tier: what blocks on the user outranks what is
- *  merely busy, because only one of the two is waiting on a human. */
-const LANE_RANK: Record<"needs-input" | "running", number> = {
-  "needs-input": 0,
-  running: 1,
+/**
+ * Ordering inside the working set. What blocks on a human outranks what is
+ * merely busy, and both outrank a tab that is simply open — the list is read
+ * top-down when something needs doing, so the rows that need doing come first.
+ * An unseen result sits above an idle tab for the same reason: it is the one
+ * row in that band carrying news.
+ */
+const ACTIVE_RANK = (r: ChatRow): number => {
+  if (r.lane === "needs-input") return 0;
+  if (r.lane === "running") return 1;
+  return r.unseen ? 2 : 3;
 };
 
 const byRecency = (a: ChatRow, b: ChatRow): number => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
@@ -97,16 +126,26 @@ function toRow(s: ChatRowSource): ChatRow {
     provider: s.provider,
     model: s.model,
     open: s.open,
+    pinned: s.pinned,
+    unseen: s.unseen,
+    messageCount: s.messageCount,
   };
   if (s.updatedAt !== undefined) row.updatedAt = s.updatedAt;
   return row;
 }
 
 /**
- * Build the two-tier list. Order of operations matters: exclusions, then the
- * query filter, then tiering. Filtering before tiering is what lets a
- * zero-match search return `live: []` AND `groups: []`, so the view renders one
- * "no matches" state instead of an empty live tier stacked on empty groups.
+ * Build the list. Order of operations matters: exclusions, then the query
+ * filter, then tiering. Filtering before tiering is what lets a zero-match
+ * search return every tier empty, so the view renders one "no matches" state
+ * instead of three empty sections stacked on each other.
+ *
+ * Three tiers, and a row lands in exactly one:
+ *   - `active` — running, blocked, or open as a tab. The working set.
+ *   - `pinned` — pinned and NOT in the working set. A pin that is also open
+ *     belongs in `active`, marked, rather than listed twice: duplicating it
+ *     would make the same conversation look like two.
+ *   - `groups`  — everything else, by day.
  */
 export function buildChatList(
   sources: readonly ChatRowSource[],
@@ -120,32 +159,38 @@ export function buildChatList(
       )
     : visible;
 
-  const live: ChatRow[] = [];
+  const active: ChatRow[] = [];
+  const pinned: ChatRow[] = [];
   const history: ChatRow[] = [];
 
   for (const s of matched) {
     const d = deriveLane(s);
     const row = toRow(s);
-    if (d.lane === "running" || d.lane === "needs-input") {
-      row.lane = d.lane;
+    const isLive = d.lane === "running" || d.lane === "needs-input";
+    if (isLive) {
+      row.lane = d.lane as "running" | "needs-input";
       if (d.reason) row.reason = d.reason;
-      live.push(row);
-    } else {
-      if (d.badge) row.badge = d.badge;
-      history.push(row);
     }
+    // The badge is independent of the lane and survives into any tier: a chat
+    // whose last turn errored says so whether it is open, pinned or filed.
+    if (d.badge) row.badge = d.badge;
+    if (isLive || row.open) active.push(row);
+    else if (row.pinned) pinned.push(row);
+    else history.push(row);
   }
 
-  live.sort((a, b) => {
-    const rank = LANE_RANK[a.lane as "running" | "needs-input"] - LANE_RANK[b.lane as "running" | "needs-input"];
+  active.sort((a, b) => {
+    const rank = ACTIVE_RANK(a) - ACTIVE_RANK(b);
     return rank !== 0 ? rank : byRecency(a, b);
   });
+  pinned.sort(byRecency);
   // groupByTime deliberately does not sort (history.ts:33-36) — the caller owns
   // the order, so sort before bucketing, not after.
   history.sort(byRecency);
 
   return {
-    live,
+    active,
+    pinned,
     groups: groupByTime(history, opts.now),
     total: visible.length,
     matched: matched.length,

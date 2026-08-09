@@ -597,6 +597,11 @@ export default class ExoPlugin extends Plugin {
       callback: () => void this.activateChats(),
     });
     this.addCommand({
+      id: "retitle-chats",
+      name: "Retitle auto-named chats",
+      callback: () => void this.backfillTitles(),
+    });
+    this.addCommand({
       id: "open-proposals",
       name: "Review suggestions",
       checkCallback: (checking) => {
@@ -1155,6 +1160,9 @@ export default class ExoPlugin extends Plugin {
   renameConversation(id: string, title: string): boolean { return convoBridge.renameConversation(this.app, id, title); }
   deleteConversation(id: string): boolean { return convoBridge.deleteConversation(this.app, id); }
   async newConversation(): Promise<void> { await this.activateView(); convoBridge.chatView(this.app)?.newConversation(); }
+  setConvoPinned(id: string, pinned: boolean): boolean { return convoBridge.setConvoPinned(this.app, id, pinned); }
+  retitleConversation(id: string): Promise<boolean> { return convoBridge.retitleConversation(this, id); }
+  backfillTitles(): Promise<void> { return convoBridge.backfillTitles(this); }
 
   /**
    * Periodic tick for the git auto-commit safety net (see core/git-autocommit

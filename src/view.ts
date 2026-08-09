@@ -1246,7 +1246,7 @@ export class ChatView extends ItemView {
   /** All conversations including the active one — which isn't always in `convos`
    *  (several paths push it lazily). The canonical "full set" for persistence and
    *  snapshots. */
-  private allConvos(): Convo[] {
+  allConvos(): Convo[] {
     return this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
   }
 
@@ -1331,7 +1331,7 @@ export class ChatView extends ItemView {
 
   /** Schedule a debounced write. Callers fire this freely; the actual
    *  serialize+write is coalesced in flushPersist(). */
-  private persist(): void {
+  persist(): void {
     const now = Date.now();
     if (this.persistScheduledAt === 0) this.persistScheduledAt = now;
     // Bound worst-case staleness: if we've been coalescing past MAX_WAIT
@@ -1580,7 +1580,7 @@ export class ChatView extends ItemView {
   }
 
   /** Render the open-conversation tab strip. */
-  private renderTabs(): void {
+  renderTabs(): void {
     if (!this.tabsEl) return;
     const ids = this.openTabs.filter((id) => this.convos.some((c) => c.id === id));
     this.openTabs = ids; // cleanup only: this is also planWorkingSet's LRU input,
@@ -1902,7 +1902,7 @@ export class ChatView extends ItemView {
    * running the cap from here would make a menu click on one tab tear away a
    * different one. The cap catches up on the next switch.
    */
-  private togglePin(c: Convo): void {
+  togglePin(c: Convo): void {
     c.pinned = c.pinned !== true;
     this.refreshTabs();
     this.persist();
@@ -2207,6 +2207,11 @@ export class ChatView extends ItemView {
       updatedAt: c.updatedAt,
       archived: !!c.archived,
       open: open.has(c.id),
+      pinned: c.pinned === true,
+      messageCount: c.messages.filter((m) => m.role === "user").length,
+      // "Finished while you were elsewhere", with no new persisted state:
+      // lastActiveAt moves on focus, updatedAt on every turn. Active excluded.
+      unseen: c !== this.active && (c.updatedAt ?? 0) > (c.lastActiveAt ?? 0),
       streaming: c.streaming,
       pendingPerm: c.pendingPerm != null,
       pendingAsk: c.pendingAsk != null,

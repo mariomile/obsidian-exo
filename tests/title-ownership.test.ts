@@ -1,5 +1,36 @@
 import { describe, it, expect } from "vitest";
-import { canAutoTitle, applyRename } from "../src/core/title-ownership";
+import { canAutoTitle, applyRename, looksAutoTitled, SLICE_CAP } from "../src/core/title-ownership";
+
+describe("looksAutoTitled", () => {
+  it("treats an empty or whitespace title as auto", () => {
+    expect(looksAutoTitled("")).toBe(true);
+    expect(looksAutoTitled("   ")).toBe(true);
+  });
+
+  it("treats the literal New chat placeholder as auto", () => {
+    expect(looksAutoTitled("New chat")).toBe(true);
+  });
+
+  it("treats a title cut at exactly the slice cap as auto", () => {
+    // The real signal: addUserTurn slices the first user message at 40, so a
+    // title of exactly 40 characters is a fragment of a longer sentence.
+    expect(looksAutoTitled("a".repeat(SLICE_CAP))).toBe(true);
+    expect(looksAutoTitled("Recupero il contesto su quell'idea che a")).toBe(true);
+  });
+
+  it("leaves a short authored title alone", () => {
+    expect(looksAutoTitled("Sidebar work")).toBe(false);
+  });
+
+  it("leaves a title longer than the cap alone", () => {
+    // Longer than the cap cannot be a slice of it, so somebody chose it.
+    expect(looksAutoTitled("b".repeat(SLICE_CAP + 1))).toBe(false);
+  });
+
+  it("ignores surrounding whitespace when measuring", () => {
+    expect(looksAutoTitled(`  ${"c".repeat(SLICE_CAP)}  `)).toBe(true);
+  });
+});
 
 interface TestConvo {
   id: string;

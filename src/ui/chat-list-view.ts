@@ -15,7 +15,6 @@
 import { App, ItemView, Menu, Modal, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type ExoPlugin from "../main";
 import { buildChatList, relativeTime, type ChatRow } from "../core/chat-rows";
-import type { TimeGroup } from "../core/history";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 import { clickable } from "./dom";
 
@@ -34,20 +33,15 @@ const BACKSTOP_MS = 5000;
  *  bridge returns `null` instead of `[]`. */
 type EmptyKind = "open-exo" | "no-chats" | "no-matches";
 
-/** Live-tier status line. `needs-input` outranks `running` in the model already;
- *  here it only has to say WHICH kind of answer is being waited on. */
-const statusText = (r: ChatRow, now: number): string => {
-  const age = r.updatedAt ? ` · ${relativeTime(r.updatedAt, now)}` : "";
-  if (r.lane === "needs-input") {
-    return `Needs input · ${r.reason === "perm" ? "permission" : "answer"}${age}`;
-  }
-  return `Working${age}`;
-};
+/** Status chip for a running or blocked row. The age already sits on the title
+ *  line, so this only has to say WHICH kind of answer is being waited on —
+ *  `needs-input` already outranks `running` in the model. */
+const statusText = (r: ChatRow): string =>
+  r.lane === "needs-input" ? `Needs ${r.reason === "perm" ? "permission" : "an answer"}` : "Working";
 
 export class ChatListView extends ItemView {
   private query = "";
-  private liveHost: HTMLElement | null = null;
-  private groupsHost: HTMLElement | null = null;
+  private listHost: HTMLElement | null = null;
   private emptyHost: HTMLElement | null = null;
   private searchEl: HTMLInputElement | null = null;
   /** Which empty state is currently painted, so the 5s backstop doesn't rebuild
@@ -55,6 +49,14 @@ export class ChatListView extends ItemView {
    *  hub's `renderedTab` guard. `null` means the list itself is on screen. */
   private emptyKind: EmptyKind | null = null;
   private convoUnsub: (() => void) | null = null;
+  /** Visible row ids, in painted order — the axis the arrow keys move along.
+   *  Recomputed every paint so the cursor can never point at a row that was
+   *  filtered out or archived since the last keystroke. */
+  private order: string[] = [];
+  /** Keyboard cursor. Applied as a class after reconciliation rather than
+   *  carried in the row signature: putting it in the signature would rebuild two
+   *  rows on every arrow press, which drops focus and defeats the point. */
+  private cursor: string | null = null;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);
@@ -112,24 +114,33 @@ export class ChatListView extends ItemView {
     });
     search.addEventListener("input", () => {
       this.query = search.value;
+      // A new filter invalidates the old cursor position; re-anchor to the top
+      // so Enter after typing opens the best match, not a stale row.
+      this.cursor = null;
       this.paint();
     });
+    search.addEventListener("keydown", (e) => this.onKey(e));
     this.searchEl = search;
 
     const body = root.createDiv({ cls: "mva-chats-body" });
-    // Three siblings, not one host: `reconcileList` orders by child INDEX, so a
-    // group header or an empty-state box sharing a container would occupy an
+    // Two siblings, not one host: `reconcileList` orders by child INDEX, so a
+    // section header or an empty-state box sharing a container would occupy an
     // index and shuffle the rows out of the order the model asked for
-    // (keyed-reconcile.ts:23-32).
-    this.liveHost = body.createDiv({ cls: "mva-chats-live" });
-    this.groupsHost = body.createDiv({ cls: "mva-chats-groups" });
+    // (keyed-reconcile.ts:23-32). `listHost` holds only sections, each of which
+    // holds a header plus its own reconciled list — so no reconciled container
+    // ever contains anything but rows.
+    this.listHost = body.createDiv({ cls: "mva-chats-sections" });
     this.emptyHost = body.createDiv({ cls: "mva-chats-empty" });
+    // tabindex so the list itself can hold focus and answer arrow keys after a
+    // click, without stealing them from the search field when that has focus.
+    body.tabIndex = 0;
+    body.addEventListener("keydown", (e) => this.onKey(e));
   }
 
   /* -------------------------------- paint ------------------------------- */
 
   private paint(): void {
-    if (!this.liveHost) return;
+    if (!this.listHost) return;
     const sources = this.plugin.listChatRows();
     if (sources === null) return this.renderEmpty("open-exo");
     // One clock read per paint: grouping and the row labels must agree, and two
@@ -142,41 +153,114 @@ export class ChatListView extends ItemView {
       this.emptyKind = null;
       this.emptyHost?.empty();
     }
-    reconcileList(this.liveHost, vm.live.map((r) => this.rowModel(r, now)));
-    this.renderGroups(vm.groups, now);
+    // Two densities, one section mechanism. The working set and the pins render
+    // rich because they are the rows you choose between; history renders compact
+    // because it is a list you scan. Empty sections are dropped rather than
+    // shown empty — a header with nothing under it is a promise of content.
+    this.renderSections(
+      [
+        { key: "active", label: "Active", rich: true, items: vm.active },
+        { key: "pinned", label: "Pinned", rich: true, items: vm.pinned },
+        ...vm.groups.map((g) => ({ key: `t:${g.label}`, label: g.label, rich: false, items: g.items })),
+      ].filter((s) => s.items.length > 0),
+      now,
+    );
+    this.order = [...vm.active, ...vm.pinned, ...vm.groups.flatMap((g) => g.items)].map((r) => r.id);
+    if (this.cursor && !this.order.includes(this.cursor)) this.cursor = null;
+    this.paintCursor(false);
+  }
+
+  /* ------------------------------ keyboard ------------------------------ */
+
+  /**
+   * Move the cursor along the painted order. `delta` of 0 just re-anchors,
+   * which is what a fresh arrow press after a filter change should do. Wraps at
+   * neither end on purpose: in a list this long, wrapping from the oldest chat
+   * back to the newest reads as a glitch rather than a convenience.
+   */
+  private moveCursor(delta: number): void {
+    if (this.order.length === 0) return;
+    const at = this.cursor ? this.order.indexOf(this.cursor) : -1;
+    const next = at === -1 ? (delta < 0 ? this.order.length - 1 : 0) : at + delta;
+    if (next < 0 || next >= this.order.length) return;
+    this.cursor = this.order[next];
+    this.paintCursor(true);
+  }
+
+  private paintCursor(scroll: boolean): void {
+    const host = this.listHost;
+    if (!host) return;
+    host.querySelectorAll<HTMLElement>(".mva-chats-row.is-cursor").forEach((el) => el.removeClass("is-cursor"));
+    if (!this.cursor) return;
+    const el = host.querySelector<HTMLElement>(`.mva-chats-row[data-id="${CSS.escape(this.cursor)}"]`);
+    if (!el) return;
+    el.addClass("is-cursor");
+    if (scroll) el.scrollIntoView({ block: "nearest" });
+  }
+
+  /** Arrow keys traverse, Enter opens, Escape clears the filter then the focus.
+   *  Bound on the search field AND the list, so the gesture works whether you
+   *  arrived by typing or by clicking into the pane. */
+  private onKey(e: KeyboardEvent): void {
+    if (e.key === "ArrowDown") { e.preventDefault(); this.moveCursor(1); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); this.moveCursor(-1); return; }
+    if (e.key === "Enter" && this.cursor) {
+      e.preventDefault();
+      void this.plugin.revealConversation(this.cursor);
+      return;
+    }
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    // Two-step: the first Escape clears a filter you can see, the second gives
+    // the pane back. Clearing and blurring at once loses the filtered list
+    // before you have read it.
+    if (this.query) {
+      this.query = "";
+      if (this.searchEl) this.searchEl.value = "";
+      this.paint();
+      return;
+    }
+    this.searchEl?.blur();
   }
 
   /**
-   * One reconciled list per time bucket, with the bucket's header as its
-   * SIBLING. Sections are keyed by label and reused across paints, so a chat
-   * moving from "Today" to "Yesterday" does not reflash the whole history.
+   * One reconciled list per section, with the section's header as its SIBLING.
+   * Sections are keyed and reused across paints, so a chat moving from Active to
+   * Yesterday does not reflash the whole list.
    */
-  private renderGroups(groups: TimeGroup<ChatRow>[], now: number): void {
-    const host = this.groupsHost;
+  private renderSections(
+    specs: Array<{ key: string; label: string; rich: boolean; items: ChatRow[] }>,
+    now: number,
+  ): void {
+    const host = this.listHost;
     if (!host) return;
-    const wanted = new Set(groups.map((g) => g.label as string));
+    const wanted = new Set(specs.map((s) => s.key));
+    // A static snapshot: removing from a live HTMLCollection mid-iteration skips
+    // siblings.
     for (const el of Array.from(host.children) as HTMLElement[]) {
-      if (!wanted.has(el.dataset.group ?? "")) el.remove();
+      if (!wanted.has(el.dataset.section ?? "")) el.remove();
     }
-    groups.forEach((g, i) => {
+    specs.forEach((spec, i) => {
       let sec = Array.from(host.children).find(
-        (el) => (el as HTMLElement).dataset.group === g.label,
+        (el) => (el as HTMLElement).dataset.section === spec.key,
       ) as HTMLElement | undefined;
       if (!sec) {
         sec = createDiv({ cls: "mva-chats-group" });
-        sec.dataset.group = g.label;
-        sec.createDiv({ cls: "mva-chats-group-label", text: g.label });
+        sec.dataset.section = spec.key;
+        sec.createDiv({ cls: "mva-chats-group-label", text: spec.label });
         sec.createDiv({ cls: "mva-chats-group-list" });
       }
+      // Reading host.children live is correct here: after iteration i-1 the
+      // first i slots already hold the first i sections, so a match can only sit
+      // at an index >= i and insertBefore always moves it forward.
       if (host.children[i] !== sec) host.insertBefore(sec, host.children[i] ?? null);
       const list = sec.querySelector<HTMLElement>(".mva-chats-group-list");
-      if (list) reconcileList(list, g.items.map((r) => this.rowModel(r, now)));
+      if (list) reconcileList(list, spec.items.map((r) => this.rowModel(r, spec.rich, now)));
     });
   }
 
   private renderEmpty(kind: EmptyKind): void {
-    if (this.liveHost) reconcileList(this.liveHost, []);
-    this.groupsHost?.empty();
+    this.listHost?.empty();
     const host = this.emptyHost;
     if (!host || this.emptyKind === kind) return;
     this.emptyKind = kind;
@@ -206,48 +290,83 @@ export class ChatListView extends ItemView {
 
   /* --------------------------------- rows ------------------------------- */
 
-  /** One model builder for both tiers, so `reconcileList` sees a single keyed
-   *  identity per conversation even when a row crosses from live to history. */
-  private rowModel(r: ChatRow, now: number): CardModel {
+  /** One model builder for both densities, so `reconcileList` sees a single
+   *  keyed identity per conversation even when a row crosses a section. */
+  private rowModel(r: ChatRow, rich: boolean, now: number): CardModel {
     // The rendered AGE LABEL, not the raw `updatedAt`: the label moves as `now`
     // advances while the timestamp sits still, so a raw-ms signature would leave
     // "now" on screen for an hour. It also collapses millisecond churn that
-    // changes nothing on screen into a no-op tick. `provider`/`model` are in
-    // here because the live tier prints them — a mid-conversation model switch
-    // is rendered state like any other.
+    // changes nothing on screen into a no-op tick. `rich` is part of the
+    // identity too — the same conversation is a different element in the
+    // working set than in history, so crossing that line rebuilds rather than
+    // patches.
     const age = r.updatedAt ? relativeTime(r.updatedAt, now) : "";
     return {
       key: r.id,
-      sig: [r.title, r.preview, r.lane ?? "", r.reason ?? "", r.badge ?? "", r.provider, r.model, r.open, age].join("|"),
-      build: () => (r.lane ? this.buildLiveRow(r, now) : this.buildCompactRow(r, now)),
+      sig: [
+        rich, r.title, r.preview, r.lane ?? "", r.reason ?? "", r.badge ?? "",
+        r.provider, r.model, r.messageCount, r.open, r.pinned, r.unseen, age,
+      ].join("|"),
+      build: () => (rich ? this.buildRichRow(r, now) : this.buildCompactRow(r, now)),
     };
   }
 
-  /** Live row: status, preview, `provider · model`. Built DETACHED —
-   *  `reconcileList` owns insertion and ordering. */
-  private buildLiveRow(r: ChatRow, now: number): HTMLElement {
-    const row = createDiv({ cls: "mva-chats-row is-live" });
+  /**
+   * Rich row — title and age, the last exchange, then a metadata line: status
+   * when something is happening, otherwise provider, model and how many turns
+   * are yours. Three lines is the budget. The model earns its place because
+   * choosing between an Opus chat and a Sonnet one is a real decision, and the
+   * title alone never tells you which is which. Built DETACHED —
+   * `reconcileList` owns insertion and ordering.
+   */
+  private buildRichRow(r: ChatRow, now: number): HTMLElement {
+    const row = createDiv({ cls: "mva-chats-row is-rich" });
     if (r.lane === "needs-input") row.addClass("is-needs-input");
+    else if (r.lane === "running") row.addClass("is-running");
     if (r.open) row.addClass("is-active");
-    row.createDiv({ cls: "mva-chats-status", text: statusText(r, now) });
-    // A conversation can be streaming its very first turn, with no assistant
-    // text to preview yet; fall back to the title rather than an empty row.
-    row.createDiv({ cls: "mva-chats-preview", text: r.preview || r.title });
-    row.createDiv({ cls: "mva-chats-meta", text: `${r.provider} · ${r.model}` });
+    if (r.unseen) row.addClass("is-unseen");
+
+    const head = row.createDiv({ cls: "mva-chats-line" });
+    if (r.pinned) setIcon(head.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
+    head.createSpan({ cls: "mva-chats-name", text: r.title });
+    head.createSpan({ cls: "mva-chats-age", text: r.updatedAt ? relativeTime(r.updatedAt, now) : "" });
+
+    // A conversation can be streaming its very first turn with no assistant text
+    // to preview yet; omit the line rather than repeating the title under it.
+    if (r.preview) row.createDiv({ cls: "mva-chats-preview", text: r.preview });
+
+    const meta = row.createDiv({ cls: "mva-chats-meta" });
+    if (r.lane) meta.createSpan({ cls: "mva-chats-status", text: statusText(r) });
+    else if (r.unseen) meta.createSpan({ cls: "mva-chats-status is-unseen", text: "New reply" });
+    meta.createSpan({ text: `${r.provider} · ${r.model}` });
+    meta.createSpan({ cls: "mva-chats-count", text: `${r.messageCount}` });
+    this.badgeInto(meta, r);
+    row.dataset.id = r.id;
     this.wireRow(row, r);
     return row;
   }
 
-  /** History row: one line — optional badge marker, title, right-aligned age. */
+  /** The stopped/error marker, shared by both densities so a failed turn is
+   *  never visible in one section and invisible in the other. */
+  private badgeInto(host: HTMLElement, r: ChatRow): void {
+    if (!r.badge) return;
+    const mark = host.createSpan({
+      cls: `mva-chats-badge is-${r.badge}`,
+      attr: { "aria-label": r.badge === "error" ? "Last turn errored" : "Stopped" },
+    });
+    setIcon(mark, r.badge === "error" ? "octagon-x" : "circle-stop");
+  }
+
+  /** History row: one line — optional markers, title, right-aligned age. */
   private buildCompactRow(r: ChatRow, now: number): HTMLElement {
     const row = createDiv({ cls: "mva-chats-row is-compact" });
     if (r.open) row.addClass("is-active");
-    if (r.badge) {
-      const mark = row.createSpan({ cls: "mva-chats-badge", attr: { "aria-hidden": "true" } });
-      setIcon(mark, r.badge === "error" ? "octagon-x" : "circle-stop");
-    }
+    if (r.unseen) row.addClass("is-unseen");
+    if (r.pinned) setIcon(row.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
+    this.badgeInto(row, r);
     row.createSpan({ cls: "mva-chats-name", text: r.title });
     row.createSpan({ cls: "mva-chats-age", text: r.updatedAt ? relativeTime(r.updatedAt, now) : "" });
+    row.dataset.id = r.id;
     this.wireRow(row, r);
     return row;
   }
@@ -272,6 +391,33 @@ export class ChatListView extends ItemView {
     const menu = new Menu();
     menu.addItem((i) =>
       i.setTitle("Rename").setIcon("pencil").onClick(() => this.promptRename(r)),
+    );
+    menu.addItem((i) =>
+      i.setTitle("Retitle with AI").setIcon("sparkles").onClick(() => {
+        // Cold-spawning a CLI session takes seconds, so say something first —
+        // an item that appears to do nothing for ten seconds reads as broken.
+        const pending = new Notice("Retitling…", 0);
+        void this.plugin
+          .retitleConversation(r.id)
+          .then((ok) => {
+            pending.hide();
+            if (!ok) new Notice("Couldn't retitle — this chat has no complete exchange yet.");
+            this.paint();
+          })
+          .catch(() => {
+            pending.hide();
+            new Notice("Retitling failed.");
+          });
+      }),
+    );
+    menu.addItem((i) =>
+      i
+        .setTitle(r.pinned ? "Unpin" : "Pin")
+        .setIcon(r.pinned ? "pin-off" : "pin")
+        .onClick(() => {
+          this.plugin.setConvoPinned(r.id, !r.pinned);
+          this.paint();
+        }),
     );
     menu.addItem((i) =>
       i.setTitle("Archive").setIcon("archive").onClick(() => {

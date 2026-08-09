@@ -15,6 +15,25 @@ export interface TitleOwnership {
   titleLocked?: boolean;
 }
 
+/** The cap `addUserTurn` slices the first user message at. A title of exactly
+ *  this length is a slice of a longer sentence, never a phrase someone chose. */
+export const SLICE_CAP = 40;
+
+/**
+ * Does this title still look auto-derived rather than authored? True for the
+ * untitled placeholders and for a first-message slice, which is recognisable
+ * because it is cut at exactly `SLICE_CAP` characters — a real title, whether
+ * typed or generated, essentially never lands on that boundary.
+ *
+ * Used to pick which conversations a retitle sweep should touch. Deliberately
+ * conservative: it may leave a bad title alone, but it will not overwrite one
+ * the user cared enough to keep, and `titleLocked` is checked separately.
+ */
+export function looksAutoTitled(title: string): boolean {
+  const t = title.trim();
+  return !t || t === "New chat" || t.length === SLICE_CAP;
+}
+
 export function canAutoTitle(c: TitleOwnership, source: TitleSource): boolean {
   if (c.titleLocked) return false;
   // The AI title supersedes the crude first-message slice, so it may overwrite.
