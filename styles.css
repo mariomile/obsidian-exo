@@ -6281,25 +6281,34 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   gap: 8px;
   padding: 6px 10px 4px;
 }
+/* Labels read from the kit's label family (--mv-label-*), so a Cosmos flavour
+   that turns tracking off, or drops the uppercase, reaches every header in the
+   suite at once instead of leaving this pane shouting on its own. Fallbacks are
+   the pre-kit values, so a Cosmos-less install renders byte-identically. */
 .mva-chats-heading {
   flex: 1;
-  font-size: var(--font-ui-small);
-  font-weight: var(--font-semibold);
-  color: var(--text-muted);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--mv-label-size, var(--font-ui-small));
+  font-weight: var(--mv-label-weight, var(--font-semibold));
+  color: var(--mv-label-color, var(--text-muted));
+  letter-spacing: var(--mv-label-track, 0.04em);
+  text-transform: var(--mv-label-transform, uppercase);
 }
 .mva-chats-search {
   margin: 0 10px 6px;
-  padding: 5px 9px;
+  min-height: var(--mv-control-h, 26px);
+  padding: 5px var(--mv-control-pad, 9px);
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r1, 6px);
+  border-radius: var(--mv-r1, var(--mva-r1, 6px));
   background: var(--background-modifier-form-field);
   color: var(--text-normal);
   font-size: var(--font-ui-small);
-  transition: border-color var(--mva-t);
+  transition: border-color var(--mv-t, var(--mva-t)), box-shadow var(--mv-t, var(--mva-t));
 }
-.mva-chats-search:focus { border-color: var(--interactive-accent); outline: none; }
+.mva-chats-search:focus {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--mv-ring, transparent);
+  outline: none;
+}
 .mva-chats-body {
   flex: 1;
   min-height: 0;
@@ -6320,18 +6329,22 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-group-label {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--mv-control-gap, 8px);
   padding: 0 9px 4px;
-  color: var(--text-faint);
-  font-size: var(--font-ui-smaller);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: var(--mv-label-color, var(--text-faint));
+  font-size: var(--mv-label-size, var(--font-ui-smaller));
+  font-weight: var(--mv-label-weight, inherit);
+  letter-spacing: var(--mv-label-track, 0.04em);
+  text-transform: var(--mv-label-transform, uppercase);
 }
+/* The separator IS the kit hairline, not a border colour of its own — the whole
+   suite draws its rules with this token, and a pane inventing its own is what
+   makes two panels look like two products. */
 .mva-chats-group-label::after {
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--background-modifier-border);
+  background: var(--mv-hairline, var(--background-modifier-border));
 }
 .mva-chats-group-list { display: flex; flex-direction: column; }
 
@@ -6339,12 +6352,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    and active are the only painted states. */
 .mva-chats-row {
   position: relative;
-  border-radius: var(--mva-r1, 6px);
+  border-radius: var(--mv-r1, var(--mva-r1, 6px));
   background: transparent;
   cursor: pointer;
-  transition: background var(--mva-t);
+  transition: background var(--mv-t, var(--mva-t));
 }
-.mva-chats-row:hover { background: var(--background-modifier-hover); }
+.mva-chats-row:hover { background: var(--mv-card-bg-hover, var(--background-modifier-hover)); }
 /* The keyboard cursor is a stronger fill than hover, because it is the thing
    Enter will act on and it has to win against a pointer resting elsewhere. */
 .mva-chats-row.is-cursor { background: var(--background-modifier-active-hover); }
@@ -6357,7 +6370,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   position: absolute;
   inset: 4px auto 4px 0;
   width: 2px;
-  border-radius: var(--mva-r1, 6px);
+  border-radius: var(--mv-r1, var(--mva-r1, 6px));
   background: var(--background-modifier-border-hover);
 }
 .mva-chats-row.is-rich.is-active::before { content: none; }
@@ -6371,7 +6384,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   position: absolute;
   inset: 7px auto 7px 4px;
   width: 2px;
-  border-radius: var(--mva-r1, 6px);
+  border-radius: var(--mv-r1, var(--mva-r1, 6px));
   background: var(--interactive-accent);
 }
 .mva-chats-row.is-rich.is-needs-input::after { background: var(--color-orange); }
@@ -6410,7 +6423,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-count {
   margin-left: auto;
   padding: 0 5px;
-  border-radius: var(--mva-r1, 6px);
+  border-radius: var(--mv-r-chip, var(--mva-r1, 6px));
   background: var(--background-modifier-border);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -6473,7 +6486,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 100%;
   padding: 6px 9px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mva-r1, 6px);
+  border-radius: var(--mv-r1, var(--mva-r1, 6px));
   background: var(--background-modifier-form-field);
   color: var(--text-normal);
 }

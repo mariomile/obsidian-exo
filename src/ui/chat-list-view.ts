@@ -14,7 +14,7 @@
  */
 import { App, ItemView, Menu, Modal, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type ExoPlugin from "../main";
-import { buildChatList, relativeTime, modelLabel, type ChatRow } from "../core/chat-rows";
+import { buildChatList, relativeTime, modelLabel, type ChatRow, type ChatListMode } from "../core/chat-rows";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 import { clickable } from "./dom";
 
@@ -104,6 +104,9 @@ export class ChatListView extends ItemView {
 
     const head = root.createDiv({ cls: "mva-chats-head" });
     head.createSpan({ cls: "mva-chats-heading", text: "Chats" });
+    const sort = head.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "Grouping" } });
+    setIcon(sort, "arrow-down-narrow-wide");
+    sort.onclick = (e) => this.groupingMenu(e);
     const add = head.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "New chat" } });
     setIcon(add, "plus");
     add.onclick = () => void this.plugin.newConversation();
@@ -137,6 +140,37 @@ export class ChatListView extends ItemView {
     body.addEventListener("keydown", (e) => this.onKey(e));
   }
 
+  /**
+   * Grouping picker. A menu with both options checked/unchecked rather than a
+   * button that flips: the two readings are peers, and a toggle would force you
+   * to click it to find out which one you are in.
+   */
+  private groupingMenu(e: MouseEvent): void {
+    const menu = new Menu();
+    const pick = (mode: ChatListMode, title: string, icon: string) =>
+      menu.addItem((i) =>
+        i
+          .setTitle(title)
+          .setIcon(icon)
+          .setChecked(this.mode() === mode)
+          .onClick(() => {
+            this.plugin.settings.chatsMode = mode;
+            void this.plugin.saveSettings();
+            // The cursor indexes into the painted order, which is about to be a
+            // different order entirely.
+            this.cursor = null;
+            this.paint();
+          }),
+      );
+    pick("activity", "Group by activity", "layers");
+    pick("days", "Group by day", "calendar-days");
+    menu.showAtMouseEvent(e);
+  }
+
+  private mode(): ChatListMode {
+    return this.plugin.settings.chatsMode === "days" ? "days" : "activity";
+  }
+
   /* -------------------------------- paint ------------------------------- */
 
   private paint(): void {
@@ -146,22 +180,23 @@ export class ChatListView extends ItemView {
     // One clock read per paint: grouping and the row labels must agree, and two
     // Date.now() calls a few lines apart can straddle a minute boundary.
     const now = Date.now();
-    const vm = buildChatList(sources, { query: this.query, now });
+    const vm = buildChatList(sources, { query: this.query, now, mode: this.mode() });
     if (vm.total === 0) return this.renderEmpty("no-chats");
     if (vm.matched === 0) return this.renderEmpty("no-matches");
     if (this.emptyKind !== null) {
       this.emptyKind = null;
       this.emptyHost?.empty();
     }
-    // Two densities, one section mechanism. The working set and the pins render
-    // rich because they are the rows you choose between; history renders compact
-    // because it is a list you scan. Empty sections are dropped rather than
-    // shown empty — a header with nothing under it is a promise of content.
+    // Density is decided PER ROW, not per section: anything running, open or
+    // pinned is something you are choosing between and earns the metadata line,
+    // wherever it happens to sit. That is what keeps the day view useful — the
+    // grouping changes, the information does not. Empty sections are dropped
+    // rather than shown empty; a header with nothing under it promises content.
     this.renderSections(
       [
-        { key: "active", label: "Active", rich: true, items: vm.active },
-        { key: "pinned", label: "Pinned", rich: true, items: vm.pinned },
-        ...vm.groups.map((g) => ({ key: `t:${g.label}`, label: g.label, rich: false, items: g.items })),
+        { key: "active", label: "Active", items: vm.active },
+        { key: "pinned", label: "Pinned", items: vm.pinned },
+        ...vm.groups.map((g) => ({ key: `t:${g.label}`, label: g.label, items: g.items })),
       ].filter((s) => s.items.length > 0),
       now,
     );
@@ -229,7 +264,7 @@ export class ChatListView extends ItemView {
    * Yesterday does not reflash the whole list.
    */
   private renderSections(
-    specs: Array<{ key: string; label: string; rich: boolean; items: ChatRow[] }>,
+    specs: Array<{ key: string; label: string; items: ChatRow[] }>,
     now: number,
   ): void {
     const host = this.listHost;
@@ -255,7 +290,7 @@ export class ChatListView extends ItemView {
       // at an index >= i and insertBefore always moves it forward.
       if (host.children[i] !== sec) host.insertBefore(sec, host.children[i] ?? null);
       const list = sec.querySelector<HTMLElement>(".mva-chats-group-list");
-      if (list) reconcileList(list, spec.items.map((r) => this.rowModel(r, spec.rich, now)));
+      if (list) reconcileList(list, spec.items.map((r) => this.rowModel(r, now)));
     });
   }
 
@@ -292,7 +327,9 @@ export class ChatListView extends ItemView {
 
   /** One model builder for both densities, so `reconcileList` sees a single
    *  keyed identity per conversation even when a row crosses a section. */
-  private rowModel(r: ChatRow, rich: boolean, now: number): CardModel {
+  private rowModel(r: ChatRow, now: number): CardModel {
+    // Running, open or pinned: something you are actively choosing between.
+    const rich = r.lane != null || r.open || r.pinned;
     // The rendered AGE LABEL, not the raw `updatedAt`: the label moves as `now`
     // advances while the timestamp sits still, so a raw-ms signature would leave
     // "now" on screen for an hour. It also collapses millisecond churn that

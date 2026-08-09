@@ -65,6 +65,9 @@ const src = (over: Partial<ChatRowSource> = {}): ChatRowSource => ({
 const build = (sources: ChatRowSource[], query = "") =>
   buildChatList(sources, { query, now: NOON });
 
+const byDays = (sources: ChatRowSource[], query = "") =>
+  buildChatList(sources, { query, now: NOON, mode: "days" });
+
 const historyIds = (vm: ReturnType<typeof build>) =>
   vm.groups.flatMap((g) => g.items.map((r) => r.id));
 
@@ -171,6 +174,57 @@ describe("buildChatList — pinned", () => {
       src({ id: "new", pinned: true, updatedAt: NOON }),
     ]);
     expect(vm.pinned.map((r) => r.id)).toEqual(["new", "old"]);
+  });
+});
+
+describe("buildChatList — days mode", () => {
+  it("promotes nothing: running, open and pinned all land in the day groups", () => {
+    const vm = byDays([
+      src({ id: "live", streaming: true }),
+      src({ id: "open", open: true }),
+      src({ id: "pin", pinned: true }),
+      src({ id: "plain" }),
+    ]);
+    expect(vm.active).toEqual([]);
+    expect(vm.pinned).toEqual([]);
+    expect(historyIds(vm).sort()).toEqual(["live", "open", "pin", "plain"]);
+  });
+
+  it("orders strictly by last message, so an open tab does not outrank a newer chat", () => {
+    // This is what the activity view cannot say: there, `open` wins over
+    // recency and the day column would be out of order.
+    const vm = byDays([
+      src({ id: "openOld", open: true, updatedAt: NOON - 5 * HOUR }),
+      src({ id: "closedNew", updatedAt: NOON }),
+    ]);
+    expect(vm.groups[0].items.map((r) => r.id)).toEqual(["closedNew", "openOld"]);
+  });
+
+  it("keeps every marker on the row — only the grouping changes", () => {
+    const vm = byDays([src({ id: "a", streaming: true, pendingPerm: true, pinned: true, unseen: true })]);
+    const row = vm.groups[0].items[0];
+    expect(row.lane).toBe("needs-input");
+    expect(row.reason).toBe("perm");
+    expect(row.pinned).toBe(true);
+    expect(row.unseen).toBe(true);
+  });
+
+  it("still buckets by calendar day", () => {
+    const vm = byDays([
+      src({ id: "today", open: true, updatedAt: NOON }),
+      src({ id: "yday", updatedAt: NOON - DAY }),
+    ]);
+    expect(vm.groups.map((g) => g.label)).toEqual(["Today", "Yesterday"]);
+  });
+
+  it("still filters by query", () => {
+    const vm = byDays([src({ id: "a", title: "keep", open: true }), src({ id: "b", title: "drop" })], "keep");
+    expect(historyIds(vm)).toEqual(["a"]);
+  });
+
+  it("defaults to activity mode when no mode is given", () => {
+    const vm = buildChatList([src({ id: "a", open: true })], { query: "", now: NOON });
+    expect(vm.active.map((r) => r.id)).toEqual(["a"]);
   });
 });
 

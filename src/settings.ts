@@ -165,6 +165,8 @@ export interface MVASettings {
   memorySetup?: MemorySetup;
   /** Open the Cockpit view automatically when Obsidian's layout is ready. */
   cockpitOnStartup: boolean;
+  /** How the chats sidebar groups: working-set-first, or pure chronology. */
+  chatsMode: import("./core/chat-rows").ChatListMode;
   /** LEGACY scheduled playbook runs ("<Prompt name> | daily" per line) — migrated
    *  into `automations` on load, then cleared. Kept only for the migration path. */
   scheduledRuns: string;
@@ -292,6 +294,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   exoQueueFolder: LEGACY_QUEUE_FOLDER,
   memoryRoot: "",
   cockpitOnStartup: false,
+  chatsMode: "activity",
   scheduledRuns: "",
   automations: [],
   automationsMigrated: false,

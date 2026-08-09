@@ -68,6 +68,21 @@ export interface ChatRow {
   badge?: SessionBadge;
 }
 
+/**
+ * How the list is carved up.
+ *
+ *  - `activity` — the working set first: what is running, blocked or open as a
+ *    tab, then pins, then the rest by day. Answers "what am I in the middle of".
+ *  - `days` — pure chronology by last message, with no promotion at all.
+ *    Answers "what did I do on Tuesday", which the activity view cannot: there,
+ *    a chat you happen to have open sits above chats you touched more recently,
+ *    so the day columns lie about order.
+ *
+ * Both are legitimate readings of the same data and neither subsumes the other,
+ * which is why this is a mode and not a default.
+ */
+export type ChatListMode = "activity" | "days";
+
 export interface ChatListVM {
   /** The working set: anything running or blocked, plus every open tab. Rendered
    *  rich — title, preview, provider and model — because these are the rows you
@@ -207,8 +222,9 @@ function toRow(s: ChatRowSource): ChatRow {
  */
 export function buildChatList(
   sources: readonly ChatRowSource[],
-  opts: { query: string; now: number },
+  opts: { query: string; now: number; mode?: ChatListMode },
 ): ChatListVM {
+  const mode = opts.mode ?? "activity";
   const visible = sources.filter((s) => !s.archived && deriveLane(s).lane !== "idle");
   const matched = opts.query.trim() ? visible.filter((s) => matchesQuery(s, opts.query)) : visible;
 
@@ -227,7 +243,11 @@ export function buildChatList(
     // The badge is independent of the lane and survives into any tier: a chat
     // whose last turn errored says so whether it is open, pinned or filed.
     if (d.badge) row.badge = d.badge;
-    if (isLive || row.open) active.push(row);
+    // In `days` mode nothing is promoted — that is the whole point of the mode.
+    // The rows keep their lane, pin and unseen flags, so the renderer still
+    // marks them; only the GROUPING changes, never the information.
+    if (mode === "days") history.push(row);
+    else if (isLive || row.open) active.push(row);
     else if (row.pinned) pinned.push(row);
     else history.push(row);
   }
