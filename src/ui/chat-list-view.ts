@@ -14,7 +14,7 @@
  */
 import { App, ItemView, Menu, Modal, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type ExoPlugin from "../main";
-import { buildChatList, relativeTime, type ChatRow } from "../core/chat-rows";
+import { buildChatList, relativeTime, modelLabel, type ChatRow } from "../core/chat-rows";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 import { clickable } from "./dom";
 
@@ -338,7 +338,7 @@ export class ChatListView extends ItemView {
     const meta = row.createDiv({ cls: "mva-chats-meta" });
     if (r.lane) meta.createSpan({ cls: "mva-chats-status", text: statusText(r) });
     else if (r.unseen) meta.createSpan({ cls: "mva-chats-status is-unseen", text: "New reply" });
-    meta.createSpan({ text: `${r.provider} · ${r.model}` });
+    meta.createSpan({ text: modelLabel(r.provider, r.model) });
     meta.createSpan({ cls: "mva-chats-count", text: `${r.messageCount}` });
     this.badgeInto(meta, r);
     row.dataset.id = r.id;

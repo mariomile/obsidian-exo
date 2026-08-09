@@ -1,5 +1,39 @@
 import { describe, it, expect } from "vitest";
-import { buildChatList, relativeTime, type ChatRowSource } from "../src/core/chat-rows";
+import { buildChatList, relativeTime, modelLabel, type ChatRowSource } from "../src/core/chat-rows";
+
+describe("modelLabel", () => {
+  it("drops a provider prefix the id repeats", () => {
+    expect(modelLabel("Claude", "claude-opus-5")).toBe("Opus 5");
+  });
+
+  it("joins a split version with a dot, not a space", () => {
+    // 4-8 is one version number, not two tokens.
+    expect(modelLabel("Claude", "claude-opus-4-8")).toBe("Opus 4.8");
+    expect(modelLabel("Claude", "claude-sonnet-4-6")).toBe("Sonnet 4.6");
+  });
+
+  it("handles the whole real Claude family", () => {
+    expect(modelLabel("Claude", "claude-sonnet-5")).toBe("Sonnet 5");
+    expect(modelLabel("Claude", "claude-fable-5")).toBe("Fable 5");
+  });
+
+  it("uppercases known acronyms and keeps word tokens as words", () => {
+    expect(modelLabel("Codex", "gpt-5.6-luna")).toBe("GPT 5.6 Luna");
+  });
+
+  it("leaves an id alone when it does not repeat the provider", () => {
+    expect(modelLabel("Codex", "opus-5")).toBe("Opus 5");
+  });
+
+  it("matches the provider prefix case-insensitively", () => {
+    expect(modelLabel("CLAUDE", "claude-opus-5")).toBe("Opus 5");
+  });
+
+  it("returns empty for an empty model rather than a stray separator", () => {
+    expect(modelLabel("Claude", "")).toBe("");
+    expect(modelLabel("Claude", "   ")).toBe("");
+  });
+});
 
 const NOON = new Date(2026, 7, 7, 12, 0, 0).getTime();
 const HOUR = 3_600_000;

@@ -103,6 +103,39 @@ export function relativeTime(ts: number, now: number): string {
   return `${Math.floor(age / DAY)}d`;
 }
 
+/** Families rendered as acronyms rather than title-cased words. */
+const ACRONYMS = new Set(["gpt", "o1", "o3"]);
+
+/**
+ * A model id as a person would say it: `claude-opus-4-8` → `Opus 4.8`,
+ * `gpt-5.6-luna` → `GPT 5.6 Luna`.
+ *
+ * The provider name is stripped when the id repeats it, because the row already
+ * has a provider and "Claude · claude-opus-5" spends a third of a 216px sidebar
+ * saying Claude twice. Hyphens BETWEEN DIGITS become dots — `4-8` is a version,
+ * not two tokens — while hyphens between words stay word breaks.
+ */
+export function modelLabel(provider: string, model: string): string {
+  const raw = model.trim();
+  if (!raw) return "";
+  const prefix = `${provider.trim().toLowerCase()}-`;
+  const body = raw.toLowerCase().startsWith(prefix) ? raw.slice(prefix.length) : raw;
+  const parts = body.split("-").filter(Boolean);
+  const merged: string[] = [];
+  for (const part of parts) {
+    const prev = merged[merged.length - 1];
+    // A numeric token following a numeric token continues the same version.
+    if (prev !== undefined && /^[\d.]+$/.test(prev) && /^\d+$/.test(part)) {
+      merged[merged.length - 1] = `${prev}.${part}`;
+      continue;
+    }
+    merged.push(part);
+  }
+  return merged
+    .map((p) => (ACRONYMS.has(p) ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1)))
+    .join(" ");
+}
+
 /**
  * Ordering inside the working set. What blocks on a human outranks what is
  * merely busy, and both outrank a tab that is simply open — the list is read
