@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { OrchestratorDriver, type DriverDeps } from "../src/obsidian/orchestrator-driver";
 import type { ConvoStateEvent, ConvoStateListener, Unsubscribe } from "../src/core/convo-state";
 import type { TaskEntry, TaskStatus, TaskPatch } from "../src/core/tasks";
 import type { ConvoSnapshot } from "../src/core/orchestrator";
+import { REPORT_DEBOUNCE_MS, type ChildReport } from "../src/core/child-reports";
 
 /** Build a task entry with sensible defaults. */
 function task(over: Partial<TaskEntry> & { id: string }): TaskEntry {
@@ -77,20 +78,26 @@ function fakeEmitter() {
 function makeDeps(initial: TaskEntry[] = []) {
   const emitter = fakeEmitter();
   const backing = fakeStore(initial);
-  const spawned: Array<{ prompt: string; model?: string }> = [];
+  const spawned: Array<{ prompt: string; model?: string; parent?: string }> = [];
   let n = 0;
   const liveness = new Map<string, ConvoSnapshot>();
   const deps: DriverDeps = {
     store: backing.store,
     subscribe: (fn) => emitter.subscribe(fn),
-    spawn: vi.fn(async (prompt: string, opts?: { model?: string }) => {
-      spawned.push({ prompt, ...(opts?.model ? { model: opts.model } : {}) });
+    spawn: vi.fn(async (prompt: string, opts?: { model?: string; parent?: string }) => {
+      spawned.push({
+        prompt,
+        ...(opts?.model ? { model: opts.model } : {}),
+        ...(opts?.parent ? { parent: opts.parent } : {}),
+      });
       return `convo-${++n}`;
     }),
     liveness: (convoId: string) => liveness.get(convoId) ?? { exists: false, streaming: false, pendingRequest: false },
     config: () => ({ maxConcurrent: 2 }),
     notify: vi.fn(),
     onChange: vi.fn(),
+    // onChildReport / lastAssistantText are optional (Task 7); left undefined
+    // here and set per-test so existing tests don't need to know about them.
   };
   return { deps, emitter, backing, spawned, liveness };
 }
@@ -382,6 +389,163 @@ describe("OrchestratorDriver — boot promotes queued tasks", () => {
     const snap = driver.snapshot();
     expect(snap.filter((t) => t.status === "running")).toHaveLength(2);
     expect(snap.filter((t) => t.status === "queued").map((t) => t.id)).toEqual(["task-3"]);
+  });
+});
+
+describe("OrchestratorDriver — child spawn parentage", () => {
+  it("passes the task's parent through to spawn", async () => {
+    const { deps, spawned } = makeDeps([task({ id: "task-1", parent: "convo-parent", prompt: "research" })]);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await driver.enqueue("task-1");
+    expect(spawned[0]).toEqual({ prompt: "research", parent: "convo-parent" });
+  });
+
+  it("omits parent from spawn opts when the task has none", async () => {
+    const { deps, spawned } = makeDeps([task({ id: "task-1", prompt: "solo" })]);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await driver.enqueue("task-1");
+    expect(spawned[0]).toEqual({ prompt: "solo" });
+  });
+});
+
+describe("OrchestratorDriver — child reports", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Advance past the report debounce window, running any due timer. */
+  const flushReports = async () => {
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS + 10);
+  };
+
+  it("reports a child's completion to its parent, with the excerpt", async () => {
+    const reports: ChildReport[] = [];
+    const { deps, emitter } = makeDeps([
+      task({
+        id: "task-1",
+        title: "Research pricing",
+        status: "running",
+        parent: "convo-parent",
+        convo: "convo-child",
+      }),
+    ]);
+    deps.onChildReport = (r) => reports.push(r);
+    deps.lastAssistantText = () => "Found three competitors.";
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await flushReports();
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      taskId: "task-1",
+      childConvoId: "convo-child",
+      title: "Research pricing",
+      outcome: "done",
+      excerpt: "Found three competitors.",
+    });
+  });
+
+  it("emits no report for a task that has no parent", async () => {
+    const reports: ChildReport[] = [];
+    const { deps, emitter } = makeDeps([
+      task({ id: "task-2", title: "Solo task", status: "running", convo: "convo-solo" }),
+    ]);
+    deps.onChildReport = (r) => reports.push(r);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    emitter.emit({ convoId: "convo-solo", state: "turn-end" });
+    await flushReports();
+
+    expect(reports).toHaveLength(0);
+  });
+
+  it("emits no report for turn-start, which is not an outcome", async () => {
+    const reports: ChildReport[] = [];
+    const { deps, emitter } = makeDeps([
+      task({ id: "task-3", title: "Child", status: "running", parent: "convo-parent", convo: "convo-child" }),
+    ]);
+    deps.onChildReport = (r) => reports.push(r);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    emitter.emit({ convoId: "convo-child", state: "turn-start" });
+    await flushReports();
+
+    expect(reports).toHaveLength(0);
+  });
+
+  it("collapses several rapid events for the same child into a single, restarted-debounce report", async () => {
+    const reports: ChildReport[] = [];
+    const { deps, emitter } = makeDeps([
+      task({ id: "task-4", title: "Child", status: "running", parent: "convo-parent", convo: "convo-child" }),
+    ]);
+    deps.onChildReport = (r) => reports.push(r);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    // t=0: first outcome schedules a flush at t=2000.
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS - 100); // t=1900, not yet fired
+
+    // A second outcome for the SAME child arrives just before the original
+    // deadline: it must restart the debounce (new deadline t=3900), not let
+    // the original t=2000 timer fire on its own.
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await vi.advanceTimersByTimeAsync(200); // t=2100 — past the ORIGINAL deadline
+
+    // If the timer wasn't restarted, a (premature) report would already be here.
+    expect(reports).toHaveLength(0);
+
+    // A third outcome, still inside the restarted window.
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+
+    await flushReports();
+
+    // All three collapsed into exactly one delivered report for this task.
+    expect(reports).toHaveLength(1);
+    expect(reports[0].taskId).toBe("task-4");
+  });
+
+  it("a throwing onChildReport consumer does not break the driver", async () => {
+    const { deps, emitter } = makeDeps([
+      task({ id: "task-5", title: "Child", status: "running", parent: "convo-parent", convo: "convo-child" }),
+    ]);
+    deps.onChildReport = () => {
+      throw new Error("boom");
+    };
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await expect(flushReports()).resolves.toBeUndefined();
+
+    // The reducer's own transition (turn-end -> review) must still have applied.
+    expect(driver.snapshot().find((t) => t.id === "task-5")!.status).toBe("review");
+  });
+
+  it("a pending report timer does not fire after stop()", async () => {
+    const reports: ChildReport[] = [];
+    const { deps, emitter } = makeDeps([
+      task({ id: "task-6", title: "Child", status: "running", parent: "convo-parent", convo: "convo-child" }),
+    ]);
+    deps.onChildReport = (r) => reports.push(r);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    driver.stop();
+
+    await flushReports();
+    expect(reports).toHaveLength(0);
   });
 });
 

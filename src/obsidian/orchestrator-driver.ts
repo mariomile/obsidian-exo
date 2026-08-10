@@ -32,6 +32,7 @@ import {
 } from "../core/orchestrator";
 import type { ConvoStateEvent, ConvoStateListener, Unsubscribe } from "../core/convo-state";
 import type { TaskEntry, TaskPatch, TaskStatus } from "../core/tasks";
+import { buildExcerpt, outcomeFromState, REPORT_DEBOUNCE_MS, type ChildReport } from "../core/child-reports";
 
 /** The driver-facing slice of the B3 `TaskStore` (kept structural so tests can
  *  inject a fake without the real store / WriteQueue). */
@@ -50,8 +51,10 @@ export interface DriverDeps {
   /** Subscribe to the plugin convo-state emitter (B4). Returns an unsubscribe. */
   subscribe(listener: ConvoStateListener): Unsubscribe;
   /** Spawn a chat for a task and return its new convo id (B4
-   *  `startTaskConversation`). Rejects on failure. */
-  spawn(prompt: string, opts?: { model?: string }): Promise<string>;
+   *  `startTaskConversation`). Rejects on failure. `parent` is passed through
+   *  so the view can stamp `parentConvoId` on the new conversation and keep it
+   *  out of the tab strip. */
+  spawn(prompt: string, opts?: { model?: string; parent?: string }): Promise<string>;
   /** Boot-time convo liveness read for a recorded convo id (B4
    *  `readConvoState`, adapted to the reducer's `ConvoSnapshot` shape). */
   liveness(convoId: string): ConvoSnapshot;
@@ -61,6 +64,12 @@ export interface DriverDeps {
   notify(message: string): void;
   /** Called after every state change so the board can re-render. */
   onChange(tasks: TaskEntry[]): void;
+  /** Last assistant text of a convo, for the child-report excerpt. Absent →
+   *  reports carry an empty excerpt. */
+  lastAssistantText?(convoId: string): string;
+  /** Deliver a finished child's report to its parent. Absent → child
+   *  reporting is off. */
+  onChildReport?(report: ChildReport): void;
 }
 
 /**
@@ -91,6 +100,10 @@ export class OrchestratorDriver {
    *  spawn awaits) can never interleave a read-modify-write of `this.tasks`. */
   private chain: Promise<void> = Promise.resolve();
   private started = false;
+  /** Reports awaiting delivery, keyed by task id — a child that ends several
+   *  turns in quick succession collapses to ONE report, not several. */
+  private readonly pendingReports = new Map<string, ChildReport>();
+  private reportTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: DriverDeps) {}
 
@@ -141,6 +154,11 @@ export class OrchestratorDriver {
       this.unsubscribe();
       this.unsubscribe = null;
     }
+    if (this.reportTimer) {
+      clearTimeout(this.reportTimer);
+      this.reportTimer = null;
+    }
+    this.pendingReports.clear();
     this.tasks = [];
     this.started = false;
   }
@@ -216,6 +234,50 @@ export class OrchestratorDriver {
 
   private onConvoEvent(e: ConvoStateEvent): void {
     void this.dispatch(toOrchestratorEvent(e));
+    this.maybeQueueChildReport(e);
+  }
+
+  /**
+   * Child reporting: a task WITH a parent that reached an outcome tells its
+   * parent. The owner lookup only depends on `task.convo`/`task.parent`,
+   * which are stamped at spawn time and never touched by this event's
+   * reducer transition — so it's safe to read `this.tasks` synchronously
+   * here rather than waiting on the dispatch chain above. Never inline —
+   * batched behind the debounce so a child that ends several turns in quick
+   * succession produces one message, not five.
+   */
+  private maybeQueueChildReport(e: ConvoStateEvent): void {
+    if (!this.deps.onChildReport) return;
+    const owner = this.tasks.find((t) => t.convo === e.convoId);
+    if (!owner?.parent) return;
+    const outcome = outcomeFromState(e.state, e.reason);
+    if (!outcome) return;
+    this.pendingReports.set(owner.id, {
+      taskId: owner.id,
+      childConvoId: e.convoId,
+      title: owner.title,
+      outcome,
+      excerpt: buildExcerpt(this.deps.lastAssistantText?.(e.convoId) ?? ""),
+      at: Date.now(),
+    });
+    this.scheduleReportFlush();
+  }
+
+  private scheduleReportFlush(): void {
+    if (this.reportTimer) clearTimeout(this.reportTimer);
+    this.reportTimer = setTimeout(() => {
+      this.reportTimer = null;
+      const batch = [...this.pendingReports.values()];
+      this.pendingReports.clear();
+      for (const report of batch) {
+        try {
+          this.deps.onChildReport?.(report);
+        } catch {
+          // A failing consumer must never break orchestration — same
+          // isolation contract as the convo-state channel's listeners.
+        }
+      }
+    }, REPORT_DEBOUNCE_MS);
   }
 
   // --- Core dispatch ------------------------------------------------------
@@ -255,7 +317,11 @@ export class OrchestratorDriver {
   private async runEffect(effect: OrchestratorEffect): Promise<void> {
     if (effect.type !== "spawn-chat") return;
     try {
-      const convoId = await this.deps.spawn(effect.prompt, effect.model ? { model: effect.model } : undefined);
+      const task = this.tasks.find((t) => t.id === effect.taskId);
+      const convoId = await this.deps.spawn(effect.prompt, {
+        ...(effect.model ? { model: effect.model } : {}),
+        ...(task?.parent ? { parent: task.parent } : {}),
+      });
       // A falsy/empty convo id is a FAILURE, not a success: the real
       // `startTaskConversation` (main.ts) and `askInNewConversation` (view.ts)
       // both RESOLVE with "" when the view can't be resolved or the prompt is
