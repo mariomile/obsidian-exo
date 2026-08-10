@@ -182,3 +182,17 @@ describe("fan-out wiring — reports reach the parent's next turn", () => {
     expect(near(view, "listChatRows(): ChatRowSource[] {")).toContain("parentConvoId");
   });
 });
+
+describe("allConvos guards a null active", () => {
+  it("does not append `active` when it is absent, so listChatRows can't map over undefined", () => {
+    // view.ts cannot be instantiated outside Obsidian, so this pins the source
+    // contract the same way the sibling assertions in this file do. The bug it
+    // guards was live: the chats sidebar paints during early boot, when
+    // `active` is genuinely absent, and `listChatRows` threw on `c.id`.
+    const src = readFileSync(join(__dirname, "..", "src", "view.ts"), "utf8");
+    const at = src.indexOf("allConvos(): Convo[] {");
+    expect(at).toBeGreaterThan(-1);
+    const body = src.slice(at, at + 600);
+    expect(body).toContain("if (!this.active) return this.convos;");
+  });
+});

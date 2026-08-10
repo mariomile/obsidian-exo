@@ -1239,6 +1239,12 @@ export class ChatView extends ItemView {
    *  (several paths push it lazily). The canonical "full set" for persistence and
    *  snapshots. */
   allConvos(): Convo[] {
+    // `active` is typed non-null but is genuinely absent during early boot and
+    // between teardown and the first convo — and the chats sidebar paints in
+    // exactly that window. Appending it unguarded put `undefined` in the array,
+    // and `listChatRows` then threw on `c.id`, blanking the sidebar until the
+    // next repaint. Reproduced on plugin reload.
+    if (!this.active) return this.convos;
     return this.convos.includes(this.active) ? this.convos : [...this.convos, this.active];
   }
 
