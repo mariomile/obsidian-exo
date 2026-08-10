@@ -91,6 +91,24 @@ describe("fan-out wiring — the board sees tasks the tool writes", () => {
     expect(handler).toMatch(/ledgerWatch\??\.notify\(\)/);
   });
 
+  it("also registers a vault create listener, so the ledger's first-ever write is seen", () => {
+    // `createChildTask` takes the vault.create branch when tasks.md doesn't exist
+    // yet — a modify-only listener never fires for a vault's first-ever task,
+    // same symptom as the missed-spawn bug this watcher exists to fix, confined
+    // to first use. registerEvent, not a bare vault.on, same as "modify".
+    expect(board).toMatch(/registerEvent\(\s*this\.app\.vault\.on\("create"/);
+  });
+
+  it("scopes the create listener to the ledger path too", () => {
+    const handler = near(board, 'this.app.vault.on("create"', 400);
+    expect(handler).toContain("this.plugin.paths.tasks");
+  });
+
+  it("routes the create event through the same debounced watch as modify", () => {
+    const handler = near(board, 'this.app.vault.on("create"', 400);
+    expect(handler).toMatch(/ledgerWatch\??\.notify\(\)/);
+  });
+
   it("reloads the driver's task list when the ledger really changed", () => {
     expect(board).toContain("ledgerChangedExternally");
     expect(near(board, "private async reloadIfLedgerChanged()", 700)).toContain("reloadTasks()");
@@ -129,6 +147,16 @@ describe("fan-out wiring — reports reach the parent's next turn", () => {
     // `queueReportForParent` is what makes the spawn-failure path work (its
     // childConvoId is ""); re-resolving the parent locally would reopen that.
     expect(near(view, "deliverChildReport(report: ChildReport)")).toContain("queueReportForParent");
+  });
+
+  it("a delivered report is scheduled for persistence, not left for the next unrelated save", () => {
+    // PERSIST_DEBOUNCE_MS (1500) is shorter than REPORT_DEBOUNCE_MS (2000), so
+    // the child's own turn-end save fires BEFORE the report exists — nothing
+    // else schedules a write for it. Without an explicit persist() here, a
+    // fan-out that finishes while the vault sits idle loses the queued report
+    // (and the unread affordance) on the next restart, defeating the whole
+    // point of persisting `pendingChildReports` across reload.
+    expect(near(view, "deliverChildReport(report: ChildReport)")).toContain("this.persist()");
   });
 
   it("the turn drains queued reports into the outbound message", () => {

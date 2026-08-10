@@ -166,6 +166,15 @@ export class BoardView extends ItemView {
         if (file.path === this.plugin.paths.tasks) this.ledgerWatch?.notify();
       })
     );
+    // `createChildTask` takes the `vault.create` branch when tasks.md doesn't
+    // exist yet (e.g. the vault's first-ever task, spawned while the board is
+    // already open) — a "modify"-only listener never fires for that, same
+    // symptom as the missed-spawn bug above, confined to first use.
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        if (file.path === this.plugin.paths.tasks) this.ledgerWatch?.notify();
+      })
+    );
 
     // Build and start the driver, wiring the plugin's primitives into the
     // injected deps. onChange re-renders; a load with warnings paints an error

@@ -2174,6 +2174,7 @@ export class ChatView extends ItemView {
     if (!parent) return;
     parent.unread = true;
     this.refreshTabs();
+    this.persist();
   }
 
   /**
