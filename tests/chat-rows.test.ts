@@ -443,3 +443,138 @@ describe("relativeTime", () => {
     expect(relativeTime(NOON + 60_000, NOON)).toBe("now");
   });
 });
+
+/**
+ * Fan-out children in the sidebar. Everything here goes through the REAL
+ * `buildChatList` pipeline — tiering, sorting, day bucketing — because the
+ * whole risk of this feature is that grouping and ordering disagree once they
+ * are composed, which testing `groupByParent` in isolation cannot catch.
+ */
+describe("buildChatList — child indentation", () => {
+  const HALF_HOUR = HOUR / 2;
+
+  it("places a child directly under its parent, indented, inside the working set", () => {
+    // Recency alone would order c, p (the child is newer) with both at depth 0.
+    const vm = build([
+      src({ id: "p", title: "Parent", open: true, updatedAt: NOON - HOUR }),
+      src({ id: "c", title: "Child", open: true, updatedAt: NOON, parentConvoId: "p" }),
+    ]);
+    expect(vm.active.map((r) => [r.id, r.depth])).toEqual([
+      ["p", 0],
+      ["c", 1],
+    ]);
+  });
+
+  it("keeps every child of one parent together, in the tier's own order", () => {
+    const vm = build([
+      src({ id: "p", open: true, updatedAt: NOON - 3 * HOUR }),
+      src({ id: "c1", open: true, updatedAt: NOON - HOUR, parentConvoId: "p" }),
+      src({ id: "c2", open: true, updatedAt: NOON, parentConvoId: "p" }),
+      src({ id: "other", open: true, updatedAt: NOON - 2 * HOUR }),
+    ]);
+    // `other` is more recent than the parent, so it sorts above it; the parent
+    // still carries its children with it rather than being split across it.
+    expect(vm.active.map((r) => r.id)).toEqual(["other", "p", "c2", "c1"]);
+    expect(vm.active.map((r) => r.depth)).toEqual([0, 0, 1, 1]);
+  });
+
+  /** The invariant the whole feature hangs on: a child is never dropped and
+   *  never hidden, whatever happened to its parent. */
+  it("renders an orphan at top level when the parent was archived", () => {
+    const vm = build([
+      src({ id: "p", open: true, archived: true }),
+      src({ id: "c", title: "Child", open: true, parentConvoId: "p" }),
+    ]);
+    expect(vm.active.map((r) => [r.id, r.depth])).toEqual([["c", 0]]);
+  });
+
+  it("renders an orphan at top level when the parent does not exist at all", () => {
+    const vm = build([src({ id: "c", open: true, parentConvoId: "gone" })]);
+    expect(vm.active.map((r) => [r.id, r.depth])).toEqual([["c", 0]]);
+  });
+
+  /**
+   * Parent and child can land in different tiers — a parent kept open sits in
+   * `active` while its finished child falls into a day bucket. Neither may be
+   * pulled out of the tier it earned, so the child renders at top level THERE.
+   */
+  it("does not indent across tiers: a child in history whose parent is an open tab", () => {
+    const vm = build([
+      src({ id: "p", title: "Parent", open: true }),
+      src({ id: "c", title: "Child", open: false, parentConvoId: "p" }),
+    ]);
+    expect(vm.active.map((r) => [r.id, r.depth])).toEqual([["p", 0]]);
+    expect(historyIds(vm)).toEqual(["c"]);
+    expect(vm.groups[0].items[0].depth).toBe(0);
+  });
+
+  it("indents inside a day bucket when parent and child share one", () => {
+    const vm = byDays([
+      src({ id: "p", updatedAt: NOON - HOUR }),
+      src({ id: "c", updatedAt: NOON, parentConvoId: "p" }),
+    ]);
+    expect(vm.groups[0].label).toBe("Today");
+    expect(vm.groups[0].items.map((r) => [r.id, r.depth])).toEqual([
+      ["p", 0],
+      ["c", 1],
+    ]);
+  });
+
+  it("does not indent across day buckets", () => {
+    const vm = byDays([
+      src({ id: "p", updatedAt: NOON - 2 * DAY }),
+      src({ id: "c", updatedAt: NOON, parentConvoId: "p" }),
+    ]);
+    expect(historyIds(vm)).toEqual(["c", "p"]);
+    for (const g of vm.groups) for (const r of g.items) expect(r.depth).toBe(0);
+  });
+
+  it("caps the indent at one level: a grandchild sits beside its parent, not further right", () => {
+    const vm = build([
+      src({ id: "p", open: true, updatedAt: NOON - 2 * HOUR }),
+      src({ id: "c", open: true, updatedAt: NOON - HOUR, parentConvoId: "p" }),
+      src({ id: "g", open: true, updatedAt: NOON, parentConvoId: "c" }),
+    ]);
+    expect(vm.active.map((r) => [r.id, r.depth])).toEqual([
+      ["p", 0],
+      ["c", 1],
+      ["g", 1],
+    ]);
+  });
+
+  it("leaves depth 0 on everything when nothing has a parent", () => {
+    const vm = build([src({ id: "a", open: true }), src({ id: "b", open: true })]);
+    expect(vm.active.every((r) => r.depth === 0)).toBe(true);
+  });
+
+  it("keeps the row count intact: grouping reorders, it never adds or drops rows", () => {
+    const vm = build([
+      src({ id: "p", open: true, updatedAt: NOON - HALF_HOUR }),
+      src({ id: "c1", open: true, parentConvoId: "p" }),
+      src({ id: "c2", open: true, parentConvoId: "p" }),
+      src({ id: "loop-a", open: true, parentConvoId: "loop-b" }),
+      src({ id: "loop-b", open: true, parentConvoId: "loop-a" }),
+    ]);
+    expect(vm.active).toHaveLength(5);
+    expect(new Set(vm.active.map((r) => r.id)).size).toBe(5);
+    expect(vm.matched).toBe(5);
+    // A hand-edited ledger can produce a cycle: both members still render.
+    expect(vm.active.filter((r) => r.id.startsWith("loop")).map((r) => r.depth)).toEqual([0, 0]);
+  });
+
+  it("indents pinned rows too, so the tier is not the odd one out", () => {
+    const vm = build([
+      src({ id: "p", pinned: true, updatedAt: NOON - HOUR }),
+      src({ id: "c", pinned: true, updatedAt: NOON, parentConvoId: "p" }),
+    ]);
+    expect(vm.pinned.map((r) => [r.id, r.depth])).toEqual([
+      ["p", 0],
+      ["c", 1],
+    ]);
+  });
+
+  it("carries parentConvoId onto the row, so the renderer and the model agree", () => {
+    const vm = build([src({ id: "c", open: true, parentConvoId: "gone" })]);
+    expect(vm.active[0].parentConvoId).toBe("gone");
+  });
+});

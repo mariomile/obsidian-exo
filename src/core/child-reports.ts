@@ -18,12 +18,65 @@ export type ChildOutcome = "done" | "blocked" | "stopped" | "error";
 
 export interface ChildReport {
   taskId: string;
+  /** The convo that ran the child. EMPTY when the spawn itself failed: there
+   *  never was a conversation. That case is precisely why routing must not go
+   *  through this field (see `parentConvoId`). */
   childConvoId: string;
+  /** Who the report is FOR — the convo id recorded as the task's `parent` in
+   *  the ledger. Carried on the report rather than resolved downstream by
+   *  looking `childConvoId` up among the conversations: that lookup finds
+   *  nothing for a spawn failure, which silently drops exactly the report the
+   *  parent most needs (the one saying its child never started). */
+  parentConvoId: string;
   title: string;
   outcome: ChildOutcome;
   excerpt: string;
   /** Wall-clock ms when the outcome landed. */
   at: number;
+}
+
+/** The shape this module needs of a conversation to route a report to it. The
+ *  view's `Convo` satisfies it structurally, so nothing here imports the view. */
+export interface ReportHolder {
+  id: string;
+  pendingChildReports?: ChildReport[];
+}
+
+/**
+ * Queue a report onto the conversation it names as parent, and return that
+ * conversation so the caller can surface it.
+ *
+ * Returns `undefined` when the parent is not in `convos` — archived, deleted,
+ * or simply gone. Dropping the report there is CORRECT, not a bug: there is no
+ * next turn to hand it to and no transcript to show it in. It is also the only
+ * failure mode, which is why routing is by `parentConvoId` and never by walking
+ * back from `childConvoId`.
+ */
+export function queueReportForParent<T extends ReportHolder>(
+  convos: readonly T[],
+  report: ChildReport,
+): T | undefined {
+  const parent = convos.find((c) => c.id === report.parentConvoId);
+  if (!parent) return undefined;
+  (parent.pendingChildReports ??= []).push(report);
+  return parent;
+}
+
+/**
+ * Take everything queued on a parent and render it for that parent's next turn,
+ * emptying the queue in the same step.
+ *
+ * Drain and format are ONE function on purpose. Split apart, a caller can
+ * format without draining — and since the prefix is rebuilt on every turn, the
+ * same "your child finished" message would then ride every subsequent turn
+ * forever. Returns "" when there is nothing queued, so the caller can drop it
+ * from the outbound join with a falsy filter.
+ */
+export function drainReportsForParent(parent: ReportHolder): string {
+  const queued = parent.pendingChildReports;
+  if (!queued?.length) return "";
+  parent.pendingChildReports = [];
+  return formatReportsForParent(queued);
 }
 
 /**
@@ -38,6 +91,42 @@ export function outcomeFromState(state: ConvoState, reason?: ConvoStateReason): 
   if (state === "error") return "error";
   if (state === "needs-input") return reason === "error" ? "error" : "blocked";
   return null;
+}
+
+/** The structural slice of a conversation's messages this module reads. The
+ *  view's `Message` union satisfies it; nothing here imports the view. */
+export interface ReportMessage {
+  role: string;
+  segments?: readonly { t: string; md?: string }[];
+}
+
+/**
+ * The child's last answer, as the text that goes into a report's excerpt.
+ *
+ * An assistant turn is SEGMENTS, not a string — the `Message` union gives
+ * `text` to user turns only (core/model.ts). Reading `.text` off an assistant
+ * message therefore yields "" for every child, and every report ships with an
+ * empty excerpt: a failure that is invisible from the outside, because the
+ * report still arrives on time and merely says nothing. Hence this lives here,
+ * under test, rather than as three lines inside the untested view.
+ *
+ * Only `text` segments count, and a turn with none falls through to the last
+ * turn that did say something: a child whose final act was a tool call has no
+ * prose of its own, and reporting silence there is strictly worse than
+ * reporting the last thing it actually said.
+ */
+export function lastAssistantText(messages: readonly ReportMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    const text = (m.segments ?? [])
+      .filter((s) => s.t === "text")
+      .map((s) => s.md ?? "")
+      .join("\n")
+      .trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 /** Trim and cap a child's last assistant text for inclusion in a report. */

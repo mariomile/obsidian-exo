@@ -191,6 +191,8 @@ export class BoardView extends ItemView {
       config: () => ({ maxConcurrent: Math.max(1, plugin.settings.orchestrationMaxConcurrent) }),
       notify: (message) => new Notice(message),
       onChange: (tasks) => this.render(tasks),
+      lastAssistantText: (convoId) => plugin.lastAssistantTextOf(convoId),
+      onChildReport: (report) => plugin.deliverChildReport(report),
     };
   }
 

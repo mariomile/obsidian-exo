@@ -3,7 +3,12 @@ import { OrchestratorDriver, type DriverDeps } from "../src/obsidian/orchestrato
 import type { ConvoStateEvent, ConvoStateListener, Unsubscribe } from "../src/core/convo-state";
 import type { TaskEntry, TaskStatus, TaskPatch } from "../src/core/tasks";
 import type { ConvoSnapshot } from "../src/core/orchestrator";
-import { REPORT_DEBOUNCE_MS, type ChildReport } from "../src/core/child-reports";
+import {
+  REPORT_DEBOUNCE_MS,
+  queueReportForParent,
+  drainReportsForParent,
+  type ChildReport,
+} from "../src/core/child-reports";
 
 /** Build a task entry with sensible defaults. */
 function task(over: Partial<TaskEntry> & { id: string }): TaskEntry {
@@ -447,6 +452,8 @@ describe("OrchestratorDriver — child reports", () => {
     expect(reports[0]).toMatchObject({
       taskId: "task-1",
       childConvoId: "convo-child",
+      // Routing key: the consumer delivers by THIS, never by childConvoId.
+      parentConvoId: "convo-parent",
       title: "Research pricing",
       outcome: "done",
       excerpt: "Found three competitors.",
@@ -572,6 +579,10 @@ describe("OrchestratorDriver — child reports", () => {
       taskId: "task-7",
       title: "Research pricing",
       outcome: "error",
+      // The failure path is exactly where childConvoId cannot identify the
+      // parent — no convo was ever created — so parentConvoId has to carry it.
+      childConvoId: "",
+      parentConvoId: "convo-parent",
     });
     expect(reports[0].excerpt).toContain("CLI down");
 
@@ -597,6 +608,8 @@ describe("OrchestratorDriver — child reports", () => {
     expect(reports).toHaveLength(1);
     expect(reports[0].outcome).toBe("error");
     expect(reports[0].taskId).toBe("task-9");
+    expect(reports[0].childConvoId).toBe("");
+    expect(reports[0].parentConvoId).toBe("convo-parent");
   });
 
   it("emits no report for a spawn failure on a task without a parent", async () => {
@@ -613,6 +626,58 @@ describe("OrchestratorDriver — child reports", () => {
     expect(reports).toHaveLength(0);
     const t = driver.snapshot().find((x) => x.id === "task-8")!;
     expect(t.status).toBe("needs-input");
+  });
+
+  /**
+   * The two halves composed. Each side passed on its own while the feature was
+   * broken end to end: the driver emitted a report, the view had a consumer,
+   * and the report was dropped in between because the consumer resolved the
+   * parent by looking `childConvoId` up among the conversations — which finds
+   * nothing when the spawn failed and there never was a child convo. These wire
+   * the REAL consumer (`queueReportForParent`, what `deliverChildReport` calls)
+   * onto the REAL driver, so that gap cannot reopen silently.
+   */
+  it("a spawn-failure report reaches the parent conversation through the real consumer", async () => {
+    const parent = { id: "convo-parent" } as { id: string; pendingChildReports?: ChildReport[] };
+    // The child's own convo does NOT exist — nothing was ever spawned.
+    const convos = [parent];
+    const { deps } = makeDeps([
+      task({ id: "task-10", title: "Research pricing", status: "queued", order: 0, parent: "convo-parent" }),
+    ]);
+    deps.onChildReport = (r) => void queueReportForParent(convos, r);
+    deps.spawn = vi.fn(async () => {
+      throw new Error("CLI down");
+    });
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flushReports();
+
+    expect(parent.pendingChildReports).toHaveLength(1);
+    expect(drainReportsForParent(parent)).toContain("Research pricing");
+  });
+
+  it("a finished child's report reaches the parent through the real consumer", async () => {
+    const parent = { id: "convo-parent" } as { id: string; pendingChildReports?: ChildReport[] };
+    const child = { id: "convo-child" } as { id: string; pendingChildReports?: ChildReport[] };
+    const convos = [parent, child];
+    const { deps, emitter } = makeDeps([
+      task({ id: "task-11", title: "Draft post", status: "running", parent: "convo-parent", convo: "convo-child" }),
+    ]);
+    deps.onChildReport = (r) => void queueReportForParent(convos, r);
+    deps.lastAssistantText = () => "Drafted.";
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await flushReports();
+
+    // The report lands on the PARENT, never on the child that produced it.
+    expect(child.pendingChildReports).toBeUndefined();
+    const text = drainReportsForParent(parent);
+    expect(text).toContain("Draft post");
+    expect(text).toContain("Drafted.");
+    // Consumed once: the parent's turn after this one gets nothing.
+    expect(drainReportsForParent(parent)).toBe("");
   });
 });
 

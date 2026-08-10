@@ -261,6 +261,7 @@ export class OrchestratorDriver {
     this.pendingReports.set(owner.id, {
       taskId: owner.id,
       childConvoId: e.convoId,
+      parentConvoId: owner.parent,
       title: owner.title,
       outcome,
       excerpt: buildExcerpt(this.deps.lastAssistantText?.(e.convoId) ?? ""),
@@ -361,7 +362,10 @@ export class OrchestratorDriver {
       if (this.deps.onChildReport && failedTask?.parent) {
         this.pendingReports.set(failedTask.id, {
           taskId: failedTask.id,
+          // No convo was ever created — hence `parentConvoId` on the report:
+          // the consumer routes by it and never by looking this id up.
           childConvoId: "",
+          parentConvoId: failedTask.parent,
           title: failedTask.title,
           outcome: "error",
           excerpt: buildExcerpt(msg),

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   planPersistedConvos,
   parseConversationsSource,
@@ -173,5 +175,95 @@ describe("partitionConvos", () => {
 
   it("returns empty sides for empty input", () => {
     expect(partitionConvos([])).toEqual({ live: [], archived: [] });
+  });
+});
+
+/**
+ * Convo ⇄ ConvoData round-trip contract.
+ *
+ * The mapping is NOT in this module: it is two hand-written object literals in
+ * `view.ts` — the `const c: Convo = {…}` in `restore()` (disk → memory) and the
+ * literal in `toConvoData()` (memory → disk). `view.ts` imports `obsidian` and
+ * has zero unit tests, so nothing else in the tree can observe that the two
+ * halves still agree.
+ *
+ * The failure they are exposed to is asymmetric and silent: add a field to one
+ * literal and not the other and the build is green, the typecheck is green
+ * (both sides are optional), and the field simply evaporates on the next
+ * reload. That is exactly how a fan-out child would come back from a restart
+ * with no parent, jump out from under it in the sidebar, and read as a chat
+ * nobody started.
+ *
+ * ⚠️ Red here means "add the field to the other literal too", never "delete the
+ * field from the list".
+ */
+const view = readFileSync(join(__dirname, "..", "src", "view.ts"), "utf8");
+
+/** Everything that must survive a save/load cycle. Deliberately includes the
+ *  fields that predate this contract — one rule for all of them, so the next
+ *  field added is added under a rule that is already being enforced. */
+const ROUND_TRIP_FIELDS = [
+  "archived",
+  "pinned",
+  "retiredAt",
+  "lastActiveAt",
+  "boardStatus",
+  "parentConvoId",
+  "titleLocked",
+  "agent",
+  "sessionId",
+  "updatedAt",
+  "usage",
+] as const;
+
+/** The literal in `restore()` that builds a live `Convo` from a `ConvoData`. */
+const restoreLiteral = (): string => {
+  const start = view.indexOf("const c: Convo = {");
+  expect(start, "restore()'s `const c: Convo = {` literal moved or was renamed").toBeGreaterThan(-1);
+  const end = view.indexOf("\n      };", start);
+  expect(end, "could not find the end of restore()'s Convo literal").toBeGreaterThan(start);
+  return view.slice(start, end);
+};
+
+/** The literal in `toConvoData()` that writes a `ConvoData` back to disk. */
+const toDataLiteral = (): string => {
+  const start = view.indexOf("private toConvoData(c: Convo): ConvoData {");
+  expect(start, "toConvoData moved or was renamed").toBeGreaterThan(-1);
+  const end = view.indexOf("\n  }", start);
+  expect(end, "could not find the end of toConvoData").toBeGreaterThan(start);
+  return view.slice(start, end);
+};
+
+describe("Convo persistence round-trip (view.ts, which has no unit tests)", () => {
+  const restore = restoreLiteral();
+  const toData = toDataLiteral();
+
+  for (const field of ROUND_TRIP_FIELDS) {
+    it(`${field} is read back on restore`, () => {
+      expect(
+        restore,
+        `${field} is written to disk but never read back: it silently disappears on reload.`,
+      ).toContain(field);
+    });
+
+    it(`${field} is written on save`, () => {
+      expect(
+        toData,
+        `${field} is restored from disk but never written: it survives exactly one session.`,
+      ).toContain(field);
+    });
+  }
+
+  it("parentConvoId is written conditionally, so a normal chat stays clean on disk", () => {
+    // Matches how `boardStatus` and `titleLocked` are already handled: absent
+    // stays absent rather than becoming an explicit `undefined` in every entry.
+    expect(toData).toMatch(/\.\.\.\(c\.parentConvoId \? \{ parentConvoId: c\.parentConvoId \} : \{\}\)/);
+  });
+
+  it("pendingChildReports is runtime-only and never persisted", () => {
+    // A queued report has no meaning after a reload — there is no in-flight
+    // turn to prepend it to, and the board still shows the child's real state.
+    expect(toData).not.toContain("pendingChildReports");
+    expect(restore).not.toContain("pendingChildReports");
   });
 });

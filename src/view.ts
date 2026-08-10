@@ -99,12 +99,19 @@ import {
   countSurvivingRetirees,
   pinnedFirst,
   nextFocusAfterRemoval,
+  stripAfterChildSpawn,
 } from "./core/working-set";
 import type { TabAgents, TabVM, TabFacts } from "./core/working-set";
 import { chooseDensity } from "./core/strip-density";
 import type { StripDensity } from "./core/strip-density";
 import { startOfDay, DAY_MS } from "./core/history";
 import type { ChatRowSource } from "./core/chat-rows";
+import {
+  drainReportsForParent,
+  lastAssistantText,
+  queueReportForParent,
+  type ChildReport,
+} from "./core/child-reports";
 import { isAiTitleDue } from "./core/title";
 import { canAutoTitle, applyRename } from "./core/title-ownership";
 import { projectDirName, resumableFrom } from "./core/resume-status";
@@ -1129,6 +1136,7 @@ export class ChatView extends ItemView {
         retiredAt: d.retiredAt,
         lastActiveAt: d.lastActiveAt,
         boardStatus: d.boardStatus,
+        parentConvoId: d.parentConvoId,
         titleLocked: d.titleLocked === true,
         provider,
         model,
@@ -1210,6 +1218,7 @@ export class ChatView extends ItemView {
       ...(c.retiredAt ? { retiredAt: c.retiredAt } : {}),
       ...(c.lastActiveAt ? { lastActiveAt: c.lastActiveAt } : {}),
       ...(c.boardStatus ? { boardStatus: c.boardStatus } : {}),
+      ...(c.parentConvoId ? { parentConvoId: c.parentConvoId } : {}),
       ...(c.titleLocked ? { titleLocked: true } : {}),
       messages: c.messages.map((message) =>
         persistMessage(message, {
@@ -2107,11 +2116,28 @@ export class ChatView extends ItemView {
    * conversations make this safe: the new convo's turn runs per-convo,
    * independent of which tab is displayed. When there was no prior active
    * convo (fresh view), the new one simply stays active.
+   *
+   * `opts.parent` marks this as a fan-out CHILD: it is stamped on the new convo
+   * (persisted, drives the sidebar indent) and takes the convo back out of the
+   * tab strip — see `stripAfterChildSpawn` for why the strip is the wrong home
+   * for delegated work. Nothing in the child's first turn reads the stamp, so
+   * writing it after the send is safe.
    */
-  startTaskConversation(prompt: string, opts?: { model?: string }): string {
+  startTaskConversation(prompt: string, opts?: { model?: string; parent?: string }): string {
     const prev = this.active ?? null;
     const id = this.askInNewConversation(prompt, true, opts);
     if (id && prev && prev.id !== id && this.convos.includes(prev)) this.switchTo(prev);
+    const child = id ? this.allConvos().find((c) => c.id === id) : undefined;
+    if (child && opts?.parent) {
+      child.parentConvoId = opts.parent;
+      const strip = stripAfterChildSpawn(this.openTabs, child.id, this.active.id);
+      if (strip !== this.openTabs) {
+        this.openTabs = [...strip];
+        this.renderTabs();
+        this.persistTabs();
+      }
+      this.persist();
+    }
     return id;
   }
 
@@ -2124,6 +2150,24 @@ export class ChatView extends ItemView {
     const c = this.convos.find((x) => x.id === convoId) ?? (this.active?.id === convoId ? this.active : undefined);
     if (!c) return { exists: false, streaming: false, hasPending: false };
     return { exists: true, streaming: c.streaming, hasPending: !!(c.pendingPerm || c.pendingAsk) };
+  }
+
+  /** Last assistant text of a conversation, for a child report's excerpt.
+   *  Empty when the convo is gone or has said nothing yet. */
+  lastAssistantTextOf(convoId: string): string {
+    const c = this.allConvos().find((x) => x.id === convoId);
+    return c ? lastAssistantText(c.messages) : "";
+  }
+
+  /** Queue a finished child's report onto its parent and surface it. The model
+   *  sees it on the parent's NEXT turn, never mid-turn — a turn already in
+   *  flight has its outbound message built. A report whose parent no longer
+   *  exists is dropped by `queueReportForParent`, which is correct. */
+  deliverChildReport(report: ChildReport): void {
+    const parent = queueReportForParent(this.allConvos(), report);
+    if (!parent) return;
+    parent.unread = true;
+    this.refreshTabs();
   }
 
   /**
@@ -2186,9 +2230,14 @@ export class ChatView extends ItemView {
       open: open.has(c.id),
       pinned: c.pinned === true,
       messageCount: c.messages.filter((m) => m.role === "user").length,
+      parentConvoId: c.parentConvoId,
       // "Finished while you were elsewhere", with no new persisted state:
-      // lastActiveAt moves on focus, updatedAt on every turn. Active excluded.
-      unseen: c !== this.active && (c.updatedAt ?? 0) > (c.lastActiveAt ?? 0),
+      // lastActiveAt moves on focus, updatedAt on every turn. Active excluded —
+      // except for a parent holding an undelivered child report, which is news
+      // you have not read whether or not the tab is in front of you.
+      unseen:
+        (c.pendingChildReports?.length ?? 0) > 0 ||
+        (c !== this.active && (c.updatedAt ?? 0) > (c.lastActiveAt ?? 0)),
       streaming: c.streaming,
       pendingPerm: c.pendingPerm != null,
       pendingAsk: c.pendingAsk != null,
@@ -6045,13 +6094,16 @@ export class ChatView extends ItemView {
       // turn once (the recap itself comes from coldRecap above).
       const compactPrefix = c.pendingSendPrefix;
       if (compactPrefix) c.pendingSendPrefix = undefined;
+      // Finished children report to their parent here, and only here: drained
+      // in the same step it is formatted, so a report rides exactly one turn.
+      const childReports = drainReportsForParent(c);
       const researchMessage = buildResearchOutbound(researchMode, message);
       // The agent binding wraps LAST so its instruction sits closest to the
       // user's text — and, like Research Mode, it never touches the visible or
       // persisted bubble.
       const agentMessage =
         boundAgent && c.provider === "claude" ? buildAgentBindingOutbound(boundAgent, researchMessage) : researchMessage;
-      const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, recallBlock, agentMessage].filter(Boolean).join("\n\n");
+      const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, childReports, recallBlock, agentMessage].filter(Boolean).join("\n\n");
       // Recalled memories are "paid for" only now, with `outbound` built and the
       // session alive — everything that could still fail is the send itself, and
       // a failed send re-recalls on the next attempt rather than answering

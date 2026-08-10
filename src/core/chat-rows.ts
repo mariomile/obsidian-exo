@@ -16,6 +16,7 @@
  */
 import { deriveLane, type NeedsInputReason, type SessionBadge } from "./session-cards";
 import { groupByTime, type TimeGroup } from "./history";
+import { groupByParent } from "./child-tree";
 
 /** The per-conversation facts the list needs. Structural, not `Convo` — this
  *  module stays ignorant of the view's types, the enumerator adapts. */
@@ -39,6 +40,9 @@ export interface ChatRowSource {
   /** User turns, not total messages: it answers "how much of this is mine",
    *  which is what makes a conversation feel long or throwaway. */
   messageCount: number;
+  /** The conversation that spawned this one via `spawn_task`. Drives the
+   *  indent; absent for everything the user started themselves. */
+  parentConvoId?: string;
   // Live signals, consumed by deriveLane.
   streaming: boolean;
   pendingPerm: boolean;
@@ -62,6 +66,12 @@ export interface ChatRow {
    *  The live tier answers "what is happening"; this answers the question that
    *  actually matters more often — "what happened while I was not looking". */
   unseen: boolean;
+  /** Kept on the row so the tier's own grouping pass can see it. */
+  parentConvoId?: string;
+  /** How far to indent, decided by `groupByParent` WITHIN this row's tier.
+   *  0 for anything the user started, and for a child whose parent is not in
+   *  the same tier — an orphan renders at top level rather than vanishing. */
+  depth: 0 | 1;
   /** Present only while the conversation is running or blocked. */
   lane?: "running" | "needs-input";
   reason?: NeedsInputReason;
@@ -211,9 +221,30 @@ function toRow(s: ChatRowSource): ChatRow {
     pinned: s.pinned,
     unseen: s.unseen,
     messageCount: s.messageCount,
+    depth: 0,
   };
   if (s.updatedAt !== undefined) row.updatedAt = s.updatedAt;
+  if (s.parentConvoId) row.parentConvoId = s.parentConvoId;
   return row;
+}
+
+/**
+ * Pull each child under its parent and stamp the indent, WITHIN one tier.
+ *
+ * Per-tier and not list-wide on purpose. A parent that is an open tab lives in
+ * `active` while its finished child sits in a day bucket — there is no single
+ * ordering that can indent across that boundary without moving one of them out
+ * of the tier it earned, and moving it would make the tiers lie about what is
+ * running, open or pinned. Applied to each tier, `groupByParent`'s orphan rule
+ * does exactly the right thing: a child whose parent is elsewhere renders at
+ * top level in its own tier. Never dropped, never hidden.
+ *
+ * Runs AFTER the tier's sort: `groupByParent` preserves the order it is given
+ * for roots and reorders only to place children, so sorting afterwards would
+ * undo it.
+ */
+function nest(rows: ChatRow[]): ChatRow[] {
+  return groupByParent(rows).map(({ item, depth }) => (depth === 0 ? item : { ...item, depth }));
 }
 
 /**
@@ -288,10 +319,10 @@ export function buildChatList(
   history.sort(byRecency);
 
   return {
-    active,
-    pinned,
-    groups: groupByTime(history, opts.now),
-    related,
+    active: nest(active),
+    pinned: nest(pinned),
+    groups: groupByTime(history, opts.now).map((g) => ({ ...g, items: nest(g.items) })),
+    related: nest(related),
     total: visible.length,
     // Related rows count as matches: without them a search whose only hits are
     // semantic would report zero and render the "no matches" empty state over a

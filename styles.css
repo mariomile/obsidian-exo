@@ -6463,6 +6463,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-row.is-compact.is-cursor .mva-chats-name { color: var(--text-normal); }
 .mva-chats-age { flex-shrink: 0; color: var(--text-faint); font-size: var(--font-ui-smaller); }
 
+/* Fan-out children — indented one step under the conversation that spawned
+   them. A margin, not padding: the row's own left inset already carries the
+   active rail and the live dot, and padding would push those off the indent.
+   One level only, by construction (core/child-tree). */
+.mva-chats-row.is-child { margin-left: 12px; }
+
 /* Markers — pin and the stopped/error badge, shared by both densities. */
 .mva-chats-pin,
 .mva-chats-badge { display: inline-flex; flex-shrink: 0; color: var(--text-faint); }
