@@ -19,6 +19,7 @@ import {
   applyTaskArchive,
   applyTaskMove,
   applyTaskPatch,
+  formatTask,
   parseTasksFile,
   parseTasksFileWithWarnings,
   serializeTasks,
@@ -96,6 +97,36 @@ export async function createBacklogTask(
       await vault.create(tasksPath, content);
     }
     return entry;
+  });
+}
+
+/**
+ * Create a task spawned BY a conversation (fan-out). Same queued write path as
+ * `createBacklogTask` — one shared `WriteQueue`, so chat-driven and board-driven
+ * creation never interleave a read-modify-write — with two differences: the
+ * entry carries its `parent` convo id, and it starts `queued` rather than
+ * `backlog`, because a delegated task is meant to run as soon as the
+ * orchestrator has a free slot.
+ */
+export async function createChildTask(
+  vault: TaskVaultAdapter,
+  queue: WriteQueue,
+  task: NewBacklogTask & { parent: string },
+  tasksPath: string = TASKS_PATH
+): Promise<TaskEntry> {
+  return queue.enqueue(async () => {
+    const existing = vault.getFile(tasksPath);
+    const current = existing ? await vault.read(tasksPath) : "";
+    const { content, entry } = addBacklogTask(current, task);
+    const queued: TaskEntry = { ...entry, status: "queued" };
+    const next = content.replace(formatTask(entry), formatTask(queued));
+    if (existing) {
+      await vault.modify(tasksPath, next);
+    } else {
+      await vault.ensureFolder(tasksPath);
+      await vault.create(tasksPath, next);
+    }
+    return queued;
   });
 }
 

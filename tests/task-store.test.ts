@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createBacklogTask, TaskStore, type TaskVaultAdapter } from "../src/obsidian/task-store";
+import { createBacklogTask, createChildTask, TaskStore, type TaskVaultAdapter } from "../src/obsidian/task-store";
 import { parseTasksFile, TASKS_PATH } from "../src/core/tasks";
 import { WriteQueue } from "../src/core/write-queue";
 
@@ -101,6 +101,107 @@ describe("createBacklogTask", () => {
     expect(entry.model).toBe("claude-opus-4-6");
     const parsed = parseTasksFile(files.get(TASKS_PATH)!);
     expect(parsed[0].model).toBe("claude-opus-4-6");
+  });
+});
+
+describe("createChildTask", () => {
+  it("writes a queued task carrying its parent convo id", async () => {
+    const { adapter, files } = fakeVault();
+    const queue = new WriteQueue();
+    const entry = await createChildTask(adapter, queue, {
+      title: "Research pricing",
+      prompt: "Look into competitor pricing.",
+      parent: "convo-parent-1",
+    });
+    expect(entry.status).toBe("queued");
+    expect(entry.parent).toBe("convo-parent-1");
+    const written = files.get(TASKS_PATH)!;
+    expect(written).toContain("- parent: convo-parent-1");
+    expect(written).toContain("- status: queued");
+
+    const parsed = parseTasksFile(written);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].status).toBe("queued");
+    expect(parsed[0].parent).toBe("convo-parent-1");
+    expect(parsed[0].title).toBe("Research pricing");
+    expect(parsed[0].prompt).toBe("Look into competitor pricing.");
+  });
+
+  it("creates the tasks.md file (and parent folder) when it doesn't exist yet", async () => {
+    const { adapter, files, folders } = fakeVault();
+    const queue = new WriteQueue();
+    const createSpy = vi.spyOn(adapter, "create");
+    const modifySpy = vi.spyOn(adapter, "modify");
+    const ensureFolderSpy = vi.spyOn(adapter, "ensureFolder");
+
+    await createChildTask(adapter, queue, {
+      title: "First child",
+      prompt: "Do it",
+      parent: "convo-1",
+    });
+
+    expect(ensureFolderSpy).toHaveBeenCalledWith(TASKS_PATH);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(modifySpy).not.toHaveBeenCalled();
+    expect(files.has(TASKS_PATH)).toBe(true);
+    expect(folders.has("_system/orchestration")).toBe(true);
+  });
+
+  it("appends to an existing tasks.md without clobbering prior tasks (modify branch)", async () => {
+    const existingBlock = [
+      "## task-1",
+      "- title: Old task",
+      "- status: review",
+      "- created: 2026-07-08T09:00:00.000Z",
+      "- updated: 2026-07-08T09:00:00.000Z",
+      "",
+      "old prompt",
+      "",
+    ].join("\n");
+    const { adapter, files } = fakeVault({ [TASKS_PATH]: existingBlock });
+    const queue = new WriteQueue();
+    const createSpy = vi.spyOn(adapter, "create");
+    const modifySpy = vi.spyOn(adapter, "modify");
+
+    await createChildTask(adapter, queue, {
+      title: "New child",
+      prompt: "new prompt",
+      parent: "convo-2",
+    });
+
+    expect(modifySpy).toHaveBeenCalledTimes(1);
+    expect(createSpy).not.toHaveBeenCalled();
+
+    const parsed = parseTasksFile(files.get(TASKS_PATH)!);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].title).toBe("Old task");
+    expect(parsed[0].status).toBe("review");
+    expect(parsed[1].title).toBe("New child");
+    expect(parsed[1].status).toBe("queued");
+    expect(parsed[1].parent).toBe("convo-2");
+  });
+
+  it("enqueues onto the passed-in WriteQueue rather than writing synchronously outside it", async () => {
+    const { adapter } = fakeVault();
+    const queue = new WriteQueue();
+    const spy = vi.spyOn(queue, "enqueue");
+    await createChildTask(adapter, queue, { title: "T", prompt: "P", parent: "convo-3" });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes concurrent calls through the given WriteQueue (no lost update)", async () => {
+    const { adapter, files } = fakeVault();
+    const queue = new WriteQueue();
+    await Promise.all([
+      createChildTask(adapter, queue, { title: "One", prompt: "p1", parent: "convo-a" }),
+      createChildTask(adapter, queue, { title: "Two", prompt: "p2", parent: "convo-a" }),
+      createChildTask(adapter, queue, { title: "Three", prompt: "p3", parent: "convo-a" }),
+    ]);
+    const parsed = parseTasksFile(files.get(TASKS_PATH)!);
+    expect(parsed).toHaveLength(3);
+    expect(parsed.every((t) => t.status === "queued")).toBe(true);
+    expect(parsed.every((t) => t.parent === "convo-a")).toBe(true);
+    expect(parsed.map((t) => t.title).sort()).toEqual(["One", "Three", "Two"]);
   });
 });
 
