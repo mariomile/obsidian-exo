@@ -121,6 +121,18 @@ function nextUniqueEpoch(content: string): number {
   return Math.max(now, maxExisting + 1);
 }
 
+/** Thrown by `createChildTask` when its `gate` callback refuses the spawn.
+ *  Evaluated against a FRESH read taken INSIDE the same queued turn as the
+ *  write, so concurrent callers each judge the ledger as of their own turn —
+ *  not a snapshot read before they were enqueued (see `createChildTask` doc).
+ *  Carries the gate's own refusal text so a caller (the `spawn_task` tool)
+ *  can surface it to the agent verbatim without a second gate evaluation. */
+export class ChildTaskRefused extends Error {
+  constructor(public readonly reason: string) {
+    super(reason);
+  }
+}
+
 /**
  * Create a task spawned BY a conversation (fan-out). Same queued write path as
  * `createBacklogTask` — one shared `WriteQueue`, so chat-driven and board-driven
@@ -129,6 +141,15 @@ function nextUniqueEpoch(content: string): number {
  * `backlog` (a delegated task is meant to run as soon as the orchestrator has
  * a free slot), and its id's epoch is bumped past any id already in the file
  * so same-millisecond fan-out never collides (see `nextUniqueEpoch`).
+ *
+ * `gate`, if given, runs INSIDE the queued turn against the ledger this same
+ * turn just read — never against a snapshot taken before `enqueue` — so N
+ * concurrent `createChildTask` calls (the canonical fan-out gesture: one
+ * assistant turn issuing several `spawn_task` calls in parallel) each judge
+ * an up-to-date count instead of racing on a stale read that would let all N
+ * pass a cap simultaneously. A refusal throws `ChildTaskRefused` and writes
+ * NOTHING — the queue's error isolation (see `WriteQueue`) means this
+ * rejection affects only this call's own promise, not later queued turns.
  *
  * The `backlog`→`queued` patch is applied by slicing the freshly-appended
  * block out of `content` by its byte offset (`lastIndexOf`), never via
@@ -143,11 +164,16 @@ export async function createChildTask(
   vault: TaskVaultAdapter,
   queue: WriteQueue,
   task: NewBacklogTask & { parent: string },
-  tasksPath: string = TASKS_PATH
+  tasksPath: string = TASKS_PATH,
+  gate?: (tasks: TaskEntry[]) => { ok: true } | { ok: false; reason: string }
 ): Promise<TaskEntry> {
   return queue.enqueue(async () => {
     const existing = vault.getFile(tasksPath);
     const current = existing ? await vault.read(tasksPath) : "";
+    if (gate) {
+      const verdict = gate(parseTasksFile(current));
+      if (!verdict.ok) throw new ChildTaskRefused(verdict.reason);
+    }
     const now = nextUniqueEpoch(current);
     const { content, entry } = addBacklogTask(current, task, now);
     const queued: TaskEntry = { ...entry, status: "queued" };

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { createBacklogTask, createChildTask, TaskStore, type TaskVaultAdapter } from "../src/obsidian/task-store";
-import { parseTasksFile, TASKS_PATH } from "../src/core/tasks";
+import { createBacklogTask, createChildTask, ChildTaskRefused, TaskStore, type TaskVaultAdapter } from "../src/obsidian/task-store";
+import { parseTasksFile, TASKS_PATH, type TaskEntry } from "../src/core/tasks";
 import { WriteQueue } from "../src/core/write-queue";
 
 /** A minimal in-memory fake of the slice of the Obsidian vault API the task
@@ -255,6 +255,85 @@ describe("createChildTask", () => {
     expect(parsed[0].status).toBe("queued");
     expect(parsed[0].prompt).toBe(trickyPrompt);
     expect(parsed[0].parent).toBe("convo-tricky");
+  });
+});
+
+describe("createChildTask gate (atomic cap check)", () => {
+  it("gate approving (ok:true) proceeds to write exactly as with no gate", async () => {
+    const { adapter, files } = fakeVault();
+    const queue = new WriteQueue();
+    const entry = await createChildTask(
+      adapter,
+      queue,
+      { title: "Allowed", prompt: "go", parent: "convo-a" },
+      TASKS_PATH,
+      () => ({ ok: true })
+    );
+    expect(entry.status).toBe("queued");
+    expect(parseTasksFile(files.get(TASKS_PATH)!)).toHaveLength(1);
+  });
+
+  it("gate refusing throws ChildTaskRefused carrying the reason and writes NOTHING", async () => {
+    const { adapter, files } = fakeVault();
+    const queue = new WriteQueue();
+    await expect(
+      createChildTask(
+        adapter,
+        queue,
+        { title: "Refused", prompt: "nope", parent: "convo-a" },
+        TASKS_PATH,
+        () => ({ ok: false, reason: "cap hit" })
+      )
+    ).rejects.toThrow(ChildTaskRefused);
+    expect(files.has(TASKS_PATH)).toBe(false);
+  });
+
+  it("preserves the gate's exact reason text on the thrown error", async () => {
+    const { adapter } = fakeVault();
+    const queue = new WriteQueue();
+    try {
+      await createChildTask(
+        adapter,
+        queue,
+        { title: "Refused", prompt: "nope", parent: "convo-a" },
+        TASKS_PATH,
+        () => ({ ok: false, reason: "This conversation already has 5 open child tasks (cap 5)." })
+      );
+      expect.unreachable("expected createChildTask to reject");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ChildTaskRefused);
+      expect((e as ChildTaskRefused).reason).toBe("This conversation already has 5 open child tasks (cap 5).");
+    }
+  });
+
+  it("evaluates the gate against a FRESH read taken inside its own queue turn, not a snapshot from before enqueue — a rejection does not poison later queued turns", async () => {
+    const { adapter, files } = fakeVault();
+    const queue = new WriteQueue();
+    // Cap of 2: the gate only allows the write while fewer than 2 entries with
+    // this parent already exist in the ledger AS OF THIS TURN. If the gate
+    // were evaluated on a snapshot taken before all three calls were
+    // enqueued (the bug this test exists to catch), all three would see 0
+    // existing entries and all three would pass, landing 3 in the ledger.
+    const gate = (tasks: TaskEntry[]) =>
+      tasks.filter((t) => t.parent === "convo-cap").length < 2
+        ? { ok: true as const }
+        : { ok: false as const, reason: "cap 2 reached" };
+
+    const results = await Promise.allSettled([
+      createChildTask(adapter, queue, { title: "One", prompt: "p1", parent: "convo-cap" }, TASKS_PATH, gate),
+      createChildTask(adapter, queue, { title: "Two", prompt: "p2", parent: "convo-cap" }, TASKS_PATH, gate),
+      createChildTask(adapter, queue, { title: "Three", prompt: "p3", parent: "convo-cap" }, TASKS_PATH, gate),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(2);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(ChildTaskRefused);
+
+    const parsed = parseTasksFile(files.get(TASKS_PATH)!);
+    expect(parsed).toHaveLength(2);
+    expect(parsed.every((t) => t.parent === "convo-cap")).toBe(true);
   });
 });
 

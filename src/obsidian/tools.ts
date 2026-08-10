@@ -26,7 +26,7 @@ import {
 } from "../core/open-loops";
 import { WriteQueue } from "../core/write-queue";
 import { patchFrontmatter } from "../core/frontmatter-patch";
-import { createBacklogTask, createChildTask, adaptAppToTaskVault } from "./task-store";
+import { createBacklogTask, createChildTask, ChildTaskRefused, adaptAppToTaskVault } from "./task-store";
 import { canSpawnChild, childrenOf } from "../core/child-tasks";
 import { parseTasksFile } from "../core/tasks";
 import {
@@ -1055,24 +1055,34 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     async (args) => {
       if (!parentConvoId) return ok("Delegation is unavailable in this session.");
       const vault = adaptAppToTaskVault(app);
-      const existing = vault.getFile(paths.tasks);
-      const current = existing ? await vault.read(paths.tasks) : "";
-      const gate = canSpawnChild(parseTasksFile(current), parentConvoId);
-      if (!gate.ok) return ok(gate.reason);
-      const entry = await createChildTask(
-        vault,
-        tasksWriteQueue,
-        {
-          title: args.title,
-          prompt: args.prompt,
-          parent: parentConvoId,
-          ...(args.model ? { model: args.model } : {}),
-        },
-        paths.tasks
-      );
-      return ok(
-        `Queued child task ${entry.id}: ${entry.title}. It starts when the board has a free slot and reports back here when it is done.`
-      );
+      try {
+        const entry = await createChildTask(
+          vault,
+          tasksWriteQueue,
+          {
+            title: args.title,
+            prompt: args.prompt,
+            parent: parentConvoId,
+            ...(args.model ? { model: args.model } : {}),
+          },
+          paths.tasks,
+          // Evaluated INSIDE createChildTask's own queued turn, against a
+          // read taken that same turn — never a snapshot from before this
+          // call was enqueued. That's what keeps N concurrent spawn_task
+          // calls (one assistant turn, several parallel tool blocks) from
+          // all passing the same stale "N < cap" check simultaneously.
+          (tasks) => canSpawnChild(tasks, parentConvoId)
+        );
+        return ok(
+          `Queued child task ${entry.id}: ${entry.title}. It starts when the board has a free slot and reports back here when it is done.`
+        );
+      } catch (e) {
+        // A cap/depth refusal is expected traffic, not a failure — surface the
+        // gate's own reason verbatim as a normal result so the agent reads it
+        // as an answer instead of retrying the tool call.
+        if (e instanceof ChildTaskRefused) return ok(e.reason);
+        throw e;
+      }
     }
   );
 

@@ -3,6 +3,7 @@ import { createObsidianToolServer } from "../src/obsidian/tools";
 import { parseTasksFile, serializeTasks, TASKS_PATH, type TaskEntry } from "../src/core/tasks";
 import { WriteQueue } from "../src/core/write-queue";
 import { canSpawnChild, MAX_OPEN_CHILDREN } from "../src/core/child-tasks";
+import { exoPaths } from "../src/core/paths";
 
 /** Registered tool names on an SDK MCP server instance — same shape read by
  *  `tests/tools-add-task.test.ts`, duplicated here rather than imported since
@@ -141,6 +142,68 @@ describe("spawn_task behavior", () => {
 
     expect(files.get(TASKS_PATH)).toBe(before);
     expect(parseTasksFile(files.get(TASKS_PATH)!)).toHaveLength(MAX_OPEN_CHILDREN);
+  });
+
+  it("concurrent spawn_task calls in one turn do NOT collectively exceed the open-children cap", async () => {
+    // The canonical fan-out gesture: one assistant turn issues several
+    // spawn_task calls in parallel tool blocks. Starting 2 below the cap (3
+    // open, cap 5) with 4 concurrent calls: a check-then-act gate evaluated
+    // OUTSIDE the write queue would let all 4 see "3 < 5" and all pass,
+    // landing 7 open children. The gate must be evaluated fresh INSIDE each
+    // call's own turn in the queue, so only 2 of the 4 may succeed.
+    const { app, files } = fakeApp();
+    const existing = Array.from({ length: 3 }, (_, i) => childEntry(`task-${1_720_000_000_000 + i}`, "convo-a"));
+    files.set(TASKS_PATH, serializeTasks(existing));
+
+    const queue = new WriteQueue();
+    const server = createObsidianToolServer(
+      app, true, false, undefined, true,
+      queue, true, queue, false, undefined, queue, undefined, "convo-a"
+    );
+    const spawnTask = registeredTools(server)["spawn_task"];
+
+    const results: any[] = await Promise.all(
+      [0, 1, 2, 3].map((i) => spawnTask.handler({ title: `Concurrent ${i}`, prompt: "work" }, {}))
+    );
+
+    const parsed = parseTasksFile(files.get(TASKS_PATH)!).filter((t) => t.parent === "convo-a");
+    expect(parsed).toHaveLength(MAX_OPEN_CHILDREN); // exactly 5, never 7
+
+    const succeeded = results.filter((r) => /^Queued child task/.test(r.content[0].text));
+    const refused = results.filter((r) => !/^Queued child task/.test(r.content[0].text));
+    expect(succeeded).toHaveLength(2); // only the 2 free slots (3 -> 5)
+    expect(refused).toHaveLength(2);
+    for (const r of refused) {
+      expect(r.isError).toBeFalsy(); // refusal is a normal result, not an error
+      expect(r.content[0].text).toContain(`cap ${MAX_OPEN_CHILDREN}`);
+    }
+  });
+});
+
+describe("fan-out tools honor a non-legacy configured ExoPaths (not a hardcoded TASKS_PATH)", () => {
+  it("spawn_task writes to the configured paths.tasks, and list_tasks reads it back from there", async () => {
+    const { app, files } = fakeApp();
+    const customPaths = exoPaths("_exo"); // non-legacy root — differs from TASKS_PATH (legacy "_system/...")
+    expect(customPaths.tasks).not.toBe(TASKS_PATH);
+
+    const queue = new WriteQueue();
+    const server = createObsidianToolServer(
+      app, true, false, undefined, true,
+      queue, true, queue, false, undefined, queue, customPaths, "convo-a"
+    );
+    const spawnTask = registeredTools(server)["spawn_task"];
+    const listTasks = registeredTools(server)["list_tasks"];
+
+    const spawnResult: any = await spawnTask.handler({ title: "Custom-root child", prompt: "go" }, {});
+    expect(spawnResult.isError).toBeFalsy();
+
+    // Written under the CONFIGURED path, never the legacy default.
+    expect(files.has(customPaths.tasks)).toBe(true);
+    expect(files.has(TASKS_PATH)).toBe(false);
+    expect(parseTasksFile(files.get(customPaths.tasks)!)).toHaveLength(1);
+
+    const listResult: any = await listTasks.handler({}, {});
+    expect(listResult.content[0].text).toContain("Custom-root child");
   });
 });
 

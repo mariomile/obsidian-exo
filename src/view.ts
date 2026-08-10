@@ -773,8 +773,7 @@ export class ChatView extends ItemView {
           s.agentFolderEnabled,
           // Per-convo bridge: rethink_memory renders into THIS conversation's turn.
           (req) => this.rethinkBridge(c, req),
-          // Same contract for the single-file Open-Loops Ledger. Kept last in
-          // the positional API so existing callers retain their argument slots.
+          // Same contract for the single-file Open-Loops Ledger (paths/parentConvoId trail it below).
           this.plugin.loopsWriteQueue,
           this.plugin.paths, c.id // parentConvoId — gates spawn_task
         )
