@@ -23,12 +23,25 @@ import {
   type ChatSection,
   type ChatListMode,
 } from "../core/chat-rows";
+import type { ChatSectionKey } from "../core/chat-rows";
+import {
+  chatDot,
+  isSectionCollapsed,
+  toggleSectionCollapsed,
+  type ChatDot,
+} from "../core/chat-list-state";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 import { clickable } from "./dom";
 import { recallChats, reindexChats, recallHost, isRecallUnavailable } from "./chat-recall";
 
 export const CHATS_VIEW_TYPE = "exo-chats";
 export const CHATS_ICON = "messages-square";
+
+/** Per-pane prefix for the header/list id pairs that wire `aria-controls` and
+ *  `aria-labelledby`. Obsidian allows the same view type in two leaves, and two
+ *  panes minting the same ids would point every header at the first pane's
+ *  lists — a screen reader would then announce the wrong section. */
+let paneSeq = 0;
 
 /** How often the list re-derives when nothing emits. Matches the board's
  *  backstop (board-view.ts:162) — it also advances the relative-time labels,
@@ -47,6 +60,14 @@ type EmptyKind = "open-exo" | "no-chats" | "no-matches";
  *  `needs-input` already outranks `running` in the model. */
 const statusText = (r: ChatRow): string =>
   r.lane === "needs-input" ? `Needs ${r.reason === "perm" ? "permission" : "an answer"}` : "Working";
+
+/** What the gutter dot says out loud. Shape and colour are the visual channel;
+ *  a screen reader gets neither, so the meaning is spelled out. */
+const DOT_LABEL: Record<ChatDot, string> = {
+  running: "Running",
+  "needs-you": "Needs you",
+  unseen: "Unseen reply",
+};
 
 export class ChatListView extends ItemView {
   private query = "";
@@ -73,6 +94,8 @@ export class ChatListView extends ItemView {
    *  carried in the row signature: putting it in the signature would rebuild two
    *  rows on every arrow press, which drops focus and defeats the point. */
   private cursor: string | null = null;
+  /** Namespace for this pane's aria ids — see `paneSeq`. */
+  private readonly uid = `exo-chats-${++paneSeq}`;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ExoPlugin) {
     super(leaf);
@@ -260,7 +283,13 @@ export class ChatListView extends ItemView {
     // has to survive a label being reworded, so this file never derives one
     // from display text.
     this.renderSections(vm.sections, now);
-    this.order = vm.sections.flatMap((s) => s.items).map((r) => r.id);
+    // Only what is on screen is on the arrow-key axis: a collapsed section's
+    // rows are not painted, so leaving them in the order would make Down walk
+    // the cursor into nothing and Enter open a chat the user cannot see.
+    this.order = vm.sections
+      .filter((s) => !this.collapsed(s.key))
+      .flatMap((s) => s.items)
+      .map((r) => r.id);
     if (this.cursor && !this.order.includes(this.cursor)) this.cursor = null;
     this.paintCursor(false);
   }
@@ -318,10 +347,37 @@ export class ChatListView extends ItemView {
     this.searchEl?.blur();
   }
 
+  /* ------------------------------ sections ------------------------------ */
+
+  private collapsed(key: ChatSectionKey): boolean {
+    return isSectionCollapsed(this.plugin.settings.chatsCollapsed, key);
+  }
+
+  /** Flip one section and persist it. The whole point of the state is that it
+   *  survives a reload, so the write happens on the gesture rather than on some
+   *  later save — a crash between the two would silently discard the choice. */
+  private toggleSection(key: ChatSectionKey): void {
+    this.plugin.settings.chatsCollapsed = toggleSectionCollapsed(
+      this.plugin.settings.chatsCollapsed,
+      key,
+    );
+    void this.plugin.saveSettings();
+    // The cursor may have been sitting on a row that just went off screen;
+    // `paint` re-derives the order and drops it if so.
+    this.paint();
+  }
+
   /**
    * One reconciled list per section, with the section's header as its SIBLING.
    * Sections are keyed by `ChatSectionKey` and reused across paints, so a chat
    * moving from Running to Settled does not reflash the whole list.
+   *
+   * Collapsing is a STATE on the reused section, never a rebuild: the header,
+   * its handler and its aria wiring are built once and only the class, the
+   * count and `aria-expanded` change. A collapsed section reconciles to an empty
+   * list rather than hiding a full one — the rows would otherwise stay in the
+   * accessibility tree, and building rows nobody can see costs a paint on every
+   * 5s tick for a section the user explicitly put away.
    */
   private renderSections(specs: readonly ChatSection[], now: number): void {
     const host = this.listHost;
@@ -336,19 +392,61 @@ export class ChatListView extends ItemView {
       let sec = Array.from(host.children).find(
         (el) => (el as HTMLElement).dataset.section === spec.key,
       ) as HTMLElement | undefined;
-      if (!sec) {
-        sec = createDiv({ cls: "mva-chats-group" });
-        sec.dataset.section = spec.key;
-        sec.createDiv({ cls: "mva-chats-group-label", text: spec.label });
-        sec.createDiv({ cls: "mva-chats-group-list" });
-      }
+      if (!sec) sec = this.buildSection(spec);
       // Reading host.children live is correct here: after iteration i-1 the
       // first i slots already hold the first i sections, so a match can only sit
       // at an index >= i and insertBefore always moves it forward.
       if (host.children[i] !== sec) host.insertBefore(sec, host.children[i] ?? null);
+      const collapsed = this.collapsed(spec.key);
+      sec.toggleClass("is-collapsed", collapsed);
+      const header = sec.querySelector<HTMLElement>(".mva-chats-group-label");
+      header?.setAttribute("aria-expanded", String(!collapsed));
+      // The count exists ONLY while collapsed, and that is what makes collapsing
+      // safe: a header that hides its rows without saying how many it is hiding
+      // turns "put this away" into "forget this exists". Expanded, the rows are
+      // right there and the number would be noise.
+      sec
+        .querySelector<HTMLElement>(".mva-chats-group-count")
+        ?.setText(collapsed ? String(spec.items.length) : "");
       const list = sec.querySelector<HTMLElement>(".mva-chats-group-list");
-      if (list) reconcileList(list, spec.items.map((r) => this.rowModel(r, now)));
+      if (list) reconcileList(list, collapsed ? [] : spec.items.map((r) => this.rowModel(r, now)));
     });
+  }
+
+  /**
+   * The section shell: a header that toggles, and the list it controls. Built
+   * once per key and reused, so the click handler is registered once — a header
+   * rebuilt on every paint would drop keyboard focus mid-interaction.
+   *
+   * The header is a `div` made operable by `clickable` (role=button, tabIndex,
+   * Enter/Space), not a `<button>`: on a real button, Obsidian's own
+   * `button:not(.clickable-icon)` rule out-specifies a single-class selector and
+   * strips the padding and background out from under it.
+   */
+  private buildSection(spec: ChatSection): HTMLElement {
+    const sec = createDiv({ cls: "mva-chats-group" });
+    sec.dataset.section = spec.key;
+    // `day:This week` is a legal section key and an ILLEGAL id: `aria-controls`
+    // and `aria-labelledby` are space-separated id LISTS, so a key with a space
+    // in it would resolve to two ids that do not exist and silently unwire the
+    // whole relationship. Slugged, not indexed by paint order — the id has to
+    // survive a section being dropped and re-added.
+    const slug = spec.key.replace(/[^a-zA-Z0-9]+/g, "-");
+    const headerId = `${this.uid}-h-${slug}`;
+    const listId = `${this.uid}-l-${slug}`;
+    const header = sec.createDiv({ cls: "mva-chats-group-label", attr: { id: headerId } });
+    // A rotation, not two icons: swapping chevron-right for chevron-down would
+    // re-run setIcon on every toggle and lose the transition that makes the
+    // gesture legible.
+    setIcon(header.createSpan({ cls: "mva-chats-group-chevron" }), "chevron-right");
+    header.createSpan({ cls: "mva-chats-group-name", text: spec.label });
+    header.createSpan({ cls: "mva-chats-group-count" });
+    header.setAttribute("aria-controls", listId);
+    clickable(header, () => this.toggleSection(spec.key));
+    const list = sec.createDiv({ cls: "mva-chats-group-list", attr: { id: listId } });
+    list.setAttribute("role", "region");
+    list.setAttribute("aria-labelledby", headerId);
+    return sec;
   }
 
   private renderEmpty(kind: EmptyKind): void {
@@ -419,11 +517,14 @@ export class ChatListView extends ItemView {
   private buildRichRow(r: ChatRow, now: number): HTMLElement {
     const row = createDiv({ cls: "mva-chats-row is-rich" });
     if (r.depth === 1) row.addClass("is-child");
+    // `is-needs-input` still colours the status text; the running and unseen
+    // row classes went with the rails they were the only consumers of — the
+    // gutter dot carries those two states now, and a class nothing styles is a
+    // hook that quietly rots.
     if (r.lane === "needs-input") row.addClass("is-needs-input");
-    else if (r.lane === "running") row.addClass("is-running");
     if (r.open) row.addClass("is-active");
-    if (r.unseen) row.addClass("is-unseen");
 
+    this.dotInto(row, r);
     const head = row.createDiv({ cls: "mva-chats-line" });
     if (r.pinned) setIcon(head.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
     head.createSpan({ cls: "mva-chats-name", text: r.title });
@@ -444,6 +545,26 @@ export class ChatListView extends ItemView {
     return row;
   }
 
+  /**
+   * The status dot, in a gutter that is ALWAYS reserved — the element is
+   * created for every row, whether or not it carries a state, so the titles sit
+   * on one vertical line and the list does not jitter as a chat starts running
+   * or goes quiet. That stability is the whole reason this replaced the left
+   * rails, which painted three unrelated meanings into the same 2px channel.
+   *
+   * The state is carried as a class, not a colour: filled / ring / small is the
+   * signal, colour only reinforces it, so the row still reads under a theme that
+   * flattens the palette and for someone who cannot separate orange from green.
+   * The label is what a screen reader gets — the shape means nothing to it.
+   */
+  private dotInto(row: HTMLElement, r: ChatRow): void {
+    const dot = chatDot(r);
+    const el = row.createSpan({ cls: "mva-chats-dot" });
+    if (!dot) return;
+    el.addClass(`is-${dot}`);
+    el.setAttribute("aria-label", DOT_LABEL[dot]);
+  }
+
   /** The stopped/error marker, shared by both densities so a failed turn is
    *  never visible in one section and invisible in the other. */
   private badgeInto(host: HTMLElement, r: ChatRow): void {
@@ -460,7 +581,7 @@ export class ChatListView extends ItemView {
     const row = createDiv({ cls: "mva-chats-row is-compact" });
     if (r.depth === 1) row.addClass("is-child");
     if (r.open) row.addClass("is-active");
-    if (r.unseen) row.addClass("is-unseen");
+    this.dotInto(row, r);
     if (r.pinned) setIcon(row.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
     this.badgeInto(row, r);
     row.createSpan({ cls: "mva-chats-name", text: r.title });

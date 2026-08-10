@@ -6272,8 +6272,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    recedes to a single muted line, because that is a list you SCAN.
 
    No permanent surface behind either family: hierarchy comes from weight, space
-   and one 2px rail, so the pane reads as part of the sidebar rather than a card
-   stack dropped into it. Every value is a token or a var() fallback. */
+   and one dot in a reserved gutter, so the pane reads as part of the sidebar
+   rather than a card stack dropped into it. Every value is a token or a var()
+   fallback. */
 .mva-chats { gap: 0; }
 .mva-chats-head {
   display: flex;
@@ -6323,20 +6324,53 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-empty:empty { display: none; }
 
 /* Section headers double as the separators between the working set and the
-   rest — a rule plus a label, no boxes. */
+   rest — a rule plus a label, no boxes — and as the collapse control. The whole
+   header is the target, not the chevron: a 12px glyph is a thing you aim at,
+   and a header you can only hit on its icon reads as broken the first time you
+   miss. It is a div with role=button (see chat-list-view): on a real <button>,
+   Obsidian's `button:not(.clickable-icon)` out-specifies a single-class rule
+   and strips the padding out from under it. */
 .mva-chats-group { display: flex; flex-direction: column; }
 .mva-chats-group + .mva-chats-group { margin-top: 10px; }
 .mva-chats-group-label {
   display: flex;
   align-items: center;
-  gap: var(--mv-control-gap, 8px);
-  padding: 0 9px 4px;
+  gap: 6px;
+  padding: 2px 9px 4px;
+  cursor: pointer;
   color: var(--mv-label-color, var(--text-faint));
   font-size: var(--mv-label-size, var(--font-ui-smaller));
   font-weight: var(--mv-label-weight, inherit);
   letter-spacing: var(--mv-label-track, 0.04em);
   text-transform: var(--mv-label-transform, uppercase);
+  transition: color var(--mv-t, var(--mva-t));
 }
+.mva-chats-group-label:hover { color: var(--text-muted); }
+.mva-chats-group-name { flex-shrink: 0; }
+/* A rotation, not a second icon: the turn IS the feedback that the click
+   landed, and swapping glyphs would jump instead of move. */
+.mva-chats-group-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  transition: transform var(--mv-t, var(--mva-t));
+}
+.mva-chats-group-chevron svg { width: 12px; height: 12px; }
+.mva-chats-group:not(.is-collapsed) .mva-chats-group-chevron { transform: rotate(90deg); }
+/* The count exists only while collapsed — that is what makes collapsing safe
+   rather than a way to forget work. `:empty` keeps the flex gap from opening a
+   hole where a number isn't. Tracking is reset: the header's letter-spacing is
+   there for uppercase words, and a spaced-out number reads as two numbers. */
+.mva-chats-group-count {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
+}
+.mva-chats-group-count:empty { display: none; }
+/* Collapsed: the list element stays in the DOM (it owns the aria region and the
+   reconciled children), but it is emptied by the renderer, so there is nothing
+   to hide — this only closes the gap it would otherwise still occupy. */
+.mva-chats-group.is-collapsed .mva-chats-group-list { display: none; }
 /* The separator IS the kit hairline, not a border colour of its own — the whole
    suite draws its rules with this token, and a pane inventing its own is what
    makes two panels look like two products. */
@@ -6361,34 +6395,80 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 /* The keyboard cursor is a stronger fill than hover, because it is the thing
    Enter will act on and it has to win against a pointer resting elsewhere. */
 .mva-chats-row.is-cursor { background: var(--background-modifier-active-hover); }
-/* Open as a tab: a rail, deliberately NEUTRAL. Accent belongs to the live
-   states, where it means "something is happening right now" — painting "you
-   already have this open" the same colour made idle rows look urgent.
-   Suppressed on rich rows, which carry their own lane rail. */
-.mva-chats-row.is-active::before {
-  content: "";
-  position: absolute;
-  inset: 4px auto 4px 0;
-  width: 2px;
-  border-radius: var(--mv-r1, var(--mva-r1, 6px));
-  background: var(--background-modifier-border-hover);
-}
-.mva-chats-row.is-rich.is-active::before { content: none; }
+/* ------------------------------ status dot ------------------------------ */
+/* Replaces the two families of left rails this list used to carry (a neutral
+   one for "open as a tab", an accent/orange/green one for running/needs-you/
+   unseen). Three unrelated meanings sharing one 2px channel is what made the
+   pane read as striped noise; and "open as a tab" needed no marker at all once
+   the sections themselves say it — the Open group IS the statement.
 
-/* Rich rows — the working set and the pins. */
-.mva-chats-row.is-rich { padding: 7px 9px 7px 12px; }
-.mva-chats-row.is-rich.is-running::after,
-.mva-chats-row.is-rich.is-needs-input::after,
-.mva-chats-row.is-rich.is-unseen::after {
-  content: "";
+   Three rules make this a design rather than a dot:
+
+   1. THE GUTTER IS ALWAYS RESERVED. `.mva-chats-dot` is created for every row,
+      empty or not, and the row's left padding is constant — so titles sit on one
+      vertical line and the list does not shift as a chat starts or stops.
+   2. SHAPE IS THE SIGNAL, COLOUR ONLY REINFORCES IT. Filled 6px, 8px ring, 4px
+      dot are three different marks in a greyscale screenshot too, which is what
+      keeps them legible for a colour-blind reader and under themes that
+      flatten --color-orange and --color-green towards each other.
+   3. The mark is drawn on ::after inside a fixed-size flex box, so changing its
+      size changes only the mark, never the gutter. */
+.mva-chats-dot {
   position: absolute;
-  inset: 7px auto 7px 4px;
-  width: 2px;
-  border-radius: var(--mv-r1, var(--mva-r1, 6px));
-  background: var(--interactive-accent);
+  left: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  /* The row is the click target; the dot must never eat a click meant for it. */
+  pointer-events: none;
 }
-.mva-chats-row.is-rich.is-needs-input::after { background: var(--color-orange); }
-.mva-chats-row.is-rich.is-unseen::after { background: var(--color-green); }
+.mva-chats-dot::after { content: ""; border-radius: 50%; }
+/* Aligned to the FIRST LINE on a rich row (three lines tall) and to the whole
+   row on a compact one (exactly one line) — a dot centred on a three-line card
+   would float beside the preview instead of the title it belongs to. */
+.mva-chats-row.is-rich .mva-chats-dot { top: 7px; height: 1.5em; }
+.mva-chats-row.is-compact .mva-chats-dot { top: 0; bottom: 0; }
+/* Running — filled, and the only mark that moves. A slow breath, not a spinner:
+   it says "still going" at the edge of attention instead of competing with the
+   text for it. */
+.mva-chats-dot.is-running::after {
+  width: 6px;
+  height: 6px;
+  background: var(--interactive-accent);
+  animation: mva-chats-dot-pulse 2.6s ease-in-out infinite;
+}
+/* Needs you — a RING: an open shape reads as unfinished, and it is the largest
+   of the three because it is the only one asking for something. */
+.mva-chats-dot.is-needs-you::after {
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 2px solid var(--color-orange);
+}
+/* Unseen — the smallest mark, and static. News, not an obligation. */
+.mva-chats-dot.is-unseen::after {
+  width: 4px;
+  height: 4px;
+  background: var(--color-green);
+}
+@keyframes mva-chats-dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.65); opacity: 0.4; }
+}
+/* The blanket reduced-motion block clamps every animation in .mva-root to one
+   near-zero cycle, which already stops this. Stated again here because for THIS
+   element the motion is the message: leaving it to a global clamp is how a
+   pulse comes back the day someone re-scopes the blanket. */
+@media (prefers-reduced-motion: reduce) {
+  .mva-chats-dot.is-running::after { animation: none; }
+  .mva-chats-group-chevron,
+  .mva-chats-group-label { transition: none; }
+}
+
+/* Rich rows — the working set and the pins. The 20px left padding IS the
+   gutter: 6px inset + a 10px dot box + 4px of air before the title. */
+.mva-chats-row.is-rich { padding: 7px 9px 7px 20px; }
 .mva-chats-line { display: flex; align-items: baseline; gap: 6px; }
 .mva-chats-preview {
   margin-top: 1px;
@@ -6438,7 +6518,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 9px 4px 12px;
+  padding: 4px 9px 4px 20px;
   font-size: var(--font-ui-small);
 }
 .mva-chats-row.is-compact .mva-chats-name {
@@ -6464,9 +6544,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-age { flex-shrink: 0; color: var(--text-faint); font-size: var(--font-ui-smaller); }
 
 /* Fan-out children — indented one step under the conversation that spawned
-   them. A margin, not padding: the row's own left inset already carries the
-   active rail and the live dot, and padding would push those off the indent.
-   One level only, by construction (core/child-tree). */
+   them. A margin, not padding: the row's own left inset IS the status gutter,
+   and padding would slide the dot away from the title it belongs to. One level
+   only, by construction (core/child-tree). */
 .mva-chats-row.is-child { margin-left: 12px; }
 
 /* Markers — pin and the stopped/error badge, shared by both densities. */
