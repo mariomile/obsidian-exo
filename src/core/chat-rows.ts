@@ -1,22 +1,29 @@
 /**
  * Chat-rows — the pure model behind the `exo-chats` sidebar list. UI-free and
- * Obsidian-free so the tiering, search and grouping rules are testable without
- * mounting a view, same discipline as `history.ts` and `session-cards.ts`.
+ * Obsidian-free so the sectioning, search and grouping rules are testable
+ * without mounting a view, same discipline as `history.ts` and
+ * `session-cards.ts`.
  *
- * Two tiers, one rule each:
- *   - LIVE: `deriveLane` says running or needs-input. Reused verbatim rather
- *     than re-derived, because its precedence (perm → ask → streaming) is the
- *     correctness core: a conversation blocked on a permission prompt is STILL
- *     `streaming: true`, so any local re-implementation that reads streaming
- *     first would label "waiting for you" as "working".
- *   - HISTORY: everything else, bucketed by `groupByTime`.
+ * The default view groups by STATE, not by date: what needs you, what is
+ * running, what you have open, what you pinned, then everything else. A date
+ * bucket answers "when did I touch this", which is a question you ask
+ * occasionally; the sidebar's standing question is "what is my situation", and
+ * only the state axis answers it. The date axis is still available whole, as
+ * `days` mode — the two are peers, which is why this is a mode and not a
+ * default that swallowed the other.
  *
- * A row never appears in both. `now` is a parameter, never read internally —
- * same rule, and same reason, as `history.ts`.
+ * Liveness is read off `deriveLane` rather than re-derived, because its
+ * precedence (perm → ask → streaming) is the correctness core: a conversation
+ * blocked on a permission prompt is STILL `streaming: true`, so any local
+ * re-implementation that reads streaming first would label "waiting for you"
+ * as "working".
+ *
+ * A row appears in exactly one section. `now` is a parameter, never read
+ * internally — same rule, and same reason, as `history.ts`.
  */
 import { deriveLane, type NeedsInputReason, type SessionBadge } from "./session-cards";
-import { groupByTime, type TimeGroup } from "./history";
-import { groupAcrossHomes } from "./child-tree";
+import { groupByTime, type TimeGroupLabel } from "./history";
+import { groupAcrossHomes, groupByParent } from "./child-tree";
 
 /** The per-conversation facts the list needs. Structural, not `Convo` — this
  *  module stays ignorant of the view's types, the enumerator adapts. */
@@ -84,44 +91,101 @@ export interface ChatRow {
 /**
  * How the list is carved up.
  *
- *  - `activity` — the working set first: what is running, blocked or open as a
- *    tab, then pins, then the rest by day. Answers "what am I in the middle of".
+ *  - `activity` — by state: what needs you, what is running, what is open,
+ *    what is pinned, then everything settled. Answers "what is my situation".
  *  - `days` — pure chronology by last message, with no promotion at all.
  *    Answers "what did I do on Tuesday", which the activity view cannot: there,
- *    a chat you happen to have open sits above chats you touched more recently,
- *    so the day columns lie about order.
+ *    a chat that needs you sits above chats you touched more recently, so a day
+ *    column would lie about order.
  *
  * Both are legitimate readings of the same data and neither subsumes the other,
  * which is why this is a mode and not a default.
  */
 export type ChatListMode = "activity" | "days";
 
+/**
+ * Stable identity for a section, independent of its label. The renderer keys
+ * DOM reuse and per-section collapsed state off this, so it must survive a
+ * label being reworded or localized — a section keyed by its display text
+ * loses its collapsed state the day someone renames "Settled".
+ *
+ * `day:` sections only exist in `days` mode; the five state sections only in
+ * `activity`. `related` can appear in either, and is always last.
+ */
+export type ChatSectionKey =
+  | "needsYou"
+  | "running"
+  | "open"
+  | "pinned"
+  | "settled"
+  | "related"
+  | `day:${TimeGroupLabel}`;
+
+export interface ChatSection {
+  key: ChatSectionKey;
+  /** Display text. Never parsed — see `ChatSectionKey`. */
+  label: string;
+  items: ChatRow[];
+}
+
 export interface ChatListVM {
-  /** The working set: anything running or blocked, plus every open tab. Rendered
-   *  rich — title, preview, provider and model — because these are the rows you
-   *  are choosing between right now, and a bare title is not enough to choose. */
-  active: ChatRow[];
-  /** Pinned but not currently in the working set. A pin that is also open shows
-   *  up in `active` instead, with its pin marked, rather than in both places. */
-  pinned: ChatRow[];
-  /** Everything else, bucketed by day. Rendered compact. */
-  groups: TimeGroup<ChatRow>[];
   /**
-   * Conversations the SEMANTIC pass found that the literal filter missed, in
-   * relevance order. Kept as its own tier rather than merged into the results:
-   * a row that is here because a model thinks it is related, not because it
-   * contains what you typed, has to say so — silently mixing the two makes the
-   * filter look broken the first time it returns something without your words
-   * in it. Empty unless a semantic ranking was supplied.
+   * Every section to render, in order, none of them empty. One ordered list
+   * rather than named fields: the renderer's job is to iterate and paint, and
+   * a fixed set of fields would make each new section a change in three files.
+   *
+   * In `activity` mode: `needsYou`, `running`, `open`, `pinned`, `settled`.
+   * In `days` mode: one `day:` section per non-empty bucket, in time order.
+   * Either way `related` comes last when a semantic pass supplied hits — rows
+   * that do NOT contain what you typed, which is why they are a section of
+   * their own rather than mixed into the results.
    */
-  related: ChatRow[];
+  sections: ChatSection[];
   /** Rows before the query filter. Distinguishes "no chats yet" from "no chats
    *  match" — different empty states, and collapsing them makes a search look
    *  like it deleted the user's data. */
   total: number;
-  /** Rows after the query filter, across every tier. */
+  /** Rows after the query filter, across every section. */
   matched: number;
 }
+
+/** The state sections of `activity` mode, in precedence order: the first one a
+ *  row qualifies for is the one it lands in, and that is also the order they
+ *  are painted in. */
+const ACTIVITY_SECTIONS = [
+  ["needsYou", "Needs you"],
+  ["running", "Running"],
+  ["open", "Open"],
+  ["pinned", "Pinned"],
+  ["settled", "Settled"],
+] as const satisfies readonly (readonly [ChatSectionKey, string])[];
+
+type ActivityKey = (typeof ACTIVITY_SECTIONS)[number][0];
+
+/**
+ * Which state section a row earns. First match wins, and the order is the
+ * argument:
+ *
+ *  1. `needsYou` — it wants a human: blocked on a permission prompt or a
+ *     question, or its last turn errored or was stopped. A badge counts even
+ *     when the chat is also open, because an error is an action item and being
+ *     open is merely where you left it — filing it under "Open" would put the
+ *     one row that needs doing in the section for rows that need nothing.
+ *  2. `running` — a turn is actually executing.
+ *  3. `open` — in the tab strip, so deliberately kept to hand, but idle.
+ *  4. `pinned` — kept across sessions, and not already above.
+ *  5. `settled` — everything else, by recency, with no day sub-buckets.
+ *
+ * `lane` and `badge` are mutually exclusive by construction (`deriveLane`
+ * only attaches a badge on the idle branch), so 1 and 2 cannot both apply.
+ */
+const activityKey = (r: ChatRow): ActivityKey => {
+  if (r.lane === "needs-input" || r.badge) return "needsYou";
+  if (r.lane === "running") return "running";
+  if (r.open) return "open";
+  if (r.pinned) return "pinned";
+  return "settled";
+};
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -198,20 +262,43 @@ export function modelLabel(provider: string, model: string): string {
     .join(" ");
 }
 
-/**
- * Ordering inside the working set. What blocks on a human outranks what is
- * merely busy, and both outrank a tab that is simply open — the list is read
- * top-down when something needs doing, so the rows that need doing come first.
- * An unseen result sits above an idle tab for the same reason: it is the one
- * row in that band carrying news.
- */
-const ACTIVE_RANK = (r: ChatRow): number => {
-  if (r.lane === "needs-input") return 0;
-  if (r.lane === "running") return 1;
-  return r.unseen ? 2 : 3;
+const byRecency = (a: ChatRow, b: ChatRow): number => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+
+/** Ordering inside `needsYou`: something blocked right now, waiting on an
+ *  answer, outranks something that already finished badly. Then recency. */
+const NEEDS_YOU_RANK = (r: ChatRow): number => (r.lane === "needs-input" ? 0 : 1);
+
+/** Ordering inside `open`: an unseen reply is the one row in a band of idle
+ *  tabs that is carrying news, so it reads first. Then recency. */
+const OPEN_RANK = (r: ChatRow): number => (r.unseen ? 0 : 1);
+
+const RANKED_SORT = (rank: (r: ChatRow) => number) => (a: ChatRow, b: ChatRow): number => {
+  const d = rank(a) - rank(b);
+  return d !== 0 ? d : byRecency(a, b);
 };
 
-const byRecency = (a: ChatRow, b: ChatRow): number => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+/** Per-section ordering; anything unlisted is plain recency. */
+const SECTION_SORT: Partial<Record<ActivityKey, (a: ChatRow, b: ChatRow) => number>> = {
+  needsYou: RANKED_SORT(NEEDS_YOU_RANK),
+  open: RANKED_SORT(OPEN_RANK),
+};
+
+/**
+ * Rows that must never be relocated under a parent: exactly the membership of
+ * the top two sections, derived from `activityKey` rather than restated, so
+ * the two cannot drift apart.
+ *
+ * Live verification found the failure this exists for: a fan-out child blocked
+ * on a permission prompt, whose parent was an old closed chat, was nested into
+ * a history bucket — a conversation waiting on the user, filed under the
+ * archive. Nesting is a convenience; "this is blocked on you" is not. Anchoring
+ * pins the row's OWN position only: its children still nest under it, in its
+ * section, same as under any other root.
+ */
+const isAnchored = (r: ChatRow): boolean => {
+  const key = activityKey(r);
+  return key === "needsYou" || key === "running";
+};
 
 function toRow(s: ChatRowSource): ChatRow {
   const row: ChatRow = {
@@ -240,18 +327,14 @@ function stampDepth(grouped: readonly { item: ChatRow; depth: 0 | 1 }[]): ChatRo
 
 /**
  * Build the list. Order of operations matters: exclusions, then the query
- * filter, then tiering. Filtering before tiering is what lets a zero-match
- * search return every tier empty, so the view renders one "no matches" state
- * instead of three empty sections stacked on each other.
+ * filter, then sectioning. Filtering first is what lets a zero-match search
+ * return no sections at all, so the view renders one "no matches" state
+ * instead of a stack of empty headers.
  *
- * Three tiers, and a row lands in exactly one — EXCEPT a child, which is
- * always relocated to sit under its parent regardless of which tier it would
- * otherwise have earned (see `depth` on `ChatRow`):
- *   - `active` — running, blocked, or open as a tab. The working set.
- *   - `pinned` — pinned and NOT in the working set. A pin that is also open
- *     belongs in `active`, marked, rather than listed twice: duplicating it
- *     would make the same conversation look like two.
- *   - `groups`  — everything else, by day.
+ * A row lands in exactly one section — EXCEPT a child, which is relocated to
+ * sit under its parent regardless of the section it would otherwise have
+ * earned (see `depth` on `ChatRow`), and except an anchored row, which is
+ * never relocated at all (see `isAnchored`).
  */
 export function buildChatList(
   sources: readonly ChatRowSource[],
@@ -278,67 +361,78 @@ export function buildChatList(
     }
   }
 
-  const active: ChatRow[] = [];
-  const pinned: ChatRow[] = [];
-  const history: ChatRow[] = [];
-
+  const rows: ChatRow[] = [];
   for (const s of matched) {
     const d = deriveLane(s);
     const row = toRow(s);
-    const isLive = d.lane === "running" || d.lane === "needs-input";
-    if (isLive) {
-      row.lane = d.lane as "running" | "needs-input";
+    if (d.lane === "running" || d.lane === "needs-input") {
+      row.lane = d.lane;
       if (d.reason) row.reason = d.reason;
     }
-    // The badge is independent of the lane and survives into any tier: a chat
-    // whose last turn errored says so whether it is open, pinned or filed.
+    // The badge is independent of the lane and survives into any section: a
+    // chat whose last turn errored says so whether it is open, pinned or filed.
     if (d.badge) row.badge = d.badge;
-    // In `days` mode nothing is promoted — that is the whole point of the mode.
-    // The rows keep their lane, pin and unseen flags, so the renderer still
-    // marks them; only the GROUPING changes, never the information.
-    if (mode === "days") history.push(row);
-    else if (isLive || row.open) active.push(row);
-    else if (row.pinned) pinned.push(row);
-    else history.push(row);
+    rows.push(row);
   }
 
-  active.sort((a, b) => {
-    const rank = ACTIVE_RANK(a) - ACTIVE_RANK(b);
-    return rank !== 0 ? rank : byRecency(a, b);
-  });
-  pinned.sort(byRecency);
-  // groupByTime deliberately does not sort (history.ts:33-36) — the caller owns
-  // the order, so sort before bucketing, not after.
-  history.sort(byRecency);
-  const dayGroups = groupByTime(history, opts.now);
-
-  // One cross-collection pass, not one nest() per tier: a child is relocated
-  // to sit under its parent wherever the parent landed, even when that is a
-  // different tier or a different day bucket — see `depth` on `ChatRow` and
-  // `groupAcrossHomes`. Each tier's OWN sort decides root order within it;
-  // this only decides which collection a child ends up in and where among its
-  // siblings. Home order below (active, pinned, days oldest-bucket-order,
-  // related last) only matters for children whose siblings come from more than
-  // one collection — a related-only hit sorts last because it is the least
-  // certain match.
+  // Named homes for the nesting pass, in paint order. `related` is deliberately
+  // NOT one of them — see below.
   const homes = new Map<string, ChatRow[]>();
-  homes.set("active", active);
-  homes.set("pinned", pinned);
-  for (const g of dayGroups) homes.set(`day:${g.label}`, g.items);
-  homes.set("related", related);
-  const grouped = groupAcrossHomes(homes);
+  const labels = new Map<string, string>();
+
+  if (mode === "days") {
+    // Nothing is promoted here — that is the whole point of the mode. The rows
+    // keep their lane, pin and unseen flags, so the renderer still marks them;
+    // only the GROUPING changes, never the information.
+    //
+    // groupByTime deliberately does not sort (history.ts:33-36) — the caller
+    // owns the order, so sort before bucketing, not after.
+    const chronological = [...rows].sort(byRecency);
+    for (const g of groupByTime(chronological, opts.now)) {
+      homes.set(`day:${g.label}`, g.items);
+      labels.set(`day:${g.label}`, g.label);
+    }
+  } else {
+    for (const [key, label] of ACTIVITY_SECTIONS) {
+      homes.set(key, []);
+      labels.set(key, label);
+    }
+    for (const row of rows) homes.get(activityKey(row))!.push(row);
+    for (const [key] of ACTIVITY_SECTIONS) homes.get(key)!.sort(SECTION_SORT[key] ?? byRecency);
+  }
+
+  // One cross-collection pass, not one per section: a child is relocated to sit
+  // under its parent wherever the parent landed, even when that is a different
+  // section entirely — see `depth` on `ChatRow` and `groupAcrossHomes`. Each
+  // section's OWN sort decides root order within it; this only decides which
+  // section a child ends up in and where among its siblings.
+  //
+  // Anchoring applies to `activity` only: it exists to protect the state
+  // sections, and `days` has none — there the axis IS the date, and a child
+  // sitting in its parent's day is that mode working as designed rather than a
+  // row hiding from the section that promised it.
+  const grouped = groupAcrossHomes(homes, mode === "days" ? undefined : { isAnchored });
+
+  // `related` gets its own, single-home nesting pass instead of joining the
+  // union above: it is the semantic tier, defined for the user as rows that
+  // do NOT contain what was typed (chat-list-view.ts). Folding it into the
+  // cross-collection pass would let a literal match get relocated INTO
+  // "doesn't contain your word", and would let a related-only hit get
+  // laundered into a literal section by nesting under a parent that actually
+  // matched. A child can still nest under a parent that is ALSO in `related`
+  // — this is `groupByParent`, the single-home case, not a no-op.
+  const sections: ChatSection[] = [...homes.keys()].map((key) => ({
+    key: key as ChatSectionKey,
+    label: labels.get(key) ?? key,
+    items: stampDepth(grouped.get(key) ?? []),
+  }));
+  sections.push({ key: "related", label: "Related", items: stampDepth(groupByParent(related)) });
 
   return {
-    active: stampDepth(grouped.get("active") ?? []),
-    pinned: stampDepth(grouped.get("pinned") ?? []),
-    // A day bucket that relocation emptied entirely — its only row pulled out
-    // to sit under a parent elsewhere — is dropped rather than rendered as a
-    // header over nothing: a label with no rows under it promises content
-    // that isn't there.
-    groups: dayGroups
-      .map((g) => ({ ...g, items: stampDepth(grouped.get(`day:${g.label}`) ?? []) }))
-      .filter((g) => g.items.length > 0),
-    related: stampDepth(grouped.get("related") ?? []),
+    // A section that relocation emptied — its only row pulled out to sit under
+    // a parent elsewhere — is dropped rather than rendered as a header over
+    // nothing: a label with no rows under it promises content that isn't there.
+    sections: sections.filter((s) => s.items.length > 0),
     total: visible.length,
     // Related rows count as matches: without them a search whose only hits are
     // semantic would report zero and render the "no matches" empty state over a

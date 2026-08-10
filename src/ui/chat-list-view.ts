@@ -1,6 +1,7 @@
 /**
- * The `exo-chats` sidebar — every AI conversation in one left-hand list: a live
- * tier on top (what is running or waiting on you), time-grouped history below.
+ * The `exo-chats` sidebar — every AI conversation in one left-hand list,
+ * grouped by state (what needs you, what is running, what you have open) or,
+ * in `days` mode, by the day it was last touched.
  *
  * It is a READER, not an owner. The conversations live in `ChatView`; this pane
  * projects them through `plugin.listChatRows()` and mutates only through the
@@ -14,7 +15,14 @@
  */
 import { App, ItemView, Menu, Modal, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type ExoPlugin from "../main";
-import { buildChatList, relativeTime, modelLabel, type ChatRow, type ChatListMode } from "../core/chat-rows";
+import {
+  buildChatList,
+  relativeTime,
+  modelLabel,
+  type ChatRow,
+  type ChatSection,
+  type ChatListMode,
+} from "../core/chat-rows";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 import { clickable } from "./dom";
 import { recallChats, reindexChats, recallHost, isRecallUnavailable } from "./chat-recall";
@@ -247,20 +255,12 @@ export class ChatListView extends ItemView {
     // Density is decided PER ROW, not per section: anything running, open or
     // pinned is something you are choosing between and earns the metadata line,
     // wherever it happens to sit. That is what keeps the day view useful — the
-    // grouping changes, the information does not. Empty sections are dropped
-    // rather than shown empty; a header with nothing under it promises content.
-    this.renderSections(
-      [
-        { key: "active", label: "Active", items: vm.active },
-        { key: "pinned", label: "Pinned", items: vm.pinned },
-        ...vm.groups.map((g) => ({ key: `t:${g.label}`, label: g.label, items: g.items })),
-        // Last, and named for what it is: these rows do not contain what you
-        // typed, a model thinks they are about it.
-        { key: "related", label: "Related", items: vm.related },
-      ].filter((s) => s.items.length > 0),
-      now,
-    );
-    this.order = [...vm.active, ...vm.pinned, ...vm.groups.flatMap((g) => g.items), ...vm.related].map((r) => r.id);
+    // grouping changes, the information does not. The model already ordered the
+    // sections and dropped the empty ones, and it owns the section KEYS: a key
+    // has to survive a label being reworded, so this file never derives one
+    // from display text.
+    this.renderSections(vm.sections, now);
+    this.order = vm.sections.flatMap((s) => s.items).map((r) => r.id);
     if (this.cursor && !this.order.includes(this.cursor)) this.cursor = null;
     this.paintCursor(false);
   }
@@ -320,16 +320,13 @@ export class ChatListView extends ItemView {
 
   /**
    * One reconciled list per section, with the section's header as its SIBLING.
-   * Sections are keyed and reused across paints, so a chat moving from Active to
-   * Yesterday does not reflash the whole list.
+   * Sections are keyed by `ChatSectionKey` and reused across paints, so a chat
+   * moving from Running to Settled does not reflash the whole list.
    */
-  private renderSections(
-    specs: Array<{ key: string; label: string; items: ChatRow[] }>,
-    now: number,
-  ): void {
+  private renderSections(specs: readonly ChatSection[], now: number): void {
     const host = this.listHost;
     if (!host) return;
-    const wanted = new Set(specs.map((s) => s.key));
+    const wanted = new Set<string>(specs.map((s) => s.key));
     // A static snapshot: removing from a live HTMLCollection mid-iteration skips
     // siblings.
     for (const el of Array.from(host.children) as HTMLElement[]) {
