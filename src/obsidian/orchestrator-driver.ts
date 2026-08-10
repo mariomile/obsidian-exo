@@ -32,6 +32,7 @@ import {
 } from "../core/orchestrator";
 import type { ConvoStateEvent, ConvoStateListener, Unsubscribe } from "../core/convo-state";
 import type { TaskEntry, TaskPatch, TaskStatus } from "../core/tasks";
+import { buildExcerpt, outcomeFromState, REPORT_DEBOUNCE_MS, type ChildReport } from "../core/child-reports";
 
 /** The driver-facing slice of the B3 `TaskStore` (kept structural so tests can
  *  inject a fake without the real store / WriteQueue). */
@@ -50,8 +51,10 @@ export interface DriverDeps {
   /** Subscribe to the plugin convo-state emitter (B4). Returns an unsubscribe. */
   subscribe(listener: ConvoStateListener): Unsubscribe;
   /** Spawn a chat for a task and return its new convo id (B4
-   *  `startTaskConversation`). Rejects on failure. */
-  spawn(prompt: string, opts?: { model?: string }): Promise<string>;
+   *  `startTaskConversation`). Rejects on failure. `parent` is passed through
+   *  so the view can stamp `parentConvoId` on the new conversation and keep it
+   *  out of the tab strip. */
+  spawn(prompt: string, opts?: { model?: string; parent?: string }): Promise<string>;
   /** Boot-time convo liveness read for a recorded convo id (B4
    *  `readConvoState`, adapted to the reducer's `ConvoSnapshot` shape). */
   liveness(convoId: string): ConvoSnapshot;
@@ -61,6 +64,12 @@ export interface DriverDeps {
   notify(message: string): void;
   /** Called after every state change so the board can re-render. */
   onChange(tasks: TaskEntry[]): void;
+  /** Last assistant text of a convo, for the child-report excerpt. Absent →
+   *  reports carry an empty excerpt. */
+  lastAssistantText?(convoId: string): string;
+  /** Deliver a finished child's report to its parent. Absent → child
+   *  reporting is off. */
+  onChildReport?(report: ChildReport): void;
 }
 
 /**
@@ -84,6 +93,27 @@ function toOrchestratorEvent(e: ConvoStateEvent): OrchestratorEvent {
   }
 }
 
+/**
+ * Did `event` take the task owning its convo out of `running`?
+ *
+ * The reducer already refuses to settle anything that isn't `running` — that is
+ * what makes a second `turn-end` on an idle child a no-op. This reads the SAME
+ * fact off the transition instead of restating the rule, so the two can't drift:
+ * a settling transition is exactly `running` → not-`running` for that convo.
+ * Events with no convo (enqueue, move, slot-freed…) never settle a child.
+ */
+function settledRunningTask(
+  before: TaskEntry[],
+  after: TaskEntry[],
+  event: OrchestratorEvent
+): boolean {
+  if (!("convoId" in event)) return false;
+  const prev = before.find((t) => t.convo === event.convoId);
+  const next = after.find((t) => t.convo === event.convoId);
+  if (!prev || !next) return false;
+  return prev.status === "running" && next.status !== "running";
+}
+
 export class OrchestratorDriver {
   private tasks: TaskEntry[] = [];
   private unsubscribe: Unsubscribe | null = null;
@@ -91,6 +121,10 @@ export class OrchestratorDriver {
    *  spawn awaits) can never interleave a read-modify-write of `this.tasks`. */
   private chain: Promise<void> = Promise.resolve();
   private started = false;
+  /** Reports awaiting delivery, keyed by task id — a child that ends several
+   *  turns in quick succession collapses to ONE report, not several. */
+  private readonly pendingReports = new Map<string, ChildReport>();
+  private reportTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: DriverDeps) {}
 
@@ -141,6 +175,16 @@ export class OrchestratorDriver {
       this.unsubscribe();
       this.unsubscribe = null;
     }
+    if (this.reportTimer) {
+      clearTimeout(this.reportTimer);
+      this.reportTimer = null;
+    }
+    // DELIVER what is pending, never drop it. The driver is stopped both when
+    // the board closes and whenever the board rebuilds it (a ledger change made
+    // outside the board does exactly that), and either can land inside the
+    // report debounce. A dropped report is the child's output gone for good:
+    // the queue on the parent is the only route it has back.
+    this.flushReports();
     this.tasks = [];
     this.started = false;
   }
@@ -148,8 +192,8 @@ export class OrchestratorDriver {
   // --- User actions -------------------------------------------------------
 
   /** Backlog → Queued (scheduler may promote to Running immediately). */
-  enqueue(taskId: string): Promise<void> {
-    return this.dispatch({ type: "enqueue", taskId });
+  async enqueue(taskId: string): Promise<void> {
+    await this.dispatch({ type: "enqueue", taskId });
   }
 
   /**
@@ -172,8 +216,8 @@ export class OrchestratorDriver {
   }
 
   /** Review → Done. User-action-only; ignored elsewhere by the reducer. */
-  markDone(taskId: string): Promise<void> {
-    return this.dispatch({ type: "mark-done", taskId });
+  async markDone(taskId: string): Promise<void> {
+    await this.dispatch({ type: "mark-done", taskId });
   }
 
   /**
@@ -208,14 +252,85 @@ export class OrchestratorDriver {
   }
 
   /** Drag/move to an explicit column + order (board drag & drop). */
-  move(taskId: string, target: TaskStatus, order: number): Promise<void> {
-    return this.dispatch({ type: "move", taskId, target, order });
+  async move(taskId: string, target: TaskStatus, order: number): Promise<void> {
+    await this.dispatch({ type: "move", taskId, target, order });
   }
 
   // --- Convo events -------------------------------------------------------
 
   private onConvoEvent(e: ConvoStateEvent): void {
-    void this.dispatch(toOrchestratorEvent(e));
+    // Chained after the dispatch settles (not a synchronous sibling call):
+    // `task.convo` is only recorded once `runEffect`'s `await spawn()`
+    // resolves, inside SOME earlier dispatch on `this.chain`. Because
+    // `dispatch()` always chains onto `this.chain`, this event's own dispatch
+    // cannot settle before that earlier one does — so by the time we get
+    // here, the owner lookup below is guaranteed to see an up-to-date
+    // `task.convo`. Reading `this.tasks` synchronously (the previous shape)
+    // raced a child that fails to spawn near-instantly: the convo-state event
+    // could reach `onConvoEvent` before the promoting dispatch had recorded
+    // `task.convo`, silently dropping the report. `e` is kept in closure so
+    // its `reason` (needed by `outcomeFromState`) survives.
+    //
+    // The dispatch reports back whether THIS event actually settled the owning
+    // task (see `applyEvent`); only then is there a report to make. Reading the
+    // status here instead would be wrong in both directions — see
+    // `maybeQueueChildReport`.
+    void this.dispatch(toOrchestratorEvent(e)).then((settled) => {
+      if (settled) this.maybeQueueChildReport(e);
+    });
+  }
+
+  /**
+   * Child reporting: a task WITH a parent that reached an outcome tells its
+   * parent. Never inline — batched behind the debounce so a child that ends
+   * several turns in quick succession produces one message, not five.
+   *
+   * Called ONLY on an actual settling transition, never on every outcome-shaped
+   * event. A settled child stays a normal chat: it sits in `review` (or
+   * `needs-input`) until a human clears it, and Mario can keep working in it.
+   * Every one of those later turns emits `turn-end` — the reducer no-ops,
+   * because only a `running` task settles — so reporting off the event alone
+   * re-told the parent "the task you delegated is done", forever, each time
+   * with an excerpt from work it never asked for.
+   */
+  private maybeQueueChildReport(e: ConvoStateEvent): void {
+    if (!this.deps.onChildReport) return;
+    const owner = this.tasks.find((t) => t.convo === e.convoId);
+    if (!owner?.parent) return;
+    const outcome = outcomeFromState(e.state, e.reason);
+    if (!outcome) return;
+    this.pendingReports.set(owner.id, {
+      taskId: owner.id,
+      childConvoId: e.convoId,
+      parentConvoId: owner.parent,
+      title: owner.title,
+      outcome,
+      excerpt: buildExcerpt(this.deps.lastAssistantText?.(e.convoId) ?? ""),
+      at: Date.now(),
+    });
+    this.scheduleReportFlush();
+  }
+
+  private scheduleReportFlush(): void {
+    if (this.reportTimer) clearTimeout(this.reportTimer);
+    this.reportTimer = setTimeout(() => {
+      this.reportTimer = null;
+      this.flushReports();
+    }, REPORT_DEBOUNCE_MS);
+  }
+
+  /** Hand every queued report to the consumer and empty the queue. */
+  private flushReports(): void {
+    const batch = [...this.pendingReports.values()];
+    this.pendingReports.clear();
+    for (const report of batch) {
+      try {
+        this.deps.onChildReport?.(report);
+      } catch {
+        // A failing consumer must never break orchestration — same
+        // isolation contract as the convo-state channel's listeners.
+      }
+    }
   }
 
   // --- Core dispatch ------------------------------------------------------
@@ -223,9 +338,11 @@ export class OrchestratorDriver {
   /**
    * Feed one event through the pure reducer, persist the resulting transitions,
    * and execute any spawn effects — all serialized on `this.chain` so async
-   * spawns can't interleave. Returns when this event's work has settled.
+   * spawns can't interleave. Returns when this event's work has settled, and
+   * resolves with whether this event took the convo's task OUT of `running`
+   * (see `settledRunningTask`). Non-convo events always resolve `false`.
    */
-  private dispatch(event: OrchestratorEvent): Promise<void> {
+  private dispatch(event: OrchestratorEvent): Promise<boolean> {
     const run = this.chain.then(() => this.applyEvent(event));
     // Advance the chain on a branch that swallows rejection, so one failed
     // dispatch never poisons later ones (same discipline as WriteQueue).
@@ -236,10 +353,15 @@ export class OrchestratorDriver {
     return run;
   }
 
-  private async applyEvent(event: OrchestratorEvent): Promise<void> {
+  private async applyEvent(event: OrchestratorEvent): Promise<boolean> {
     const before = this.tasks;
     const result: OrchestratorResult = reduce(before, event, this.deps.config());
     this.tasks = result.tasks;
+    // Computed against the pre-reduce list, INSIDE the serialized chain, so it
+    // reads the same state the reducer just judged. Doing this in
+    // `onConvoEvent` instead would race the chain: another dispatch can run
+    // between this one settling and its `.then` callback.
+    const settled = settledRunningTask(before, result.tasks, event);
 
     // Persist non-effect transitions (status/order/badge changes) first so the
     // ledger reflects the move even if a spawn later fails.
@@ -250,12 +372,17 @@ export class OrchestratorDriver {
     for (const effect of result.effects) {
       await this.runEffect(effect);
     }
+    return settled;
   }
 
   private async runEffect(effect: OrchestratorEffect): Promise<void> {
     if (effect.type !== "spawn-chat") return;
     try {
-      const convoId = await this.deps.spawn(effect.prompt, effect.model ? { model: effect.model } : undefined);
+      const task = this.tasks.find((t) => t.id === effect.taskId);
+      const convoId = await this.deps.spawn(effect.prompt, {
+        ...(effect.model ? { model: effect.model } : {}),
+        ...(task?.parent ? { parent: task.parent } : {}),
+      });
       // A falsy/empty convo id is a FAILURE, not a success: the real
       // `startTaskConversation` (main.ts) and `askInNewConversation` (view.ts)
       // both RESOLVE with "" when the view can't be resolved or the prompt is
@@ -273,12 +400,33 @@ export class OrchestratorDriver {
       // Spawn/write failure → drop the task to needs-input with an error badge,
       // surface a Notice + (implicitly) a badge on the card via the state.
       const msg = err instanceof Error ? err.message : String(err);
+      const failedTask = this.tasks.find((t) => t.id === effect.taskId);
       this.tasks = this.tasks.map((t) =>
         t.id === effect.taskId ? { ...t, status: "needs-input", inputReason: "error", chatMissing: undefined } : t
       );
       await this.deps.store.update(effect.taskId, { status: "needs-input" }).catch(() => undefined);
       this.deps.notify(`Couldn't start task: ${msg}`);
       this.emitChange();
+
+      // A child that never got a convo never emits a convo-state event, so
+      // `maybeQueueChildReport` never fires for it — the parent would wait
+      // forever on a report that can never arrive. Queue one directly, through
+      // the SAME batched/debounced path (keyed by task id), so a parent with
+      // several children in flight still gets one message, not a partial set.
+      if (this.deps.onChildReport && failedTask?.parent) {
+        this.pendingReports.set(failedTask.id, {
+          taskId: failedTask.id,
+          // No convo was ever created — hence `parentConvoId` on the report:
+          // the consumer routes by it and never by looking this id up.
+          childConvoId: "",
+          parentConvoId: failedTask.parent,
+          title: failedTask.title,
+          outcome: "error",
+          excerpt: buildExcerpt(msg),
+          at: Date.now(),
+        });
+        this.scheduleReportFlush();
+      }
 
       // The failed task freed the running slot it was promoted into. Re-run the
       // scheduler so that slot is refilled by the next eligible queued task —

@@ -26,7 +26,9 @@ import {
 } from "../core/open-loops";
 import { WriteQueue } from "../core/write-queue";
 import { patchFrontmatter } from "../core/frontmatter-patch";
-import { createBacklogTask, adaptAppToTaskVault } from "./task-store";
+import { createBacklogTask, createChildTask, ChildTaskRefused, adaptAppToTaskVault } from "./task-store";
+import { canSpawnChild, childrenOf } from "../core/child-tasks";
+import { parseTasksFile } from "../core/tasks";
 import {
   automationLastRunKey,
   cadenceLabel,
@@ -181,6 +183,11 @@ export interface ObsidianToolOpts {
   loopsWriteQueue?: WriteQueue;
   orchestrationEnabled?: boolean;
   tasksWriteQueue?: WriteQueue;
+  /** Convo id of the conversation this tool server belongs to. Present only
+   *  for real chat sessions (never headless runs) — `spawn_task` is not
+   *  registered without it, since a child with no parent has nobody to
+   *  report to. */
+  parentConvoId?: string;
   agentFolderEnabled?: boolean;
   rethinkBridge?: (req: RethinkRequest) => Promise<string>;
   /** Resolved memory-layer paths. Absent → the legacy root (test/fallback). */
@@ -214,6 +221,10 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
      *  injected by the plugin the same way `memoryWriteQueue` is — so `add_task`
      *  and any future board-side writer serialize on the SAME queue. */
     tasksWriteQueue = new WriteQueue(),
+    /** Convo id of the conversation this tool server belongs to. Absent for
+     *  headless runs — `spawn_task` is gated on this being present, in
+     *  addition to `orchestrationEnabled`. */
+    parentConvoId,
     /** The Agent Is the Folder master flag (default OFF). Gates `rethink_memory`
      *  ONLY (in addition to memoryWrite) — every other tool is byte-identical to
      *  before this parameter existed when this is false. */
@@ -1033,6 +1044,68 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     }
   );
 
+  const spawnTask = tool(
+    "spawn_task",
+    "Delegate a piece of work to a separate child conversation that runs in parallel with this one. Use it when the work is self-contained and would otherwise crowd this thread — research a source, draft a section, check a dataset. The child runs as a normal chat (so it can ask Mario for permission) and reports its outcome back here when it finishes. IMPORTANT: the Orchestration Board owns the scheduler, so it must be OPEN for a delegated task to run at all — with the board closed the task is written to the ledger and simply waits there, and nothing will report back. Say so if Mario seems to be expecting results. Prefer doing small work yourself: each child is a whole conversation Mario has to supervise.",
+    {
+      title: z.string().describe("Short title shown on the board card and in the sidebar."),
+      prompt: z.string().describe("The full instruction for the child conversation — it does not see this chat's history."),
+      model: z.string().optional().describe("Provider model id for the child; omit for the default."),
+    },
+    async (args) => {
+      if (!parentConvoId) return ok("Delegation is unavailable in this session.");
+      const vault = adaptAppToTaskVault(app);
+      try {
+        const entry = await createChildTask(
+          vault,
+          tasksWriteQueue,
+          {
+            title: args.title,
+            prompt: args.prompt,
+            parent: parentConvoId,
+            ...(args.model ? { model: args.model } : {}),
+          },
+          paths.tasks,
+          // Evaluated INSIDE createChildTask's own queued turn, against a
+          // read taken that same turn — never a snapshot from before this
+          // call was enqueued. That's what keeps N concurrent spawn_task
+          // calls (one assistant turn, several parallel tool blocks) from
+          // all passing the same stale "N < cap" check simultaneously.
+          (tasks) => canSpawnChild(tasks, parentConvoId)
+        );
+        return ok(
+          `Queued child task ${entry.id}: ${entry.title}. It starts when the Orchestration Board is open and has a free slot, and reports back here when it is done. If the board is closed nothing runs — the task waits in the ledger.`
+        );
+      } catch (e) {
+        // A cap/depth refusal is expected traffic, not a failure — surface the
+        // gate's own reason verbatim as a normal result so the agent reads it
+        // as an answer instead of retrying the tool call.
+        if (e instanceof ChildTaskRefused) return ok(e.reason);
+        throw e;
+      }
+    }
+  );
+
+  const listTasks = tool(
+    "list_tasks",
+    "List tasks on the Orchestration Board. By default it shows only the child tasks this conversation delegated, with their current status — use it to check on work you handed off before reporting to Mario.",
+    {
+      all: z.boolean().optional().describe("List every task on the board instead of only this conversation's children."),
+    },
+    async (args) => {
+      const vault = adaptAppToTaskVault(app);
+      const existing = vault.getFile(paths.tasks);
+      const tasks = parseTasksFile(existing ? await vault.read(paths.tasks) : "");
+      const shown = args.all ? tasks : parentConvoId ? childrenOf(tasks, parentConvoId) : [];
+      if (!shown.length) return ok(args.all ? "The board is empty." : "This conversation has not delegated any tasks.");
+      return ok(
+        shown
+          .map((t) => `- ${t.id} · ${t.status} · ${t.title}${t.convo ? "" : " (not started yet)"}`)
+          .join("\n")
+      );
+    }
+  );
+
   /* ------------------------- automations (exo) ------------------------- */
   // Chat-side management of scheduled playbook runs — the same operations as
   // the Automations panel, so "metti in pausa il digest" works as a sentence.
@@ -1354,7 +1427,8 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
     // agent-folder flag, plus a live view bridge to render its diff/proposal.
     ...(memoryWrite && agentFolderEnabled && rethinkBridge ? [rethinkMemory] : []),
-    ...(orchestrationEnabled ? [addTask] : []),
+    ...(orchestrationEnabled ? [addTask, listTasks] : []),
+    ...(orchestrationEnabled && parentConvoId ? [spawnTask] : []),
   ];
 }
 
@@ -1376,7 +1450,12 @@ export function createObsidianToolServer(
   agentFolderEnabled = false,
   rethinkBridge?: (req: RethinkRequest) => Promise<string>,
   loopsWriteQueue: WriteQueue = new WriteQueue(),
-  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT)
+  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT),
+  // Convo id of the conversation this server belongs to. Kept last in the
+  // positional API so existing callers retain their argument slots (same
+  // convention as `loopsWriteQueue` above). Absent for headless runs, which
+  // must not get `spawn_task` — a child with no parent has nobody to report to.
+  parentConvoId?: string
 ) {
   return createSdkMcpServer({
     name: "obsidian",
@@ -1393,6 +1472,7 @@ export function createObsidianToolServer(
       loopsWriteQueue,
       orchestrationEnabled,
       tasksWriteQueue,
+      parentConvoId,
       agentFolderEnabled,
       rethinkBridge,
       paths,
@@ -1416,6 +1496,10 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__list_loops",
   "mcp__obsidian__list_automations",
   "mcp__obsidian__list_agents",
+  // Reads the ledger and writes nothing. Its own description tells the agent to
+  // "check on work you handed off" — raising a write-permission card for that
+  // turns a status glance into an interruption.
+  "mcp__obsidian__list_tasks",
   ...CAPABILITY_READ_TOOLS,
 ]);
 
@@ -1430,5 +1514,10 @@ export const OBSIDIAN_MEMORY_TOOLS = new Set([
   "mcp__obsidian__rethink_memory",
 ]);
 
-/** Orchestration tool names — gated separately by the `orchestrationEnabled` setting. */
-export const OBSIDIAN_ORCHESTRATION_TOOLS = new Set(["mcp__obsidian__add_task"]);
+// `OBSIDIAN_ORCHESTRATION_TOOLS` used to live here, listing `add_task` alone.
+// Removed rather than extended with `spawn_task`/`list_tasks`: it had ZERO
+// production consumers, and it never could have one — the `orchestrationEnabled`
+// gate is applied at REGISTRATION (see `createObsidianToolServer`), so a tool
+// that is off is not on the server at all and there is nothing left to classify.
+// A Set nobody reads cannot go red when it drifts, which is exactly how
+// `list_tasks` came to be missing from the read-tools Set above unnoticed.

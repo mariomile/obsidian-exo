@@ -8,6 +8,7 @@ import { ChatView, VIEW_TYPE, EXO_ICON } from "./view";
 import { DiagLog } from "./core/diag";
 import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { handoffPrefix } from "./core/handoff";
+import type { ChildReport } from "./core/child-reports";
 import { BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
 import { CockpitView, COCKPIT_VIEW_TYPE } from "./ui/cockpit-view";
 import { AgentsView, AGENTS_VIEW_TYPE } from "./ui/agents-view";
@@ -1129,9 +1130,20 @@ export default class ExoPlugin extends Plugin {
    * queued-task start). The view is created hidden on demand; if it still can't
    * be resolved it returns "".
    */
-  async startTaskConversation(prompt: string, opts?: { model?: string }): Promise<string> {
+  async startTaskConversation(prompt: string, opts?: { model?: string; parent?: string }): Promise<string> {
     await this.ensureChatView();
     return convoBridge.chatView(this.app)?.startTaskConversation(prompt, opts) ?? "";
+  }
+
+  /** Child-reporting bridges for the Orchestration Board driver: read a child's
+   *  last answer for the excerpt, and hand a finished child's report to its
+   *  parent conversation. Both no-op when no ChatView is mounted — there is
+   *  then no conversation to read from or deliver to. */
+  lastAssistantTextOf(convoId: string): string {
+    return convoBridge.chatView(this.app)?.lastAssistantTextOf(convoId) ?? "";
+  }
+  deliverChildReport(report: ChildReport): void {
+    convoBridge.chatView(this.app)?.deliverChildReport(report);
   }
 
   /**

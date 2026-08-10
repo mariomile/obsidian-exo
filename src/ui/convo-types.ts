@@ -27,6 +27,7 @@ import type { LiveTask } from "../core/live-tasks";
 import type { TouchedNote } from "./graph-view";
 import type { ComposerDraft } from "./composer";
 import type { StepsRun } from "./steps";
+import type { ChildReport } from "../core/child-reports";
 
 export interface ToolCard {
   card: HTMLElement;
@@ -68,6 +69,18 @@ export interface ConvoData {
   lastActiveAt?: number;
   /** Manually-assigned Session-Cockpit column (persisted). Absent = default. */
   boardStatus?: SessionLane;
+  /** Convo id of the conversation that spawned this one via `spawn_task`.
+   *  Denormalized from the ledger's `parent` (which stays the source of truth)
+   *  so the sidebar can group without reading tasks.md. Persisted: a child that
+   *  loses its parentage on reload would jump out from under its parent and
+   *  read as an unexplained chat nobody started. */
+  parentConvoId?: string;
+  /** Reports from finished children this conversation has not yet handed to its
+   *  model. Persisted (capped, see `MAX_PENDING_CHILD_REPORTS`) because it is
+   *  the ONLY path by which a delegated conversation's output reaches the
+   *  conversation that delegated it: dropping it on reload left the parent
+   *  showing unread news it could never deliver. Written only when non-empty. */
+  pendingChildReports?: ChildReport[];
   /** The user named this conversation by hand. Both auto-title paths must
    *  respect it. Written only when true; absent reads as false, so every
    *  existing conversations.json stays valid unchanged. Deliberately NOT
@@ -106,6 +119,15 @@ export interface Convo {
    *  is idle, its card sits here instead of the default review lane; running /
    *  needs-input still auto-override. */
   boardStatus?: SessionLane;
+  /** Convo id of the conversation that spawned this one via `spawn_task`.
+   *  Denormalized from the ledger's `parent` (the source of truth) so the chats
+   *  sidebar can indent without reading tasks.md. Persisted. */
+  parentConvoId?: string;
+  /** Reports from finished child tasks, waiting to be handed to this
+   *  conversation's model on its NEXT turn. Persisted (capped): the next turn
+   *  can happen after a restart just as easily as before one, and this queue is
+   *  the only route a child's output has back to the parent's model. */
+  pendingChildReports?: ChildReport[];
   provider: ProviderId;
   model: string;
   allow: Set<string>;

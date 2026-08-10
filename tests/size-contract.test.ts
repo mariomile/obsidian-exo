@@ -27,16 +27,19 @@ import { join } from "node:path";
  */
 
 const CEILINGS: Record<string, number> = {
-  // Alzato deliberatamente il 2026-08-08 a 7100 — budget riservato per la feature
-  // exo-chats. Abbassare il tetto al conteggio esatto dopo ogni estrazione
-  // lasciava zero margine, quindi l'estrazione non comprava niente di
-  // spendibile: la prima feature vera dopo un'estrazione sforava comunque. 7100
-  // resta ben sotto i 7216 da cui questo branch è partito, quindi view.ts esce
-  // comunque più piccolo di come è entrato. Alzare ulteriormente per qualsiasi
-  // ALTRO motivo resta vietato: la risposta a un futuro sforamento è estrarre il
-  // resto della gallery (showGallery più il cluster di selezione bulk), non un
-  // numero più grande.
-  "src/view.ts": 7100,
+  // Abbassato il 2026-08-10 da 7100 dopo l'estrazione annunciata dal commento
+  // precedente: la gallery della cronologia — `showGallery`, `hideGallery`,
+  // `toggleGallery`, il cluster di selezione bulk (bulk bar, free-session,
+  // deleteSelected) e lo stato che ha esattamente la vita dell'overlay
+  // (`galleryEl`, selezione, chip di filtro, snapshot delle sessioni su disco)
+  // — vive ora in `ui/gallery-view.ts`. 7099 -> 6518 righe reali.
+  // Il tetto resta a 6600, non a 6518: stessa scelta già motivata su main.ts
+  // qui sotto — fissarlo al conteggio esatto azzera il margine e l'estrazione
+  // non compra niente di spendibile. 82 righe sono un budget dichiarato per il
+  // wiring che segue (strip/sidebar), non un permesso di ricrescita: alzare il
+  // numero per qualsiasi ALTRO motivo resta vietato, e il prossimo candidato
+  // all'estrazione è il blocco dei tab (renderTabs + working set).
+  "src/view.ts": 6600,
   // Abbassato il 2026-08-07 dopo l'estrazione della registrazione e
   // attivazione delle view in `ui/view-registry.ts`, e di nuovo il 2026-08-08
   // dopo l'estrazione degli SVG di addIcon in `ui/icons.ts` (3492 -> 3460

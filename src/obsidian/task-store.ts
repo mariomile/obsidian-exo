@@ -19,6 +19,7 @@ import {
   applyTaskArchive,
   applyTaskMove,
   applyTaskPatch,
+  formatTask,
   parseTasksFile,
   parseTasksFileWithWarnings,
   serializeTasks,
@@ -96,6 +97,99 @@ export async function createBacklogTask(
       await vault.create(tasksPath, content);
     }
     return entry;
+  });
+}
+
+/** `task-<epoch>` id pattern, matched against `TaskEntry.id` — mirrors the id
+ *  shape `addBacklogTask` generates (`task-${Date.now()}`). */
+const ID_EPOCH = /^task-(\d+)$/;
+
+/** An epoch strictly greater than every existing `task-<epoch>` id already in
+ *  `content`, so ids stay unique even when several fan-out writes land within
+ *  the same millisecond — `Date.now()` has 1ms resolution and the `WriteQueue`
+ *  only guarantees ORDER, not that time has visibly advanced between turns.
+ *  Falls back to the wall clock when it is already ahead of every existing id. */
+function nextUniqueEpoch(content: string): number {
+  const now = Date.now();
+  let maxExisting = 0;
+  for (const { id } of parseTasksFile(content)) {
+    const m = ID_EPOCH.exec(id);
+    if (!m) continue;
+    const epoch = Number(m[1]);
+    if (epoch > maxExisting) maxExisting = epoch;
+  }
+  return Math.max(now, maxExisting + 1);
+}
+
+/** Thrown by `createChildTask` when its `gate` callback refuses the spawn.
+ *  Evaluated against a FRESH read taken INSIDE the same queued turn as the
+ *  write, so concurrent callers each judge the ledger as of their own turn —
+ *  not a snapshot read before they were enqueued (see `createChildTask` doc).
+ *  Carries the gate's own refusal text so a caller (the `spawn_task` tool)
+ *  can surface it to the agent verbatim without a second gate evaluation. */
+export class ChildTaskRefused extends Error {
+  constructor(public readonly reason: string) {
+    super(reason);
+  }
+}
+
+/**
+ * Create a task spawned BY a conversation (fan-out). Same queued write path as
+ * `createBacklogTask` — one shared `WriteQueue`, so chat-driven and board-driven
+ * creation never interleave a read-modify-write — with three differences: the
+ * entry carries its `parent` convo id, it starts `queued` rather than
+ * `backlog` (a delegated task is meant to run as soon as the orchestrator has
+ * a free slot), and its id's epoch is bumped past any id already in the file
+ * so same-millisecond fan-out never collides (see `nextUniqueEpoch`).
+ *
+ * `gate`, if given, runs INSIDE the queued turn against the ledger this same
+ * turn just read — never against a snapshot taken before `enqueue` — so N
+ * concurrent `createChildTask` calls (the canonical fan-out gesture: one
+ * assistant turn issuing several `spawn_task` calls in parallel) each judge
+ * an up-to-date count instead of racing on a stale read that would let all N
+ * pass a cap simultaneously. A refusal throws `ChildTaskRefused` and writes
+ * NOTHING — the queue's error isolation (see `WriteQueue`) means this
+ * rejection affects only this call's own promise, not later queued turns.
+ *
+ * The `backlog`→`queued` patch is applied by slicing the freshly-appended
+ * block out of `content` by its byte offset (`lastIndexOf`), never via
+ * `String.prototype.replace(searchBlock, replacementBlock)` — the replacement
+ * form treats `$$`/`$&`/`` $` ``/`$'` in the REPLACEMENT string as
+ * substitution patterns, and the replacement here is `formatTask(queued)`,
+ * which embeds the caller-supplied prompt/title verbatim. A prompt containing
+ * e.g. `$&` would silently splice a copy of the whole matched block into
+ * itself, corrupting the ledger.
+ */
+export async function createChildTask(
+  vault: TaskVaultAdapter,
+  queue: WriteQueue,
+  task: NewBacklogTask & { parent: string },
+  tasksPath: string = TASKS_PATH,
+  gate?: (tasks: TaskEntry[]) => { ok: true } | { ok: false; reason: string }
+): Promise<TaskEntry> {
+  return queue.enqueue(async () => {
+    const existing = vault.getFile(tasksPath);
+    const current = existing ? await vault.read(tasksPath) : "";
+    if (gate) {
+      const verdict = gate(parseTasksFile(current));
+      if (!verdict.ok) throw new ChildTaskRefused(verdict.reason);
+    }
+    const now = nextUniqueEpoch(current);
+    const { content, entry } = addBacklogTask(current, task, now);
+    const queued: TaskEntry = { ...entry, status: "queued" };
+    const backlogBlock = formatTask(entry);
+    const idx = content.lastIndexOf(backlogBlock);
+    const next =
+      idx === -1
+        ? content
+        : content.slice(0, idx) + formatTask(queued) + content.slice(idx + backlogBlock.length);
+    if (existing) {
+      await vault.modify(tasksPath, next);
+    } else {
+      await vault.ensureFolder(tasksPath);
+      await vault.create(tasksPath, next);
+    }
+    return queued;
   });
 }
 

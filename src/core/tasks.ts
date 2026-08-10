@@ -68,6 +68,10 @@ export interface TaskEntry {
   convo?: string;
   /** Position within its column — omitted when unset. */
   order?: number;
+  /** Convo id of the conversation that spawned this task (fan-out parentage).
+   *  Omitted for tasks a human created directly. The ledger is the source of
+   *  truth for parentage; `Convo.parentConvoId` is a denormalized UI copy. */
+  parent?: string;
   /** The task prompt, stored verbatim (multi-line markdown). */
   prompt: string;
 }
@@ -75,7 +79,7 @@ export interface TaskEntry {
 /** Block header, e.g. `## task-1720000000000`. No `g` flag: safe for `.test`. */
 const HEADER = /^##\s+(task-\d+)\s*$/;
 /** A metadata line inside a block, e.g. `- title: Write the launch post`. */
-const META = /^-\s+(title|status|created|updated|model|convo|order):\s*(.*)$/;
+const META = /^-\s+(title|status|created|updated|model|convo|order|parent):\s*(.*)$/;
 
 /** Render one entry to its canonical on-disk block (no trailing newline). */
 export function formatTask(e: TaskEntry): string {
@@ -89,6 +93,7 @@ export function formatTask(e: TaskEntry): string {
   if (e.model) lines.push(`- model: ${e.model}`);
   if (e.convo) lines.push(`- convo: ${e.convo}`);
   if (e.order !== undefined) lines.push(`- order: ${e.order}`);
+  if (e.parent) lines.push(`- parent: ${e.parent}`);
   lines.push("", e.prompt);
   return lines.join("\n");
 }
@@ -115,6 +120,7 @@ export function parseTasksFile(content: string): TaskEntry[] {
     let model: string | undefined;
     let convo: string | undefined;
     let order: number | undefined;
+    let parent: string | undefined;
 
     for (let m: RegExpExecArray | null; i < lines.length && (m = META.exec(lines[i])); i++) {
       const key = m[1];
@@ -130,7 +136,7 @@ export function parseTasksFile(content: string): TaskEntry[] {
       else if (key === "order") {
         const n = Number(val);
         if (Number.isFinite(n)) order = n;
-      }
+      } else if (key === "parent") parent = val || undefined;
     }
 
     // Optional single blank line separating metadata from the verbatim prompt.
@@ -149,6 +155,7 @@ export function parseTasksFile(content: string): TaskEntry[] {
       ...(model ? { model } : {}),
       ...(convo ? { convo } : {}),
       ...(order !== undefined ? { order } : {}),
+      ...(parent ? { parent } : {}),
       prompt,
     });
   }
@@ -214,6 +221,7 @@ export interface NewBacklogTask {
   title: string;
   prompt: string;
   model?: string;
+  parent?: string;
 }
 
 /**
@@ -242,6 +250,7 @@ export function addBacklogTask(
     created: iso,
     updated: iso,
     ...(task.model ? { model: task.model } : {}),
+    ...(task.parent ? { parent: task.parent } : {}),
     prompt: task.prompt,
   };
   const block = formatTask(entry);

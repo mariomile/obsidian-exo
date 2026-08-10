@@ -403,6 +403,9 @@ export class ChatListView extends ItemView {
       sig: [
         rich, r.title, r.preview, r.lane ?? "", r.reason ?? "", r.badge ?? "",
         r.provider, r.model, r.messageCount, r.open, r.pinned, r.unseen, age,
+        // A row that gains or loses its parent changes shape, so it has to
+        // rebuild rather than be patched in place at the wrong indent.
+        r.depth,
       ].join("|"),
       build: () => (rich ? this.buildRichRow(r, now) : this.buildCompactRow(r, now)),
     };
@@ -418,6 +421,7 @@ export class ChatListView extends ItemView {
    */
   private buildRichRow(r: ChatRow, now: number): HTMLElement {
     const row = createDiv({ cls: "mva-chats-row is-rich" });
+    if (r.depth === 1) row.addClass("is-child");
     if (r.lane === "needs-input") row.addClass("is-needs-input");
     else if (r.lane === "running") row.addClass("is-running");
     if (r.open) row.addClass("is-active");
@@ -457,6 +461,7 @@ export class ChatListView extends ItemView {
   /** History row: one line — optional markers, title, right-aligned age. */
   private buildCompactRow(r: ChatRow, now: number): HTMLElement {
     const row = createDiv({ cls: "mva-chats-row is-compact" });
+    if (r.depth === 1) row.addClass("is-child");
     if (r.open) row.addClass("is-active");
     if (r.unseen) row.addClass("is-unseen");
     if (r.pinned) setIcon(row.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
