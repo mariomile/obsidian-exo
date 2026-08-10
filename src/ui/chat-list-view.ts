@@ -526,8 +526,12 @@ export class ChatListView extends ItemView {
 
     this.dotInto(row, r);
     const head = row.createDiv({ cls: "mva-chats-line" });
-    if (r.pinned) setIcon(head.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
     head.createSpan({ cls: "mva-chats-name", text: r.title });
+    // Markers trail the title, never precede it: a leading icon shifts the title
+    // right on exactly the rows that have one, so the column breaks on the few
+    // rows and holds on the many. Left gutter = live state, title column, then
+    // trailing markers and age.
+    if (r.pinned) setIcon(head.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
     head.createSpan({ cls: "mva-chats-age", text: r.updatedAt ? relativeTime(r.updatedAt, now) : "" });
 
     // A conversation can be streaming its very first turn with no assistant text
@@ -582,9 +586,11 @@ export class ChatListView extends ItemView {
     if (r.depth === 1) row.addClass("is-child");
     if (r.open) row.addClass("is-active");
     this.dotInto(row, r);
+    row.createSpan({ cls: "mva-chats-name", text: r.title });
+    // Same rule as the rich row: markers trail, so the title column holds for
+    // every row whether or not it is pinned or carries a badge.
     if (r.pinned) setIcon(row.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
     this.badgeInto(row, r);
-    row.createSpan({ cls: "mva-chats-name", text: r.title });
     row.createSpan({ cls: "mva-chats-age", text: r.updatedAt ? relativeTime(r.updatedAt, now) : "" });
     row.dataset.id = r.id;
     this.wireRow(row, r);
