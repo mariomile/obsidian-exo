@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groupByParent } from "../src/core/child-tree";
+import { groupAcrossHomes, groupByParent } from "../src/core/child-tree";
 
 type C = { id: string; parentConvoId?: string };
 
@@ -78,5 +78,49 @@ describe("groupByParent", () => {
     for (const node of out) {
       expect([0, 1]).toContain(node.depth);
     }
+  });
+});
+
+/**
+ * `groupAcrossHomes` is the one algorithm; `groupByParent` is its single-home
+ * case. These cover the part `groupByParent` cannot reach: relocation between
+ * named collections, and the anchor that refuses it.
+ */
+describe("groupAcrossHomes — anchoring", () => {
+  const homes = (o: Record<string, C[]>) => new Map(Object.entries(o));
+  const flat = (out: Map<string, { item: C; depth: 0 | 1 }[]>) =>
+    Object.fromEntries([...out].map(([k, v]) => [k, v.map((n) => [n.item.id, n.depth])]));
+
+  it("relocates a child into its parent's home when nothing is anchored", () => {
+    const out = groupAcrossHomes<C>(homes({ live: [{ id: "p" }], old: [{ id: "c", parentConvoId: "p" }] }));
+    expect(flat(out)).toEqual({ live: [["p", 0], ["c", 1]], old: [] });
+  });
+
+  it("leaves an anchored row at depth 0 in the home it was already given", () => {
+    const out = groupAcrossHomes<C>(
+      homes({ live: [{ id: "c", parentConvoId: "p" }], old: [{ id: "p" }] }),
+      { isAnchored: (item) => item.id === "c" },
+    );
+    expect(flat(out)).toEqual({ live: [["c", 0]], old: [["p", 0]] });
+  });
+
+  it("pins an anchored row's OWN position only — its children still nest under it", () => {
+    const out = groupAcrossHomes<C>(
+      homes({
+        live: [{ id: "p", parentConvoId: "gp" }],
+        old: [{ id: "gp" }, { id: "c", parentConvoId: "p" }],
+      }),
+      { isAnchored: (item) => item.id === "p" },
+    );
+    expect(flat(out)).toEqual({ live: [["p", 0], ["c", 1]], old: [["gp", 0]] });
+  });
+
+  it("emits every id exactly once, anchored or not", () => {
+    const out = groupAcrossHomes<C>(
+      homes({ a: [{ id: "p" }, { id: "c1", parentConvoId: "p" }], b: [{ id: "c2", parentConvoId: "p" }] }),
+      { isAnchored: (item) => item.id === "c2" },
+    );
+    const ids = [...out.values()].flat().map((n) => n.item.id);
+    expect(ids.sort()).toEqual(["c1", "c2", "p"]);
   });
 });

@@ -23,19 +23,31 @@ export interface GroupedConvo<T> {
  * collection and a child in another end up nested together instead of stuck
  * in the tiers they individually earned.
  *
+ * `opts.isAnchored`, when supplied, marks rows that must never be relocated:
+ * an anchored row stays in whatever home it was already given, at depth 0,
+ * regardless of where its parent lives. It can still BE a parent — its own
+ * children keep nesting under it, in its home, same as any other root; only
+ * its OWN position is pinned. This is for a row whose liveness outranks
+ * nesting (a conversation running or blocked on the user), which must not be
+ * able to vanish into a parent's day bucket just because that parent happens
+ * to be an old closed chat.
+ *
  * A root — no parent, an absent parent (archived, filtered out, never in this
- * call at all), or part of a cycle — stays in its own home, in the order that
- * home already supplied. Every id in the input appears in the output exactly
- * once: `groupByParent` below is the single-home case of this same pass, so
- * the two never drift into two different sets of rules.
+ * call at all), anchored, or part of a cycle — stays in its own home, in the
+ * order that home already supplied. Every id in the input appears in the
+ * output exactly once: `groupByParent` below is the single-home, unanchored
+ * case of this same pass, so the two never drift into two different sets of
+ * rules.
  */
 export function groupAcrossHomes<T extends { id: string; parentConvoId?: string }>(
-  homes: ReadonlyMap<string, readonly T[]>
+  homes: ReadonlyMap<string, readonly T[]>,
+  opts?: { isAnchored?: (item: T) => boolean }
 ): Map<string, GroupedConvo<T>[]> {
   const allRows: T[] = [];
   for (const rows of homes.values()) allRows.push(...rows);
 
   const present = new Set(allRows.map((c) => c.id));
+  const byId = new Map(allRows.map((c) => [c.id, c]));
   const parentOf = new Map<string, string>();
   for (const c of allRows) {
     if (c.parentConvoId) parentOf.set(c.id, c.parentConvoId);
@@ -57,10 +69,13 @@ export function groupAcrossHomes<T extends { id: string; parentConvoId?: string 
   };
 
   // The parent to group under, or undefined if this item should be a root:
-  // no parentConvoId, the named parent isn't present ANYWHERE across the
-  // supplied homes (orphan — parent archived/deleted/filtered out), or the
-  // link is part of a cycle.
+  // it is anchored, has no parentConvoId, the named parent isn't present
+  // ANYWHERE across the supplied homes (orphan — parent archived/deleted/
+  // filtered out), or the link is part of a cycle. Anchoring is checked
+  // first and short-circuits the rest — an anchored row is a root by
+  // definition, whatever its parent chain says.
   const effectiveParent = (id: string): string | undefined => {
+    if (opts?.isAnchored?.(byId.get(id) as T)) return undefined;
     const parent = parentOf.get(id);
     if (!parent || !present.has(parent) || hasCycle(id)) return undefined;
     return parent;
