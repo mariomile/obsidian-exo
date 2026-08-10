@@ -494,18 +494,25 @@ describe("buildChatList — child indentation", () => {
   });
 
   /**
-   * Parent and child can land in different tiers — a parent kept open sits in
-   * `active` while its finished child falls into a day bucket. Neither may be
-   * pulled out of the tier it earned, so the child renders at top level THERE.
+   * Parent and child can naturally land in different tiers — a parent kept
+   * open sits in `active` while its finished child would otherwise fall into
+   * a day bucket. The child is pulled OUT of the day bucket and rendered
+   * nested under the parent in `active` instead, so a conversation you are
+   * working in shows its whole fan-out in one place. The day bucket it would
+   * have occupied must not even appear, since relocation left it with nothing
+   * in it.
    */
-  it("does not indent across tiers: a child in history whose parent is an open tab", () => {
+  it("indents across tiers: a child that would land in history follows its parent into active", () => {
     const vm = build([
       src({ id: "p", title: "Parent", open: true }),
       src({ id: "c", title: "Child", open: false, parentConvoId: "p" }),
     ]);
-    expect(vm.active.map((r) => [r.id, r.depth])).toEqual([["p", 0]]);
-    expect(historyIds(vm)).toEqual(["c"]);
-    expect(vm.groups[0].items[0].depth).toBe(0);
+    expect(vm.active.map((r) => [r.id, r.depth])).toEqual([
+      ["p", 0],
+      ["c", 1],
+    ]);
+    expect(historyIds(vm)).toEqual([]);
+    expect(vm.groups).toEqual([]);
   });
 
   it("indents inside a day bucket when parent and child share one", () => {
@@ -520,13 +527,20 @@ describe("buildChatList — child indentation", () => {
     ]);
   });
 
-  it("does not indent across day buckets", () => {
+  /**
+   * A parent in one day bucket and a child in another still nest together —
+   * the child is relocated into the PARENT's bucket, and a "Today" section
+   * that would otherwise contain only that child must not render at all: an
+   * empty header over nothing is worse than no header.
+   */
+  it("indents across day buckets: the child follows its parent into the parent's day", () => {
     const vm = byDays([
       src({ id: "p", updatedAt: NOON - 2 * DAY }),
       src({ id: "c", updatedAt: NOON, parentConvoId: "p" }),
     ]);
-    expect(historyIds(vm)).toEqual(["c", "p"]);
-    for (const g of vm.groups) for (const r of g.items) expect(r.depth).toBe(0);
+    expect(vm.groups.map((g) => g.label)).not.toContain("Today");
+    expect(historyIds(vm)).toEqual(["p", "c"]);
+    expect(vm.groups.flatMap((g) => g.items).map((r) => r.depth)).toEqual([0, 1]);
   });
 
   it("caps the indent at one level: a grandchild sits beside its parent, not further right", () => {
@@ -576,5 +590,60 @@ describe("buildChatList — child indentation", () => {
   it("carries parentConvoId onto the row, so the renderer and the model agree", () => {
     const vm = build([src({ id: "c", open: true, parentConvoId: "gone" })]);
     expect(vm.active[0].parentConvoId).toBe("gone");
+  });
+
+  /**
+   * The cardinal rule restated for search: a parent that the QUERY filtered
+   * out is exactly as absent as one that was archived — the child it left
+   * behind must still render, standalone, not vanish with it.
+   */
+  it("still shows a child when the search matches only the child, not the parent", () => {
+    const vm = build(
+      [
+        src({ id: "p", title: "Parent unrelated", open: true }),
+        src({ id: "c", title: "Child match", open: true, parentConvoId: "p" }),
+      ],
+      "match",
+    );
+    expect(vm.active.map((r) => r.id)).toEqual(["c"]);
+    expect(vm.active[0].depth).toBe(0);
+  });
+
+  /**
+   * A grandchild's immediate parent (the child) is itself relocated into the
+   * grandparent's tier; the grandchild must follow it there too, not sit back
+   * in whatever tier it originally belonged to.
+   */
+  it("relocates a grandchild across tiers alongside its relocated parent", () => {
+    const vm = build([
+      src({ id: "gp", open: true, updatedAt: NOON - 2 * HOUR }),
+      src({ id: "p", open: false, updatedAt: NOON - HOUR, parentConvoId: "gp" }),
+      src({ id: "g", open: false, updatedAt: NOON, parentConvoId: "p" }),
+    ]);
+    expect(vm.active.map((r) => [r.id, r.depth])).toEqual([
+      ["gp", 0],
+      ["p", 1],
+      ["g", 1],
+    ]);
+    expect(historyIds(vm)).toEqual([]);
+  });
+
+  /**
+   * Mutation target: a naive implementation could push a relocated child into
+   * its new home WITHOUT removing it from its natural one, or vice versa.
+   * Checking every collection AT ONCE is what would catch that — checking
+   * them one at a time cannot tell "missing everywhere" from "present twice".
+   */
+  it("never duplicates a row across active, pinned and history at once", () => {
+    const vm = build([
+      src({ id: "p1", open: true, updatedAt: NOON - 3 * HOUR }),
+      src({ id: "c1", open: false, updatedAt: NOON - 2 * HOUR, parentConvoId: "p1" }),
+      src({ id: "p2", pinned: true, updatedAt: NOON - HOUR }),
+      src({ id: "c2", pinned: false, updatedAt: NOON, parentConvoId: "p2" }),
+      src({ id: "solo", updatedAt: NOON - 5 * HOUR }),
+    ]);
+    const all = [...vm.active, ...vm.pinned, ...historyIds(vm).map((id) => ({ id }))].map((r) => r.id);
+    expect(all.sort()).toEqual(["c1", "c2", "p1", "p2", "solo"]);
+    expect(new Set(all).size).toBe(all.length);
   });
 });

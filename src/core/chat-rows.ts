@@ -16,7 +16,7 @@
  */
 import { deriveLane, type NeedsInputReason, type SessionBadge } from "./session-cards";
 import { groupByTime, type TimeGroup } from "./history";
-import { groupByParent } from "./child-tree";
+import { groupAcrossHomes } from "./child-tree";
 
 /** The per-conversation facts the list needs. Structural, not `Convo` — this
  *  module stays ignorant of the view's types, the enumerator adapts. */
@@ -66,11 +66,14 @@ export interface ChatRow {
    *  The live tier answers "what is happening"; this answers the question that
    *  actually matters more often — "what happened while I was not looking". */
   unseen: boolean;
-  /** Kept on the row so the tier's own grouping pass can see it. */
+  /** Kept on the row so the cross-collection grouping pass can see it. */
   parentConvoId?: string;
-  /** How far to indent, decided by `groupByParent` WITHIN this row's tier.
-   *  0 for anything the user started, and for a child whose parent is not in
-   *  the same tier — an orphan renders at top level rather than vanishing. */
+  /** How far to indent, decided by `groupAcrossHomes` across every collection
+   *  at once. 0 for anything the user started, and for a child whose parent
+   *  is not visible anywhere in the current list — an orphan renders at top
+   *  level rather than vanishing. A child that IS visible is 1 regardless of
+   *  which collection it would otherwise have landed in: it is relocated to
+   *  sit under its parent, in the parent's collection. */
   depth: 0 | 1;
   /** Present only while the conversation is running or blocked. */
   lane?: "running" | "needs-input";
@@ -228,23 +231,11 @@ function toRow(s: ChatRowSource): ChatRow {
   return row;
 }
 
-/**
- * Pull each child under its parent and stamp the indent, WITHIN one tier.
- *
- * Per-tier and not list-wide on purpose. A parent that is an open tab lives in
- * `active` while its finished child sits in a day bucket — there is no single
- * ordering that can indent across that boundary without moving one of them out
- * of the tier it earned, and moving it would make the tiers lie about what is
- * running, open or pinned. Applied to each tier, `groupByParent`'s orphan rule
- * does exactly the right thing: a child whose parent is elsewhere renders at
- * top level in its own tier. Never dropped, never hidden.
- *
- * Runs AFTER the tier's sort: `groupByParent` preserves the order it is given
- * for roots and reorders only to place children, so sorting afterwards would
- * undo it.
- */
-function nest(rows: ChatRow[]): ChatRow[] {
-  return groupByParent(rows).map(({ item, depth }) => (depth === 0 ? item : { ...item, depth }));
+/** Stamp the indent `groupAcrossHomes` decided onto each row of one output
+ *  collection. Depth-0 rows come back unchanged; only a relocated child needs
+ *  a new object, same as the old per-tier `nest` did. */
+function stampDepth(grouped: readonly { item: ChatRow; depth: 0 | 1 }[]): ChatRow[] {
+  return grouped.map(({ item, depth }) => (depth === 0 ? item : { ...item, depth }));
 }
 
 /**
@@ -253,7 +244,9 @@ function nest(rows: ChatRow[]): ChatRow[] {
  * search return every tier empty, so the view renders one "no matches" state
  * instead of three empty sections stacked on each other.
  *
- * Three tiers, and a row lands in exactly one:
+ * Three tiers, and a row lands in exactly one — EXCEPT a child, which is
+ * always relocated to sit under its parent regardless of which tier it would
+ * otherwise have earned (see `depth` on `ChatRow`):
  *   - `active` — running, blocked, or open as a tab. The working set.
  *   - `pinned` — pinned and NOT in the working set. A pin that is also open
  *     belongs in `active`, marked, rather than listed twice: duplicating it
@@ -317,12 +310,35 @@ export function buildChatList(
   // groupByTime deliberately does not sort (history.ts:33-36) — the caller owns
   // the order, so sort before bucketing, not after.
   history.sort(byRecency);
+  const dayGroups = groupByTime(history, opts.now);
+
+  // One cross-collection pass, not one nest() per tier: a child is relocated
+  // to sit under its parent wherever the parent landed, even when that is a
+  // different tier or a different day bucket — see `depth` on `ChatRow` and
+  // `groupAcrossHomes`. Each tier's OWN sort decides root order within it;
+  // this only decides which collection a child ends up in and where among its
+  // siblings. Home order below (active, pinned, days oldest-bucket-order,
+  // related last) only matters for children whose siblings come from more than
+  // one collection — a related-only hit sorts last because it is the least
+  // certain match.
+  const homes = new Map<string, ChatRow[]>();
+  homes.set("active", active);
+  homes.set("pinned", pinned);
+  for (const g of dayGroups) homes.set(`day:${g.label}`, g.items);
+  homes.set("related", related);
+  const grouped = groupAcrossHomes(homes);
 
   return {
-    active: nest(active),
-    pinned: nest(pinned),
-    groups: groupByTime(history, opts.now).map((g) => ({ ...g, items: nest(g.items) })),
-    related: nest(related),
+    active: stampDepth(grouped.get("active") ?? []),
+    pinned: stampDepth(grouped.get("pinned") ?? []),
+    // A day bucket that relocation emptied entirely — its only row pulled out
+    // to sit under a parent elsewhere — is dropped rather than rendered as a
+    // header over nothing: a label with no rows under it promises content
+    // that isn't there.
+    groups: dayGroups
+      .map((g) => ({ ...g, items: stampDepth(grouped.get(`day:${g.label}`) ?? []) }))
+      .filter((g) => g.items.length > 0),
+    related: stampDepth(grouped.get("related") ?? []),
     total: visible.length,
     // Related rows count as matches: without them a search whose only hits are
     // semantic would report zero and render the "no matches" empty state over a

@@ -14,12 +14,30 @@ export interface GroupedConvo<T> {
   depth: 0 | 1;
 }
 
-export function groupByParent<T extends { id: string; parentConvoId?: string }>(
-  convos: T[]
-): GroupedConvo<T>[] {
-  const present = new Set(convos.map((c) => c.id));
+/**
+ * Pull every child — and every further descendant, still capped at depth 1 —
+ * OUT of whatever home it would otherwise occupy and place it directly after
+ * its parent, in the home the PARENT landed in. `homes` is an ordered map of
+ * named collections (e.g. `"active"`, `"day:Today"`); a row's parent is looked
+ * up across ALL of them, not just its own, which is what lets a parent in one
+ * collection and a child in another end up nested together instead of stuck
+ * in the tiers they individually earned.
+ *
+ * A root — no parent, an absent parent (archived, filtered out, never in this
+ * call at all), or part of a cycle — stays in its own home, in the order that
+ * home already supplied. Every id in the input appears in the output exactly
+ * once: `groupByParent` below is the single-home case of this same pass, so
+ * the two never drift into two different sets of rules.
+ */
+export function groupAcrossHomes<T extends { id: string; parentConvoId?: string }>(
+  homes: ReadonlyMap<string, readonly T[]>
+): Map<string, GroupedConvo<T>[]> {
+  const allRows: T[] = [];
+  for (const rows of homes.values()) allRows.push(...rows);
+
+  const present = new Set(allRows.map((c) => c.id));
   const parentOf = new Map<string, string>();
-  for (const c of convos) {
+  for (const c of allRows) {
     if (c.parentConvoId) parentOf.set(c.id, c.parentConvoId);
   }
 
@@ -39,17 +57,20 @@ export function groupByParent<T extends { id: string; parentConvoId?: string }>(
   };
 
   // The parent to group under, or undefined if this item should be a root:
-  // no parentConvoId, the named parent isn't in this list (orphan — parent
-  // archived/deleted/out of view), or the link is part of a cycle.
+  // no parentConvoId, the named parent isn't present ANYWHERE across the
+  // supplied homes (orphan — parent archived/deleted/filtered out), or the
+  // link is part of a cycle.
   const effectiveParent = (id: string): string | undefined => {
     const parent = parentOf.get(id);
     if (!parent || !present.has(parent) || hasCycle(id)) return undefined;
     return parent;
   };
 
-  // Children bucketed by effective parent, preserving input order within each bucket.
+  // Children bucketed by effective parent, preserving input order within each
+  // bucket — the order rows are visited in below, which is home-by-home in
+  // the order `homes` supplies them, then row order within each home.
   const byParent = new Map<string, T[]>();
-  for (const c of convos) {
+  for (const c of allRows) {
     const parent = effectiveParent(c.id);
     if (!parent) continue;
     const bucket = byParent.get(parent);
@@ -57,25 +78,40 @@ export function groupByParent<T extends { id: string; parentConvoId?: string }>(
     else byParent.set(parent, [c]);
   }
 
+  const out = new Map<string, GroupedConvo<T>[]>();
+  for (const home of homes.keys()) out.set(home, []);
+
   const emitted = new Set<string>();
-  const out: GroupedConvo<T>[] = [];
-  const emitChildren = (parentId: string): void => {
+  const emitChildren = (parentId: string, home: string): void => {
     for (const child of byParent.get(parentId) ?? []) {
       if (emitted.has(child.id)) continue;
       emitted.add(child.id);
-      out.push({ item: child, depth: 1 });
-      // Grandchildren follow their parent, still at depth 1 (see header).
-      emitChildren(child.id);
+      out.get(home)!.push({ item: child, depth: 1 });
+      // Grandchildren follow their parent into the SAME home, still at
+      // depth 1 (see header) — never their own natural home.
+      emitChildren(child.id, home);
     }
   };
-  for (const c of convos) {
-    if (emitted.has(c.id)) continue;
-    // Anything with a real (present, non-cyclic) parent is emitted by that
-    // parent's pass, not here — never twice.
-    if (effectiveParent(c.id)) continue;
-    emitted.add(c.id);
-    out.push({ item: c, depth: 0 });
-    emitChildren(c.id);
+  for (const [home, rows] of homes) {
+    for (const c of rows) {
+      if (emitted.has(c.id)) continue;
+      // Anything with a real (present, non-cyclic) parent is emitted by that
+      // parent's pass, into the parent's home — never twice, never here.
+      if (effectiveParent(c.id)) continue;
+      emitted.add(c.id);
+      out.get(home)!.push({ item: c, depth: 0 });
+      emitChildren(c.id, home);
+    }
   }
   return out;
+}
+
+/** Single-home case of `groupAcrossHomes`: nothing ever moves collections,
+ *  so this is what a plain flat list looks like once children are indented
+ *  under their parents. Kept as its own export because most callers — and
+ *  every existing test — only ever have the one list. */
+export function groupByParent<T extends { id: string; parentConvoId?: string }>(
+  convos: T[]
+): GroupedConvo<T>[] {
+  return groupAcrossHomes(new Map([["_", convos]])).get("_") ?? [];
 }
