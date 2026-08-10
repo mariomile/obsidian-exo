@@ -125,3 +125,47 @@ per house rule (no forced reload while turns are in flight).
 
 Medium: ~2 new core modules, 2 tools, 1 ledger field + 1 ConvoData field,
 touches to driver/sidebar/board; main risk concentrated in view.ts wiring.
+
+## Verification (live vault, 2026-08-10)
+
+Run against the merged build deployed to the real vault, Exo reloaded, board open,
+`orchestrationEnabled` already on. Probe artifacts were cleaned up afterwards.
+
+**Works, verified end to end:**
+
+- **The ledger watcher** (the fix for the whole-branch CRITICAL): a task written to
+  `tasks.md` by an external process appeared on the open board without reopening it
+  — 13 → 14 cards, probe visible, back to 13 after removal.
+- **The full round trip**: an agent turn called `spawn_task` once; a child
+  conversation was created with `parentConvoId` correctly stamped (`c200` → parent
+  `c199`).
+- **Strip exclusion**: the child did NOT enter the tab strip (`childInStrip: false`,
+  strip size unchanged at 7).
+- **Report delivery**: the parent showed unread and carried
+  `{outcome: "done", title: "E2E probe", excerpt: "OK"}`. The excerpt is the child's
+  actual reply, which also confirms the `lastAssistantText` fix — the original plan's
+  code read `m.text` on assistant turns and would have delivered an empty excerpt.
+
+**Does NOT work — design conflict, needs a decision:**
+
+- **Sidebar indent never fires in the common case.** Parent and child landed in
+  different tiers: parent in `ACTIVE` (it is an open tab), child in `TODAY` (it is
+  not, by design). `groupByParent` is applied PER TIER, so it cannot indent across
+  them — `is-child` was absent from every rendered row.
+  The two design decisions are incompatible as written: "children stay out of the
+  tab strip" guarantees a child is never in the `ACTIVE` tier, while the parent you
+  are working in usually is. The indent therefore only works when both are idle in
+  the same bucket, which is the less common case. Unit tests passed because they
+  exercise grouping within a tier.
+  Options: (a) tier a child with its parent (pull the child into the parent's tier),
+  (b) render children as a nested sub-list under the parent regardless of tier,
+  (c) drop the indent and rely on the board for parentage.
+
+**Found but NOT caused by this feature:**
+
+- `listChatRows` can throw `Cannot read properties of undefined (reading 'id')` at
+  reload. Cause: `allConvos()` returns `[...this.convos, this.active]` when `active`
+  is not in `convos` — if `active` is null during an early paint, `undefined` enters
+  the array. `allConvos()` is untouched by this branch (`git log 2f7e0fe..8542f29 -L`
+  over those lines is empty); last changed by f8b7df8 / 3e931cb. Transient at reload;
+  the sidebar paints normally afterwards. Worth a separate one-line guard.
