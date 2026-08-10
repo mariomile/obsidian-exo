@@ -490,36 +490,127 @@ describe("OrchestratorDriver — child reports", () => {
     expect(reports).toHaveLength(0);
   });
 
-  it("collapses several rapid events for the same child into a single, restarted-debounce report", async () => {
+  /**
+   * Deliberately THREE DIFFERENT children, not three events on one: a settled
+   * child never settles again (see "reports a settled child ONCE" below), so
+   * re-using one child here would only re-test the reducer's no-op. What the
+   * debounce is FOR is a fan-out landing together — several children finishing
+   * seconds apart must reach the parent as one message, not as a drip.
+   */
+  it("collapses a burst of children settling into a single, restarted-debounce batch", async () => {
     const reports: ChildReport[] = [];
     const { deps, emitter } = makeDeps([
-      task({ id: "task-4", title: "Child", status: "running", parent: "convo-parent", convo: "convo-child" }),
+      task({ id: "task-4a", title: "Child A", status: "running", parent: "convo-parent", convo: "convo-a" }),
+      task({ id: "task-4b", title: "Child B", status: "running", parent: "convo-parent", convo: "convo-b" }),
+      task({ id: "task-4c", title: "Child C", status: "running", parent: "convo-parent", convo: "convo-c" }),
     ]);
     deps.onChildReport = (r) => reports.push(r);
     const driver = new OrchestratorDriver(deps);
     await driver.start();
 
     // t=0: first outcome schedules a flush at t=2000.
-    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    emitter.emit({ convoId: "convo-a", state: "turn-end" });
     await vi.advanceTimersByTimeAsync(REPORT_DEBOUNCE_MS - 100); // t=1900, not yet fired
 
-    // A second outcome for the SAME child arrives just before the original
-    // deadline: it must restart the debounce (new deadline t=3900), not let
-    // the original t=2000 timer fire on its own.
-    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    // A second child settles just before the original deadline: it must restart
+    // the debounce (new deadline t=3900), not let the original t=2000 timer fire.
+    emitter.emit({ convoId: "convo-b", state: "turn-end" });
     await vi.advanceTimersByTimeAsync(200); // t=2100 — past the ORIGINAL deadline
 
-    // If the timer wasn't restarted, a (premature) report would already be here.
+    // If the timer wasn't restarted, a (premature) partial batch would be here.
     expect(reports).toHaveLength(0);
 
-    // A third outcome, still inside the restarted window.
-    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    // A third child, still inside the restarted window.
+    emitter.emit({ convoId: "convo-c", state: "turn-end" });
 
     await flushReports();
 
-    // All three collapsed into exactly one delivered report for this task.
+    // All three delivered in one flush, one report each — never a drip.
+    expect(reports.map((r) => r.taskId).sort()).toEqual(["task-4a", "task-4b", "task-4c"]);
+  });
+
+  /**
+   * A settled child is still a NORMAL chat: Mario opens it and keeps working in
+   * it. Every one of those turns emits `turn-end`, and the reducer correctly
+   * no-ops (the task is already in `review`, and only a `running` task settles).
+   * The report path must follow the same guard, or the parent is told "your
+   * delegated task is done" again on every later turn of a conversation it
+   * never re-delegated — with a fresh excerpt from unrelated work.
+   */
+  it("reports a settled child ONCE, however many later turns that chat runs", async () => {
+    const reports: ChildReport[] = [];
+    const { deps, emitter } = makeDeps([
+      task({ id: "task-6", title: "Research pricing", status: "running", parent: "convo-parent", convo: "convo-child" }),
+    ]);
+    let last = "Found three competitors.";
+    deps.lastAssistantText = () => last;
+    deps.onChildReport = (r) => reports.push(r);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    // The real settling transition: running -> review. One report.
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await flushReports();
     expect(reports).toHaveLength(1);
-    expect(reports[0].taskId).toBe("task-4");
+
+    // Mario now keeps chatting in that child. Two more turns, well past the
+    // debounce window so they can't be collapsed into the first batch.
+    last = "Sure, here is that unrelated thing.";
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await flushReports();
+    last = "And another one.";
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await flushReports();
+
+    // Still exactly one: the task never went back to `running`, so nothing settled.
+    expect(reports).toHaveLength(1);
+    expect(reports[0].excerpt).toBe("Found three competitors.");
+    expect(driver.snapshot().find((t) => t.id === "task-6")!.status).toBe("review");
+  });
+
+  it("reports a child parked in needs-input ONCE, not on every later event", async () => {
+    const reports: ChildReport[] = [];
+    const { deps, emitter } = makeDeps([
+      task({ id: "task-7", title: "Draft post", status: "running", parent: "convo-parent", convo: "convo-child" }),
+    ]);
+    deps.onChildReport = (r) => reports.push(r);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    emitter.emit({ convoId: "convo-child", state: "needs-input", reason: "perm" });
+    await flushReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0].outcome).toBe("blocked");
+
+    // The card is already parked; further needs-input/stopped noise is not news.
+    emitter.emit({ convoId: "convo-child", state: "needs-input", reason: "perm" });
+    await flushReports();
+    emitter.emit({ convoId: "convo-child", state: "stopped", reason: "stopped" });
+    await flushReports();
+
+    expect(reports).toHaveLength(1);
+  });
+
+  it("re-running a settled child reports again — a real second settling transition", async () => {
+    const reports: ChildReport[] = [];
+    const { deps, emitter } = makeDeps([
+      task({ id: "task-8", title: "Research pricing", status: "running", parent: "convo-parent", convo: "convo-child" }),
+    ]);
+    deps.onChildReport = (r) => reports.push(r);
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await flushReports();
+    expect(reports).toHaveLength(1);
+
+    // The child picks work back up (turn-start -> running), then finishes again.
+    emitter.emit({ convoId: "convo-child", state: "turn-start" });
+    await vi.advanceTimersByTimeAsync(1);
+    emitter.emit({ convoId: "convo-child", state: "turn-end" });
+    await flushReports();
+
+    expect(reports).toHaveLength(2);
   });
 
   it("a throwing onChildReport consumer does not break the driver", async () => {

@@ -93,6 +93,27 @@ function toOrchestratorEvent(e: ConvoStateEvent): OrchestratorEvent {
   }
 }
 
+/**
+ * Did `event` take the task owning its convo out of `running`?
+ *
+ * The reducer already refuses to settle anything that isn't `running` — that is
+ * what makes a second `turn-end` on an idle child a no-op. This reads the SAME
+ * fact off the transition instead of restating the rule, so the two can't drift:
+ * a settling transition is exactly `running` → not-`running` for that convo.
+ * Events with no convo (enqueue, move, slot-freed…) never settle a child.
+ */
+function settledRunningTask(
+  before: TaskEntry[],
+  after: TaskEntry[],
+  event: OrchestratorEvent
+): boolean {
+  if (!("convoId" in event)) return false;
+  const prev = before.find((t) => t.convo === event.convoId);
+  const next = after.find((t) => t.convo === event.convoId);
+  if (!prev || !next) return false;
+  return prev.status === "running" && next.status !== "running";
+}
+
 export class OrchestratorDriver {
   private tasks: TaskEntry[] = [];
   private unsubscribe: Unsubscribe | null = null;
@@ -166,8 +187,8 @@ export class OrchestratorDriver {
   // --- User actions -------------------------------------------------------
 
   /** Backlog → Queued (scheduler may promote to Running immediately). */
-  enqueue(taskId: string): Promise<void> {
-    return this.dispatch({ type: "enqueue", taskId });
+  async enqueue(taskId: string): Promise<void> {
+    await this.dispatch({ type: "enqueue", taskId });
   }
 
   /**
@@ -190,8 +211,8 @@ export class OrchestratorDriver {
   }
 
   /** Review → Done. User-action-only; ignored elsewhere by the reducer. */
-  markDone(taskId: string): Promise<void> {
-    return this.dispatch({ type: "mark-done", taskId });
+  async markDone(taskId: string): Promise<void> {
+    await this.dispatch({ type: "mark-done", taskId });
   }
 
   /**
@@ -226,8 +247,8 @@ export class OrchestratorDriver {
   }
 
   /** Drag/move to an explicit column + order (board drag & drop). */
-  move(taskId: string, target: TaskStatus, order: number): Promise<void> {
-    return this.dispatch({ type: "move", taskId, target, order });
+  async move(taskId: string, target: TaskStatus, order: number): Promise<void> {
+    await this.dispatch({ type: "move", taskId, target, order });
   }
 
   // --- Convo events -------------------------------------------------------
@@ -244,13 +265,28 @@ export class OrchestratorDriver {
     // could reach `onConvoEvent` before the promoting dispatch had recorded
     // `task.convo`, silently dropping the report. `e` is kept in closure so
     // its `reason` (needed by `outcomeFromState`) survives.
-    void this.dispatch(toOrchestratorEvent(e)).then(() => this.maybeQueueChildReport(e));
+    //
+    // The dispatch reports back whether THIS event actually settled the owning
+    // task (see `applyEvent`); only then is there a report to make. Reading the
+    // status here instead would be wrong in both directions — see
+    // `maybeQueueChildReport`.
+    void this.dispatch(toOrchestratorEvent(e)).then((settled) => {
+      if (settled) this.maybeQueueChildReport(e);
+    });
   }
 
   /**
    * Child reporting: a task WITH a parent that reached an outcome tells its
    * parent. Never inline — batched behind the debounce so a child that ends
    * several turns in quick succession produces one message, not five.
+   *
+   * Called ONLY on an actual settling transition, never on every outcome-shaped
+   * event. A settled child stays a normal chat: it sits in `review` (or
+   * `needs-input`) until a human clears it, and Mario can keep working in it.
+   * Every one of those later turns emits `turn-end` — the reducer no-ops,
+   * because only a `running` task settles — so reporting off the event alone
+   * re-told the parent "the task you delegated is done", forever, each time
+   * with an excerpt from work it never asked for.
    */
   private maybeQueueChildReport(e: ConvoStateEvent): void {
     if (!this.deps.onChildReport) return;
@@ -292,9 +328,11 @@ export class OrchestratorDriver {
   /**
    * Feed one event through the pure reducer, persist the resulting transitions,
    * and execute any spawn effects — all serialized on `this.chain` so async
-   * spawns can't interleave. Returns when this event's work has settled.
+   * spawns can't interleave. Returns when this event's work has settled, and
+   * resolves with whether this event took the convo's task OUT of `running`
+   * (see `settledRunningTask`). Non-convo events always resolve `false`.
    */
-  private dispatch(event: OrchestratorEvent): Promise<void> {
+  private dispatch(event: OrchestratorEvent): Promise<boolean> {
     const run = this.chain.then(() => this.applyEvent(event));
     // Advance the chain on a branch that swallows rejection, so one failed
     // dispatch never poisons later ones (same discipline as WriteQueue).
@@ -305,10 +343,15 @@ export class OrchestratorDriver {
     return run;
   }
 
-  private async applyEvent(event: OrchestratorEvent): Promise<void> {
+  private async applyEvent(event: OrchestratorEvent): Promise<boolean> {
     const before = this.tasks;
     const result: OrchestratorResult = reduce(before, event, this.deps.config());
     this.tasks = result.tasks;
+    // Computed against the pre-reduce list, INSIDE the serialized chain, so it
+    // reads the same state the reducer just judged. Doing this in
+    // `onConvoEvent` instead would race the chain: another dispatch can run
+    // between this one settling and its `.then` callback.
+    const settled = settledRunningTask(before, result.tasks, event);
 
     // Persist non-effect transitions (status/order/badge changes) first so the
     // ledger reflects the move even if a spawn later fails.
@@ -319,6 +362,7 @@ export class OrchestratorDriver {
     for (const effect of result.effects) {
       await this.runEffect(effect);
     }
+    return settled;
   }
 
   private async runEffect(effect: OrchestratorEffect): Promise<void> {
