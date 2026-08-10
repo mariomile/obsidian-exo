@@ -39,7 +39,7 @@ function renderCard(
   const isOpen = view.openTabs.includes(c.id);
   if (isActive) card.addClass("is-active");
   if (isOpen) card.addClass("is-open");
-  setCardSelected(card, view.gallerySelection.has(c.id));
+  setCardSelected(card, view.gallery.gallerySelection.has(c.id));
   addCardDelete(view, card, grid, c);
   const head = card.createDiv({ cls: "mva-card-head" });
   const dot = head.createSpan({ cls: "mva-dot" });
@@ -70,7 +70,7 @@ function renderCard(
   // draws nothing either — see resumeStatus's contract. Not an `else` on the
   // block above: a chat can be archived AND no longer resumable, and hiding
   // the second fact behind the first would lose the one that costs context.
-  if (view.resumeStatusOf(c) === "restarts") {
+  if (view.gallery.resumeStatusOf(c) === "restarts") {
     // One word, deliberately. The badge cluster is `flex: 0 0 auto` and never
     // wraps or compresses, so every character it costs comes straight out of
     // `.mva-card-title` — and cards are ~180px wide. The full sentence in
@@ -116,14 +116,14 @@ function renderCard(
     // Once anything is selected, a plain click toggles too — otherwise the
     // first stray click would blow away a multi-selection.
     const mod = e as MouseEvent | KeyboardEvent;
-    if (mod.metaKey || mod.ctrlKey || view.gallerySelection.size > 0) {
-      if (view.gallerySelection.has(c.id)) view.gallerySelection.delete(c.id);
-      else view.gallerySelection.add(c.id);
-      setCardSelected(card, view.gallerySelection.has(c.id));
-      view.renderBulkBar();
+    if (mod.metaKey || mod.ctrlKey || view.gallery.gallerySelection.size > 0) {
+      if (view.gallery.gallerySelection.has(c.id)) view.gallery.gallerySelection.delete(c.id);
+      else view.gallery.gallerySelection.add(c.id);
+      setCardSelected(card, view.gallery.gallerySelection.has(c.id));
+      view.gallery.renderBulkBar();
       return;
     }
-    view.hideGallery();
+    view.gallery.hideGallery();
     view.switchTo(c);
   });
 }
