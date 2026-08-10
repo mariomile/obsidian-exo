@@ -6,7 +6,9 @@ import {
   queueReportForParent,
   drainReportsForParent,
   lastAssistantText,
+  reviveChildReports,
   EXCERPT_CAP,
+  MAX_PENDING_CHILD_REPORTS,
   type ChildReport,
 } from "../src/core/child-reports";
 
@@ -192,6 +194,90 @@ describe("queueReportForParent — routing", () => {
     queueReportForParent([parent], report({ taskId: "task-1" }));
     queueReportForParent([parent], report({ taskId: "task-2" }));
     expect(parent.pendingChildReports?.map((r) => r.taskId)).toEqual(["task-1", "task-2"]);
+  });
+
+  /**
+   * The queue is now persisted, so an unbounded one is an unbounded write to
+   * conversations.json. Capped where it is FILLED (not only where it is saved),
+   * so runtime and disk can never disagree about what the parent is holding.
+   */
+  it("caps the queue at MAX_PENDING_CHILD_REPORTS, dropping the OLDEST", () => {
+    const parent = holder("convo-parent");
+    const n = MAX_PENDING_CHILD_REPORTS + 4;
+    for (let i = 0; i < n; i++) queueReportForParent([parent], report({ taskId: `task-${i}` }));
+    const ids = parent.pendingChildReports!.map((r) => r.taskId);
+    expect(ids).toHaveLength(MAX_PENDING_CHILD_REPORTS);
+    // The newest survive: an old report is the one whose news is stalest.
+    expect(ids[ids.length - 1]).toBe(`task-${n - 1}`);
+    expect(ids).not.toContain("task-0");
+  });
+});
+
+/**
+ * Reload durability. A child finishing at 14:00 sets the parent's unread
+ * affordance, which survives a restart; before this the report CONTENT did not,
+ * so the parent advertised news it could never deliver and the model never
+ * received its child's output — the entire point of the feature.
+ *
+ * `conversations.json` is a plain file: a half-written or hand-edited entry
+ * must not put junk onto a live Convo, where the next turn would splice it
+ * verbatim into the outbound message.
+ */
+describe("reviveChildReports — what comes back off disk", () => {
+  const onDisk = (over: Partial<ChildReport> = {}): ChildReport => ({
+    taskId: "task-1",
+    childConvoId: "convo-child",
+    parentConvoId: "convo-parent",
+    title: "Research pricing",
+    outcome: "done",
+    excerpt: "Found three competitors.",
+    at: 1720000000000,
+    ...over,
+  });
+
+  it("round-trips a queued report unchanged", () => {
+    const saved = [onDisk(), onDisk({ taskId: "task-2", outcome: "stopped" })];
+    const back = reviveChildReports(JSON.parse(JSON.stringify(saved)));
+    expect(back).toEqual(saved);
+    // Formatting the revived queue must produce the same message the live one
+    // would have — the report is only worth persisting if it still reads right.
+    expect(formatReportsForParent(back!)).toBe(formatReportsForParent(saved));
+  });
+
+  it("returns undefined for absent or empty, so a normal chat stays clean", () => {
+    expect(reviveChildReports(undefined)).toBeUndefined();
+    expect(reviveChildReports([])).toBeUndefined();
+    expect(reviveChildReports(null)).toBeUndefined();
+    expect(reviveChildReports("not an array")).toBeUndefined();
+    expect(reviveChildReports({ 0: onDisk() })).toBeUndefined();
+  });
+
+  it("drops entries that could not be delivered or rendered", () => {
+    const back = reviveChildReports([
+      onDisk(),
+      { ...onDisk({ taskId: "task-x" }), parentConvoId: "" }, // unroutable
+      { ...onDisk({ taskId: "task-y" }), outcome: "elsewhere" }, // unknown outcome
+      { taskId: "task-z" }, // half-written
+      null,
+      "garbage",
+    ]);
+    expect(back?.map((r) => r.taskId)).toEqual(["task-1"]);
+  });
+
+  it("caps a hand-grown file at MAX_PENDING_CHILD_REPORTS, keeping the newest", () => {
+    const many = Array.from({ length: MAX_PENDING_CHILD_REPORTS + 5 }, (_, i) =>
+      onDisk({ taskId: `task-${i}` })
+    );
+    const back = reviveChildReports(many)!;
+    expect(back).toHaveLength(MAX_PENDING_CHILD_REPORTS);
+    expect(back[back.length - 1].taskId).toBe(`task-${MAX_PENDING_CHILD_REPORTS + 4}`);
+  });
+
+  it("never hands back the caller's own array, so disk data can't alias live state", () => {
+    const saved = [onDisk()];
+    const back = reviveChildReports(saved)!;
+    back[0].excerpt = "mutated";
+    expect(saved[0].excerpt).toBe("Found three competitors.");
   });
 });
 

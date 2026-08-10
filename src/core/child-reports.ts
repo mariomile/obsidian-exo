@@ -13,8 +13,19 @@ import type { ConvoState, ConvoStateReason } from "./convo-state";
 export const EXCERPT_CAP = 2000;
 /** How long the driver batches reports before delivering them. */
 export const REPORT_DEBOUNCE_MS = 2000;
+/**
+ * How many undelivered reports one parent may hold. The queue is PERSISTED
+ * (see `reviveChildReports`), so an uncapped one is an uncapped write to
+ * conversations.json; and a parent sitting on more than a handful of unread
+ * children is holding a briefing nobody will read anyway. Enforced where the
+ * queue is filled, not only where it is saved, so runtime and disk can never
+ * disagree about what the parent is carrying.
+ */
+export const MAX_PENDING_CHILD_REPORTS = 10;
 
 export type ChildOutcome = "done" | "blocked" | "stopped" | "error";
+
+const OUTCOMES: ReadonlySet<string> = new Set<ChildOutcome>(["done", "blocked", "stopped", "error"]);
 
 export interface ChildReport {
   taskId: string;
@@ -58,8 +69,53 @@ export function queueReportForParent<T extends ReportHolder>(
 ): T | undefined {
   const parent = convos.find((c) => c.id === report.parentConvoId);
   if (!parent) return undefined;
-  (parent.pendingChildReports ??= []).push(report);
+  const queued = (parent.pendingChildReports ??= []);
+  queued.push(report);
+  // Drop the OLDEST past the cap: a stale report is the one whose news has
+  // least chance of still mattering to the next turn.
+  if (queued.length > MAX_PENDING_CHILD_REPORTS) {
+    queued.splice(0, queued.length - MAX_PENDING_CHILD_REPORTS);
+  }
   return parent;
+}
+
+/**
+ * Rebuild a persisted report queue, or `undefined` when there is nothing usable
+ * to rebuild — so a chat that delegated nothing stays absent on disk rather than
+ * growing an empty array in every entry.
+ *
+ * Validating rather than trusting, because `conversations.json` is a plain file
+ * a human (or a half-finished write) can leave malformed, and what comes out of
+ * here is spliced verbatim into the parent's next outbound message. Two fields
+ * are load-bearing and therefore mandatory: `parentConvoId` (the only routing
+ * key — a report without it can never be delivered) and a known `outcome`
+ * (`formatReportsForParent` indexes a table with it, and an unknown value would
+ * render `undefined` into the message). `childConvoId` is deliberately NOT
+ * required: it is empty for the spawn-failure report, which is the one the
+ * parent most needs.
+ */
+export function reviveChildReports(raw: unknown): ChildReport[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: ChildReport[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const r = item as Partial<ChildReport>;
+    if (typeof r.parentConvoId !== "string" || !r.parentConvoId) continue;
+    if (typeof r.outcome !== "string" || !OUTCOMES.has(r.outcome)) continue;
+    out.push({
+      taskId: typeof r.taskId === "string" ? r.taskId : "",
+      childConvoId: typeof r.childConvoId === "string" ? r.childConvoId : "",
+      parentConvoId: r.parentConvoId,
+      title: typeof r.title === "string" ? r.title : "",
+      outcome: r.outcome,
+      excerpt: typeof r.excerpt === "string" ? r.excerpt : "",
+      at: typeof r.at === "number" ? r.at : 0,
+    });
+  }
+  if (!out.length) return undefined;
+  // Same rule as the live queue, applied to a file that could have been grown
+  // by hand or by an older build that did not cap.
+  return out.slice(-MAX_PENDING_CHILD_REPORTS);
 }
 
 /**

@@ -110,6 +110,7 @@ import {
   drainReportsForParent,
   lastAssistantText,
   queueReportForParent,
+  reviveChildReports,
   type ChildReport,
 } from "./core/child-reports";
 import { isAiTitleDue } from "./core/title";
@@ -1137,6 +1138,7 @@ export class ChatView extends ItemView {
         lastActiveAt: d.lastActiveAt,
         boardStatus: d.boardStatus,
         parentConvoId: d.parentConvoId,
+        pendingChildReports: reviveChildReports(d.pendingChildReports),
         titleLocked: d.titleLocked === true,
         provider,
         model,
@@ -1219,6 +1221,10 @@ export class ChatView extends ItemView {
       ...(c.lastActiveAt ? { lastActiveAt: c.lastActiveAt } : {}),
       ...(c.boardStatus ? { boardStatus: c.boardStatus } : {}),
       ...(c.parentConvoId ? { parentConvoId: c.parentConvoId } : {}),
+      // Capped at the queue itself (core/child-reports), so this writes exactly
+      // what the parent is holding. An unread child report that did not survive
+      // the reload left the sidebar advertising news it could never deliver.
+      ...(c.pendingChildReports?.length ? { pendingChildReports: c.pendingChildReports } : {}),
       ...(c.titleLocked ? { titleLocked: true } : {}),
       messages: c.messages.map((message) =>
         persistMessage(message, {

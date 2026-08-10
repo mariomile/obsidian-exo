@@ -214,6 +214,7 @@ const ROUND_TRIP_FIELDS = [
   "sessionId",
   "updatedAt",
   "usage",
+  "pendingChildReports",
 ] as const;
 
 /** The literal in `restore()` that builds a live `Convo` from a `ConvoData`. */
@@ -260,10 +261,37 @@ describe("Convo persistence round-trip (view.ts, which has no unit tests)", () =
     expect(toData).toMatch(/\.\.\.\(c\.parentConvoId \? \{ parentConvoId: c\.parentConvoId \} : \{\}\)/);
   });
 
-  it("pendingChildReports is runtime-only and never persisted", () => {
-    // A queued report has no meaning after a reload — there is no in-flight
-    // turn to prepend it to, and the board still shows the child's real state.
-    expect(toData).not.toContain("pendingChildReports");
-    expect(restore).not.toContain("pendingChildReports");
+  it("pendingChildReports is written conditionally, so a normal chat stays clean on disk", () => {
+    // Same shape as parentConvoId above: a chat that delegated nothing must not
+    // grow an empty array in every entry of conversations.json.
+    expect(toData).toMatch(/c\.pendingChildReports\?\.length \?/);
+  });
+
+  it("pendingChildReports is revived through the validating reader, not trusted raw", () => {
+    // conversations.json is a plain file on disk: a hand-edited or half-written
+    // entry must not put a non-array (or a report missing its parentConvoId)
+    // onto a live Convo, where the next turn would splice it into the outbound
+    // message. The validation lives in the tested pure module.
+    expect(restore).toContain("reviveChildReports(d.pendingChildReports)");
+  });
+});
+
+/**
+ * The durability contract in prose, so the round-trip assertions above read as
+ * a rule rather than as a list.
+ *
+ * A child report IS the feature: it is the only path by which a delegated
+ * conversation's output ever reaches the model that delegated it. The parent's
+ * "unread" affordance survives a restart (it is derived from the persisted
+ * updatedAt/lastActiveAt pair, and from the queue itself in `listChatRows`), so
+ * dropping the queue on reload left the sidebar advertising news the parent
+ * could never deliver — and the model never received its child's work at all.
+ * The approved design says so explicitly: "pending child reports persist in
+ * ConvoData (small capped array), so an unread report survives restart."
+ */
+describe("child reports survive a reload (view.ts persistence seam)", () => {
+  it("the queue is capped where it is filled, so it cannot grow without bound on disk", () => {
+    const core = readFileSync(join(__dirname, "..", "src", "core", "child-reports.ts"), "utf8");
+    expect(core).toContain("MAX_PENDING_CHILD_REPORTS");
   });
 });
