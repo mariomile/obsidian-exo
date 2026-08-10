@@ -5,6 +5,7 @@ import {
   fanoutDepth,
   canSpawnChild,
   MAX_OPEN_CHILDREN,
+  MAX_FANOUT_DEPTH,
 } from "../src/core/child-tasks";
 import type { TaskEntry } from "../src/core/tasks";
 
@@ -37,6 +38,15 @@ describe("childrenOf / openChildCount", () => {
     ];
     expect(openChildCount(tasks, "convo-a")).toBe(1);
   });
+
+  it("still counts needs-input and review children as open (not just queued/running)", () => {
+    const tasks = [
+      task({ id: "task-1", parent: "convo-a", status: "needs-input" }),
+      task({ id: "task-2", parent: "convo-a", status: "review" }),
+      task({ id: "task-3", parent: "convo-a", status: "backlog" }),
+    ];
+    expect(openChildCount(tasks, "convo-a")).toBe(3);
+  });
 });
 
 describe("fanoutDepth", () => {
@@ -64,11 +74,29 @@ describe("fanoutDepth", () => {
     ];
     expect(fanoutDepth(tasks, "convo-a")).toBeGreaterThanOrEqual(2);
   });
+
+  it("terminates on a self-parent cycle (convo is its own parent)", () => {
+    const tasks = [task({ id: "task-1", parent: "a", convo: "a" })];
+    expect(fanoutDepth(tasks, "a")).toBe(1);
+  });
 });
 
 describe("canSpawnChild", () => {
   it("allows a spawn under both caps", () => {
     expect(canSpawnChild([], "convo-a")).toEqual({ ok: true });
+  });
+
+  it("allows a spawn with a realistic below-cap mix (open + closed children, one hop deep)", () => {
+    const tasks = [
+      task({ id: "task-0", parent: "convo-root", convo: "convo-a", status: "running" }),
+      task({ id: "task-1", parent: "convo-a", status: "queued" }),
+      task({ id: "task-2", parent: "convo-a", status: "running" }),
+      task({ id: "task-3", parent: "convo-a", status: "needs-input" }),
+      task({ id: "task-4", parent: "convo-a", status: "done" }),
+      task({ id: "task-5", parent: "convo-a", status: "archived" }),
+    ];
+    // 3 open children (well under MAX_OPEN_CHILDREN=5) + depth 1 (well under MAX_FANOUT_DEPTH=2).
+    expect(canSpawnChild(tasks, "convo-a")).toEqual({ ok: true });
   });
 
   it("refuses past the open-children cap, naming the cap", () => {
@@ -87,6 +115,9 @@ describe("canSpawnChild", () => {
     ];
     const res = canSpawnChild(tasks, "convo-c");
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toContain("depth");
+    if (!res.ok) {
+      expect(res.reason).toContain("depth");
+      expect(res.reason).toContain(String(MAX_FANOUT_DEPTH));
+    }
   });
 });

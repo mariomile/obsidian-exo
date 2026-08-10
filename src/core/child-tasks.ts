@@ -15,7 +15,7 @@ export const MAX_OPEN_CHILDREN = 5;
 export const MAX_FANOUT_DEPTH = 2;
 
 /** Statuses that no longer occupy a fan-out slot. */
-const CLOSED = new Set(["done", "archived"]);
+const CLOSED = new Set<TaskEntry["status"]>(["done", "archived"]);
 
 export function childrenOf(tasks: TaskEntry[], parentConvoId: string): TaskEntry[] {
   return tasks.filter((t) => t.parent === parentConvoId);
