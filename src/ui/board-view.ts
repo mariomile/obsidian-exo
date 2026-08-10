@@ -8,9 +8,12 @@
  * but `./view` MUST NOT import this module. The board observes chat; chat never
  * depends on the board. Verified by grep in the brief's acceptance criteria.
  *
- * The board is the ONLY consumer that turns the plugin's injected primitives
- * (`taskStore`, `convoState`, `startTaskConversation`, `readConvoState`) into a
- * running orchestration loop, via the `OrchestratorDriver`.
+ * The board is a RENDERER and a control surface, not an owner. The
+ * `OrchestratorDriver` and its ledger watch belong to the plugin
+ * (`obsidian/orchestration.ts`): this view attaches to the running runtime,
+ * paints its snapshot and routes gestures to it. Closing the board stops
+ * nothing — which is the point, since the driver used to live and die with this
+ * tab and `spawn_task` was silently inert whenever it was closed.
  */
 import { ItemView, Menu, Notice, WorkspaceLeaf, setIcon } from "obsidian";
 import type ExoPlugin from "../main";
@@ -25,8 +28,7 @@ import {
   type SessionSnapshot,
 } from "../core/session-cards";
 import type { InputReason } from "../core/orchestrator";
-import { OrchestratorDriver, type DriverDeps, type DriverStore } from "../obsidian/orchestrator-driver";
-import { LedgerWatch, ledgerChangedExternally } from "../core/ledger-watch";
+import type { Unsubscribe } from "../core/convo-state";
 import { clickable } from "./dom";
 import { TaskModal } from "./task-modal";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
@@ -86,12 +88,9 @@ function promptPreview(prompt: string, lines = 3): string {
 }
 
 export class BoardView extends ItemView {
-  private driver: OrchestratorDriver | null = null;
-  /** Debounce + self-write suppression for `tasks.md` changes made by anyone
-   *  other than this board — above all the `spawn_task` tool, which appends
-   *  queued children straight into the ledger. Policy lives in
-   *  `core/ledger-watch`; this view only feeds it events and reloads. */
-  private ledgerWatch: LedgerWatch | null = null;
+  /** Detach handle for the plugin runtime's task feed. Dropped on close — which
+   *  detaches this renderer and nothing else. */
+  private tasksUnsub: Unsubscribe | null = null;
   private boardEl!: HTMLElement;
   /** The active drag payload — a task or session card being dragged. */
   private dragItem: { kind: "task" | "session"; id: string } | null = null;
@@ -148,43 +147,14 @@ export class BoardView extends ItemView {
 
     this.boardEl = root.createDiv({ cls: "mva-board" });
 
-    // Built BEFORE the driver: `buildDeps` hands the driver a store whose writes
-    // route through this watch, so the ledger events the driver itself causes
-    // don't come back as reloads that restart it mid-spawn.
-    this.ledgerWatch = new LedgerWatch({
-      schedule: (fn, ms) => window.setTimeout(fn, ms),
-      cancel: (id) => window.clearTimeout(id),
-      now: () => Date.now(),
-      onExternalChange: () => void this.reloadIfLedgerChanged(),
-    });
-    // The `spawn_task` tool writes a queued child straight into tasks.md. Without
-    // this listener a board that is ALREADY OPEN never learns the task exists:
-    // no card, no promotion, no spawn, no child, no report — while the tool has
-    // already told the agent the work would start and report back.
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => {
-        if (file.path === this.plugin.paths.tasks) this.ledgerWatch?.notify();
-      })
-    );
-    // `createChildTask` takes the `vault.create` branch when tasks.md doesn't
-    // exist yet (e.g. the vault's first-ever task, spawned while the board is
-    // already open) — a "modify"-only listener never fires for that, same
-    // symptom as the missed-spawn bug above, confined to first use.
-    this.registerEvent(
-      this.app.vault.on("create", (file) => {
-        if (file.path === this.plugin.paths.tasks) this.ledgerWatch?.notify();
-      })
-    );
-
-    // Build and start the driver, wiring the plugin's primitives into the
-    // injected deps. onChange re-renders; a load with warnings paints an error
-    // banner (chat is never affected by this).
-    this.driver = new OrchestratorDriver(this.buildDeps());
-    // Surface store-load warnings on the board (corrupt/malformed tasks.md).
-    const loaded = await this.plugin.taskStore.load();
-    this.loadWarnings = loaded.warnings;
-    await this.driver.start();
-    this.render(this.driver.snapshot());
+    // Attach to the PLUGIN's runtime. `start()` is idempotent: normally the
+    // runtime is already up (it starts at layout-ready), and this only covers
+    // opening the board in the same tick the flag was turned on.
+    const orchestration = this.plugin.orchestration;
+    this.tasksUnsub = orchestration.onTasks((tasks) => this.render(tasks));
+    await orchestration.start();
+    this.loadWarnings = orchestration.warnings();
+    this.render(orchestration.snapshot());
 
     // Session Cockpit (U3): project the open ChatView's live chats as cards.
     // Subscribe directly to convo-state so session-card freshness doesn't depend
@@ -200,62 +170,17 @@ export class BoardView extends ItemView {
     window.setTimeout(() => this.scheduleRerender(), 800);
   }
 
+  /** Detach this renderer. Orchestration keeps running: the driver, its ledger
+   *  watch and every in-flight child belong to the plugin, not to this tab. */
   async onClose(): Promise<void> {
+    this.tasksUnsub?.();
+    this.tasksUnsub = null;
     this.convoUnsub?.();
     this.convoUnsub = null;
-    this.ledgerWatch?.dispose();
-    this.ledgerWatch = null;
     if (this.backstop != null) {
       window.clearInterval(this.backstop);
       this.backstop = null;
     }
-    this.driver?.stop();
-    this.driver = null;
-  }
-
-  /** The task store with every WRITE routed through the ledger watch, so the
-   *  modify events the driver's own persistence causes are told apart from
-   *  somebody else's edit. Reads pass straight through — they change nothing. */
-  private guardedStore(): DriverStore {
-    const store = this.plugin.taskStore;
-    const guard = <T>(write: Promise<T>): Promise<T> => this.ledgerWatch?.guard(write) ?? write;
-    return {
-      load: () => store.load(),
-      update: (id, patch) => guard(store.update(id, patch)),
-      move: (id, status, order) => guard(store.move(id, status, order)),
-      archive: (id) => guard(store.archive(id)),
-    };
-  }
-
-  /** A settled ledger change: reload only if what is on disk actually differs
-   *  from what the driver believes. A reload rebuilds the driver from scratch,
-   *  so doing it on a write we made ourselves would restart orchestration
-   *  mid-spawn — and the suppression window is a heuristic, this is the proof. */
-  private async reloadIfLedgerChanged(): Promise<void> {
-    if (!this.driver) return;
-    const loaded = await this.plugin.taskStore.load();
-    if (!this.driver) return; // closed while the read was in flight
-    if (!ledgerChangedExternally(this.driver.snapshot(), loaded.tasks)) return;
-    await this.reloadTasks();
-  }
-
-  /** Wire the plugin's primitives into the driver's injected deps. */
-  private buildDeps(): DriverDeps {
-    const plugin = this.plugin;
-    return {
-      store: this.guardedStore(),
-      subscribe: (listener) => plugin.onConvoState(listener),
-      spawn: (prompt, opts) => plugin.startTaskConversation(prompt, opts),
-      liveness: (convoId) => {
-        const s = plugin.readConvoState(convoId);
-        return { exists: s.exists, streaming: s.streaming, pendingRequest: s.hasPending };
-      },
-      config: () => ({ maxConcurrent: Math.max(1, plugin.settings.orchestrationMaxConcurrent) }),
-      notify: (message) => new Notice(message),
-      onChange: (tasks) => this.render(tasks),
-      lastAssistantText: (convoId) => plugin.lastAssistantTextOf(convoId),
-      onChildReport: (report) => plugin.deliverChildReport(report),
-    };
   }
 
   // --- Rendering ----------------------------------------------------------
@@ -619,7 +544,7 @@ export class BoardView extends ItemView {
         const pinned = r.model ? { model: r.model } : {};
         const entry = await this.plugin.taskStore.create({ title: r.title, prompt: r.prompt, ...pinned });
         await this.reloadTasks();
-        if (r.runImmediately) await this.driver?.run(entry.id);
+        if (r.runImmediately) await this.plugin.orchestration.run(entry.id);
       },
     }).open();
   }
@@ -641,7 +566,7 @@ export class BoardView extends ItemView {
       i
         .setTitle("Run")
         .setIcon("play")
-        .onClick(() => void this.driver?.run(task.id))
+        .onClick(() => void this.plugin.orchestration.run(task.id))
     );
     menu.addItem((i) =>
       i
@@ -661,7 +586,7 @@ export class BoardView extends ItemView {
           .setTitle("Mark done")
           .setIcon("check")
           .onClick(() =>
-            void this.driver?.markDone(task.id).then(() => {
+            void this.plugin.orchestration.markDone(task.id).then(() => {
               // Marking done closes+archives the linked chat too (same path as the
               // session-card "×"), so it lands in the Conversations gallery tagged
               // "Done" instead of lingering as an open tab.
@@ -675,7 +600,7 @@ export class BoardView extends ItemView {
       i
         .setTitle("Archive")
         .setIcon("archive")
-        .onClick(() => void this.driver?.archive(task.id))
+        .onClick(() => void this.plugin.orchestration.archive(task.id))
     );
     // Suppress session-card repaints while the menu is open (a repaint would
     // detach its anchor); catch up on close.
@@ -726,7 +651,7 @@ export class BoardView extends ItemView {
       const maxOrder = this.lastTasks
         .filter((t) => t.status === status)
         .reduce((m, t) => Math.max(m, t.order ?? 0), 0);
-      void this.driver?.move(id, status, maxOrder + 1);
+      void this.plugin.orchestration.move(id, status, maxOrder + 1);
     });
   }
 
@@ -751,22 +676,19 @@ export class BoardView extends ItemView {
       // Insert just before the target card: use an order slightly less than the
       // target's. The driver persists status+order; a full render re-sorts.
       const targetOrder = target.order ?? 0;
-      void this.driver?.move(id, target.status, targetOrder - 0.5);
+      void this.plugin.orchestration.move(id, target.status, targetOrder - 0.5);
     });
   }
 
   // --- Helpers ------------------------------------------------------------
 
-  /** Reload the driver's task list from the store (after a quick-add/edit that
-   *  bypassed the reducer) and re-render. Also refreshes load warnings. */
+  /** Rebuild the plugin runtime's task list from the store, after a quick-add or
+   *  an edit that bypassed the reducer. The reload emits back through `onTasks`,
+   *  so the repaint below is only for the warning banner. */
   private async reloadTasks(): Promise<void> {
-    const loaded = await this.plugin.taskStore.load();
-    this.loadWarnings = loaded.warnings;
-    // Restart the driver so its in-memory list reflects the new backlog task.
-    this.driver?.stop();
-    this.driver = new OrchestratorDriver(this.buildDeps());
-    await this.driver.start();
-    this.render(this.driver.snapshot());
+    await this.plugin.orchestration.reload();
+    this.loadWarnings = this.plugin.orchestration.warnings();
+    this.render(this.plugin.orchestration.snapshot());
   }
 
   private currentProvider(): ProviderId {

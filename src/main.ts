@@ -10,6 +10,7 @@ import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { handoffPrefix } from "./core/handoff";
 import type { ChildReport } from "./core/child-reports";
 import { BOARD_VIEW_TYPE, BOARD_ICON } from "./ui/board-view";
+import { createOrchestration } from "./obsidian/orchestration-wiring";
 import { CockpitView, COCKPIT_VIEW_TYPE } from "./ui/cockpit-view";
 import { AgentsView, AGENTS_VIEW_TYPE } from "./ui/agents-view";
 import { HubView, HUB_VIEW_TYPE, type HubTab } from "./ui/hub/hub-view";
@@ -314,6 +315,11 @@ export default class ExoPlugin extends Plugin {
    */
   readonly convoState = new ConvoStateChannel(() => this.settings.orchestrationEnabled);
 
+  /** THE orchestration runtime — driver + ledger watch, owned by the PLUGIN so
+   *  delegated tasks run with every tab closed. The board renders it; it used to
+   *  own it, which made `spawn_task` a no-op whenever that tab wasn't open. */
+  readonly orchestration = createOrchestration(this);
+
   /** Ribbon-icon handle for the Orchestration Board — created only while
    *  `orchestrationEnabled` is on, removed when it's toggled off, so the entry
    *  point disappears entirely (not just disabled) on hot-disable. */
@@ -613,6 +619,9 @@ export default class ExoPlugin extends Plugin {
     });
     this.app.workspace.onLayoutReady(() => {
       if (this.unloaded) return;
+      // Orchestration starts HERE, not earlier: before layout-ready a spawn
+      // would race Obsidian's own workspace restore for the sidebar leaf.
+      this.orchestration.sync();
       if (this.settings.cockpitOnStartup && this.app.workspace.getLeavesOfType(COCKPIT_VIEW_TYPE).length === 0) {
         void this.openCockpit();
       }
@@ -930,11 +939,7 @@ export default class ExoPlugin extends Plugin {
   /** Add or remove the board ribbon icon so it matches the flag exactly. */
   private syncBoardRibbon(): void {
     if (this.settings.orchestrationEnabled) {
-      if (!this.boardRibbonEl) {
-        this.boardRibbonEl = this.addRibbonIcon(BOARD_ICON, "Open orchestration board", () =>
-          void this.activateBoard()
-        );
-      }
+      this.boardRibbonEl ??= this.addRibbonIcon(BOARD_ICON, "Open orchestration board", () => void this.activateBoard());
     } else if (this.boardRibbonEl) {
       this.boardRibbonEl.remove();
       this.boardRibbonEl = null;
@@ -942,25 +947,19 @@ export default class ExoPlugin extends Plugin {
   }
 
   /**
-   * React to an `orchestrationEnabled` toggle (called from `saveSettings`).
-   * Hot-disable must be SAFE: it stops the driver (by detaching every open board
-   * leaf — `BoardView.onClose` calls `driver.stop()`, dropping runtime state and
-   * leaving running conversations alive as normal chats), hides entry points
-   * (ribbon + palette command — the latter via its own checkCallback), and
-   * touches NO markdown. Hot-enable just re-shows the ribbon.
+   * React to an `orchestrationEnabled` toggle (called from `saveSettings`), with
+   * no reload: `orchestration.sync()` starts or stops the runtime, the ribbon
+   * and the palette command follow the flag, and a hot-disable also detaches any
+   * open board leaf. Running conversations survive as normal chats; no markdown
+   * is touched either way.
    */
   private applyOrchestrationToggle(): void {
     const now = this.settings.orchestrationEnabled;
     if (now === this.orchestrationApplied) return;
     this.orchestrationApplied = now;
     this.syncBoardRibbon();
-    if (!now) {
-      // Detach any open board leaves — their onClose stops the driver and drops
-      // in-memory orchestration state. No file writes, no chat impact.
-      for (const leaf of this.app.workspace.getLeavesOfType(BOARD_VIEW_TYPE)) {
-        leaf.detach();
-      }
-    }
+    this.orchestration.sync();
+    if (!now) for (const leaf of this.app.workspace.getLeavesOfType(BOARD_VIEW_TYPE)) leaf.detach();
   }
 
   /**
@@ -2619,6 +2618,7 @@ export default class ExoPlugin extends Plugin {
 
   onunload(): void {
     this.unloaded = true;
+    this.orchestration.stop();
     this.proposalAbort.abort();
     const cancelIdle = (window as unknown as {
       cancelIdleCallback?: (h: number) => void;

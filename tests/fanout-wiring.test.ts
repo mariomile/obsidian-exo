@@ -32,6 +32,8 @@ const read = (...rel: string[]): string => readFileSync(join(__dirname, "..", ..
 const view = read("src", "view.ts");
 const main = read("src", "main.ts");
 const board = read("src", "ui", "board-view.ts");
+const runtime = read("src", "obsidian", "orchestration.ts");
+const wiring = read("src", "obsidian", "orchestration-wiring.ts");
 
 /** The body of `name`'s declaration in `src`, up to `chars` ahead — enough to
  *  contain the method without depending on brace matching. */
@@ -64,76 +66,107 @@ describe("fan-out wiring — spawn carries parentage", () => {
 /**
  * The seam that closed the loop. `spawn_task` writes a `queued` block straight
  * into tasks.md; the running `OrchestratorDriver` loads the ledger ONCE in
- * `start()` and evolves an in-memory list from there. With no watcher, a board
- * that was ALREADY OPEN — the expected supervision posture — never saw the new
- * task: no card, no promotion, no spawn, no child, no report, while the tool had
- * already told the agent it would start and report back. Only closing and
- * reopening the board tab picked it up.
+ * `start()` and evolves an in-memory list from there. With no watcher, an
+ * already-running driver never saw the new task: no card, no promotion, no
+ * spawn, no child, no report, while the tool had already told the agent it
+ * would start and report back.
  *
- * board-view.ts imports `obsidian` and has zero unit tests, so the policy lives
- * in `core/ledger-watch.ts` (tested there) and this pins that the board actually
- * calls it.
+ * The listener moved with the driver — from `BoardView` to the plugin-owned
+ * `OrchestrationRuntime` — when orchestration stopped depending on a tab being
+ * open. `orchestration-wiring.ts` imports `obsidian` and has no unit tests, so
+ * the policy lives in `core/ledger-watch.ts` (tested there) and this pins that
+ * the wiring actually calls it.
  */
-describe("fan-out wiring — the board sees tasks the tool writes", () => {
-  it("registers a vault modify listener, so it is torn down with the view", () => {
-    // registerEvent, not a bare vault.on: a leaked listener on a closed board
-    // would keep calling into a disposed driver.
-    expect(board).toMatch(/registerEvent\(\s*this\.app\.vault\.on\("modify"/);
+describe("fan-out wiring — the plugin sees tasks the tool writes", () => {
+  it("watches the ledger for modify AND create", () => {
+    // `createChildTask` takes the vault.create branch when tasks.md doesn't exist
+    // yet — a modify-only listener never fires for a vault's first-ever task,
+    // same symptom as the missed-spawn bug this watcher exists to fix.
+    const watch = near(wiring, "watchLedger:", 700);
+    expect(watch).toMatch(/vault\.on\("modify"/);
+    expect(watch).toMatch(/vault\.on\("create"/);
   });
 
-  it("scopes the listener to the ledger path, not to every note in the vault", () => {
-    const handler = near(board, 'this.app.vault.on("modify"', 400);
-    expect(handler).toContain("this.plugin.paths.tasks");
+  it("scopes the listeners to the ledger path, not to every note in the vault", () => {
+    expect(near(wiring, "watchLedger:", 700)).toContain("plugin.paths.tasks");
+  });
+
+  it("hands back an unsubscribe, so a hot-disable does not leak a vault listener", () => {
+    // Not `registerEvent`: the runtime is started and stopped at runtime by the
+    // orchestration flag, many times per plugin load. A plugin-lifetime
+    // registration would leak one listener set per toggle.
+    expect(near(wiring, "watchLedger:", 700)).toContain("vault.offref(ref)");
+    expect(near(runtime, "stop(): void {", 500)).toContain("this.unwatchLedger?.()");
   });
 
   it("routes the event through the debounced watch, never straight to a reload", () => {
-    const handler = near(board, 'this.app.vault.on("modify"', 400);
-    expect(handler).toMatch(/ledgerWatch\??\.notify\(\)/);
-  });
-
-  it("also registers a vault create listener, so the ledger's first-ever write is seen", () => {
-    // `createChildTask` takes the vault.create branch when tasks.md doesn't exist
-    // yet — a modify-only listener never fires for a vault's first-ever task,
-    // same symptom as the missed-spawn bug this watcher exists to fix, confined
-    // to first use. registerEvent, not a bare vault.on, same as "modify".
-    expect(board).toMatch(/registerEvent\(\s*this\.app\.vault\.on\("create"/);
-  });
-
-  it("scopes the create listener to the ledger path too", () => {
-    const handler = near(board, 'this.app.vault.on("create"', 400);
-    expect(handler).toContain("this.plugin.paths.tasks");
-  });
-
-  it("routes the create event through the same debounced watch as modify", () => {
-    const handler = near(board, 'this.app.vault.on("create"', 400);
-    expect(handler).toMatch(/ledgerWatch\??\.notify\(\)/);
+    expect(near(runtime, "this.unwatchLedger = this.deps.watchLedger(", 200)).toMatch(
+      /ledgerWatch\??\.notify\(\)/
+    );
   });
 
   it("reloads the driver's task list when the ledger really changed", () => {
-    expect(board).toContain("ledgerChangedExternally");
-    expect(near(board, "private async reloadIfLedgerChanged()", 700)).toContain("reloadTasks()");
+    expect(runtime).toContain("ledgerChangedExternally");
+    expect(near(runtime, "private async reloadIfLedgerChanged()", 700)).toContain("this.reload()");
   });
 
   it("wraps the driver's OWN store writes, so they don't bounce back as reloads", () => {
     // The driver persists every transition through the same file it now watches.
-    // Unguarded, each write it makes would re-enter reloadTasks and restart the
+    // Unguarded, each write it makes would re-enter the reload and restart the
     // driver — mid-spawn, repeatedly.
-    const deps = near(board, "private buildDeps(): DriverDeps {");
-    expect(deps).toContain("guardedStore");
-    const guarded = near(board, "private guardedStore()", 700);
+    expect(near(runtime, "private buildDriverDeps(): DriverDeps {")).toContain("guardedStore");
+    const guarded = near(runtime, "private guardedStore()", 700);
     for (const write of ["update", "move", "archive"]) {
       expect(guarded, `store.${write} is not guarded`).toContain(`guard(store.${write}`);
     }
   });
 
-  it("disposes the watch when the board closes", () => {
-    expect(near(board, "async onClose()", 500)).toContain("ledgerWatch");
+  it("disposes the watch when the runtime stops", () => {
+    expect(near(runtime, "stop(): void {", 500)).toContain("ledgerWatch?.dispose()");
+  });
+});
+
+/**
+ * Ownership contract. The driver used to be built in `BoardView.onOpen` and
+ * stopped in `onClose`, which made every delegation conditional on a tab being
+ * open. These assertions are the only cheap way to keep it that way: board-view
+ * imports `obsidian` and cannot be instantiated under vitest.
+ */
+describe("orchestration ownership — the plugin, not the board", () => {
+  it("the plugin starts the runtime at layout-ready and stops it on unload", () => {
+    expect(near(main, "this.app.workspace.onLayoutReady(() => {", 500)).toContain(
+      "this.orchestration.sync()"
+    );
+    expect(near(main, "onunload(): void {", 300)).toContain("this.orchestration.stop()");
+  });
+
+  it("a settings toggle starts or stops it live, with no reload", () => {
+    expect(near(main, "private applyOrchestrationToggle()", 600)).toContain(
+      "this.orchestration.sync()"
+    );
+  });
+
+  it("the board never constructs a driver or a ledger watch of its own", () => {
+    expect(board).not.toContain("new OrchestratorDriver");
+    expect(board).not.toContain("new LedgerWatch");
+  });
+
+  it("closing the board stops nothing", () => {
+    const close = near(board, "async onClose()", 500);
+    expect(close).not.toContain("driver");
+    expect(close).not.toContain("orchestration.stop");
+  });
+
+  it("opening the board attaches to the running runtime instead of starting one", () => {
+    const open = near(board, "async onOpen()", 1600);
+    expect(open).toContain("orchestration.onTasks(");
+    expect(open).toContain("orchestration.snapshot()");
   });
 });
 
 describe("fan-out wiring — reports reach the parent's next turn", () => {
-  it("the board wires both report deps into the driver", () => {
-    const deps = near(board, "private buildDeps(): DriverDeps {");
+  it("the runtime wires both report deps into the driver", () => {
+    const deps = near(runtime, "private buildDriverDeps(): DriverDeps {");
     expect(deps).toContain("onChildReport");
     expect(deps).toContain("lastAssistantText");
   });
