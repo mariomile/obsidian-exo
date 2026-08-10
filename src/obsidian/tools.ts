@@ -26,7 +26,9 @@ import {
 } from "../core/open-loops";
 import { WriteQueue } from "../core/write-queue";
 import { patchFrontmatter } from "../core/frontmatter-patch";
-import { createBacklogTask, adaptAppToTaskVault } from "./task-store";
+import { createBacklogTask, createChildTask, adaptAppToTaskVault } from "./task-store";
+import { canSpawnChild, childrenOf } from "../core/child-tasks";
+import { parseTasksFile } from "../core/tasks";
 import {
   automationLastRunKey,
   cadenceLabel,
@@ -181,6 +183,11 @@ export interface ObsidianToolOpts {
   loopsWriteQueue?: WriteQueue;
   orchestrationEnabled?: boolean;
   tasksWriteQueue?: WriteQueue;
+  /** Convo id of the conversation this tool server belongs to. Present only
+   *  for real chat sessions (never headless runs) — `spawn_task` is not
+   *  registered without it, since a child with no parent has nobody to
+   *  report to. */
+  parentConvoId?: string;
   agentFolderEnabled?: boolean;
   rethinkBridge?: (req: RethinkRequest) => Promise<string>;
   /** Resolved memory-layer paths. Absent → the legacy root (test/fallback). */
@@ -214,6 +221,10 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
      *  injected by the plugin the same way `memoryWriteQueue` is — so `add_task`
      *  and any future board-side writer serialize on the SAME queue. */
     tasksWriteQueue = new WriteQueue(),
+    /** Convo id of the conversation this tool server belongs to. Absent for
+     *  headless runs — `spawn_task` is gated on this being present, in
+     *  addition to `orchestrationEnabled`. */
+    parentConvoId,
     /** The Agent Is the Folder master flag (default OFF). Gates `rethink_memory`
      *  ONLY (in addition to memoryWrite) — every other tool is byte-identical to
      *  before this parameter existed when this is false. */
@@ -1033,6 +1044,58 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     }
   );
 
+  const spawnTask = tool(
+    "spawn_task",
+    "Delegate a piece of work to a separate child conversation that runs in parallel with this one. Use it when the work is self-contained and would otherwise crowd this thread — research a source, draft a section, check a dataset. The child starts as soon as the board has a free slot, runs as a normal chat (so it can ask Mario for permission), and reports its outcome back here when it finishes. Prefer doing small work yourself: each child is a whole conversation Mario has to supervise.",
+    {
+      title: z.string().describe("Short title shown on the board card and in the sidebar."),
+      prompt: z.string().describe("The full instruction for the child conversation — it does not see this chat's history."),
+      model: z.string().optional().describe("Provider model id for the child; omit for the default."),
+    },
+    async (args) => {
+      if (!parentConvoId) return ok("Delegation is unavailable in this session.");
+      const vault = adaptAppToTaskVault(app);
+      const existing = vault.getFile(paths.tasks);
+      const current = existing ? await vault.read(paths.tasks) : "";
+      const gate = canSpawnChild(parseTasksFile(current), parentConvoId);
+      if (!gate.ok) return ok(gate.reason);
+      const entry = await createChildTask(
+        vault,
+        tasksWriteQueue,
+        {
+          title: args.title,
+          prompt: args.prompt,
+          parent: parentConvoId,
+          ...(args.model ? { model: args.model } : {}),
+        },
+        paths.tasks
+      );
+      return ok(
+        `Queued child task ${entry.id}: ${entry.title}. It starts when the board has a free slot and reports back here when it is done.`
+      );
+    }
+  );
+
+  const listTasks = tool(
+    "list_tasks",
+    "List tasks on the Orchestration Board. By default it shows only the child tasks this conversation delegated, with their current status — use it to check on work you handed off before reporting to Mario.",
+    {
+      all: z.boolean().optional().describe("List every task on the board instead of only this conversation's children."),
+    },
+    async (args) => {
+      const vault = adaptAppToTaskVault(app);
+      const existing = vault.getFile(paths.tasks);
+      const tasks = parseTasksFile(existing ? await vault.read(paths.tasks) : "");
+      const shown = args.all ? tasks : parentConvoId ? childrenOf(tasks, parentConvoId) : [];
+      if (!shown.length) return ok(args.all ? "The board is empty." : "This conversation has not delegated any tasks.");
+      return ok(
+        shown
+          .map((t) => `- ${t.id} · ${t.status} · ${t.title}${t.convo ? "" : " (not started yet)"}`)
+          .join("\n")
+      );
+    }
+  );
+
   /* ------------------------- automations (exo) ------------------------- */
   // Chat-side management of scheduled playbook runs — the same operations as
   // the Automations panel, so "metti in pausa il digest" works as a sentence.
@@ -1354,7 +1417,8 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
     // agent-folder flag, plus a live view bridge to render its diff/proposal.
     ...(memoryWrite && agentFolderEnabled && rethinkBridge ? [rethinkMemory] : []),
-    ...(orchestrationEnabled ? [addTask] : []),
+    ...(orchestrationEnabled ? [addTask, listTasks] : []),
+    ...(orchestrationEnabled && parentConvoId ? [spawnTask] : []),
   ];
 }
 
@@ -1376,7 +1440,12 @@ export function createObsidianToolServer(
   agentFolderEnabled = false,
   rethinkBridge?: (req: RethinkRequest) => Promise<string>,
   loopsWriteQueue: WriteQueue = new WriteQueue(),
-  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT)
+  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT),
+  // Convo id of the conversation this server belongs to. Kept last in the
+  // positional API so existing callers retain their argument slots (same
+  // convention as `loopsWriteQueue` above). Absent for headless runs, which
+  // must not get `spawn_task` — a child with no parent has nobody to report to.
+  parentConvoId?: string
 ) {
   return createSdkMcpServer({
     name: "obsidian",
@@ -1393,6 +1462,7 @@ export function createObsidianToolServer(
       loopsWriteQueue,
       orchestrationEnabled,
       tasksWriteQueue,
+      parentConvoId,
       agentFolderEnabled,
       rethinkBridge,
       paths,

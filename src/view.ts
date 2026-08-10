@@ -776,7 +776,7 @@ export class ChatView extends ItemView {
           // Same contract for the single-file Open-Loops Ledger. Kept last in
           // the positional API so existing callers retain their argument slots.
           this.plugin.loopsWriteQueue,
-          this.plugin.paths
+          this.plugin.paths, c.id // parentConvoId — gates spawn_task
         )
       : undefined;
 
@@ -830,7 +830,7 @@ export class ChatView extends ItemView {
           memoryWriteQueue: this.plugin.memoryWriteQueue,
           loopsWriteQueue: this.plugin.loopsWriteQueue,
           orchestrationEnabled: s.orchestrationEnabled && !readOnlySandbox,
-          tasksWriteQueue: this.plugin.tasksWriteQueue,
+          tasksWriteQueue: this.plugin.tasksWriteQueue, parentConvoId: c.id,
           agentFolderEnabled: s.agentFolderEnabled && !readOnlySandbox,
           rethinkBridge: (req) => this.rethinkBridge(c, req),
           paths: this.plugin.paths,
