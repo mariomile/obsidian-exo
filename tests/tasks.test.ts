@@ -118,6 +118,45 @@ describe("formatTask / parseTasksFile round-trip", () => {
     const [parsed] = parseTasksFile(content);
     expect(parsed.status).toBe("backlog");
   });
+
+  it("round-trips the parent field", () => {
+    const entry: TaskEntry = {
+      id: "task-1720000000003",
+      title: "Research competitor pricing",
+      status: "queued",
+      created: "2026-08-10T10:00:00.000Z",
+      updated: "2026-08-10T10:00:00.000Z",
+      parent: "convo-parent-1",
+      prompt: "Look into competitor pricing pages.",
+    };
+    const block = formatTask(entry);
+    expect(block).toContain("- parent: convo-parent-1");
+    const [parsed] = parseTasksFile(block);
+    expect(parsed).toEqual(entry);
+  });
+
+  it("omits the parent line entirely when there is no parent", () => {
+    const entry: TaskEntry = {
+      id: "task-1720000000004",
+      title: "Standalone task",
+      status: "backlog",
+      created: "2026-08-10T10:00:00.000Z",
+      updated: "2026-08-10T10:00:00.000Z",
+      prompt: "Do the thing.",
+    };
+    expect(formatTask(entry)).not.toContain("parent");
+    const [parsed] = parseTasksFile(formatTask(entry));
+    expect(parsed.parent).toBeUndefined();
+  });
+
+  it("addBacklogTask persists a parent when given one", () => {
+    const { entry } = addBacklogTask(
+      "",
+      { title: "Child work", prompt: "Do it.", parent: "convo-parent-1" },
+      1720000000005
+    );
+    expect(entry.parent).toBe("convo-parent-1");
+  });
 });
 
 describe("addBacklogTask", () => {
