@@ -547,6 +547,73 @@ describe("OrchestratorDriver — child reports", () => {
     await flushReports();
     expect(reports).toHaveLength(0);
   });
+
+  // A child that fails to spawn never gets a convo, so it never emits a
+  // convo-state event and `maybeQueueChildReport` can never fire for it. Without
+  // wiring the catch block in `runEffect` to queue a report directly, a parent
+  // that fans out 3 children where one fails to spawn gets 2 reports and waits
+  // forever on the third. These pin the fix at `runEffect`'s catch block.
+
+  it("reports a spawn failure to the parent as an error outcome carrying the failure message", async () => {
+    const reports: ChildReport[] = [];
+    const { deps } = makeDeps([
+      task({ id: "task-7", title: "Research pricing", status: "queued", order: 0, parent: "convo-parent" }),
+    ]);
+    deps.onChildReport = (r) => reports.push(r);
+    deps.spawn = vi.fn(async () => {
+      throw new Error("CLI down");
+    });
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flushReports();
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      taskId: "task-7",
+      title: "Research pricing",
+      outcome: "error",
+    });
+    expect(reports[0].excerpt).toContain("CLI down");
+
+    // The rest of the catch block's behavior (needs-input + error badge +
+    // Notice) must be unaffected by the new report path.
+    const t = driver.snapshot().find((x) => x.id === "task-7")!;
+    expect(t.status).toBe("needs-input");
+    expect(t.inputReason).toBe("error");
+    expect(deps.notify).toHaveBeenCalled();
+  });
+
+  it("reports a spawn failure to the parent when spawn resolves empty (the other failure path)", async () => {
+    const reports: ChildReport[] = [];
+    const { deps } = makeDeps([
+      task({ id: "task-9", title: "Empty spawn", status: "queued", order: 0, parent: "convo-parent" }),
+    ]);
+    deps.onChildReport = (r) => reports.push(r);
+    deps.spawn = vi.fn(async () => "");
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flushReports();
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0].outcome).toBe("error");
+    expect(reports[0].taskId).toBe("task-9");
+  });
+
+  it("emits no report for a spawn failure on a task without a parent", async () => {
+    const reports: ChildReport[] = [];
+    const { deps } = makeDeps([task({ id: "task-8", title: "Solo task", status: "queued", order: 0 })]);
+    deps.onChildReport = (r) => reports.push(r);
+    deps.spawn = vi.fn(async () => {
+      throw new Error("CLI down");
+    });
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flushReports();
+
+    expect(reports).toHaveLength(0);
+    const t = driver.snapshot().find((x) => x.id === "task-8")!;
+    expect(t.status).toBe("needs-input");
+  });
 });
 
 describe("OrchestratorDriver — reconciliation on boot", () => {

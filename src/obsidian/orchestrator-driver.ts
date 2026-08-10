@@ -233,18 +233,24 @@ export class OrchestratorDriver {
   // --- Convo events -------------------------------------------------------
 
   private onConvoEvent(e: ConvoStateEvent): void {
-    void this.dispatch(toOrchestratorEvent(e));
-    this.maybeQueueChildReport(e);
+    // Chained after the dispatch settles (not a synchronous sibling call):
+    // `task.convo` is only recorded once `runEffect`'s `await spawn()`
+    // resolves, inside SOME earlier dispatch on `this.chain`. Because
+    // `dispatch()` always chains onto `this.chain`, this event's own dispatch
+    // cannot settle before that earlier one does — so by the time we get
+    // here, the owner lookup below is guaranteed to see an up-to-date
+    // `task.convo`. Reading `this.tasks` synchronously (the previous shape)
+    // raced a child that fails to spawn near-instantly: the convo-state event
+    // could reach `onConvoEvent` before the promoting dispatch had recorded
+    // `task.convo`, silently dropping the report. `e` is kept in closure so
+    // its `reason` (needed by `outcomeFromState`) survives.
+    void this.dispatch(toOrchestratorEvent(e)).then(() => this.maybeQueueChildReport(e));
   }
 
   /**
    * Child reporting: a task WITH a parent that reached an outcome tells its
-   * parent. The owner lookup only depends on `task.convo`/`task.parent`,
-   * which are stamped at spawn time and never touched by this event's
-   * reducer transition — so it's safe to read `this.tasks` synchronously
-   * here rather than waiting on the dispatch chain above. Never inline —
-   * batched behind the debounce so a child that ends several turns in quick
-   * succession produces one message, not five.
+   * parent. Never inline — batched behind the debounce so a child that ends
+   * several turns in quick succession produces one message, not five.
    */
   private maybeQueueChildReport(e: ConvoStateEvent): void {
     if (!this.deps.onChildReport) return;
@@ -339,12 +345,30 @@ export class OrchestratorDriver {
       // Spawn/write failure → drop the task to needs-input with an error badge,
       // surface a Notice + (implicitly) a badge on the card via the state.
       const msg = err instanceof Error ? err.message : String(err);
+      const failedTask = this.tasks.find((t) => t.id === effect.taskId);
       this.tasks = this.tasks.map((t) =>
         t.id === effect.taskId ? { ...t, status: "needs-input", inputReason: "error", chatMissing: undefined } : t
       );
       await this.deps.store.update(effect.taskId, { status: "needs-input" }).catch(() => undefined);
       this.deps.notify(`Couldn't start task: ${msg}`);
       this.emitChange();
+
+      // A child that never got a convo never emits a convo-state event, so
+      // `maybeQueueChildReport` never fires for it — the parent would wait
+      // forever on a report that can never arrive. Queue one directly, through
+      // the SAME batched/debounced path (keyed by task id), so a parent with
+      // several children in flight still gets one message, not a partial set.
+      if (this.deps.onChildReport && failedTask?.parent) {
+        this.pendingReports.set(failedTask.id, {
+          taskId: failedTask.id,
+          childConvoId: "",
+          title: failedTask.title,
+          outcome: "error",
+          excerpt: buildExcerpt(msg),
+          at: Date.now(),
+        });
+        this.scheduleReportFlush();
+      }
 
       // The failed task freed the running slot it was promoted into. Re-run the
       // scheduler so that slot is refilled by the next eligible queued task —
