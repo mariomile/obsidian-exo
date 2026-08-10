@@ -413,3 +413,30 @@ describe("OrchestrationRuntime — ledger changes made by somebody else", () => 
     }
   });
 });
+
+describe("OrchestrationRuntime — teardown during boot", () => {
+  it("abandons a driver whose runtime was stopped mid-load (no orphan subscription)", async () => {
+    const { deps, convo } = makeDeps([task({ id: "task-1", status: "queued", order: 0 })]);
+    // Hold the boot inside `store.load()`, exactly where an unload or a
+    // hot-disable can land.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    deps.store.load = vi.fn(async () => {
+      await held;
+      return { tasks: [task({ id: "task-1", status: "queued", order: 0 })], warnings: [] };
+    });
+    const runtime = new OrchestrationRuntime(deps);
+
+    const starting = runtime.start();
+    runtime.stop();
+    release();
+    await starting;
+    await flush();
+
+    expect(runtime.isRunning()).toBe(false);
+    // The abandoned driver must not be left listening to convo-state.
+    expect(convo.size).toBe(0);
+  });
+});

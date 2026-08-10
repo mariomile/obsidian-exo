@@ -81,6 +81,11 @@ export class OrchestrationRuntime {
   /** In-flight `start()`, so concurrent callers (plugin boot + a board opening
    *  in the same tick) await the SAME start instead of racing two drivers. */
   private starting: Promise<void> | null = null;
+  /** Bumped by every `stop()`. A boot that was torn down mid-`await` compares
+   *  this and abandons the driver it was building — without it, an unload or a
+   *  hot-disable landing inside `store.load()` would let the boot resume and
+   *  subscribe a driver nobody holds a handle to any more. */
+  private generation = 0;
 
   constructor(private readonly deps: OrchestrationDeps) {}
 
@@ -114,6 +119,7 @@ export class OrchestrationRuntime {
   }
 
   private async boot(): Promise<void> {
+    const generation = this.generation;
     // Built BEFORE the driver: the driver writes through a store whose writes
     // route into this watch, so the modify events its own persistence causes
     // aren't mistaken for somebody else's edit.
@@ -131,11 +137,15 @@ export class OrchestrationRuntime {
     const driver = new OrchestratorDriver(this.buildDriverDeps());
     this.driver = driver;
     const loaded = await this.deps.store.load();
+    // A `stop()` landing inside that read already tore everything down. Starting
+    // the driver now would subscribe a runtime nobody can stop again.
+    if (this.generation !== generation) return;
     this.loadWarnings = loaded.warnings;
     await driver.start();
-    // `stop()` can land while `driver.start()` is awaiting the store; if it did,
-    // it already tore this driver down and nulled the field — don't resurrect it.
-    if (this.driver !== driver) return;
+    if (this.generation !== generation) {
+      driver.stop();
+      return;
+    }
     this.emit(driver.snapshot());
   }
 
@@ -146,6 +156,7 @@ export class OrchestrationRuntime {
    * markdown. Safe when never started.
    */
   stop(): void {
+    this.generation++;
     this.disarmHostWatch();
     this.unwatchLedger?.();
     this.unwatchLedger = null;
@@ -167,13 +178,18 @@ export class OrchestrationRuntime {
       await this.start();
       return;
     }
+    const generation = this.generation;
     const loaded = await this.deps.store.load();
+    if (this.generation !== generation || !this.driver) return;
     this.loadWarnings = loaded.warnings;
     this.driver.stop();
     const driver = new OrchestratorDriver(this.buildDriverDeps());
     this.driver = driver;
     await driver.start();
-    if (this.driver !== driver) return;
+    if (this.generation !== generation) {
+      driver.stop();
+      return;
+    }
     this.emit(driver.snapshot());
   }
 
