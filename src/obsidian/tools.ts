@@ -1496,6 +1496,10 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__list_loops",
   "mcp__obsidian__list_automations",
   "mcp__obsidian__list_agents",
+  // Reads the ledger and writes nothing. Its own description tells the agent to
+  // "check on work you handed off" — raising a write-permission card for that
+  // turns a status glance into an interruption.
+  "mcp__obsidian__list_tasks",
   ...CAPABILITY_READ_TOOLS,
 ]);
 
@@ -1510,5 +1514,10 @@ export const OBSIDIAN_MEMORY_TOOLS = new Set([
   "mcp__obsidian__rethink_memory",
 ]);
 
-/** Orchestration tool names — gated separately by the `orchestrationEnabled` setting. */
-export const OBSIDIAN_ORCHESTRATION_TOOLS = new Set(["mcp__obsidian__add_task"]);
+// `OBSIDIAN_ORCHESTRATION_TOOLS` used to live here, listing `add_task` alone.
+// Removed rather than extended with `spawn_task`/`list_tasks`: it had ZERO
+// production consumers, and it never could have one — the `orchestrationEnabled`
+// gate is applied at REGISTRATION (see `createObsidianToolServer`), so a tool
+// that is off is not on the server at all and there is nothing left to classify.
+// A Set nobody reads cannot go red when it drifts, which is exactly how
+// `list_tasks` came to be missing from the read-tools Set above unnoticed.

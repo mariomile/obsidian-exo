@@ -211,8 +211,14 @@ export function formatReportsForParent(reports: ChildReport[]): string {
     const body = r.excerpt ? `\n${r.excerpt}` : "";
     return `${head}${body}`;
   });
+  // Count-agnostic on purpose. "One of these was stopped by hand" was false at
+  // BOTH edges of a batch: wrong for a single report (there is no "these"), and
+  // actively harmful for two or more stopped children — it names one, which
+  // reads as licence to pick the second one back up. This is the guardrail that
+  // stops an agent resuming work a human deliberately killed, so it has to hold
+  // for any number of them.
   const guidance = reports.some((r) => r.outcome === "stopped")
-    ? "\n\nOne of these was stopped by hand: do not resume its work unless Mario asks."
+    ? "\n\nAny task above shown as stopped was stopped by hand: do not resume its work unless Mario asks."
     : "";
   const plural = reports.length === 1 ? "a task you delegated" : "tasks you delegated";
   return `Update on ${plural}:\n\n${blocks.join("\n\n")}${guidance}`;

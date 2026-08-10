@@ -115,6 +115,37 @@ describe("formatReportsForParent", () => {
     expect(out.toLowerCase()).not.toContain("do not resume");
   });
 
+  /**
+   * The guidance has to hold at BOTH edges of a batch. "One of these was
+   * stopped by hand" was false for a single report (there is no "these") and
+   * worse for two — it names ONE, which an agent can read as licence to resume
+   * the other. It is the guardrail against resuming work a human deliberately
+   * killed, so it must never be phrased as a count.
+   */
+  it("phrases the stopped guidance without a count, for a batch of exactly one", () => {
+    const out = formatReportsForParent([{ ...base, outcome: "stopped" }]);
+    expect(out).not.toMatch(/one of these/i);
+    expect(out.toLowerCase()).toContain("do not resume");
+  });
+
+  it("covers EVERY stopped child when two or more were stopped", () => {
+    const out = formatReportsForParent([
+      { ...base, taskId: "task-1", title: "Research pricing", outcome: "stopped" },
+      { ...base, taskId: "task-2", title: "Draft post", outcome: "stopped" },
+    ]);
+    expect(out).not.toMatch(/one of these/i);
+    // One guidance line, not one per report, and it must not single any of them out.
+    expect(out.match(/do not resume/gi)).toHaveLength(1);
+    expect(out).toContain("Research pricing");
+    expect(out).toContain("Draft post");
+  });
+
+  it("still carries the guidance when only SOME of a mixed batch was stopped", () => {
+    const out = formatReportsForParent([base, { ...base, taskId: "task-2", outcome: "stopped" }]);
+    expect(out.toLowerCase()).toContain("do not resume");
+    expect(out).not.toMatch(/one of these/i);
+  });
+
   it("distinguishes blocked from error children in the rendered text", () => {
     const blocked = formatReportsForParent([{ ...base, outcome: "blocked" }]);
     const error = formatReportsForParent([{ ...base, outcome: "error" }]);

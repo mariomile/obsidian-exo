@@ -14,7 +14,16 @@ export const MAX_OPEN_CHILDREN = 5;
 /** Max chain length: parent → child → grandchild, then refuse. */
 export const MAX_FANOUT_DEPTH = 2;
 
-/** Statuses that no longer occupy a fan-out slot. */
+/**
+ * Statuses that no longer occupy a fan-out slot.
+ *
+ * Note what is NOT here: `review`, where a finished child parks. Finishing
+ * therefore does NOT free a slot — only a human marking the card done or
+ * archiving it does. That is deliberate (the cap counts children Mario still
+ * has to supervise, and one waiting to be read is one of them), and the refusal
+ * text below has to say so, or the agent sits waiting for something that will
+ * never happen on its own.
+ */
 const CLOSED = new Set<TaskEntry["status"]>(["done", "archived"]);
 
 export function childrenOf(tasks: TaskEntry[], parentConvoId: string): TaskEntry[] {
@@ -53,7 +62,7 @@ export function canSpawnChild(
   if (open >= MAX_OPEN_CHILDREN) {
     return {
       ok: false,
-      reason: `This conversation already has ${open} open child tasks (cap ${MAX_OPEN_CHILDREN}). Wait for one to finish, or mark one done on the board.`,
+      reason: `This conversation already has ${open} open child tasks (cap ${MAX_OPEN_CHILDREN}). Ask Mario to mark one done or archive it on the board to free a slot — a finished child parks in Review and keeps its slot until he does.`,
     };
   }
   const depth = fanoutDepth(tasks, parentConvoId);

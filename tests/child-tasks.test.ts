@@ -108,6 +108,24 @@ describe("canSpawnChild", () => {
     if (!res.ok) expect(res.reason).toContain(String(MAX_OPEN_CHILDREN));
   });
 
+  /**
+   * The refusal is the agent's only instruction for getting unstuck, so it has
+   * to be TRUE. `review` is not in CLOSED: a child that finishes keeps its slot
+   * until a human marks it done or archives it. Telling the agent to "wait for
+   * one to finish" pointed it at something that never frees anything — a
+   * conversation with 5 finished-but-unread children waits forever.
+   */
+  it("tells the agent how a slot is ACTUALLY freed, never to wait for one to finish", () => {
+    const finished = Array.from({ length: MAX_OPEN_CHILDREN }, (_, i) =>
+      task({ id: `task-${i}`, parent: "convo-a", status: "review" })
+    );
+    const res = canSpawnChild(finished, "convo-a");
+    expect(res.ok).toBe(false); // every child is DONE working and the cap still bites
+    if (res.ok) return;
+    expect(res.reason.toLowerCase()).not.toMatch(/wait for one to finish/);
+    expect(res.reason.toLowerCase()).toMatch(/mark one done|archive/);
+  });
+
   it("refuses at max depth", () => {
     const tasks = [
       task({ id: "task-1", parent: "convo-a", convo: "convo-b" }),
