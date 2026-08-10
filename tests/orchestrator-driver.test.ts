@@ -820,3 +820,82 @@ describe("OrchestratorDriver — reconciliation on boot", () => {
     expect(t.chatMissing).toBeFalsy();
   });
 });
+
+/**
+ * "No host to put a conversation in" is NOT a spawn failure.
+ *
+ * Once the driver runs on plugin load (rather than only while the board tab is
+ * open), the very first scheduler pass can happen before any ChatView exists.
+ * Burning every queued task into `needs-input` with an error badge and a false
+ * "it failed" report to its parent would be a regression, not a fix — so the
+ * driver asks `canSpawn()` first and WITHHOLDS the promotion when the answer is
+ * no: the task stays `queued`, no slot is consumed, nothing is reported.
+ */
+describe("OrchestratorDriver — no conversation host available", () => {
+  it("withholds the promotion: the task stays queued, with no badge, no notice, no report", async () => {
+    const { deps, spawned } = makeDeps([task({ id: "task-1", status: "queued", order: 0, parent: "convo-parent" })]);
+    const reports: ChildReport[] = [];
+    deps.onChildReport = (r) => reports.push(r);
+    deps.canSpawn = () => false;
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flush();
+
+    const t = driver.snapshot().find((x) => x.id === "task-1")!;
+    expect(t.status).toBe("queued");
+    expect(t.inputReason).toBeUndefined();
+    expect(spawned).toHaveLength(0);
+    expect(deps.notify).not.toHaveBeenCalled();
+    expect(reports).toEqual([]);
+  });
+
+  it("consumes no concurrency slot while withheld (a later host start still gets the full cap)", async () => {
+    const { deps, spawned } = makeDeps([
+      task({ id: "task-1", status: "queued", order: 0 }),
+      task({ id: "task-2", status: "queued", order: 1 }),
+      task({ id: "task-3", status: "queued", order: 2 }),
+    ]);
+    let host = false;
+    deps.canSpawn = () => host;
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flush();
+    expect(driver.snapshot().filter((t) => t.status === "running")).toHaveLength(0);
+
+    host = true;
+    await driver.pump();
+    await flush();
+    // Cap 2: exactly two spawn, the third stays queued — the withheld pass must
+    // not have leaked slots.
+    expect(spawned).toHaveLength(2);
+    expect(driver.snapshot().filter((t) => t.status === "running")).toHaveLength(2);
+  });
+
+  it("tells the shell a host is missing so it can arm a retry", async () => {
+    const { deps } = makeDeps([task({ id: "task-1", status: "queued", order: 0 })]);
+    deps.canSpawn = () => false;
+    deps.onSpawnHostMissing = vi.fn();
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flush();
+    expect(deps.onSpawnHostMissing).toHaveBeenCalled();
+  });
+
+  it("still treats a genuine spawn failure as a failure when a host IS available", async () => {
+    const { deps } = makeDeps([task({ id: "task-1", status: "queued", order: 0, parent: "convo-parent" })]);
+    const reports: ChildReport[] = [];
+    deps.onChildReport = (r) => reports.push(r);
+    deps.canSpawn = () => true;
+    deps.spawn = vi.fn(async () => {
+      throw new Error("CLI down");
+    });
+    const driver = new OrchestratorDriver(deps);
+    await driver.start();
+    await flush();
+
+    const t = driver.snapshot().find((x) => x.id === "task-1")!;
+    expect(t.status).toBe("needs-input");
+    expect(t.inputReason).toBe("error");
+    expect(deps.notify).toHaveBeenCalled();
+  });
+});

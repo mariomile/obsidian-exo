@@ -238,6 +238,39 @@ function fillSlots(
   return { tasks: next, effects };
 }
 
+/**
+ * Undo the promotions in `result`, putting the promoted tasks back in `queued`
+ * and dropping every effect. Pure.
+ *
+ * "There is no UI able to host a conversation right now" is not the same fact as
+ * "starting this conversation failed". The reducer cannot tell them apart — it
+ * has no idea a workspace exists — so the driver asks its shell and, when the
+ * answer is no, rewinds the scheduler's decision *before* anything is persisted:
+ * the tasks never reach `running`, so they consume no slot, earn no error badge,
+ * and tell no parent that work it delegated has failed. They simply wait.
+ *
+ * Rewinds ONLY the fields `fillSlots` sets (`status`, `chatMissing`, restored
+ * from `before`), never the whole entry: the same `reduce` call may also have
+ * moved the task (a re-run is `move → queued` followed by a promotion), and that
+ * move is a user decision that must survive the rewind.
+ */
+export function withholdSpawns(
+  before: TaskEntry[],
+  result: OrchestratorResult
+): OrchestratorResult {
+  if (result.effects.length === 0) return result;
+  const withheld = new Set(result.effects.map((e) => e.taskId));
+  const prior = new Map(before.map((t) => [t.id, t]));
+  return {
+    tasks: result.tasks.map((t) =>
+      withheld.has(t.id)
+        ? patch(t, { status: "queued", chatMissing: prior.get(t.id)?.chatMissing })
+        : t
+    ),
+    effects: [],
+  };
+}
+
 /** Replace one task by id; no-op if not found. Pure. */
 function mapTask(
   tasks: TaskEntry[],

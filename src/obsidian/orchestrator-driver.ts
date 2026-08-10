@@ -17,13 +17,17 @@
  * memory and on disk).
  *
  * Nothing here imports `obsidian` — it depends only on injected callbacks
- * (`DriverDeps`), so the whole controller is unit-testable with fakes. The
- * BoardView (which DOES import `obsidian`) constructs the real deps.
+ * (`DriverDeps`), so the whole controller is unit-testable with fakes. The real
+ * deps are built by `obsidian/orchestration-wiring.ts` and the driver is owned
+ * by the PLUGIN (`obsidian/orchestration.ts`), not by the board: delegated work
+ * has to run whether or not the board tab happens to be open. The board is a
+ * renderer and a control surface over this driver, nothing more.
  */
 
 import {
   reconcile,
   reduce,
+  withholdSpawns,
   type ConvoSnapshot,
   type OrchestratorConfig,
   type OrchestratorEffect,
@@ -70,6 +74,21 @@ export interface DriverDeps {
   /** Deliver a finished child's report to its parent. Absent → child
    *  reporting is off. */
   onChildReport?(report: ChildReport): void;
+  /**
+   * Is there a UI able to host a conversation right now?
+   *
+   * Absent → assumed yes (the shape every test and the old board-owned driver
+   * used). Returning `false` makes the driver WITHHOLD promotions instead of
+   * spawning into the void: the tasks stay `queued`, hold no slot, get no error
+   * badge and send no report. This exists because the driver now starts with the
+   * plugin, not with the board tab, so the first scheduler pass routinely runs
+   * before any ChatView is mounted — and `spawn` answers that situation with the
+   * same empty string it uses for a real failure.
+   */
+  canSpawn?(): boolean;
+  /** Called when a promotion was withheld for want of a host, so the shell can
+   *  arm a retry. Fires once per withheld dispatch, not once per task. */
+  onSpawnHostMissing?(): void;
 }
 
 /**
@@ -179,11 +198,11 @@ export class OrchestratorDriver {
       clearTimeout(this.reportTimer);
       this.reportTimer = null;
     }
-    // DELIVER what is pending, never drop it. The driver is stopped both when
-    // the board closes and whenever the board rebuilds it (a ledger change made
-    // outside the board does exactly that), and either can land inside the
-    // report debounce. A dropped report is the child's output gone for good:
-    // the queue on the parent is the only route it has back.
+    // DELIVER what is pending, never drop it. The driver is stopped on plugin
+    // unload, on an orchestration hot-disable, and on every ledger reload (which
+    // rebuilds it), and any of those can land inside the report debounce. A
+    // dropped report is the child's output gone for good: the queue on the
+    // parent is the only route it has back.
     this.flushReports();
     this.tasks = [];
     this.started = false;
@@ -194,6 +213,16 @@ export class OrchestratorDriver {
   /** Backlog → Queued (scheduler may promote to Running immediately). */
   async enqueue(taskId: string): Promise<void> {
     await this.dispatch({ type: "enqueue", taskId });
+  }
+
+  /**
+   * Re-run the scheduler. The shell calls this when something outside the
+   * reducer's world changed in a way that could unblock queued work — today
+   * that is exactly one thing: a conversation host appeared after a promotion
+   * was withheld (see `canSpawn`).
+   */
+  async pump(): Promise<void> {
+    await this.dispatch({ type: "slot-freed" });
   }
 
   /**
@@ -243,7 +272,7 @@ export class OrchestratorDriver {
     this.tasks = this.tasks.map((x) => (x.id === taskId ? { ...x, status: "archived" as TaskStatus } : x));
     await this.deps.store.archive(taskId).catch(() => undefined);
     // Archiving a running task frees a slot — let the scheduler fill it.
-    const result = reduce(this.tasks, { type: "slot-freed" }, this.deps.config());
+    const result = this.reduceGated(this.tasks, { type: "slot-freed" });
     const before = this.tasks;
     this.tasks = result.tasks;
     await this.persistDiff(before, this.tasks);
@@ -353,9 +382,22 @@ export class OrchestratorDriver {
     return run;
   }
 
+  /**
+   * `reduce`, then withhold the promotions when no UI can host a conversation.
+   * EVERY reducer call goes through here — the scheduler runs from three places
+   * (a dispatched event, an archive freeing a slot, a failed spawn refilling
+   * one) and a gate that only covered one of them would still burn tasks.
+   */
+  private reduceGated(before: TaskEntry[], event: OrchestratorEvent): OrchestratorResult {
+    const result = reduce(before, event, this.deps.config());
+    if (result.effects.length === 0 || this.deps.canSpawn?.() !== false) return result;
+    this.deps.onSpawnHostMissing?.();
+    return withholdSpawns(before, result);
+  }
+
   private async applyEvent(event: OrchestratorEvent): Promise<boolean> {
     const before = this.tasks;
-    const result: OrchestratorResult = reduce(before, event, this.deps.config());
+    const result: OrchestratorResult = this.reduceGated(before, event);
     this.tasks = result.tasks;
     // Computed against the pre-reduce list, INSIDE the serialized chain, so it
     // reads the same state the reducer just judged. Doing this in
@@ -435,7 +477,7 @@ export class OrchestratorDriver {
       // one fails. Mirror applyArchive's slot-freed dispatch. A cascading
       // failure re-enters runEffect via the effect loop below; each failure
       // frees only its own slot, so the recursion terminates.
-      const result = reduce(this.tasks, { type: "slot-freed" }, this.deps.config());
+      const result = this.reduceGated(this.tasks, { type: "slot-freed" });
       const before = this.tasks;
       this.tasks = result.tasks;
       await this.persistDiff(before, this.tasks);
