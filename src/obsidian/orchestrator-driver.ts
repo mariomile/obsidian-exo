@@ -179,7 +179,12 @@ export class OrchestratorDriver {
       clearTimeout(this.reportTimer);
       this.reportTimer = null;
     }
-    this.pendingReports.clear();
+    // DELIVER what is pending, never drop it. The driver is stopped both when
+    // the board closes and whenever the board rebuilds it (a ledger change made
+    // outside the board does exactly that), and either can land inside the
+    // report debounce. A dropped report is the child's output gone for good:
+    // the queue on the parent is the only route it has back.
+    this.flushReports();
     this.tasks = [];
     this.started = false;
   }
@@ -310,17 +315,22 @@ export class OrchestratorDriver {
     if (this.reportTimer) clearTimeout(this.reportTimer);
     this.reportTimer = setTimeout(() => {
       this.reportTimer = null;
-      const batch = [...this.pendingReports.values()];
-      this.pendingReports.clear();
-      for (const report of batch) {
-        try {
-          this.deps.onChildReport?.(report);
-        } catch {
-          // A failing consumer must never break orchestration — same
-          // isolation contract as the convo-state channel's listeners.
-        }
-      }
+      this.flushReports();
     }, REPORT_DEBOUNCE_MS);
+  }
+
+  /** Hand every queued report to the consumer and empty the queue. */
+  private flushReports(): void {
+    const batch = [...this.pendingReports.values()];
+    this.pendingReports.clear();
+    for (const report of batch) {
+      try {
+        this.deps.onChildReport?.(report);
+      } catch {
+        // A failing consumer must never break orchestration — same
+        // isolation contract as the convo-state channel's listeners.
+      }
+    }
   }
 
   // --- Core dispatch ------------------------------------------------------

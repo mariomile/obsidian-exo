@@ -25,7 +25,8 @@ import {
   type SessionSnapshot,
 } from "../core/session-cards";
 import type { InputReason } from "../core/orchestrator";
-import { OrchestratorDriver, type DriverDeps } from "../obsidian/orchestrator-driver";
+import { OrchestratorDriver, type DriverDeps, type DriverStore } from "../obsidian/orchestrator-driver";
+import { LedgerWatch, ledgerChangedExternally } from "../core/ledger-watch";
 import { clickable } from "./dom";
 import { TaskModal } from "./task-modal";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
@@ -86,6 +87,11 @@ function promptPreview(prompt: string, lines = 3): string {
 
 export class BoardView extends ItemView {
   private driver: OrchestratorDriver | null = null;
+  /** Debounce + self-write suppression for `tasks.md` changes made by anyone
+   *  other than this board — above all the `spawn_task` tool, which appends
+   *  queued children straight into the ledger. Policy lives in
+   *  `core/ledger-watch`; this view only feeds it events and reloads. */
+  private ledgerWatch: LedgerWatch | null = null;
   private boardEl!: HTMLElement;
   /** The active drag payload — a task or session card being dragged. */
   private dragItem: { kind: "task" | "session"; id: string } | null = null;
@@ -142,6 +148,25 @@ export class BoardView extends ItemView {
 
     this.boardEl = root.createDiv({ cls: "mva-board" });
 
+    // Built BEFORE the driver: `buildDeps` hands the driver a store whose writes
+    // route through this watch, so the ledger events the driver itself causes
+    // don't come back as reloads that restart it mid-spawn.
+    this.ledgerWatch = new LedgerWatch({
+      schedule: (fn, ms) => window.setTimeout(fn, ms),
+      cancel: (id) => window.clearTimeout(id),
+      now: () => Date.now(),
+      onExternalChange: () => void this.reloadIfLedgerChanged(),
+    });
+    // The `spawn_task` tool writes a queued child straight into tasks.md. Without
+    // this listener a board that is ALREADY OPEN never learns the task exists:
+    // no card, no promotion, no spawn, no child, no report — while the tool has
+    // already told the agent the work would start and report back.
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (file.path === this.plugin.paths.tasks) this.ledgerWatch?.notify();
+      })
+    );
+
     // Build and start the driver, wiring the plugin's primitives into the
     // injected deps. onChange re-renders; a load with warnings paints an error
     // banner (chat is never affected by this).
@@ -169,6 +194,8 @@ export class BoardView extends ItemView {
   async onClose(): Promise<void> {
     this.convoUnsub?.();
     this.convoUnsub = null;
+    this.ledgerWatch?.dispose();
+    this.ledgerWatch = null;
     if (this.backstop != null) {
       window.clearInterval(this.backstop);
       this.backstop = null;
@@ -177,11 +204,37 @@ export class BoardView extends ItemView {
     this.driver = null;
   }
 
+  /** The task store with every WRITE routed through the ledger watch, so the
+   *  modify events the driver's own persistence causes are told apart from
+   *  somebody else's edit. Reads pass straight through — they change nothing. */
+  private guardedStore(): DriverStore {
+    const store = this.plugin.taskStore;
+    const guard = <T>(write: Promise<T>): Promise<T> => this.ledgerWatch?.guard(write) ?? write;
+    return {
+      load: () => store.load(),
+      update: (id, patch) => guard(store.update(id, patch)),
+      move: (id, status, order) => guard(store.move(id, status, order)),
+      archive: (id) => guard(store.archive(id)),
+    };
+  }
+
+  /** A settled ledger change: reload only if what is on disk actually differs
+   *  from what the driver believes. A reload rebuilds the driver from scratch,
+   *  so doing it on a write we made ourselves would restart orchestration
+   *  mid-spawn — and the suppression window is a heuristic, this is the proof. */
+  private async reloadIfLedgerChanged(): Promise<void> {
+    if (!this.driver) return;
+    const loaded = await this.plugin.taskStore.load();
+    if (!this.driver) return; // closed while the read was in flight
+    if (!ledgerChangedExternally(this.driver.snapshot(), loaded.tasks)) return;
+    await this.reloadTasks();
+  }
+
   /** Wire the plugin's primitives into the driver's injected deps. */
   private buildDeps(): DriverDeps {
     const plugin = this.plugin;
     return {
-      store: plugin.taskStore,
+      store: this.guardedStore(),
       subscribe: (listener) => plugin.onConvoState(listener),
       spawn: (prompt, opts) => plugin.startTaskConversation(prompt, opts),
       liveness: (convoId) => {

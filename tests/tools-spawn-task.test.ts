@@ -96,6 +96,44 @@ describe("fan-out tools registration gating", () => {
   });
 });
 
+/**
+ * The scheduler lives in the Orchestration Board's view. With the board CLOSED
+ * there is no driver at all: `spawn_task` writes a `queued` block that nothing
+ * ever promotes. The tool must not promise otherwise — an agent that tells Mario
+ * "I've delegated that, it'll report back" when nothing can run is worse than
+ * one that says the board has to be open.
+ */
+describe("spawn_task tells the truth about needing an open board", () => {
+  const spawnTool = () => {
+    const { app } = fakeApp();
+    const server = createObsidianToolServer(
+      app, true, false, undefined, true,
+      new WriteQueue(), true, new WriteQueue(), false, undefined, new WriteQueue(), undefined, "convo-a"
+    );
+    return (server.instance as unknown as {
+      _registeredTools: Record<string, { description: string }>;
+    })._registeredTools["spawn_task"];
+  };
+
+  it("says so in the tool description the model reads before calling", () => {
+    expect(spawnTool().description).toMatch(/board.{0,40}open|open.{0,40}board/i);
+  });
+
+  it("says so again in the result, which is what the model actually acts on", async () => {
+    const { app } = fakeApp();
+    const queue = new WriteQueue();
+    const server = createObsidianToolServer(
+      app, true, false, undefined, true,
+      queue, true, queue, false, undefined, queue, undefined, "convo-a"
+    );
+    const result: any = await registeredTools(server)["spawn_task"].handler(
+      { title: "Research the pricing page", prompt: "Go read it" },
+      {}
+    );
+    expect(result.content[0].text).toMatch(/board.{0,40}open|open.{0,40}board/i);
+  });
+});
+
 describe("spawn_task behavior", () => {
   it("writes a queued child task carrying the parent convo id", async () => {
     const { app, files } = fakeApp();

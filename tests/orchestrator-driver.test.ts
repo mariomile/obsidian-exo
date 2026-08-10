@@ -630,20 +630,33 @@ describe("OrchestratorDriver — child reports", () => {
     expect(driver.snapshot().find((t) => t.id === "task-5")!.status).toBe("review");
   });
 
-  it("a pending report timer does not fire after stop()", async () => {
+  /**
+   * `stop()` is not only "the board was closed": the board also stops and
+   * rebuilds the driver whenever the ledger changes underneath it, which is now
+   * a routine event (a `spawn_task` write). Either can land inside the 2s report
+   * debounce, and a dropped report is the child's output gone for good — the
+   * parent's queue is the only route it has back.
+   */
+  it("stop() DELIVERS a queued report instead of dropping it, and fires no timer after", async () => {
     const reports: ChildReport[] = [];
     const { deps, emitter } = makeDeps([
-      task({ id: "task-6", title: "Child", status: "running", parent: "convo-parent", convo: "convo-child" }),
+      task({ id: "task-9", title: "Child", status: "running", parent: "convo-parent", convo: "convo-child" }),
     ]);
     deps.onChildReport = (r) => reports.push(r);
     const driver = new OrchestratorDriver(deps);
     await driver.start();
 
     emitter.emit({ convoId: "convo-child", state: "turn-end" });
-    driver.stop();
+    await vi.advanceTimersByTimeAsync(1); // dispatch settles; well inside the debounce
+    expect(reports).toHaveLength(0); // still batching
 
+    driver.stop();
+    expect(reports).toHaveLength(1); // handed over on the way out
+    expect(reports[0].taskId).toBe("task-9");
+
+    // And nothing arrives twice: the timer was cancelled, not merely beaten.
     await flushReports();
-    expect(reports).toHaveLength(0);
+    expect(reports).toHaveLength(1);
   });
 
   // A child that fails to spawn never gets a convo, so it never emits a

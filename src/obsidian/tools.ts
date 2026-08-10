@@ -1046,7 +1046,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   const spawnTask = tool(
     "spawn_task",
-    "Delegate a piece of work to a separate child conversation that runs in parallel with this one. Use it when the work is self-contained and would otherwise crowd this thread — research a source, draft a section, check a dataset. The child starts as soon as the board has a free slot, runs as a normal chat (so it can ask Mario for permission), and reports its outcome back here when it finishes. Prefer doing small work yourself: each child is a whole conversation Mario has to supervise.",
+    "Delegate a piece of work to a separate child conversation that runs in parallel with this one. Use it when the work is self-contained and would otherwise crowd this thread — research a source, draft a section, check a dataset. The child runs as a normal chat (so it can ask Mario for permission) and reports its outcome back here when it finishes. IMPORTANT: the Orchestration Board owns the scheduler, so it must be OPEN for a delegated task to run at all — with the board closed the task is written to the ledger and simply waits there, and nothing will report back. Say so if Mario seems to be expecting results. Prefer doing small work yourself: each child is a whole conversation Mario has to supervise.",
     {
       title: z.string().describe("Short title shown on the board card and in the sidebar."),
       prompt: z.string().describe("The full instruction for the child conversation — it does not see this chat's history."),
@@ -1074,7 +1074,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
           (tasks) => canSpawnChild(tasks, parentConvoId)
         );
         return ok(
-          `Queued child task ${entry.id}: ${entry.title}. It starts when the board has a free slot and reports back here when it is done.`
+          `Queued child task ${entry.id}: ${entry.title}. It starts when the Orchestration Board is open and has a free slot, and reports back here when it is done. If the board is closed nothing runs — the task waits in the ledger.`
         );
       } catch (e) {
         // A cap/depth refusal is expected traffic, not a failure — surface the

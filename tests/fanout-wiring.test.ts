@@ -61,6 +61,58 @@ describe("fan-out wiring — spawn carries parentage", () => {
   });
 });
 
+/**
+ * The seam that closed the loop. `spawn_task` writes a `queued` block straight
+ * into tasks.md; the running `OrchestratorDriver` loads the ledger ONCE in
+ * `start()` and evolves an in-memory list from there. With no watcher, a board
+ * that was ALREADY OPEN — the expected supervision posture — never saw the new
+ * task: no card, no promotion, no spawn, no child, no report, while the tool had
+ * already told the agent it would start and report back. Only closing and
+ * reopening the board tab picked it up.
+ *
+ * board-view.ts imports `obsidian` and has zero unit tests, so the policy lives
+ * in `core/ledger-watch.ts` (tested there) and this pins that the board actually
+ * calls it.
+ */
+describe("fan-out wiring — the board sees tasks the tool writes", () => {
+  it("registers a vault modify listener, so it is torn down with the view", () => {
+    // registerEvent, not a bare vault.on: a leaked listener on a closed board
+    // would keep calling into a disposed driver.
+    expect(board).toMatch(/registerEvent\(\s*this\.app\.vault\.on\("modify"/);
+  });
+
+  it("scopes the listener to the ledger path, not to every note in the vault", () => {
+    const handler = near(board, 'this.app.vault.on("modify"', 400);
+    expect(handler).toContain("this.plugin.paths.tasks");
+  });
+
+  it("routes the event through the debounced watch, never straight to a reload", () => {
+    const handler = near(board, 'this.app.vault.on("modify"', 400);
+    expect(handler).toMatch(/ledgerWatch\??\.notify\(\)/);
+  });
+
+  it("reloads the driver's task list when the ledger really changed", () => {
+    expect(board).toContain("ledgerChangedExternally");
+    expect(near(board, "private async reloadIfLedgerChanged()", 700)).toContain("reloadTasks()");
+  });
+
+  it("wraps the driver's OWN store writes, so they don't bounce back as reloads", () => {
+    // The driver persists every transition through the same file it now watches.
+    // Unguarded, each write it makes would re-enter reloadTasks and restart the
+    // driver — mid-spawn, repeatedly.
+    const deps = near(board, "private buildDeps(): DriverDeps {");
+    expect(deps).toContain("guardedStore");
+    const guarded = near(board, "private guardedStore()", 700);
+    for (const write of ["update", "move", "archive"]) {
+      expect(guarded, `store.${write} is not guarded`).toContain(`guard(store.${write}`);
+    }
+  });
+
+  it("disposes the watch when the board closes", () => {
+    expect(near(board, "async onClose()", 500)).toContain("ledgerWatch");
+  });
+});
+
 describe("fan-out wiring — reports reach the parent's next turn", () => {
   it("the board wires both report deps into the driver", () => {
     const deps = near(board, "private buildDeps(): DriverDeps {");
