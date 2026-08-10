@@ -229,3 +229,44 @@ describe("allConvos guards a null active", () => {
     expect(body).toContain("if (!this.active) return this.convos;");
   });
 });
+
+describe("canHostConversation keeps its three states", () => {
+  /**
+   * This policy is the ONLY thing separating the plugin-level driver from a
+   * regression worse than the bug it fixed: at boot with a RESTORED-BUT-DEFERRED
+   * Exo leaf, `convoBridge.chatView()` returns null, so spawning would get "" back
+   * and every queued task would burn into needs-input with a false "your delegated
+   * task failed" report to its parent.
+   *
+   * A mutation review proved the gap this pins: hardwiring the function to `true`
+   * left all 2213 tests green. `orchestration-wiring.ts` imports `obsidian`, so it
+   * cannot be exercised under vitest — the same grep-pin the sibling assertions in
+   * this file use is the available guard.
+   */
+  const src = () => readFileSync(join(__dirname, "..", "src", "obsidian", "orchestration-wiring.ts"), "utf8");
+
+  const body = (): string => {
+    const text = src();
+    const at = text.indexOf("function canHostConversation");
+    expect(at).toBeGreaterThan(-1);
+    return text.slice(at, text.indexOf("\n}", at));
+  };
+
+  it("refuses to spawn before the layout is ready", () => {
+    expect(body()).toContain("layoutReady");
+  });
+
+  it("treats a resolvable ChatView as a host", () => {
+    expect(body()).toContain("convoBridge.chatView");
+  });
+
+  it("treats ZERO leaves as hostable, since startTaskConversation creates one", () => {
+    // The deferred case is what falls through to false: a leaf EXISTS but does
+    // not resolve. That distinction is the whole policy.
+    expect(body()).toContain("getLeavesOfType(VIEW_TYPE).length === 0");
+  });
+
+  it("is wired into the driver as canSpawn", () => {
+    expect(src()).toContain("canSpawn: () => canHostConversation(plugin)");
+  });
+});
