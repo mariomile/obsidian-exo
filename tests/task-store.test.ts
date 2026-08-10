@@ -189,19 +189,72 @@ describe("createChildTask", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it("serializes concurrent calls through the given WriteQueue (no lost update)", async () => {
+  it("serializes concurrent calls through the given WriteQueue (no lost update, distinct ids)", async () => {
     const { adapter, files } = fakeVault();
     const queue = new WriteQueue();
-    await Promise.all([
+    const [a, b, c] = await Promise.all([
       createChildTask(adapter, queue, { title: "One", prompt: "p1", parent: "convo-a" }),
       createChildTask(adapter, queue, { title: "Two", prompt: "p2", parent: "convo-a" }),
       createChildTask(adapter, queue, { title: "Three", prompt: "p3", parent: "convo-a" }),
     ]);
+    // Fan-out is exactly the caller that creates N tasks in a tight loop — a
+    // collision here means a later drag-to-done on ONE task would flip ALL
+    // same-id entries via applyTaskPatch's id match.
+    expect(new Set([a.id, b.id, c.id]).size).toBe(3);
     const parsed = parseTasksFile(files.get(TASKS_PATH)!);
     expect(parsed).toHaveLength(3);
+    expect(new Set(parsed.map((t) => t.id)).size).toBe(3);
     expect(parsed.every((t) => t.status === "queued")).toBe(true);
     expect(parsed.every((t) => t.parent === "convo-a")).toBe(true);
     expect(parsed.map((t) => t.title).sort()).toEqual(["One", "Three", "Two"]);
+  });
+
+  it("assigns unique ids even when Date.now() does not advance across calls (same-millisecond fan-out)", async () => {
+    const { adapter, files } = fakeVault();
+    const queue = new WriteQueue();
+    const fixed = 1_700_000_000_000;
+    const spy = vi.spyOn(Date, "now").mockReturnValue(fixed);
+    try {
+      const [a, b, c] = await Promise.all([
+        createChildTask(adapter, queue, { title: "One", prompt: "p1", parent: "convo-b" }),
+        createChildTask(adapter, queue, { title: "Two", prompt: "p2", parent: "convo-b" }),
+        createChildTask(adapter, queue, { title: "Three", prompt: "p3", parent: "convo-b" }),
+      ]);
+      expect(new Set([a.id, b.id, c.id]).size).toBe(3);
+      const parsed = parseTasksFile(files.get(TASKS_PATH)!);
+      expect(parsed).toHaveLength(3);
+      expect(new Set(parsed.map((t) => t.id)).size).toBe(3);
+      expect(parsed.every((t) => t.status === "queued")).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("stores a prompt containing $-sequences verbatim (String.replace metacharacters must not corrupt the ledger)", async () => {
+    const { adapter, files } = fakeVault();
+    const queue = new WriteQueue();
+    // $$ / $& / $` are special inside String.prototype.replace's REPLACEMENT
+    // argument (not its search argument). A naive `content.replace(oldBlock,
+    // formatTask(queued))` where the entry's own prompt/title feed into the
+    // replacement string is vulnerable if the block text itself is ever used
+    // as a replacement value anywhere in the pipeline — assert the full
+    // round-trip is byte-for-byte and the block still parses as ONE entry
+    // in `queued` status, not split/duplicated into a stray `backlog` block.
+    const trickyPrompt = "echo $$PID; sed s/x/$&-y/; before $` after";
+    const entry = await createChildTask(adapter, queue, {
+      title: "Tricky prompt",
+      prompt: trickyPrompt,
+      parent: "convo-tricky",
+    });
+    expect(entry.status).toBe("queued");
+    expect(entry.prompt).toBe(trickyPrompt);
+
+    const written = files.get(TASKS_PATH)!;
+    const parsed = parseTasksFile(written);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].status).toBe("queued");
+    expect(parsed[0].prompt).toBe(trickyPrompt);
+    expect(parsed[0].parent).toBe("convo-tricky");
   });
 });
 
