@@ -48,11 +48,13 @@ export function planTurnEndTerminals(
     if (t.status !== "running") continue; // already settled — never re-settle
     if (!registeredThisTurn.has(t.id)) continue; // not this turn's to settle
     if (reason === "completed") {
-      // A subagent resolves inside its own turn, so one still running here
-      // never got its result. Bash and Workflow genuinely may still be going —
-      // but this turn's stream is closed, so Exo will never hear about them
-      // again. Detach rather than claim either outcome.
-      out.push({ id: t.id, status: t.kind === "subagent" ? "error" : "detached" });
+      // A FOREGROUND subagent resolves inside its own turn, so one still
+      // running here never got its result. A backgrounded one legitimately
+      // outlives the turn — its terminal `agent-task` event arrives on the
+      // still-open stream, exactly like a Workflow's task_updated. Bash and
+      // Workflow genuinely may still be going too. Detach those rather than
+      // claim either outcome.
+      out.push({ id: t.id, status: t.kind === "subagent" && !t.backgrounded ? "error" : "detached" });
     } else {
       out.push({ id: t.id, status: "stopped" }); // session gone with the work
     }

@@ -120,6 +120,11 @@ class ClaudeSession implements AgentSession {
    *  tool_use_id, so the binding from task_started resolves them; doubles as
    *  the "this task IS a workflow" gate for task_progress. */
   private workflowTasks = new Map<string, string>();
+  /** task_id → launching Agent tool_use_id, for BACKGROUNDED subagents. The
+   *  Agent tool returns its result at launch (~1s) while the agent keeps
+   *  running; these `system/task_*` echoes are the only window into its real
+   *  lifecycle — same shape as `workflowTasks`, same reason. */
+  private subagentTasks = new Map<string, string>();
   private permSeed = 0;
   /** Force-deny callback for an in-flight permission request, so interrupt/dispose
    *  unblock the SDK (otherwise parked waiting for canUseTool to resolve → turn hangs). */
@@ -328,31 +333,50 @@ class ClaudeSession implements AgentSession {
     }
   }
 
-  /** Workflow background-run progress (`system/task_*`). task_started binds
-   *  task_id → the launching Workflow tool_use; task_progress carries the
-   *  incremental agent roster; task_updated carries the terminal status.
-   *  Progress events carry their own tool_use_id, so the binding is also
-   *  registered lazily — a missed task_started (e.g. no listener attached at
-   *  that moment) doesn't mute the rest of the run. Non-workflow background
-   *  tasks (shells) pass through untouched: they never carry
-   *  workflow_progress and never enter the binding map. */
+  /** Background-run progress (`system/task_*`). task_started binds task_id →
+   *  the launching tool_use; task_progress carries the incremental agent
+   *  roster (workflows) or a liveness echo (subagents); task_updated carries
+   *  the terminal status. Progress events carry their own tool_use_id, so the
+   *  binding is also registered lazily — a missed task_started (e.g. no
+   *  listener attached at that moment) doesn't mute the rest of the run.
+   *  Two task families, two maps:
+   *   - `task_type === "local_workflow"` → workflow roster events.
+   *   - `subagent_type` present → a BACKGROUNDED Agent tool call (foreground
+   *     subagents never become tasks: they stream nested tool_use with
+   *     parent_tool_use_id instead). `skip_transcript` marks ambient
+   *     housekeeping tasks the SDK asks consumers to hide — dropped here.
+   *  Non-workflow, non-subagent background tasks (shells) pass through
+   *  untouched: they never enter either binding map. */
   private routeTaskEvent(msg: ClaudeMsg, taskId: string, emit: (e: AgentEvent) => void): void {
     if (msg.subtype === "task_started") {
       if (msg.task_type === "local_workflow" && msg.tool_use_id) {
         this.workflowTasks.set(taskId, msg.tool_use_id);
         emit({ kind: "workflow-progress", toolUseId: msg.tool_use_id, taskId, name: msg.workflow_name, entries: [] });
+      } else if (msg.tool_use_id && msg.subagent_type && !msg.skip_transcript) {
+        this.subagentTasks.set(taskId, msg.tool_use_id);
+        emit({ kind: "agent-task", toolUseId: msg.tool_use_id, taskId, description: msg.description });
       }
     } else if (msg.subtype === "task_progress") {
       const toolUseId = msg.tool_use_id ?? this.workflowTasks.get(taskId);
       if (toolUseId && msg.workflow_progress?.length) {
         this.workflowTasks.set(taskId, toolUseId); // lazy binding for task_updated
         emit({ kind: "workflow-progress", toolUseId, taskId, entries: msg.workflow_progress });
+      } else if (msg.tool_use_id && msg.subagent_type && !msg.skip_transcript) {
+        this.subagentTasks.set(taskId, msg.tool_use_id); // lazy binding for task_updated
+        emit({ kind: "agent-task", toolUseId: msg.tool_use_id, taskId, description: msg.description });
       }
     } else if (msg.subtype === "task_updated") {
-      const toolUseId = this.workflowTasks.get(taskId);
-      if (toolUseId && msg.patch?.status) {
-        emit({ kind: "workflow-progress", toolUseId, taskId, entries: [], status: msg.patch.status });
-        if (msg.patch.status === "completed" || msg.patch.status === "failed") this.workflowTasks.delete(taskId);
+      const terminal = msg.patch?.status === "completed" || msg.patch?.status === "failed" || msg.patch?.status === "killed";
+      const wfToolUse = this.workflowTasks.get(taskId);
+      if (wfToolUse && msg.patch?.status) {
+        emit({ kind: "workflow-progress", toolUseId: wfToolUse, taskId, entries: [], status: msg.patch.status });
+        if (terminal) this.workflowTasks.delete(taskId);
+        return;
+      }
+      const agToolUse = this.subagentTasks.get(taskId);
+      if (agToolUse && msg.patch?.status) {
+        emit({ kind: "agent-task", toolUseId: agToolUse, taskId, status: msg.patch.status });
+        if (terminal) this.subagentTasks.delete(taskId);
       }
     }
   }
@@ -771,6 +795,13 @@ interface ClaudeMsg {
   workflow_name?: string;
   workflow_progress?: import("../core/workflow-progress").WorkflowProgressEntry[];
   patch?: { status?: string };
+  // system/task_* fields for BACKGROUNDED subagents (SDKTaskStartedMessage /
+  // SDKTaskProgressMessage in the Agent SDK's types): `subagent_type` is set
+  // only for Agent-tool tasks; `skip_transcript` marks ambient housekeeping
+  // tasks consumers should hide.
+  subagent_type?: string;
+  description?: string;
+  skip_transcript?: boolean;
   // system/init capability snapshot (CLI ≥2.1.199 emits it in streaming-input too)
   skills?: string[];
   slash_commands?: string[];

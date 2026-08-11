@@ -33,6 +33,12 @@ export interface LiveTask {
   kind: LiveTaskKind;
   label: string;
   status: LiveTaskStatus;
+  /** A subagent the Agent tool BACKGROUNDED: its tool result is a launch ack,
+   *  not an outcome — the real lifecycle arrives via `agent-task` events. Set
+   *  the moment the first such event lands. Changes two rules: the tool-result
+   *  no longer settles the row, and a clean turn end detaches it (like a
+   *  workflow) instead of declaring it an error. */
+  backgrounded?: boolean;
   startedAt: number;
   /** Wall-clock ms when it reached an outcome (done/error/stopped) — drives the
    *  fade. Never set for `detached`, which has no outcome. */

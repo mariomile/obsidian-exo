@@ -55,6 +55,7 @@ import { clickable } from "./ui/dom";
 import { swapTailChild } from "./ui/tail-child";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
+import { agentTaskRow } from "./core/agent-task";
 import { hoistSlashCommand } from "./core/slash";
 import { setGoal, clearGoal, advance, resumeGoal, buildContinuationPrompt } from "./core/goal-loop";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
@@ -5815,10 +5816,10 @@ export class ChatView extends ItemView {
             this.linkBackgroundResult(ctx, e.id, e.output);
             this.markTaskDone(ctx, e.id); // Task's own result → mark section done
             // A subagent finished → transition its live-task row to terminal
-            // (delete returns true only when it was a tracked Task, so plain
-            // tools don't refresh). setStatus refreshes the chip and schedules
-            // the fade-out eviction.
-            if (ctx.runningTasks.delete(e.id)) {
+            // (delete returns true only when it was a tracked Task). EXCEPT a
+            // backgrounded agent: its result is a launch ack, not an outcome — the
+            // row settles via `agent-task` events (`runningTasks` still cleared).
+            if (ctx.runningTasks.delete(e.id) && !c.liveTasks.get(e.id)?.backgrounded) {
               this.liveTasks.setStatus(c, e.id, e.ok ? "done" : "error");
             }
           }
@@ -6037,6 +6038,14 @@ export class ChatView extends ItemView {
               cardEl: wfCard,
             });
           }
+          break;
+        }
+        case "agent-task": {
+          // A BACKGROUNDED subagent's real lifecycle (its tool result was only a launch ack) — see core/agent-task.ts.
+          const agPrev = c.liveTasks.get(e.toolUseId);
+          this.diag.push("tool", `agent-task ${e.taskId.slice(0, 12)} ${e.status ?? "running"}`);
+          const agCard = ctx.cards.get(e.toolUseId)?.card ?? agPrev?.cardEl;
+          if (agCard) this.liveTasks.register(ctx, { ...agentTaskRow(e, agPrev, Date.now()), cardEl: agCard });
           break;
         }
         case "turn-end":

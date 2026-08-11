@@ -42,6 +42,17 @@ export type AgentEvent =
       status?: string;
     }
   | {
+      kind: "agent-task";
+      /** The launching Agent tool_use id — the view's card/live-task key. */
+      toolUseId: string;
+      taskId: string;
+      /** Launch description from task_started/task_progress, if any. */
+      description?: string;
+      /** Terminal status patch from task_updated ("completed" | "failed" | "killed" | …);
+       *  absent means the agent is (still) running. */
+      status?: string;
+    }
+  | {
       kind: "rate-limit";
       status: RateStatus;
       utilization?: number;

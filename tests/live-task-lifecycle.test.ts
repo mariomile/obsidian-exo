@@ -19,6 +19,15 @@ describe("planTurnEndTerminals — a turn only settles what it can speak for", (
     expect(out).toEqual([{ id: "a", status: "error" }]);
   });
 
+  it("a clean finish DETACHES a BACKGROUNDED subagent — its result was only a launch ack", () => {
+    // The Agent tool backgrounds by default on recent CLIs: the tool result
+    // returns at launch while the agent keeps running for minutes, and its
+    // real lifecycle arrives via `agent-task` events on the still-open stream.
+    // Declaring it an error at turn end (the foreground rule) would be a lie.
+    const out = planTurnEndTerminals([task("bg", "subagent", "running", { backgrounded: true })], ids("bg"), "completed");
+    expect(out).toEqual([{ id: "bg", status: "detached" }]);
+  });
+
   it("a clean finish DETACHES background bash — Exo cannot poll it, so it must not claim 'running'", () => {
     // The turn's stream is closed; nothing will ever report this task's outcome
     // again. `detached` says only what's true: started, outcome unknown. See

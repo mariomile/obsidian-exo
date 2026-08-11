@@ -27,8 +27,10 @@ export class LiveTaskRegistry {
    * @param onChange Repaint hook — the count is a rendered fact, so every
    *   mutation has to announce itself. Called at most once per mutation.
    * @param schedule Deferred callback (`window.setTimeout` in the app; a stub
-   *   in tests). Returned handle is ignored: ids are never reused, so a late
-   *   eviction can only ever find the row it was scheduled for.
+   *   in tests). Returned handle is ignored — but an id CAN be resurrected
+   *   (a backgrounded agent's tool result settles the row, then a later
+   *   `agent-task` echo re-registers it running), so the eviction re-checks
+   *   the row is still settled before removing it.
    */
   constructor(
     private readonly onChange: () => void,
@@ -48,7 +50,15 @@ export class LiveTaskRegistry {
     if (settled) rec.doneAt = Date.now();
     c.liveTasks.set(rec.id, rec);
     this.onChange();
-    if (settled) this.schedule(() => this.remove(c, rec.id), LIVE_FADE_MS);
+    // Guarded eviction: if the row was resurrected to `running` in the fade
+    // window (backgrounded agent — launch ack settled it, a live echo revived
+    // it), this stale timer must not reap the living row.
+    if (settled) {
+      this.schedule(() => {
+        const cur = c.liveTasks.get(rec.id);
+        if (cur && isSettled(cur.status)) this.remove(c, rec.id);
+      }, LIVE_FADE_MS);
+    }
   }
 
   /**

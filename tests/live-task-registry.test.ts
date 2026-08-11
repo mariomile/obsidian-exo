@@ -62,6 +62,18 @@ describe("LiveTaskRegistry — stamping and eviction", () => {
     expect(c.liveTasks.has("a")).toBe(false);
   });
 
+  it("a stale eviction spares a row resurrected to running in the fade window", () => {
+    // Backgrounded agent: the launch ack settles the row (scheduling eviction),
+    // then an `agent-task` echo revives it as running. The timer from the
+    // settled era must not reap the living row.
+    const { reg, timers } = harness();
+    const c = convo();
+    reg.upsert(c, rec("a", "subagent", "done"));
+    reg.upsert(c, rec("a", "subagent", "running"));
+    timers[0].fn();
+    expect(c.liveTasks.get("a")?.status).toBe("running");
+  });
+
   it("every kind gets eviction, not just the ones that go through setStatus", () => {
     // The original bug: workflow progress went through upsert directly and so
     // never got the doneAt stamp that only the sibling function applied.
