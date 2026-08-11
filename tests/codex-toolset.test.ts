@@ -12,8 +12,8 @@ const tools = [
 describe("codexSessionToolset", () => {
   it("returns the input array ITSELF when the sandbox is not read-only", () => {
     // Reference equality on purpose: the tool list sent to sessions must stay
-    // byte-identical when no gating applies — a defensive copy would already
-    // be drift surface.
+    // byte-identical when no gating applies: a defensive copy would already be
+    // drift surface.
     expect(codexSessionToolset(tools, false, READ)).toBe(tools);
   });
 

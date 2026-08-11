@@ -75,7 +75,7 @@ describe("ask_user handler contract", () => {
   });
 
   it("reports a dismissal (Stop / teardown) as a NORMAL result, never isError", async () => {
-    // isError here would poison the Codex turn — the dismissal is guidance to
+    // isError here would poison the Codex turn: the dismissal is guidance to
     // the model ("proceed"), not a failure.
     const t = askUserOf({
       askBridge: async () => {

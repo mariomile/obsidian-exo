@@ -1,11 +1,11 @@
 /**
- * Codex session toolset — the pure half of the Codex ↔ Obsidian bridge's
+ * Codex session toolset: the pure half of the Codex ↔ Obsidian bridge's
  * sandbox honesty (no Obsidian imports).
  *
  * Bridge tool handlers run in the Obsidian process and BYPASS codex's own
  * sandbox, so a read-only sandbox must get read tools only. `ask_user` is the
- * deliberate exception: it mutates nothing — blocking the turn on a question
- * card is user interaction, not a write — and a read-only session that cannot
+ * deliberate exception: it mutates nothing (blocking the turn on a question
+ * card is user interaction, not a write), and a read-only session that cannot
  * ask a clarifying question would be needlessly dumber than its Claude twin.
  *
  * When the sandbox is not read-only, the input array is returned AS-IS (same
@@ -36,7 +36,7 @@ export function codexSessionToolset<T extends { name: string }>(
  * Map ask-card answers to the id-keyed record a Codex app-server reply needs.
  * The card resolves answers keyed by `header` (that is what the user saw);
  * codex addresses questions by `id`. Missing answers become "" so every id is
- * present in the reply — the app-server's answer shape expects a string per
+ * present in the reply: the app-server's answer shape expects a string per
  * question, and an absent key would be dropped by the reply serializer.
  */
 export function mapUserInputAnswers(

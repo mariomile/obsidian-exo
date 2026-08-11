@@ -295,7 +295,7 @@ describe("CodexSession app-server lifecycle", () => {
     child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
     await first;
 
-    // The next turn, with no override, falls back to the session's own prompt —
+    // The next turn, with no override, falls back to the session's own prompt:
     // the override from the previous turn must not have leaked into `opts`.
     const second = session.send("again", () => {});
     const secondStart = await child.next("turn/start");
@@ -708,7 +708,7 @@ describe("CodexSession app-server lifecycle", () => {
     expect(child.kill).toHaveBeenCalled();
   });
 
-  it("registers the obsidian bridge with a 1-hour tool timeout — ask_user can wait for the human", () => {
+  it("registers the obsidian bridge with a 1-hour tool timeout, so ask_user can wait for the human", () => {
     const child = new FakeCodexProcess();
     const spawn = vi.fn(() => child as never);
     const session = new CodexSession(
@@ -719,7 +719,7 @@ describe("CodexSession app-server lifecycle", () => {
       const args = spawn.mock.calls[0]?.[1] as unknown as string[];
       const override = args.find((a) => typeof a === "string" && a.includes("mcp_servers.obsidian="));
       expect(override).toBeDefined();
-      // Codex's per-server default is 60s — that would kill every answer Mario
+      // Codex's per-server default is 60s, which would kill every answer Mario
       // takes more than a minute to give. 3600 is the deliberate ceiling.
       expect(override).toContain("tool_timeout_sec=3600");
       expect(override).toContain('EXO_BRIDGE_PORT="4321"');
