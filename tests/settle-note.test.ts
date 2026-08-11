@@ -260,14 +260,60 @@ describe("re-settling the same conversation", () => {
   });
 
   it("keeps frontmatter the user added by hand", () => {
-    const filed = `---\n${SETTLE_CONVO_KEY}: "c7"\nproject: "[[Onboarding]]"\n---\nold body\n`;
+    // Both shapes a filed note actually takes: a scalar, and the indented
+    // block sequence — the one the key patcher consumes when it owns the key.
+    const filed =
+      `---\n${SETTLE_CONVO_KEY}: "c7"\nproject: "[[Onboarding]]"\n` +
+      `related:\n  - "[[Q3 launch]]"\n  - "[[Copy review]]"\n---\nold body\n`;
     const out = renderSettleNote(filed, {
       frontmatter: { [SETTLE_CONVO_KEY]: "c7", outcome: "settled" },
       body: "new body\n",
     });
     expect(out).toMatch(/project: "\[\[Onboarding\]\]"/);
+    expect(out).toMatch(/- "\[\[Q3 launch\]\]"/);
+    expect(out).toMatch(/- "\[\[Copy review\]\]"/);
     expect(out).toMatch(/new body/);
     expect(out).not.toMatch(/old body/);
+  });
+
+  it("adds its tag to the user's tags instead of replacing them", () => {
+    // The promise is that a filed note survives a re-settle. Keeping the KEY
+    // and dropping the values in it is not keeping the note filed: a chat
+    // sorted into `project/onboarding` came back tagged only `exo/chat`.
+    const filed =
+      `---\n${SETTLE_CONVO_KEY}: "c7"\ntags:\n  - project/onboarding\n  - important\n---\nold body\n`;
+    const out = renderSettleNote(filed, {
+      frontmatter: { [SETTLE_CONVO_KEY]: "c7", tags: [SETTLE_TAG] },
+      body: "new body\n",
+    });
+    expect(out).toMatch(/project\/onboarding/);
+    expect(out).toMatch(/important/);
+    expect(out).toMatch(/exo\/chat/);
+  });
+
+  it("reads the user's tags in whichever shape they wrote them", () => {
+    const inline = renderSettleNote(
+      `---\ntags: [project/onboarding, important]\n---\nold\n`,
+      { frontmatter: { tags: [SETTLE_TAG] }, body: "new\n" },
+    );
+    expect(inline).toMatch(/project\/onboarding/);
+    expect(inline).toMatch(/important/);
+
+    const scalar = renderSettleNote(`---\ntags: important\n---\nold\n`, {
+      frontmatter: { tags: [SETTLE_TAG] },
+      body: "new\n",
+    });
+    expect(scalar).toMatch(/important/);
+    expect(scalar).toMatch(/exo\/chat/);
+  });
+
+  it("does not stack a second copy of its own tag on every settle", () => {
+    const once = renderSettleNote(`---\ntags: ["${SETTLE_TAG}", mine]\n---\nold\n`, {
+      frontmatter: { tags: [SETTLE_TAG] },
+      body: "new\n",
+    });
+    expect(once.match(new RegExp(SETTLE_TAG, "g"))?.length).toBe(1);
+    expect(once).toMatch(/mine/);
   });
 });
 

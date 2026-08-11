@@ -313,6 +313,48 @@ function frontmatterBlock(content: string): string {
 }
 
 /**
+ * The user's tags plus ours, in that order, once each.
+ *
+ * `tags` is the one key we write that the user also writes. Patching it is a
+ * REPLACE — the key patcher swallows the whole indented block under a key it
+ * owns — so writing `[exo/chat]` over a note filed under `project/onboarding`
+ * silently unfiles it. Keeping the key and dropping the values in it is not
+ * keeping the note's frontmatter.
+ */
+function mergeTags(existing: string, ours: unknown): string[] {
+  const mine = Array.isArray(ours) ? ours.filter((t): t is string => typeof t === "string") : [];
+  const out = frontmatterTags(existing);
+  for (const tag of mine) if (!out.includes(tag)) out.push(tag);
+  return out;
+}
+
+const unquote = (s: string): string =>
+  /^(".*"|'.*')$/.test(s) ? s.slice(1, -1).replace(/''/g, "'") : s;
+
+/** Whatever is under `tags:`, in any of the three shapes a vault writes it:
+ *  a block sequence, an inline `[a, b]` flow, or a bare comma-separated scalar. */
+function frontmatterTags(content: string): string[] {
+  const lines = frontmatterBlock(content).split(/\r?\n/);
+  const at = lines.findIndex((l) => /^tags\s*:/.test(l));
+  if (at < 0) return [];
+  const inline = lines[at].slice(lines[at].indexOf(":") + 1).trim();
+  if (inline) {
+    return inline
+      .replace(/^\[|\]$/g, "")
+      .split(",")
+      .map((t) => unquote(t.trim()))
+      .filter(Boolean);
+  }
+  const out: string[] = [];
+  for (let i = at + 1; i < lines.length; i++) {
+    const item = /^\s*-\s*(.*\S)\s*$/.exec(lines[i]);
+    if (!item) break;
+    out.push(unquote(item[1]));
+  }
+  return out;
+}
+
+/**
  * The file to write. A new note is frontmatter + body; an EXISTING note keeps
  * every frontmatter key we did not write (via `patchFrontmatter`, the same
  * byte-preserving patcher the agent tools use) and has its body replaced.
@@ -325,7 +367,8 @@ function frontmatterBlock(content: string): string {
  */
 export function renderSettleNote(existing: string | null, note: SettleNote): string {
   if (existing === null) return patchFrontmatter(note.body, note.frontmatter);
-  const patched = patchFrontmatter(existing, note.frontmatter);
+  const merged = { ...note.frontmatter, tags: mergeTags(existing, note.frontmatter.tags) };
+  const patched = patchFrontmatter(existing, merged);
   const block = frontmatterBlock(patched);
   if (!block && !/^---\r?\n/.test(patched)) return patchFrontmatter(note.body, note.frontmatter);
   const start = patched.indexOf("\n") + 1;
