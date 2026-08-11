@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  SETTLE_BODY_NOTE,
   SETTLE_CONVO_KEY,
   SETTLE_TAG,
   canSettle,
@@ -181,6 +182,17 @@ describe("the distillation", () => {
 
   it("links the files it touched, so the note lands in the graph with backlinks", () => {
     expect(note.body).toMatch(/\[\[Notes\/onboarding\]\]/);
+  });
+
+  it("says the body is regenerated, high enough to read before typing into it", () => {
+    // Re-settling replaces everything under the frontmatter. Nothing else warns
+    // the user, so the page has to say it, and it has to say it above the
+    // content or it is a footnote nobody reaches.
+    expect(note.body).toContain(SETTLE_BODY_NOTE);
+    const heading = note.body.indexOf("# ");
+    const warning = note.body.indexOf(SETTLE_BODY_NOTE);
+    expect(warning).toBeGreaterThan(heading);
+    expect(warning).toBeLessThan(note.body.indexOf("## Asked"));
   });
 
   it("caps a long conversation instead of transcribing it", () => {
