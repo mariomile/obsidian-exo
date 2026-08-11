@@ -282,11 +282,20 @@ export interface ResumeState {
   pendingAsk: boolean;
   stopped: boolean;
   poisoned: boolean;
-  hasMessages: boolean;
+  /** Milliseconds since the last message landed. `undefined` when there is no
+   *  last message, or it carries no timestamp: an empty chat has nothing to
+   *  resume, which is a different fact from having been idle forever. */
+  idleMs: number | undefined;
   /** The composer is empty. The verbs are a fast path INTO the composer, so
    *  they stand down the moment the user starts writing their own. */
   draftEmpty: boolean;
 }
+
+/** How long a settled chat has to sit untouched before a way back in beats no
+ *  chrome at all. Twelve hours, so it takes a night or a full working day to
+ *  cross: a chat you left after lunch is still in your head at 4pm and does
+ *  not need a button telling you to continue it. */
+export const RESUME_STALE_MS = 12 * 60 * 60 * 1000;
 
 const RESUME: ResumeVerb = {
   key: "resume",
@@ -313,14 +322,20 @@ const APPROVE: ResumeVerb = { key: "approve", label: "Approve" };
  *  - streaming, or blocked on a question → nothing. The live surface is the
  *    card or the caret, and a verb bar under it would be a second one.
  *  - stopped or errored → Resume (worded as picking it back up) +
- *    Course-correct.
- *  - settled with a history → Resume + Course-correct.
- *  - a brand-new empty chat → nothing. There is nothing to resume.
+ *    Course-correct. This is the state the verbs are for: a run was cut off
+ *    mid-course, so both picking it up and redirecting it are live.
+ *  - settled and cold → Resume alone. Nothing is in flight to correct, and by
+ *    then the useful offer is a way in that is not re-reading the transcript.
+ *  - settled and recent, or empty → nothing. "Has a history" is not a state,
+ *    it is the condition of every chat you have ever opened; a bar that shows
+ *    there is chrome under the composer, not an affordance. If the chat is
+ *    still in your head, the composer is already the fast path.
  */
 export function resumeVerbs(s: ResumeState): ResumeVerb[] {
   if (!s.draftEmpty) return [];
   if (s.pendingPerm) return [APPROVE];
   if (s.streaming || s.pendingAsk) return [];
-  if (!s.hasMessages) return [];
-  return [s.stopped || s.poisoned ? RESUME_AFTER_STOP : RESUME, COURSE_CORRECT];
+  if (s.idleMs === undefined) return [];
+  if (s.stopped || s.poisoned) return [RESUME_AFTER_STOP, COURSE_CORRECT];
+  return s.idleMs >= RESUME_STALE_MS ? [RESUME] : [];
 }

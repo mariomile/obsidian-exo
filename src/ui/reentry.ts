@@ -310,6 +310,24 @@ export interface ResumeComposer {
  * the composer so it reads as a lead-in to the empty input rather than as a
  * footer under the transcript.
  */
+/**
+ * How long this conversation has been sitting, measured from the last thing the
+ * USER said. That is the only message carrying a timestamp, and it is the right
+ * clock anyway: the question is how long ago you last spoke to this chat, not
+ * how long ago it finished answering itself.
+ *
+ * `undefined` when the chat is empty, or when it predates 0.14.0 and carries no
+ * timestamps at all. Undatable reads as "offer nothing", which is the safe
+ * direction: a bar that should not be there is worse than one that is missing.
+ */
+function idleSince(c: Convo): number | undefined {
+  for (let i = c.messages.length - 1; i >= 0; i--) {
+    const m = c.messages[i];
+    if (m.role === "user" && typeof m.at === "number") return Math.max(0, Date.now() - m.at);
+  }
+  return undefined;
+}
+
 export function renderResumeVerbs(host: HTMLElement, c: Convo, composer: ResumeComposer): void {
   host.querySelector(`.${VERBS}`)?.remove();
   const verbs = resumeVerbs({
@@ -318,7 +336,7 @@ export function renderResumeVerbs(host: HTMLElement, c: Convo, composer: ResumeC
     pendingAsk: c.pendingAsk != null,
     stopped: c.stopped,
     poisoned: !!c.resumeRisky,
-    hasMessages: c.messages.length > 0,
+    idleMs: idleSince(c),
     draftEmpty: composer.getDraft().text.trim().length === 0,
   });
   if (!verbs.length) return;

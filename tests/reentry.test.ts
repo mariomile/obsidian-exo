@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   REENTRY_SLOTS,
+  RESUME_STALE_MS,
   advanceReadIndex,
   bandAnchor,
   bandIsStale,
@@ -184,19 +185,45 @@ describe("a band already on screen", () => {
 });
 
 describe("resume verbs", () => {
+  // The default is the state almost every conversation is in almost all of the
+  // time: settled, and touched a minute ago. It must offer nothing.
   const state = (over: Partial<ResumeState> = {}): ResumeState => ({
     streaming: false,
     pendingPerm: false,
     pendingAsk: false,
     stopped: false,
     poisoned: false,
-    hasMessages: true,
+    idleMs: 60_000,
     draftEmpty: true,
     ...over,
   });
 
-  it("offers Resume and Course-correct on a settled chat", () => {
-    expect(resumeVerbs(state()).map((v) => v.label)).toEqual(["Resume", "Course-correct"]);
+  it("offers nothing on a settled chat you were just using", () => {
+    // The bug this pins: "has a history" is not a state, it is the norm. A bar
+    // that shows there is chrome, not an affordance.
+    expect(resumeVerbs(state())).toEqual([]);
+  });
+
+  it("offers Resume once a settled chat has gone cold", () => {
+    const verbs = resumeVerbs(state({ idleMs: RESUME_STALE_MS }));
+    expect(verbs.map((v) => v.label)).toEqual(["Resume"]);
+  });
+
+  it("does not offer Course-correct on a cold chat: there is no course in flight", () => {
+    const keys = resumeVerbs(state({ idleMs: RESUME_STALE_MS * 10 })).map((v) => v.key);
+    expect(keys).toEqual(["resume"]);
+  });
+
+  it("offers Resume and Course-correct after a stop, however recent", () => {
+    // Stopping is the moment the verbs are FOR: you cut a run off mid-course,
+    // so picking it back up and redirecting it are both live options.
+    const verbs = resumeVerbs(state({ stopped: true, idleMs: 1000 }));
+    expect(verbs.map((v) => v.label)).toEqual(["Resume", "Course-correct"]);
+  });
+
+  it("treats an errored run like a stopped one", () => {
+    const verbs = resumeVerbs(state({ poisoned: true, idleMs: 1000 }));
+    expect(verbs.map((v) => v.key)).toEqual(["resume", "course-correct"]);
   });
 
   it("offers Approve, and only Approve, when a permission is waiting", () => {
@@ -207,7 +234,7 @@ describe("resume verbs", () => {
   });
 
   it("offers nothing while a turn is streaming", () => {
-    expect(resumeVerbs(state({ streaming: true }))).toEqual([]);
+    expect(resumeVerbs(state({ streaming: true, idleMs: RESUME_STALE_MS }))).toEqual([]);
   });
 
   it("offers nothing while a question card is open — the card is the surface", () => {
@@ -215,23 +242,26 @@ describe("resume verbs", () => {
   });
 
   it("offers nothing on an empty new chat", () => {
-    expect(resumeVerbs(state({ hasMessages: false }))).toEqual([]);
+    // No last message means no idle span to measure, not an infinite one.
+    expect(resumeVerbs(state({ idleMs: undefined }))).toEqual([]);
+    expect(resumeVerbs(state({ idleMs: undefined, stopped: true }))).toEqual([]);
   });
 
   it("stands down as soon as the user writes their own message", () => {
-    expect(resumeVerbs(state({ draftEmpty: false }))).toEqual([]);
+    expect(resumeVerbs(state({ draftEmpty: false, stopped: true }))).toEqual([]);
   });
 
   it("words Resume differently after a stop or an error", () => {
-    const settled = resumeVerbs(state())[0].prompt;
+    const cold = resumeVerbs(state({ idleMs: RESUME_STALE_MS }))[0].prompt;
     const stopped = resumeVerbs(state({ stopped: true }))[0].prompt;
     const errored = resumeVerbs(state({ poisoned: true }))[0].prompt;
-    expect(stopped).not.toBe(settled);
+    expect(stopped).not.toBe(cold);
     expect(errored).toBe(stopped);
   });
 
   it("every message verb seeds the composer with something", () => {
-    for (const v of resumeVerbs(state())) expect(v.prompt).toBeTruthy();
+    for (const v of resumeVerbs(state({ stopped: true }))) expect(v.prompt).toBeTruthy();
+    for (const v of resumeVerbs(state({ idleMs: RESUME_STALE_MS }))) expect(v.prompt).toBeTruthy();
   });
 });
 
