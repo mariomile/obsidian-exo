@@ -2213,6 +2213,61 @@ git commit -m "docs: record agent-browser live verification results"
 
 ---
 
+## Probe results
+
+Run 2026-08-11 against Mario's live Obsidian via `obsidian-cli eval`, before any
+host code was written. The probe webview used a throwaway `persist:exo-probe`
+partition, which was removed and its storage cleared afterwards
+(`session.clearStorageData()` + `clearCache()`; `document.querySelectorAll("webview").length === 0`).
+
+**Seam 1: `electron.remote` in the Obsidian renderer.**
+
+```
+=> {"keys":["nativeImage","shell","clipboard","contextBridge","crashReporter","ipcRenderer","webFrame","webUtils","remote"],"hasRemote":true,"hasRemoteSession":true}
+```
+
+`remote.session` is present, so `session.fromPartition(BROWSER_PARTITION)` and
+the deny-all permission handlers + `will-download` block are reachable from the
+renderer. `hardened` should be TRUE on this build; if it ever comes back false
+the leaf header says so rather than degrading silently.
+
+**Seam 2: the `<webview>` element's method surface inside the Obsidian window.**
+
+```
+=> {"tag":"WEBVIEW","loadURL":"function","executeJavaScript":"function","capturePage":"function","getURL":"function","getTitle":"function","isLoading":"function","stop":"function","getWebContentsId":"function"}
+```
+
+The whole surface binds directly on the element. The planned
+`remote.webContents.fromId(el.getWebContentsId())` fallback is NOT needed.
+
+**Seam 2b: those methods actually working, end to end** (navigate to
+`https://example.com`, exec a script, capture the page):
+
+```
+=> {"url":"https://example.com/","title":"Example Domain","loading":false,
+    "execType":"string","exec":"{\"h1\":\"Example Domain\",\"sh\":300}",
+    "imgKeys":"getSize:function,resize:function,toPNG:function,isEmpty:function",
+    "size":"0x0","empty":true,"pngBytes":0}
+```
+
+Two things this pins down:
+
+1. `executeJavaScript(script, false)` returns the script's value as a **string**
+   already, so the JSON-string protocol from Task 3 crosses the guest boundary
+   intact and `capExecResult` only has to cap it.
+2. **Seam 5 of the list below is REAL, and worse than "may".** This probe's
+   webview was deliberately off-composite (`opacity:0.01; z-index:-1`) and
+   `capturePage()` resolved happily with a **0x0, `isEmpty() === true`, 0-byte**
+   image. It does not throw. A blank screenshot is therefore the *default*
+   failure mode for an unpainted surface, and a silent one. Consequence baked
+   into the code: `BrowserHost.capture()` returns `""` for an empty capture and
+   the controller turns that into a `BrowserToolRefused` naming visibility, so
+   the model is told the tab was not painted instead of being handed 0 bytes it
+   would describe as an empty page.
+
+Also worth recording: `capturePage()` on that unpainted webview took tens of
+seconds to resolve. The navigation, exec and status calls were all fast.
+
 ## Known unverified seams
 
 The implementer must **check these rather than assume**; each has a decided fallback.
