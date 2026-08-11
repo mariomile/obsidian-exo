@@ -154,6 +154,18 @@ body {
      running turn and to nothing else (see §"identity moment" below). */
   --mva-accent: var(--mv-accent, var(--cosmos-accent, var(--interactive-accent)));
   --mva-glow: color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+
+  /* ---- semantic status ----------------------------------------------------
+     Three states, and the fallback is the point: a theme that ships no
+     semantic palette still gets a legible dot. The kit publishes no status
+     colour, so this chain is Obsidian's own and stops there.
+     Declared once because the alternative was declared forty-three times,
+     which is how .mva-conn-dot.is-failed came to carry a fourth orange
+     (#e0a458) that no other rule in the file used: nobody nudged it, it was
+     simply typed once without the others in view. */
+  --mva-ok: var(--color-green, #3fb950);
+  --mva-caution: var(--color-orange, #e0a341);
+  --mva-danger: var(--color-red, #e05b5b);
 }
 /* The Style Settings default stays on :root, one level ABOVE the seam. The
    plugin writes the user's slider value to `body`; a default sitting on `body`
@@ -1249,7 +1261,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   text-decoration: line-through;
 }
 .mva-todo.is-completed .mva-todo-box {
-  color: var(--color-green, #3fb950);
+  color: var(--mva-ok);
 }
 .mva-todo.is-in_progress .mva-todo-box {
   color: var(--mva-brand, var(--interactive-accent));
@@ -1334,7 +1346,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-agents-icon.is-idle .svg-icon {
   animation: none;
-  color: var(--color-green, #3fb950);
+  color: var(--mva-ok);
 }
 
 /* Enumerable list, anchored above the chip (opens upward). */
@@ -1583,13 +1595,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-radius: 50%;
   flex-shrink: 0;
 }
-.mva-sel-chip.is-caution::before { background: var(--color-orange, #e0a341); }
-.mva-sel-chip.is-danger::before  { background: var(--color-red, #e05b5b); }
+.mva-sel-chip.is-caution::before { background: var(--mva-caution); }
+.mva-sel-chip.is-danger::before  { background: var(--mva-danger); }
 /* Escalate to full risk color on hover / while the popover is open. */
 .mva-sel-chip.is-caution:hover,
-.mva-sel-chip.is-caution.is-open { color: var(--color-orange, #e0a341); }
+.mva-sel-chip.is-caution.is-open { color: var(--mva-caution); }
 .mva-sel-chip.is-danger:hover,
-.mva-sel-chip.is-danger.is-open  { color: var(--color-red, #e05b5b); }
+.mva-sel-chip.is-danger.is-open  { color: var(--mva-danger); }
 
 /* Research is a per-chat mode, not a global warning. Icon-only binoculars
    toggle: state reads through the tooltip and the active brand tint. */
@@ -1928,8 +1940,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-sel-opt.is-active {
   background: var(--background-modifier-hover);
 }
-.mva-sel-opt.is-danger  { color: var(--color-red, #e05b5b); }
-.mva-sel-opt.is-caution { color: var(--color-orange, #e0a341); }
+.mva-sel-opt.is-danger  { color: var(--mva-danger); }
+.mva-sel-opt.is-caution { color: var(--mva-caution); }
 /* The row label takes the free space; a check sits at the trailing edge to mark
    the current value (used by the tune dialog, which stays open after a pick). */
 .mva-sel-opt-label {
@@ -1994,10 +2006,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-radius: 50%;
   margin: 0 2px;
   cursor: pointer;
-  background: var(--color-green, #3fb950);
+  background: var(--mva-ok);
 }
-.mva-perm-dot.is-caution { background: var(--color-orange, #e0a341); }
-.mva-perm-dot.is-danger  { background: var(--color-red, #e05b5b); }
+.mva-perm-dot.is-caution { background: var(--mva-caution); }
+.mva-perm-dot.is-danger  { background: var(--mva-danger); }
 
 /* ------------------------------ context ------------------------------- */
 /* Context strip lives at the top of the unified input box (Craft-style): its
@@ -2591,7 +2603,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   animation: mva-spin 0.9s linear infinite;
 }
 .mva-tool.is-ok .mva-tool-status {
-  color: var(--color-green, #3fb950);
+  color: var(--mva-ok);
 }
 .mva-tool.is-error .mva-tool-status {
   color: var(--text-error);
@@ -2735,7 +2747,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 12px;
 }
 .mva-steps-status.is-ok {
-  color: var(--color-green, #3fb950);
+  color: var(--mva-ok);
 }
 .mva-steps-status.is-error {
   color: var(--text-error);
@@ -2988,7 +3000,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--mva-brand, var(--interactive-accent));
 }
 .mva-subagent-dot.is-ok {
-  background: var(--color-green, #3fb950);
+  background: var(--mva-ok);
 }
 .mva-subagent-dot.is-error {
   background: var(--text-error);
@@ -3062,14 +3074,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: color-mix(in srgb, var(--text-error) 9%, transparent);
 }
 .mva-diff-line.mva-add {
-  color: var(--color-green, #3fb950);
-  background: color-mix(in srgb, var(--color-green, #3fb950) 10%, transparent);
+  color: var(--mva-ok);
+  background: color-mix(in srgb, var(--mva-ok) 10%, transparent);
 }
 
 .mva-diff-collapse > summary {
   cursor: pointer;
   font-size: 11.5px;
-  color: var(--color-green, #3fb950);
+  color: var(--mva-ok);
   padding: 2px 0;
   list-style-position: inside;
 }
@@ -3102,9 +3114,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 
 /* --------------------------- permission card -------------------------- */
 .mva-perm {
-  border: 1px solid color-mix(in srgb, var(--color-orange, #e0a341) 30%, var(--background-modifier-border));
+  border: 1px solid color-mix(in srgb, var(--mva-caution) 30%, var(--background-modifier-border));
   border-radius: var(--mva-card-radius);
-  background: color-mix(in srgb, var(--color-orange, #e0a341) 5%, var(--background-primary));
+  background: color-mix(in srgb, var(--mva-caution) 5%, var(--background-primary));
   padding: var(--mva-card-pad);
   font-size: 12.5px;
 }
@@ -3123,7 +3135,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-perm-icon {
   display: inline-flex;
-  color: var(--color-orange, #e0a341);
+  color: var(--mva-caution);
 }
 .mva-perm-icon .svg-icon {
   width: 15px;
@@ -3599,8 +3611,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   line-height: 1;
 }
 .mva-card-status-badge.is-done {
-  border: 1px solid color-mix(in srgb, var(--color-green, #3fb950) 40%, transparent);
-  color: var(--color-green, #3fb950);
+  border: 1px solid color-mix(in srgb, var(--mva-ok) 40%, transparent);
+  color: var(--mva-ok);
 }
 .mva-card-status-badge.is-archived {
   border: 1px solid var(--background-modifier-border);
@@ -4003,16 +4015,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--text-muted);
 }
 .mva-rate-badge.is-caution {
-  color: var(--color-orange, #e0a341);
+  color: var(--mva-caution);
 }
 .mva-rate-badge.is-caution .mva-rate-dot {
-  background: var(--color-orange, #e0a341);
+  background: var(--mva-caution);
 }
 .mva-rate-badge.is-danger {
-  color: var(--color-red, #e05b5b);
+  color: var(--mva-danger);
 }
 .mva-rate-badge.is-danger .mva-rate-dot {
-  background: var(--color-red, #e05b5b);
+  background: var(--mva-danger);
 }
 .mva-rate-badge:focus-visible {
   outline: 2px solid var(--interactive-accent);
@@ -4078,12 +4090,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-normal);
 }
 .mva-ie-add {
-  background: color-mix(in srgb, var(--color-green, #3fb950) 22%, transparent);
+  background: color-mix(in srgb, var(--mva-ok) 22%, transparent);
   color: var(--text-normal);
   border-radius: 3px;
 }
 .mva-ie-del {
-  background: color-mix(in srgb, var(--color-red, #e05b5b) 18%, transparent);
+  background: color-mix(in srgb, var(--mva-danger) 18%, transparent);
   color: var(--text-muted);
   text-decoration: line-through;
   border-radius: 3px;
@@ -4344,8 +4356,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 12px;
 }
 .mva-src-act.is-armed {
-  color: var(--color-red, #e05b5b);
-  background: color-mix(in srgb, var(--color-red, #e05b5b) 15%, transparent);
+  color: var(--mva-danger);
+  background: color-mix(in srgb, var(--mva-danger) 15%, transparent);
 }
 .mva-src-chip.is-reverted {
   opacity: 0.5;
@@ -4367,12 +4379,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--color-orange, #e0a341) 30%, var(--background-modifier-border));
+  border: 1px solid color-mix(in srgb, var(--mva-caution) 30%, var(--background-modifier-border));
   border-radius: var(--mva-r2);
 }
 .mva-onboard-icon {
   display: inline-flex;
-  color: var(--color-orange, #e0a341);
+  color: var(--mva-caution);
 }
 .mva-onboard-title {
   font-weight: 650;
@@ -4412,11 +4424,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-onboard-opt:hover {
   background: var(--background-modifier-hover);
-  border-color: color-mix(in srgb, var(--color-orange, #e0a341) 40%, var(--background-modifier-border));
+  border-color: color-mix(in srgb, var(--mva-caution) 40%, var(--background-modifier-border));
 }
 .mva-onboard-opt-icon {
   display: inline-flex;
-  color: var(--color-orange, #e0a341);
+  color: var(--mva-caution);
   padding-top: 1px;
 }
 .mva-onboard-opt-body {
@@ -4590,7 +4602,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--text-faint);
 }
 .mva-caps-chip.is-on .mva-caps-dot {
-  background: var(--color-green, #3fb950);
+  background: var(--mva-ok);
 }
 .mva-caps-chip.is-off {
   opacity: 0.55;
@@ -5282,8 +5294,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    growing green text in the live "rewriting…" stream chip. */
 .mva-inai-add,
 .mva-inai-streamtext {
-  color: var(--color-green, #3fb950);
-  background: color-mix(in srgb, var(--color-green, #3fb950) 12%, transparent);
+  color: var(--mva-ok);
+  background: color-mix(in srgb, var(--mva-ok) 12%, transparent);
   border-radius: 3px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -5324,12 +5336,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-normal);
 }
 .mva-inai-chip.is-accept.is-on {
-  color: var(--color-green, #3fb950);
-  background: color-mix(in srgb, var(--color-green, #3fb950) 18%, transparent);
+  color: var(--mva-ok);
+  background: color-mix(in srgb, var(--mva-ok) 18%, transparent);
 }
 .mva-inai-chip.is-reject.is-on {
-  color: var(--color-red, #e05b5b);
-  background: color-mix(in srgb, var(--color-red, #e05b5b) 16%, transparent);
+  color: var(--mva-danger);
+  background: color-mix(in srgb, var(--mva-danger) 16%, transparent);
 }
 
 /* The live "rewriting…" chip and the compact review action bar are body-appended
@@ -5814,10 +5826,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border: 1px solid var(--background-modifier-border); cursor: pointer; font-size: var(--font-ui-small); }
 .mva-ck-att:hover { border-color: var(--background-modifier-border-hover); }
 .mva-ck-att-icon svg { width: 14px; height: 14px; }
-.mva-ck-att.is-blocked .mva-ck-att-icon { color: var(--color-orange); }
+.mva-ck-att.is-blocked .mva-ck-att-icon { color: var(--mva-caution); }
 .mva-ck-att.is-pulse .mva-ck-att-icon { color: var(--text-accent); }
 .mva-ck-att.is-streaming .mva-ck-att-icon { color: var(--interactive-accent); }
-.mva-ck-att.is-answer .mva-ck-att-icon { color: var(--color-green); }
+.mva-ck-att.is-answer .mva-ck-att-icon { color: var(--mva-ok); }
 
 .mva-ck-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
 .mva-ck-input { flex: 1; background: transparent; border: 1px solid var(--background-modifier-border);
@@ -5851,7 +5863,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-size: var(--font-ui-smaller); color: var(--text-muted); }
 .mva-ll-icon svg { width: 13px; height: 13px; color: var(--interactive-accent); }
 .mva-ll-icon.is-working svg { animation: mva-ll-pulse var(--mva-heartbeat) ease-in-out infinite; }
-.mva-ll-icon.is-ok svg { color: var(--color-green); }
+.mva-ll-icon.is-ok svg { color: var(--mva-ok); }
 @keyframes mva-ll-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .mva-ll-icon.is-working svg { animation: none; } }
 .mva-ll-label { flex: 1; }
@@ -5901,7 +5913,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   margin-top: 4px;
 }
 .mva-auto-warn {
-  color: var(--color-orange, #e0a341);
+  color: var(--mva-caution);
   display: -webkit-box;
   max-width: 52ch;
   overflow: hidden;
@@ -6027,7 +6039,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    =================================================================== */
 .exo-mention-underline {
   text-decoration: underline dotted;
-  text-decoration-color: var(--text-accent, #7c6cff);
+  text-decoration-color: var(--text-accent);
   text-underline-offset: 3px;
   cursor: pointer;
 }
@@ -6045,13 +6057,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 6px;
   border: 1px solid var(--background-modifier-border, rgba(0, 0, 0, 0.1));
   border-radius: var(--mva-r-floating);
-  background: var(--background-primary, #fff);
+  background: var(--background-primary);
   box-shadow: var(--mva-shadow-rest);
   font-size: var(--font-ui-small, 13px);
 }
 .exo-mention-popover-title {
   padding: 2px 6px 4px;
-  color: var(--text-muted, #888);
+  color: var(--text-muted);
   font-size: var(--font-ui-smaller, 12px);
 }
 .exo-mention-btn {
@@ -6059,7 +6071,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 4px 8px;
   border-radius: 4px;
   cursor: pointer;
-  color: var(--text-normal, #222);
+  color: var(--text-normal);
 }
 .exo-mention-btn:hover {
   background: var(--background-modifier-hover, rgba(0, 0, 0, 0.06));
@@ -6303,7 +6315,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-conn-state { font-size: 12px; color: var(--text-muted); }
 .mva-conn-state.is-muted { color: var(--text-faint); }
 .mva-conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
-.mva-conn-dot.is-connected { background: var(--color-green, #3fb950); }
+.mva-conn-dot.is-connected { background: var(--mva-ok); }
 /* Whisper empty state — faint and one step smaller than body copy; an empty
    state is not a call to action. */
 .mva-conn-empty { color: var(--text-faint); padding: 28px 8px; text-align: center; font-size: var(--font-ui-smaller, 12px); }
@@ -6335,7 +6347,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 
 /* Connections — MCP status: amber dot for needs-auth / failed, faint for disabled */
-.mva-conn-dot.is-failed { background: var(--color-orange, #e0a458); }
+.mva-conn-dot.is-failed { background: var(--mva-caution); }
 .mva-conn-dot.is-disabled { background: var(--text-faint); opacity: 0.5; }
 
 /* Connections — "Add MCP server" action row (control-surface entry point) */
@@ -6730,13 +6742,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 8px;
   height: 8px;
   box-sizing: border-box;
-  border: 2px solid var(--color-orange);
+  border: 2px solid var(--mva-caution);
 }
 /* Unseen — the smallest mark, and static. News, not an obligation. */
 .mva-chats-dot.is-unseen::after {
   width: 4px;
   height: 4px;
-  background: var(--color-green);
+  background: var(--mva-ok);
 }
 @keyframes mva-chats-dot-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
@@ -6802,8 +6814,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
      prefers-reduced-motion block. */
   animation: mva-chats-breathe var(--mva-heartbeat) ease-in-out infinite;
 }
-.mva-chats-row.is-needs-input .mva-chats-status { color: var(--color-orange); animation: none; }
-.mva-chats-status.is-unseen { color: var(--color-green); animation: none; }
+.mva-chats-row.is-needs-input .mva-chats-status { color: var(--mva-caution); animation: none; }
+.mva-chats-status.is-unseen { color: var(--mva-ok); animation: none; }
 /* Turn count: a bare number reads as noise, so it gets a container that says
    "quantity" without spending a word on it. */
 .mva-chats-count {
