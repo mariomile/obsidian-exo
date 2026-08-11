@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { toolsManifest, callBridgeTool, authOk, startCodexBridge } from "../src/obsidian/codex-bridge";
+import { buildObsidianTools } from "../src/obsidian/tools";
+import type { App } from "obsidian";
 
 const echo = tool("echo", "Echo the input back.", { text: z.string() }, async (a) => ({
   content: [{ type: "text", text: `echo:${a.text}` }],
@@ -36,6 +38,21 @@ describe("callBridgeTool", () => {
     const r = await callBridgeTool([boom], "boom", {});
     expect(r.isError).toBe(true);
     expect(JSON.stringify(r.content)).toContain("kaboom");
+  });
+});
+
+describe("ask_user through the bridge executor", () => {
+  it("a dismissal reaches codex as a normal MCP result, never isError", async () => {
+    const tools = buildObsidianTools({} as App, {
+      askBridge: async () => {
+        throw new Error("cancelled");
+      },
+    });
+    const res = await callBridgeTool(tools, "ask_user", {
+      questions: [{ question: "Which?", header: "Approach", options: [{ label: "A" }, { label: "B" }] }],
+    });
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0]?.text).toMatch(/dismissed/i);
   });
 });
 

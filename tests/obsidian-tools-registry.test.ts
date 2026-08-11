@@ -47,3 +47,43 @@ describe("buildObsidianTools", () => {
     }
   });
 });
+
+describe("ask_user handler contract", () => {
+  const QUESTIONS = {
+    questions: [
+      { question: "Which approach?", header: "Approach", options: [{ label: "A" }, { label: "B" }] },
+    ],
+  };
+  type ToolResult = { isError?: boolean; content: Array<{ text?: string }> };
+  const askUserOf = (opts?: Parameters<typeof buildObsidianTools>[1]) => {
+    const t = buildObsidianTools(app, opts).find((x) => x.name === "ask_user");
+    if (!t) throw new Error("ask_user not registered");
+    return t as unknown as { handler: (args: unknown, extra: unknown) => Promise<ToolResult> };
+  };
+
+  it("returns the bridge's answers as JSON", async () => {
+    const t = askUserOf({ askBridge: async () => ({ Approach: "A" }) });
+    const res = await t.handler(QUESTIONS, {});
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0]?.text).toBe(JSON.stringify({ Approach: "A" }));
+  });
+
+  it("degrades to best-judgment guidance when no bridge is wired (headless)", async () => {
+    const res = await askUserOf().handler(QUESTIONS, {});
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0]?.text).toMatch(/best judgment/i);
+  });
+
+  it("reports a dismissal (Stop / teardown) as a NORMAL result, never isError", async () => {
+    // isError here would poison the Codex turn — the dismissal is guidance to
+    // the model ("proceed"), not a failure.
+    const t = askUserOf({
+      askBridge: async () => {
+        throw new Error("cancelled");
+      },
+    });
+    const res = await t.handler(QUESTIONS, {});
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0]?.text).toMatch(/dismissed/i);
+  });
+});
