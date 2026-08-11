@@ -898,3 +898,117 @@ describe("buildChatList — related is not a nesting home", () => {
     expect(new Set(allIds(vm)).size).toBe(allIds(vm).length);
   });
 });
+
+/**
+ * `hasChildren` through the whole pipeline, not just the grouping pass — the
+ * flag is what earns a row its collapse control, and every rule that can move a
+ * child (anchoring, the query filter, the Related split) can also change the
+ * answer. Testing `groupAcrossHomes` alone would miss all three.
+ */
+describe("buildChatList — hasChildren", () => {
+  const sem = (sources: ChatRowSource[], query: string, semanticIds: string[]) =>
+    buildChatList(sources, { query, now: NOON, semanticIds });
+  const kids = (vm: ChatListVM, key: ChatSectionKey): Array<[string, boolean]> =>
+    rows(vm, key).map((r) => [r.id, r.hasChildren]);
+
+  it("marks the parent and nothing else", () => {
+    const vm = build([
+      src({ id: "p", open: true, updatedAt: NOON - HOUR }),
+      src({ id: "c", open: true, updatedAt: NOON, parentConvoId: "p" }),
+      src({ id: "solo", open: true, updatedAt: NOON - 2 * HOUR }),
+    ]);
+    expect(kids(vm, "open")).toEqual([
+      ["p", true],
+      ["c", false],
+      ["solo", false],
+    ]);
+  });
+
+  it("leaves every row unmarked when nothing has a parent", () => {
+    const vm = build([src({ id: "a", open: true }), src({ id: "b", open: true })]);
+    expect(rows(vm, "open").some((r) => r.hasChildren)).toBe(false);
+  });
+
+  it("marks a parent whose child was pulled in from another section", () => {
+    // The child earned `settled` on its own and was relocated into `open` under
+    // its parent; the parent still has to say so.
+    const vm = build([
+      src({ id: "p", open: true }),
+      src({ id: "c", parentConvoId: "p" }),
+    ]);
+    expect(kids(vm, "open")).toEqual([
+      ["p", true],
+      ["c", false],
+    ]);
+    expect(rows(vm, "settled")).toEqual([]);
+  });
+
+  it("does NOT mark a parent whose only child was anchored away by liveness", () => {
+    // A blocked child stays in Needs you rather than nesting; nothing renders
+    // under the parent, so a chevron there would open onto an empty group.
+    const vm = build([
+      src({ id: "p", open: true }),
+      src({ id: "c", parentConvoId: "p", streaming: true, pendingPerm: true }),
+    ]);
+    expect(ids(vm, "needsYou")).toEqual(["c"]);
+    expect(kids(vm, "open")).toEqual([["p", false]]);
+  });
+
+  it("does NOT mark a parent whose child the query filtered out", () => {
+    const vm = build(
+      [
+        src({ id: "p", title: "Alpha", open: true }),
+        src({ id: "c", title: "Zeta", open: true, parentConvoId: "p" }),
+      ],
+      "alpha",
+    );
+    expect(kids(vm, "open")).toEqual([["p", false]]);
+  });
+
+  it("does not mark the middle row of a flattened grandchild chain", () => {
+    const vm = build([
+      src({ id: "p", open: true, updatedAt: NOON }),
+      src({ id: "c", open: true, updatedAt: NOON - HOUR, parentConvoId: "p" }),
+      src({ id: "g", open: true, updatedAt: NOON - 2 * HOUR, parentConvoId: "c" }),
+    ]);
+    expect(rows(vm, "open").map((r) => [r.id, r.depth, r.hasChildren])).toEqual([
+      ["p", 0, true],
+      ["c", 1, false],
+      ["g", 1, false],
+    ]);
+  });
+
+  it("marks a parent inside Related, which nests on its own", () => {
+    const vm = sem(
+      [
+        src({ id: "p", title: "Alpha", updatedAt: NOON - HOUR }),
+        src({ id: "c", title: "Beta", parentConvoId: "p", updatedAt: NOON }),
+      ],
+      "zzz",
+      ["p", "c"],
+    );
+    expect(kids(vm, "related")).toEqual([
+      ["p", true],
+      ["c", false],
+    ]);
+  });
+
+  it("agrees with the painted shape: marked exactly when a depth-1 row follows", () => {
+    // The renderer draws the control off `hasChildren` and counts the rows off
+    // the painted order. If those two ever disagree, a chevron appears over
+    // nothing or a hidden run has no way back.
+    const vm = build([
+      src({ id: "p", open: true, updatedAt: NOON }),
+      src({ id: "c1", open: true, updatedAt: NOON - HOUR, parentConvoId: "p" }),
+      src({ id: "c2", open: true, updatedAt: NOON - 2 * HOUR, parentConvoId: "p" }),
+      src({ id: "q", open: true, updatedAt: NOON - 3 * HOUR }),
+      src({ id: "settledOne", updatedAt: NOON - 4 * HOUR }),
+    ]);
+    for (const section of vm.sections) {
+      section.items.forEach((row, i) => {
+        const follows = section.items[i + 1]?.depth === 1;
+        expect([row.id, row.hasChildren]).toEqual([row.id, row.depth === 0 && follows]);
+      });
+    }
+  });
+});

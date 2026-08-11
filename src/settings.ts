@@ -169,6 +169,10 @@ export interface MVASettings {
   chatsMode: import("./core/chat-rows").ChatListMode;
   /** Chats-sidebar sections collapsed, by `ChatSectionKey` — core/chat-list-state. */
   chatsCollapsed: string[];
+  /** Chats-sidebar rows whose fan-out children are folded away, by CONVERSATION
+   *  ID. A list of its own rather than a share of `chatsCollapsed`: the two are
+   *  keyed in different namespaces — core/chat-list-state. */
+  chatsCollapsedParents: string[];
   /** LEGACY scheduled playbook runs ("<Prompt name> | daily" per line) — migrated
    *  into `automations` on load, then cleared. Kept only for the migration path. */
   scheduledRuns: string;
@@ -298,6 +302,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   cockpitOnStartup: false,
   chatsMode: "activity",
   chatsCollapsed: [],
+  chatsCollapsedParents: [],
   scheduledRuns: "",
   automations: [],
   automationsMigrated: false,

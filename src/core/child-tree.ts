@@ -12,6 +12,22 @@
 export interface GroupedConvo<T> {
   item: T;
   depth: 0 | 1;
+  /**
+   * Does anything render NESTED UNDER this row in the output? Decided here,
+   * where the parent→children map already exists — a caller re-deriving it from
+   * the flat result would be answering the same question with worse
+   * information, and would drift the day the anchoring rules change.
+   *
+   * Always `false` at depth 1, and that is the definition rather than an
+   * omission: the indent is capped at one level, so a grandchild renders BESIDE
+   * its parent, not under it. A row that is itself indented has nothing beneath
+   * it to hide, which is exactly what a collapse control on it would promise.
+   *
+   * Also `false` for a parent whose only child was anchored away (see
+   * `opts.isAnchored`): that child stayed in its own home, so nothing is
+   * nested here either.
+   */
+  hasChildren: boolean;
 }
 
 /**
@@ -101,7 +117,7 @@ export function groupAcrossHomes<T extends { id: string; parentConvoId?: string 
     for (const child of byParent.get(parentId) ?? []) {
       if (emitted.has(child.id)) continue;
       emitted.add(child.id);
-      out.get(home)!.push({ item: child, depth: 1 });
+      out.get(home)!.push({ item: child, depth: 1, hasChildren: false });
       // Grandchildren follow their parent into the SAME home, still at
       // depth 1 (see header) — never their own natural home.
       emitChildren(child.id, home);
@@ -114,7 +130,10 @@ export function groupAcrossHomes<T extends { id: string; parentConvoId?: string 
       // parent's pass, into the parent's home — never twice, never here.
       if (effectiveParent(c.id)) continue;
       emitted.add(c.id);
-      out.get(home)!.push({ item: c, depth: 0 });
+      // A bucket only ever exists because something was pushed into it, so a
+      // present key means at least one row is about to be emitted under this
+      // one — no separate emptiness check to keep in sync.
+      out.get(home)!.push({ item: c, depth: 0, hasChildren: byParent.has(c.id) });
       emitChildren(c.id, home);
     }
   }

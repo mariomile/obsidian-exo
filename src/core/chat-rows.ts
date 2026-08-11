@@ -23,7 +23,7 @@
  */
 import { deriveLane, type NeedsInputReason, type SessionBadge } from "./session-cards";
 import { groupByTime, type TimeGroupLabel } from "./history";
-import { groupAcrossHomes, groupByParent } from "./child-tree";
+import { groupAcrossHomes, groupByParent, type GroupedConvo } from "./child-tree";
 
 /** The per-conversation facts the list needs. Structural, not `Convo` — this
  *  module stays ignorant of the view's types, the enumerator adapts. */
@@ -82,6 +82,14 @@ export interface ChatRow {
    *  which collection it would otherwise have landed in: it is relocated to
    *  sit under its parent, in the parent's collection. */
   depth: 0 | 1;
+  /** At least one row is nested UNDER this one in the list as painted — what
+   *  earns the row its own collapse toggle. Decided by the same grouping pass
+   *  that decided `depth` (see `GroupedConvo.hasChildren`), never re-derived by
+   *  the renderer: the pass knows which children were anchored away and which
+   *  parents the search filtered out, and a second derivation would answer with
+   *  less. Always false at depth 1 — a grandchild renders beside its parent,
+   *  not under it. */
+  hasChildren: boolean;
   /** Present only while the conversation is running or blocked. */
   lane?: "running" | "needs-input";
   reason?: NeedsInputReason;
@@ -312,17 +320,22 @@ function toRow(s: ChatRowSource): ChatRow {
     unseen: s.unseen,
     messageCount: s.messageCount,
     depth: 0,
+    hasChildren: false,
   };
   if (s.updatedAt !== undefined) row.updatedAt = s.updatedAt;
   if (s.parentConvoId) row.parentConvoId = s.parentConvoId;
   return row;
 }
 
-/** Stamp the indent `groupAcrossHomes` decided onto each row of one output
- *  collection. Depth-0 rows come back unchanged; only a relocated child needs
- *  a new object, same as the old per-tier `nest` did. */
-function stampDepth(grouped: readonly { item: ChatRow; depth: 0 | 1 }[]): ChatRow[] {
-  return grouped.map(({ item, depth }) => (depth === 0 ? item : { ...item, depth }));
+/** Stamp the nesting `groupAcrossHomes` decided — the indent AND whether
+ *  anything sits under the row — onto each row of one output collection. A row
+ *  that is neither indented nor a parent already says so (`toRow`), so it comes
+ *  back unchanged; only a row the pass actually moved or marked needs a new
+ *  object, same as the old per-tier `nest` did. */
+function stampNesting(grouped: readonly GroupedConvo<ChatRow>[]): ChatRow[] {
+  return grouped.map(({ item, depth, hasChildren }) =>
+    depth === 0 && !hasChildren ? item : { ...item, depth, hasChildren },
+  );
 }
 
 /**
@@ -424,9 +437,9 @@ export function buildChatList(
   const sections: ChatSection[] = [...homes.keys()].map((key) => ({
     key: key as ChatSectionKey,
     label: labels.get(key) ?? key,
-    items: stampDepth(grouped.get(key) ?? []),
+    items: stampNesting(grouped.get(key) ?? []),
   }));
-  sections.push({ key: "related", label: "Related", items: stampDepth(groupByParent(related)) });
+  sections.push({ key: "related", label: "Related", items: stampNesting(groupByParent(related)) });
 
   return {
     // A section that relocation emptied — its only row pulled out to sit under
