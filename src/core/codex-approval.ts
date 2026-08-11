@@ -77,8 +77,16 @@ export function recoverApprovalTool(
   if (!server) return null;
   const candidates = [...inFlight].filter((call) => call.server === server);
   if (!candidates.length) return null;
-  const wanted = canonical(record(params._meta).tool_params);
+  const toolParams = record(params._meta).tool_params;
+  const wanted = canonical(toolParams);
   const byArgs = candidates.filter((call) => canonical(call.args) === wanted);
+  // Arguments that name something and match NOTHING in flight are a
+  // contradiction, not a missing signal: the approval belongs to a call this
+  // process cannot see, and answering it would unblock that call under the
+  // classification of the one it can. Decline instead. Absent or empty
+  // `tool_params` (a tool called with no arguments) contradicts nothing, so the
+  // single-candidate fallback still stands.
+  if (!byArgs.length && Object.keys(record(toolParams)).length > 0) return null;
   const pool = byArgs.length ? byArgs : candidates;
   const names = new Set(pool.map((call) => call.tool));
   if (names.size === 1) return [...names][0];

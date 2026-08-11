@@ -185,9 +185,29 @@ describe("correlating an approval with its tool call", () => {
     expect(recoverApprovalTool(approval({ message: 'run tool "delete_note"?' }), calls)).toBeNull();
   });
 
-  it("uses the single in-flight call even when the arguments do not line up", () => {
-    // Arguments are a corroborator, not a requirement: one candidate is one answer.
-    const calls = inFlight({ server: "obsidian", tool: "list_notes", args: { folder: "Z" } });
-    expect(recoverApprovalTool(approval(), calls)).toBe("list_notes");
+  it("uses the single in-flight call when the approval carries NO arguments to contradict it", () => {
+    // Arguments are a corroborator, not a requirement. A tool called with no
+    // arguments sends `tool_params` absent or empty: neither can disagree with
+    // anything, so one candidate is still one answer.
+    const calls = inFlight({ server: "obsidian", tool: "list_notes", args: {} });
+    expect(recoverApprovalTool(approval({}, { tool_params: undefined }), calls)).toBe("list_notes");
+    expect(recoverApprovalTool(approval({}, { tool_params: {} }), calls)).toBe("list_notes");
+    // ...and the in-flight side may be the empty one instead.
+    const noArgs = inFlight({ server: "obsidian", tool: "list_notes", args: undefined });
+    expect(recoverApprovalTool(approval({}, { tool_params: {} }), noArgs)).toBe("list_notes");
+  });
+
+  it("DECLINES when the approval's arguments match NO in-flight call", () => {
+    // The security case: arguments that contradict the only candidate mean the
+    // correlation is wrong. Returning it anyway would classify the approval as
+    // the harmless call in flight while codex unblocks a different, gated one.
+    const calls = inFlight({ server: "obsidian", tool: "read_note", args: { path: "A.md" } });
+    expect(recoverApprovalTool(approval({}, { tool_params: { path: "DANGER.md" } }), calls)).toBeNull();
+    // Same tool, wrong arguments: still a contradiction, still no answer.
+    expect(recoverApprovalTool(approval({ message: 'run tool "read_note"?' }, { tool_params: { path: "B.md" } }), calls))
+      .toBeNull();
+    // End to end: the router refuses instead of auto-allowing the read tool it
+    // can see while codex unblocks the mutating one it cannot.
+    expect(route(approval({}, { tool_params: { path: "DANGER.md" } }), calls).kind).toBe("decline");
   });
 });
