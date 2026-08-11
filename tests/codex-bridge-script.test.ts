@@ -5,6 +5,7 @@ import { writeFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { CODEX_BRIDGE_SCRIPT } from "../src/obsidian/codex-bridge-script";
+import { startCodexBridge } from "../src/obsidian/codex-bridge";
 
 const TOKEN = "test-token";
 let server: Server;
@@ -72,4 +73,48 @@ describe("codex-bridge script (real node child)", () => {
       child.kill();
     }
   });
+});
+
+describe("no-timeout posture", () => {
+  it("the script keeps the hand-rolled node:http transport (undici's hidden 300s headersTimeout is the documented regression)", () => {
+    expect(CODEX_BRIDGE_SCRIPT).toContain("node:http");
+    expect(CODEX_BRIDGE_SCRIPT).toContain("req.setTimeout(0)");
+    expect(CODEX_BRIDGE_SCRIPT).not.toContain("fetch(");
+  });
+
+  it("a call whose handler resolves only after a human-scale delay still answers, through the REAL bridge and the REAL script", async () => {
+    const bridge = await startCodexBridge();
+    bridge.setTools([
+      {
+        name: "ask_user",
+        description: "d",
+        inputSchema: {},
+        handler: async () => {
+          await new Promise((r) => setTimeout(r, 1500));
+          return { content: [{ type: "text", text: '{"Approach":"A"}' }] };
+        },
+      } as never,
+    ]);
+    const child = spawn(process.execPath, [script], {
+      env: {
+        ...process.env,
+        EXO_BRIDGE_PORT: String(bridge.port),
+        EXO_BRIDGE_TOKEN: bridge.token,
+        ELECTRON_RUN_AS_NODE: "1",
+      },
+    });
+    try {
+      const call = await rpc(child, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "ask_user", arguments: {} },
+      });
+      expect(JSON.stringify(call.result)).toContain("Approach");
+      expect(JSON.stringify(call.result)).not.toContain("isError");
+    } finally {
+      child.kill();
+      bridge.stop();
+    }
+  }, 15_000);
 });

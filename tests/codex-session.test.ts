@@ -530,6 +530,27 @@ describe("CodexSession app-server lifecycle", () => {
     expect(child.kill).toHaveBeenCalled();
   });
 
+  it("registers the obsidian bridge with a 1-hour tool timeout — ask_user can wait for the human", () => {
+    const child = new FakeCodexProcess();
+    const spawn = vi.fn(() => child as never);
+    const session = new CodexSession(
+      { ...OPTS, codexBridge: { port: 4321, token: "tok", scriptPath: "/bridge.mjs" } },
+      { spawn, requestTimeoutMs: 500, turnStartTimeoutMs: 500 }
+    );
+    try {
+      const args = spawn.mock.calls[0]?.[1] as unknown as string[];
+      const override = args.find((a) => typeof a === "string" && a.includes("mcp_servers.obsidian="));
+      expect(override).toBeDefined();
+      // Codex's per-server default is 60s — that would kill every answer Mario
+      // takes more than a minute to give. 3600 is the deliberate ceiling.
+      expect(override).toContain("tool_timeout_sec=3600");
+      expect(override).toContain('EXO_BRIDGE_PORT="4321"');
+      expect(override).toContain('EXO_BRIDGE_TOKEN="tok"');
+    } finally {
+      session.dispose();
+    }
+  });
+
   it("releases its per-session Obsidian bridge exactly once", async () => {
     const stop = vi.fn();
     const { session } = await readySession({
