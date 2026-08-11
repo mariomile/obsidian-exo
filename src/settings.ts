@@ -846,6 +846,14 @@ export class MVASettingTab extends PluginSettingTab {
           });
       });
 
+    new Setting(el).setName("Agent browser").setHeading();
+    this.toggleSetting(
+      el,
+      "Enable agent browser",
+      "Gives the agent a real, visible browser tab inside Obsidian (desktop only): it can open a page in front of you, read it, click, type, scroll and screenshot it, a tab you both share, instead of a blind web fetch. Off by default. Opening, navigating and interacting always ask through the standard permission card; only looking (snapshot, read, screenshot) rides the auto-allowed read tools.",
+      "browserEnabled"
+    );
+
     new Setting(el)
       .setName("Conversation history budget (MB)")
       .setDesc(

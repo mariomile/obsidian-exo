@@ -232,6 +232,10 @@ export interface MVASettings {
    *  Discovering agents never grants them autonomy — each agent is additionally
    *  disabled in its own contract until turned on. */
   agentsEnabled: boolean;
+  /** Agent browser master flag, default OFF, desktop only. Gates the eight
+   *  `browser_*` tools and the exo-browser leaf's live mode. When false the
+   *  session tool list is byte-identical to before the feature existed. */
+  browserEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -322,6 +326,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   retentionBudgetMb: 50,
   stripMaxTabs: 6,
   agentsEnabled: false,
+  browserEnabled: false,
   connectionsInlineUnderline: true,
   connectionsStemming: true,
 };
