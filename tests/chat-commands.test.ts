@@ -1,8 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { Notice } from "obsidian";
 import { registerChatCommands } from "../src/ui/chat-commands";
 import type ExoPlugin from "../src/main";
 import type { ChatRowSource } from "../src/core/chat-rows";
+
+/** The command reaches the writer through `convo-bridge`, imported lazily so
+ *  the registrations never pull `view.ts`. Stubbed here for the same reason:
+ *  what is under test is what the command does with the answer. */
+const bridge = vi.hoisted(() => ({
+  settle: (): Promise<string | null> => Promise.resolve(null),
+}));
+vi.mock("../src/ui/convo-bridge", () => ({ settleToNote: () => bridge.settle() }));
 
 /** A conversation as `listChatRows` reports it; every test overrides only what
  *  it is about. */
@@ -78,6 +86,34 @@ describe("registerChatCommands", () => {
       "next-needs-you",
       "settle-chat-to-note",
     ]);
+  });
+});
+
+describe("settling the active chat from the palette", () => {
+  beforeEach(() => {
+    Notice.last = "";
+    bridge.settle = () => Promise.resolve(null);
+  });
+
+  it("names the note it wrote", async () => {
+    bridge.settle = () => Promise.resolve("_exo/chats/Ship it.md");
+    harness([], "c7").run("settle-chat-to-note");
+    await vi.waitFor(() => expect(Notice.last).toBe("Settled to _exo/chats/Ship it.md"));
+  });
+
+  it("says the write failed instead of dropping it on the floor", async () => {
+    // `vault.create`/`vault.modify` are unwrapped: "File already exists",
+    // ENAMETOOLONG, EACCES, a read-only vault. Nothing was written, and a
+    // command that reports nothing is indistinguishable from a broken one.
+    // The row menu already says this; the palette must say the same.
+    bridge.settle = () => Promise.reject(new Error("EACCES"));
+    harness([], "c7").run("settle-chat-to-note");
+    await vi.waitFor(() => expect(Notice.last).toBe("Couldn't write the note."));
+  });
+
+  it("refuses a chat that is not settled, and says why", async () => {
+    harness([], "c7").run("settle-chat-to-note");
+    await vi.waitFor(() => expect(Notice.last).toContain("Only a settled chat"));
   });
 });
 

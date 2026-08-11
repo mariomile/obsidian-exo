@@ -45,6 +45,13 @@ export function registerChatCommands(plugin: ExoPlugin): void {
  *  `chat-actions.settleToNote`; a refusal comes back as null and is reported
  *  rather than swallowed.
  *
+ *  A refusal and a FAILED WRITE are different answers and get different words.
+ *  `vault.create`/`vault.modify` are unwrapped down there: "File already
+ *  exists", ENAMETOOLONG, EACCES, a read-only vault. Left uncaught they became
+ *  an unhandled rejection with no Notice at all — nothing written, nothing
+ *  said, indistinguishable from a broken command. The row menu already reports
+ *  this case; both entry points say the same thing.
+ *
  *  The bridge is imported HERE, not at module scope: a static import would
  *  pull `view.ts` — and with it the whole Obsidian surface — into this file's
  *  module graph, which is exactly what keeps the command registrations
@@ -55,11 +62,15 @@ async function settleActive(plugin: ExoPlugin): Promise<void> {
     void plugin.activateView();
     return;
   }
-  const { settleToNote } = await import("./convo-bridge");
-  const path = await settleToNote(plugin, id);
-  new Notice(
-    path ? `Settled to ${path}` : "Only a settled chat can become a note — let this turn finish.",
-  );
+  try {
+    const { settleToNote } = await import("./convo-bridge");
+    const path = await settleToNote(plugin, id);
+    new Notice(
+      path ? `Settled to ${path}` : "Only a settled chat can become a note — let this turn finish.",
+    );
+  } catch {
+    new Notice("Couldn't write the note.");
+  }
 }
 
 /**
