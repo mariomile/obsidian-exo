@@ -50,7 +50,7 @@ describe("mergeSlashEntries", () => {
 });
 
 describe("hoistSlashCommand", () => {
-  const known = new Set(["goal", "grilling"]);
+  const known = new Set(["goal", "grilling", "mattpocock-skills:grilling"]);
 
   it("hoists a command from its own line", () => {
     expect(hoistSlashCommand("organize my notes\n/goal", known)).toBe("/goal organize my notes");
@@ -60,15 +60,68 @@ describe("hoistSlashCommand", () => {
     expect(hoistSlashCommand("/goal organize my notes", known)).toBe("/goal organize my notes");
   });
 
-  it("ignores a command trailing prose on the same line", () => {
-    // The shape typed in the composer screenshot: `/grilling` after a sentence
-    // is not a standalone command line, so it stays literal text.
-    const text = "Fammi domande precise, per capire cosa fare e perché. /grilling";
-    expect(hoistSlashCommand(text, known)).toBe(text);
+  it("keeps the args of a command that owns its line", () => {
+    expect(hoistSlashCommand("fix the tests\n/goal ship v2", known)).toBe("/goal ship v2\nfix the tests");
   });
 
-  it("ignores unknown commands and URLs", () => {
-    expect(hoistSlashCommand("text\n/unknowncmd", known)).toBe("text\n/unknowncmd");
-    expect(hoistSlashCommand("see https://a.b/goal now", known)).toBe("see https://a.b/goal now");
+  it("shaves leading whitespace so a leading command actually opens the message", () => {
+    // The CLI expands "/goal" only when "/" is the first character, so the
+    // already-command-first guard has to hand back a string that starts there.
+    expect(hoistSlashCommand("  /goal organize", known)).toBe("/goal organize");
+    expect(hoistSlashCommand(" /goal\nmore context", known)).toBe("/goal\nmore context");
+  });
+
+  describe("embedded in prose", () => {
+    it("hoists a command trailing a sentence", () => {
+      // The shape typed in the composer: the palette inserts `/name ` right
+      // where the caret is, at the end of a sentence.
+      expect(hoistSlashCommand("Fammi domande precise, per capire cosa fare e perché. /grilling", known)).toBe(
+        "/grilling Fammi domande precise, per capire cosa fare e perché.",
+      );
+    });
+
+    it("hoists a command from the middle of a sentence", () => {
+      expect(hoistSlashCommand("fai un /grilling su questo piano", known)).toBe("/grilling fai un su questo piano");
+    });
+
+    it("hoists a namespaced plugin skill", () => {
+      expect(hoistSlashCommand("stress-test this. /mattpocock-skills:grilling", known)).toBe(
+        "/mattpocock-skills:grilling stress-test this.",
+      );
+    });
+
+    it("hoists across lines", () => {
+      expect(hoistSlashCommand("prima riga\nseconda riga /goal", known)).toBe("/goal prima riga\nseconda riga");
+    });
+
+    it("skips an unknown token and takes the known one after it", () => {
+      expect(hoistSlashCommand("check /nope then /goal", known)).toBe("/goal check /nope then");
+    });
+  });
+
+  describe("false positives it must refuse", () => {
+    it("ignores a command name inside a URL", () => {
+      expect(hoistSlashCommand("see https://a.b/goal now", known)).toBe("see https://a.b/goal now");
+      expect(hoistSlashCommand("see https://a.b/goal", known)).toBe("see https://a.b/goal");
+    });
+
+    it("ignores a command name inside a path", () => {
+      // "/goal" here is preceded by "s", and "/Users" is followed by "/".
+      expect(hoistSlashCommand("apri /Users/mario/goal ora", known)).toBe("apri /Users/mario/goal ora");
+    });
+
+    it("ignores unknown commands", () => {
+      expect(hoistSlashCommand("text\n/unknowncmd", known)).toBe("text\n/unknowncmd");
+      expect(hoistSlashCommand("prose /unknowncmd here", known)).toBe("prose /unknowncmd here");
+    });
+
+    it("ignores a bare slash and division-looking text", () => {
+      expect(hoistSlashCommand("50/50 chance", known)).toBe("50/50 chance");
+      expect(hoistSlashCommand("a / b", known)).toBe("a / b");
+    });
+
+    it("leaves the text alone with an empty roster", () => {
+      expect(hoistSlashCommand("prose. /goal", new Set())).toBe("prose. /goal");
+    });
   });
 });

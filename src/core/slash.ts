@@ -6,33 +6,49 @@
  * Exo sends raw text through the SDK, so a command typed mid-message ("do X
  * for me\n/goal") reaches the model as literal text and never expands.
  *
- * hoistSlashCommand() closes the gap at send time: if a line of the message
- * is a KNOWN command (matched against the session's live command list — never
- * a bare "/" pattern, so URLs and paths in prose can't false-positive), the
- * command is moved to the front and the surrounding text becomes its argument.
+ * hoistSlashCommand() closes the gap at send time: wherever a KNOWN command
+ * sits in the message, it is moved to the front and the surrounding text
+ * becomes its argument. "Known" is the load-bearing word — the match is always
+ * against the session's live command+skill roster, never a bare "/" pattern,
+ * so URLs and paths in prose can't false-positive.
  */
 
 const COMMAND_LINE = /^\/([A-Za-z0-9][\w:-]*)(?:\s+(.*))?$/;
 
 /**
- * If `text` contains a known `/command` line that isn't already at the start,
- * hoist it to the front. The rest of the message becomes the argument:
+ * A command embedded in prose. The delimiters are what keep it safe:
+ * the "/" must open a whitespace-delimited token, and the name must end one.
+ *
+ *   "perché. /grilling"   → matches (space before, end of string after)
+ *   "https://a.b/goal"    → no match ("/" follows "b", not whitespace)
+ *   "/Users/mario/goal"   → no match ("/Users" is followed by "/", not space)
+ */
+const INLINE_COMMAND = /(?:^|\s)\/([A-Za-z0-9][\w:-]*)(?=\s|$)/g;
+
+/**
+ * If `text` contains a known `/command` that isn't already at the start, hoist
+ * it to the front. The rest of the message becomes the argument:
  *
  *   "organize my notes\n/goal"  →  "/goal organize my notes"
+ *   "sharpen this. /grilling"   →  "/grilling sharpen this."
  *   "/goal organize my notes"   →  unchanged (already leading)
- *   "see https://a.b/goal now"  →  unchanged (not a standalone command line)
+ *   "see https://a.b/goal now"  →  unchanged (not a command token)
  *   "text\n/unknowncmd"         →  unchanged (not in the known list)
  *
- * Only the first matching command line is hoisted. If the command line carried
- * its own arguments they stay attached to it, and the remaining text follows
- * on the next lines (the model still sees everything).
+ * Only the first match is hoisted. A command that OWNS its line keeps whatever
+ * arguments follow it on that line, and the rest of the message trails below —
+ * the explicit shape, so "fix the tests\n/goal ship v2" doesn't swallow
+ * "ship v2" into the prose. A command embedded in prose has no such slot: it
+ * is lifted out of the sentence and the sentence becomes the argument.
  */
 export function hoistSlashCommand(text: string, known: ReadonlySet<string>): string {
   if (!text.includes("/") || known.size === 0) return text;
   const lines = text.split("\n");
-  // Already command-first? Leave the message alone — the CLI handles it.
+  // Already command-first? Leave the message alone — the CLI handles it. Only
+  // leading whitespace is shaved: the CLI wants the "/" to literally open the
+  // message, so " /goal" would otherwise pass this guard and expand nowhere.
   const first = COMMAND_LINE.exec(lines[0].trim());
-  if (first && known.has(first[1])) return text;
+  if (first && known.has(first[1])) return text.trimStart();
 
   for (let i = 0; i < lines.length; i++) {
     const m = COMMAND_LINE.exec(lines[i].trim());
@@ -45,6 +61,17 @@ export function hoistSlashCommand(text: string, known: ReadonlySet<string>): str
     // shape the CLI parses). Inline args win the same-line slot; the rest of
     // the message follows below and still reaches the model.
     return ownArgs ? `${cmd} ${ownArgs}\n${rest}` : `${cmd} ${rest}`;
+  }
+
+  // No command owns a line — take one out of the middle of a sentence. This is
+  // the shape the composer's own autocomplete produces: typing "/" mid-message
+  // opens the menu and inserts "/name " right there, so refusing to hoist it
+  // made the palette offer something the send path then ignored.
+  for (const m of text.matchAll(INLINE_COMMAND)) {
+    if (m.index === undefined || !known.has(m[1])) continue;
+    const rest = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
+    const cmd = `/${m[1]}`;
+    return rest ? `${cmd} ${rest}` : cmd;
   }
   return text;
 }

@@ -5480,13 +5480,13 @@ export class ChatView extends ItemView {
   }
 
   /** TUI parity: the CLI only expands /commands that OPEN the message, so a
-   *  known command typed mid/end-message ("do X\n/goal") is hoisted to the
-   *  front — but ONLY in the outbound payload. The bubble and history keep
-   *  what the user actually typed, the same contract as sendPrefix and
-   *  recall blocks (payload-only riders). */
+   *  known command OR skill typed anywhere ("sharpen this. /grilling") is
+   *  hoisted to the front — but ONLY in the outbound payload. The bubble and
+   *  history keep what the user actually typed, the same contract as
+   *  sendPrefix and recall blocks (payload-only riders). */
   private hoistOutbound(text: string): string {
     const caps = this.sessionCaps ?? this.plugin.lastSessionCaps;
-    return caps?.commands?.length ? hoistSlashCommand(text, new Set(caps.commands)) : text;
+    return hoistSlashCommand(text, new Set([...(caps?.commands ?? []), ...(caps?.skills ?? [])]));
   }
 
   /** Thin wrapper: claims `c.turnClaimed` synchronously, before any await, so
