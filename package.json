@@ -6,7 +6,8 @@
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
-		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"build": "bash scripts/contract.sh && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"contract": "bash scripts/contract.sh",
 		"release:check": "pnpm lint && pnpm test && pnpm build",
 		"typecheck": "tsc -noEmit -skipLibCheck",
 		"lint": "eslint src tests",

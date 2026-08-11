@@ -151,7 +151,7 @@ export class ChatListView extends ItemView {
     root.empty();
 
     const head = root.createDiv({ cls: "mva-chats-head" });
-    head.createSpan({ cls: "mva-chats-heading", text: "Chats" });
+    head.createSpan({ cls: "mva-chats-heading mva-type-eyebrow", text: "Chats" });
     const sort = head.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "Grouping" } });
     setIcon(sort, "arrow-down-narrow-wide");
     sort.onclick = (e) => this.groupingMenu(e);
@@ -469,7 +469,7 @@ export class ChatListView extends ItemView {
     const slug = spec.key.replace(/[^a-zA-Z0-9]+/g, "-");
     const headerId = `${this.uid}-h-${slug}`;
     const listId = `${this.uid}-l-${slug}`;
-    const header = sec.createDiv({ cls: "mva-chats-group-label", attr: { id: headerId } });
+    const header = sec.createDiv({ cls: "mva-chats-group-label mva-type-eyebrow", attr: { id: headerId } });
     // A rotation, not two icons: swapping chevron-right for chevron-down would
     // re-run setIcon on every toggle and lose the transition that makes the
     // gesture legible.
@@ -613,7 +613,7 @@ export class ChatListView extends ItemView {
 
     this.dotInto(row, r);
     const head = row.createDiv({ cls: "mva-chats-line" });
-    head.createSpan({ cls: "mva-chats-name", text: r.title });
+    head.createSpan({ cls: "mva-chats-name mva-type-title", text: r.title });
     // Markers trail the title, never precede it: a leading icon shifts the title
     // right on exactly the rows that have one, so the column breaks on the few
     // rows and holds on the many. Left gutter = live state, title column, then
@@ -624,7 +624,7 @@ export class ChatListView extends ItemView {
 
     // A conversation can be streaming its very first turn with no assistant text
     // to preview yet; omit the line rather than repeating the title under it.
-    if (r.preview) row.createDiv({ cls: "mva-chats-preview", text: r.preview });
+    if (r.preview) row.createDiv({ cls: "mva-chats-preview mva-type-body", text: r.preview });
 
     const meta = row.createDiv({ cls: "mva-chats-meta" });
     if (r.lane) meta.createSpan({ cls: "mva-chats-status", text: statusText(r) });
@@ -674,7 +674,7 @@ export class ChatListView extends ItemView {
     if (r.depth === 1) row.addClass("is-child");
     if (r.open) row.addClass("is-active");
     this.dotInto(row, r);
-    row.createSpan({ cls: "mva-chats-name", text: r.title });
+    row.createSpan({ cls: "mva-chats-name mva-type-body", text: r.title });
     // Same rule as the rich row: markers trail, so the title column holds for
     // every row whether or not it is pinned or carries a badge.
     if (r.pinned) setIcon(row.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");

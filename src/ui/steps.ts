@@ -32,7 +32,7 @@ export class StepsRun {
 
   constructor(parent: HTMLElement) {
     this.rootEl = parent.createDiv({ cls: "mva-steps" });
-    this.headEl = this.rootEl.createDiv({ cls: "mva-steps-head" });
+    this.headEl = this.rootEl.createDiv({ cls: "mva-steps-head mva-type-body" });
     setIcon(this.headEl.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
     this.statusEl = this.headEl.createSpan({ cls: "mva-steps-status" });
     this.labelEl = this.headEl.createSpan({ cls: "mva-steps-label", text: "" });
@@ -66,7 +66,7 @@ export class StepsRun {
     if (this.thinkEl) return;
     this.thinkRaw = "";
     const step = this.bodyEl.createDiv({ cls: "mva-step-think is-active" });
-    const head = step.createDiv({ cls: "mva-step-think-head" });
+    const head = step.createDiv({ cls: "mva-step-think-head mva-type-body" });
     setIcon(head.createSpan({ cls: "mva-reason-chevron" }), "chevron-right");
     this.thinkLabelEl = head.createSpan({ cls: "mva-step-think-label", text: "Thinking…" });
     clickable(head, () => step.toggleClass("is-collapsed", !step.hasClass("is-collapsed")));

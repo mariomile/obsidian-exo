@@ -321,7 +321,7 @@ export class Composer {
     // top-right corner (context/image rows above it move the textarea around).
     this.inputWrapEl = box.createDiv({ cls: "mva-inputwrap" });
     this.inputEl = this.inputWrapEl.createEl("textarea", {
-      cls: "mva-input",
+      cls: "mva-input mva-type-body",
       attr: { rows: "3", placeholder: "Message the agent…" },
     });
     this.expandBtn = this.inputWrapEl.createEl("button", {

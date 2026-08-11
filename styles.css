@@ -19,27 +19,158 @@ settings:
         format: px
 */
 
-/* Geometry & timing tokens live on :root (not .mva-root) so they resolve in
-   Obsidian Modals too — a Modal renders in `.modal-container`, OUTSIDE `.mva-root`,
-   where a var() scoped to `.mva-root` is undefined and radii silently collapse to
-   0. These are pure design constants; scoping them to the view was the bug. */
-:root {
-  --mva-r1: 6px;
-  --mva-r2: 9px;
-  --mva-r3: 13px;
-  --mva-t: 0.14s ease;
+/* ===== COSMOS BRIDGE START ===== */
+/* THE COSMOS BRIDGE — the one place in this file that names a theme token.
+
+   Before this block existed, 39 declarations scattered across the stylesheet
+   each re-derived their own Cosmos fallback chain by hand. Same token, seven
+   different fallbacks; changing one meant grepping for the other six and
+   hoping. Everything below resolves the chain ONCE
+
+       kit token  ->  theme token  ->  Obsidian's own variable
+
+   and publishes the result as an `--mva-` alias. Component rules consume the
+   aliases and nothing else — that rule is enforced by src/style-contract.test.ts,
+   which fails if any selector outside this block reads a theme token directly.
+
+   The seam is declared on `body`, and that is not a detail — it is the only
+   scope where the bridge actually bridges. Verified 2026-08-11 in a browser,
+   not assumed: Obsidian declares its own palette on `body` (inside its
+   `.theme-dark` / `.theme-light` blocks), and Cosmos declares EVERY token it
+   publishes on `body` or a `body.<flavour>` compound. A custom property is
+   substituted where it is DECLARED, so the same chain written on `:root` (the
+   `html` element, one level above) resolves against nothing on both sides: it
+   would take the Obsidian fallback under Cosmos, and resolve the dark palette
+   once and keep it under a light theme. An inert bridge that looks correct.
+   `body` also clears the reason `:root` was reached for in the first place: an
+   Obsidian Modal renders in `.modal-container`, OUTSIDE the view, so a var()
+   scoped to `.mva-root` is undefined there and radii silently collapse to 0
+   (real bug, 2026-07-09). `.modal-container` is a child of `body`, so the
+   modal case is covered either way. What must never happen is scoping these to
+   `.mva-root`. */
+body {
+  /* ---- surfaces: a 4-step luminosity ladder --------------------------------
+     0 is the canvas, 3 the theme's own raised surface; 1 and 2 are BUILT
+     between them with color-mix (design.md §4's card recipe), not picked by
+     eye. Under Cosmos the four rungs alias the theme's own luminosity ladder,
+     so Exo sits on the same steps as every other panel instead of inventing
+     near-misses of them.
+     Rung 2 is the hover step and is currently unclaimed on purpose: every
+     hover in this file spends Obsidian's own --background-modifier-hover,
+     which is translucent and therefore correct over any parent. Swapping a
+     solid mix under it would change how a row reads in the sidebar, where the
+     parent is not the canvas. The rung is published; nothing is forced onto it. */
+  --mva-surface-0: var(--mv-surface-0, var(--cosmos-surface-0, var(--background-primary)));
+  --mva-surface-3: var(--mv-surface-3, var(--cosmos-surface-3, var(--background-secondary)));
+  --mva-surface-1: var(--mv-surface-1, var(--cosmos-surface-1, color-mix(in srgb, var(--background-primary) 92%, var(--background-secondary))));
+  --mva-surface-2: var(--mv-surface-2, var(--cosmos-surface-2, color-mix(in srgb, var(--background-primary) 82%, var(--background-secondary))));
+  --mva-card-bg-hover: var(--mv-card-bg-hover, var(--cosmos-surface-card-hover, var(--background-modifier-hover)));
+  --mva-hairline: var(--mv-hairline, var(--cosmos-hairline, var(--background-modifier-border)));
+  --mva-ring: var(--mv-ring, var(--cosmos-ring, transparent));
+
+  /* ---- elevation: exactly two steps ---------------------------------------
+     Rest is what a card wears when it is simply there; lift is what a floating
+     surface wears when it is above the page. Two names, no third opinion. */
+  --mva-shadow-rest: var(--mv-card-rest, var(--cosmos-card-rest, var(--shadow-s)));
+  --mva-shadow-lift: var(--mv-card-lift, var(--cosmos-pop-shadow, var(--shadow-l)));
+
+  /* ---- geometry: concentric radii ------------------------------------------
+     Only the outer radius is a number. The inner two are what is left after
+     subtracting the physical inset that separates them, so a rounded thing
+     inside a rounded thing stays concentric by construction instead of by
+     three literals that drift apart the first time one is nudged.
+     Today: 13px outer, 9px base (13 - 4), 6px control (9 - 3) — the values
+     already in docs/design.md §2, now derived rather than repeated. */
+  --mva-r-inset: 4px;
+  --mva-r-inset-tight: 3px;
+  --mva-r3: var(--mv-r3, var(--cosmos-r3, 13px));
+  --mva-r2: max(0px, calc(var(--mva-r3) - var(--mva-r-inset)));
+  --mva-r1: max(0px, calc(var(--mva-r2) - var(--mva-r-inset-tight)));
+  /* Il raggio card segue quello della suite: le 7 famiglie di card di Exo si
+     arrotondavano a 9px mentre Masonry, Horizon e Bases stavano su un altro
+     valore. Nessun equivalente al livello tema, quindi la catena ha due anelli. */
+  --mva-card-radius: var(--mv-r-card, var(--mva-r2));
+  --mva-r-chip: var(--mv-r-chip, var(--cosmos-r-chip, var(--mva-r1)));
+  --mva-r-floating: var(--mv-r-floating, var(--cosmos-r-floating-surface, 8px));
+  --mva-control-h: var(--mv-control-h, var(--cosmos-control-h, 26px));
+  --mva-control-pad: var(--mv-control-pad, var(--cosmos-control-pad, 9px));
+
+  /* ---- timing --------------------------------------------------------------
+     --mva-t carries duration AND easing, because that is how every transition
+     in this file spends it. --mva-heartbeat is the ONE pulse rhythm: the file
+     used to breathe at 1.1s, 1.2s, 1.4s, 1.6s, 2s, 2.6s and 4.5s at the same
+     time, which reads as eight products in one pane. 1.6s is the working
+     indicator's rhythm, and the working indicator is the state Exo is FOR. */
+  --mva-t: var(--mv-t, var(--cosmos-t-fast, 0.14s)) ease;
+  --mva-t-base: var(--mv-t-base, var(--cosmos-t-base, 0.18s));
+  --mva-heartbeat: 1.6s;
   --mva-ease-out: var(--mv-lift, cubic-bezier(0.22, 1, 0.36, 1));
+
+  /* ---- type registers (docs/design.md §3) ---------------------------------
+     Three registers, no fourth. A. eyebrow = structural section headers,
+     uppercase and quiet — NEVER a form-field label. B. title = card and row
+     headings, tight tracking. C. body = everything you actually read, plus
+     form-field labels. Cosmos publishes the eyebrow recipe as its label
+     family, so a flavour that drops the uppercase reaches the whole suite at
+     once instead of leaving this pane shouting on its own. */
+  --mva-type-eyebrow-size: var(--mv-label-size, var(--cosmos-label-size, 11px));
+  --mva-type-eyebrow-weight: var(--mv-label-weight, var(--cosmos-label-weight, 600));
+  --mva-type-eyebrow-track: var(--mv-label-track, var(--cosmos-label-track, 0.05em));
+  --mva-type-eyebrow-case: var(--mv-label-transform, var(--cosmos-label-transform, uppercase));
+  --mva-type-eyebrow-color: var(--mv-label-color, var(--cosmos-label-color, var(--text-muted)));
+  --mva-type-title-size: var(--mv-title-size, var(--cosmos-title-size, var(--font-ui-small)));
+  --mva-type-title-weight: var(--mv-title-weight, var(--cosmos-title-weight, 650));
+  --mva-type-title-track: var(--mv-title-track, var(--cosmos-title-track, -0.015em));
+  --mva-type-body-size: var(--mv-body-size, var(--cosmos-body-size, var(--font-ui-small)));
+  --mva-type-body-size-sm: var(--font-ui-smaller);
+  --mva-type-body-weight: var(--mv-body-weight, var(--cosmos-body-weight, var(--font-normal, 400)));
+  --mva-type-body-track: var(--mv-body-track, var(--cosmos-body-track, normal));
+
+  /* ---- accent -------------------------------------------------------------
+     One accent, spent only where a decision is being made: the primary action,
+     the ring on the thing the keyboard will act on, a permission waiting for
+     an answer. --mva-glow is the same accent as light: it belongs to the
+     running turn and to nothing else (see §"identity moment" below). */
+  --mva-accent: var(--mv-accent, var(--cosmos-accent, var(--interactive-accent)));
+  --mva-glow: color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+}
+/* The Style Settings default stays on :root, one level ABOVE the seam. The
+   plugin writes the user's slider value to `body`; a default sitting on `body`
+   as well would race it in the cascade and could win by source order. */
+:root {
   --exo-font-size: 14px;
 }
+/* ===== COSMOS BRIDGE END ===== */
+
+/* The three type registers as classes. Declared here, above every component
+   rule, so a surface can still override a single axis locally — and so the
+   register a surface belongs to is a class on the element, readable in the
+   inspector, instead of five font declarations repeated per family. */
+.mva-type-eyebrow {
+  font-size: var(--mva-type-eyebrow-size);
+  font-weight: var(--mva-type-eyebrow-weight);
+  letter-spacing: var(--mva-type-eyebrow-track);
+  text-transform: var(--mva-type-eyebrow-case);
+  color: var(--mva-type-eyebrow-color);
+}
+.mva-type-title {
+  font-size: var(--mva-type-title-size);
+  font-weight: var(--mva-type-title-weight);
+  letter-spacing: var(--mva-type-title-track);
+  text-transform: none;
+}
+.mva-type-body {
+  font-size: var(--mva-type-body-size);
+  font-weight: var(--mva-type-body-weight);
+  letter-spacing: var(--mva-type-body-track);
+  text-transform: none;
+}
+
 .mva-root {
   --mva-brand: var(--interactive-accent);
   /* Shared card rhythm — one padding/radius/border across every card family
      (tool, permission, ask, capabilities) so they read as one system. */
   --mva-card-pad: 10px 12px;
-  /* Il raggio card segue quello della suite (--mv-r-card), con --mva-r2 come
-     fallback storico: le 7 famiglie di card di Exo si arrotondavano a 9px
-     mentre Masonry, Horizon e Bases stavano su un altro valore. */
-  --mva-card-radius: var(--mv-r-card, var(--mva-r2));
   --mva-card-border: 1px solid var(--background-modifier-border);
   /* Single reading-column cap shared by the transcript, the agents chip and the
      composer so they stay centered on the same axis at any pane width. */
@@ -61,9 +192,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 0;
 }
 
-/* Keyboard focus ring for every focusable control inside the view. */
+/* Keyboard focus ring for every focusable control inside the view — one of the
+   three places the accent is allowed to spend itself (it marks the thing the
+   next keystroke will act on, which is a decision point). */
 .mva-root :focus-visible {
-  outline: 2px solid var(--interactive-accent);
+  outline: 2px solid var(--mva-accent);
   outline-offset: 2px;
   border-radius: var(--mva-r1);
 }
@@ -223,7 +356,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    a UI has and two of them compete instead of informing. */
 .mva-tab-mark.is-streaming {
   background: var(--text-muted);
-  animation: mva-pulse 1.1s ease-in-out infinite;
+  animation: mva-pulse var(--mva-heartbeat) ease-in-out infinite;
 }
 /* Fill = finished, unseen. */
 .mva-tab-mark.is-unread {
@@ -648,7 +781,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 6px;
   border-radius: 999px;
   background: var(--mva-brand);
-  animation: mva-pulse 1.1s ease-in-out infinite;
+  animation: mva-pulse var(--mva-heartbeat) ease-in-out infinite;
 }
 .mva-recap-now-label {
   flex: 1;
@@ -744,7 +877,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-turn {
   display: flex;
   flex-direction: column;
-  animation: mva-pop var(--cosmos-t-base, 0.18s) ease-out;
+  animation: mva-pop var(--mva-t-base) ease-out;
 }
 .mva-user {
   align-items: flex-end;
@@ -812,8 +945,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 8px 10px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  /* subtle raised surface via color-mix (law 4), never a flat hard-coded fill */
-  background: color-mix(in srgb, var(--background-primary) 92%, var(--background-secondary));
+  /* Rung 1 of the surface ladder — a card at rest. The mix lives in the seam
+     now (law 4, never a flat hard-coded fill), so under Cosmos this lands on
+     the theme's own luminosity step instead of a near-miss of it. */
+  background: var(--mva-surface-1);
   text-align: left;
   max-width: min(420px, 100%);
 }
@@ -853,7 +988,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-rethink-proposal {
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  background: color-mix(in srgb, var(--background-primary) 92%, var(--background-secondary));
+  background: var(--mva-surface-1);
   padding: 10px 12px;
 }
 /* Eyebrow chip (register A) — muted at rest, no permanent fill. */
@@ -894,8 +1029,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
      45-75 comfortable measure); Cosmos has since pushed the editor to 24px,
      which no longer fits that measure in a narrow sidebar. Exo now reads at
      its own dedicated size (--exo-font-size, Style Settings → Exo), not tied
-     to the note editor or to the rest of the interface's UI scale. */
-  font-size: var(--exo-font-size, 14px);
+     to the note editor or to the rest of the interface's UI scale. Register C
+     (body) with its size slot overridden — the register still owns weight,
+     tracking and case; only the reading size is this surface's own call. */
+  --mva-type-body-size: var(--exo-font-size, 14px);
   /* Leading tracks Cosmos' intentional desktop/phone split (1.6 / 1.55)
      instead of pinning one number. Fallback = the pre-wave literal, so a
      Cosmos-less install renders exactly as before. */
@@ -1118,7 +1255,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 6px;
   border-radius: 50%;
   background: var(--text-faint);
-  animation: mva-pulse 1.1s ease-in-out infinite;
+  animation: mva-pulse var(--mva-heartbeat) ease-in-out infinite;
 }
 .mva-thinking-dot:nth-child(2) {
   animation-delay: 0.18s;
@@ -1192,7 +1329,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2, 8px);
-  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s));
+  box-shadow: var(--mva-shadow-rest);
   padding: 4px;
   z-index: var(--layer-popover, 30);
 }
@@ -1257,7 +1394,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   position: relative;
   display: flex;
   flex-direction: column;
-  background: var(--background-primary);
+  background: var(--mva-surface-0);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r3);
   transition: border-color var(--mva-t), box-shadow var(--mva-t);
@@ -1267,11 +1404,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-color: var(--background-modifier-border-hover);
 }
 /* The composer must never repaint on hover or focus — some themes tint
-   generic inputs/containers; pin every state to the resting surface. */
+   generic inputs/containers; pin every state to the resting surface, which is
+   rung 0 of the ladder: the canvas the whole pane sits on. */
 .mva-inputbox,
 .mva-inputbox:hover,
 .mva-inputbox:focus-within {
-  background: var(--background-primary);
+  background: var(--mva-surface-0);
 }
 .mva-inputbox .mva-input,
 .mva-inputbox .mva-input:hover,
@@ -1290,10 +1428,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   max-height: 260px;
   overflow-y: auto;
   padding: 4px;
-  background: var(--background-secondary);
+  background: var(--mva-surface-3);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--cosmos-pop-shadow, var(--shadow-l));
+  box-shadow: var(--mva-shadow-lift);
   z-index: 30;
   scrollbar-width: none;
 }
@@ -1727,10 +1865,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;
-  background: var(--background-secondary);
+  background: var(--mva-surface-3);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--cosmos-pop-shadow, var(--shadow-l));
+  box-shadow: var(--mva-shadow-lift);
   scrollbar-width: none;
 }
 .mva-sel-pop::-webkit-scrollbar {
@@ -2044,7 +2182,13 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 13px;
 }
 
-/* streaming caret — signals the agent is still writing */
+/* streaming caret — signals the agent is still writing, and one of exactly two
+   surfaces allowed to glow (the other is the working row). The running turn is
+   Exo's single identity moment: everything else in the pane stays monochrome
+   quiet, so when something IS lit you know without reading that work is live.
+   The light is the accent mixed down with color-mix — never a literal colour,
+   never a gradient — and it beats on the shared heartbeat, so caret and working
+   row breathe together instead of at two unrelated rates. */
 .mva-caret {
   display: inline-block;
   width: 2px;
@@ -2052,7 +2196,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   margin-left: 1px;
   vertical-align: text-bottom;
   background: var(--mva-brand, var(--interactive-accent));
-  animation: mva-blink 1s steps(2, start) infinite;
+  box-shadow: 0 0 6px var(--mva-glow);
+  animation: mva-blink var(--mva-heartbeat) steps(2, start) infinite;
 }
 
 /* clickable note target inside a tool card — the whole row is already
@@ -2077,11 +2222,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
      visibly re-flows the instant your message becomes a bubble. Follows
      .mva-bubble's --exo-font-size (Style Settings → Exo). The "~3 lines"
      intent below is re-derived at the new metrics
-     (3 x 14px x 1.55 = 65px of text + 13px of vertical padding). */
+     (3 x 14px x 1.55 = 65px of text + 13px of vertical padding). Register C,
+     same size slot as the bubble — that is what keeps the two identical. */
+  --mva-type-body-size: var(--exo-font-size, 14px);
   min-height: 78px;
   max-height: 200px;
   padding: 9px 11px 4px;
-  font-size: var(--exo-font-size, 14px);
   line-height: var(--line-height-normal, 1.55);
   color: var(--text-normal);
   background: transparent;
@@ -2210,7 +2356,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-radius: 50%;
   background: radial-gradient(circle, color-mix(in srgb, var(--mva-brand) 24%, transparent), transparent 68%);
   filter: blur(6px);
-  animation: mva-breathe 4.5s ease-in-out infinite;
+  animation: mva-breathe var(--mva-heartbeat) ease-in-out infinite;
 }
 .mva-empty-title {
   font-size: 18px;
@@ -2538,7 +2684,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 .mva-tool.is-running.is-collapsed .mva-tool-icon {
   color: var(--mva-brand, var(--interactive-accent));
-  animation: mva-pulse 1.2s ease-in-out infinite;
+  animation: mva-pulse var(--mva-heartbeat) ease-in-out infinite;
 }
 .mva-tool.is-ok.is-collapsed .mva-tool-icon {
   color: var(--text-muted);
@@ -2564,13 +2710,15 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-steps {
   margin: 4px 0;
 }
+/* Register C at its small step: a step header is a label you read, not a
+   structural eyebrow — uppercasing it would shout at every tool call. */
 .mva-steps-head {
+  --mva-type-body-size: var(--mva-type-body-size-sm);
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 2px 4px;
   border-radius: var(--radius-s);
-  font-size: var(--font-ui-smaller);
   color: var(--text-muted);
   cursor: pointer;
   transition: color var(--mva-t), background var(--mva-t);
@@ -2615,12 +2763,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 
 /* thinking step */
 .mva-step-think-head {
+  --mva-type-body-size: var(--mva-type-body-size-sm);
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 2px 4px;
   border-radius: var(--radius-s);
-  font-size: var(--font-ui-smaller);
   color: var(--text-muted);
   cursor: pointer;
   transition: color var(--mva-t), background var(--mva-t);
@@ -2880,6 +3028,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: color-mix(in srgb, var(--color-orange, #e0a341) 5%, var(--background-primary));
   padding: var(--mva-card-pad);
   font-size: 12.5px;
+}
+/* A permission still waiting for an answer is a decision point — the third and
+   last sanctioned accent spend. A hairline inset ring, not a fill: the card is
+   already caution-tinted, and stacking a second colour volume on it is how
+   permission alarm fatigue came back the first time. The ring goes as soon as
+   the card is resolved, so a settled transcript carries no live accent at all. */
+.mva-perm:not(.is-resolved) {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mva-accent) 16%, transparent);
 }
 .mva-perm-head {
   display: flex;
@@ -3194,9 +3350,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-btn:hover {
   background: var(--background-modifier-active-hover, var(--background-modifier-hover));
 }
+/* The primary action — the second of the three sanctioned accent spends. */
 .mva-btn-primary {
   color: var(--text-on-accent);
-  background: var(--interactive-accent);
+  background: var(--mva-accent);
   border-color: transparent;
 }
 .mva-btn-primary:hover {
@@ -3574,7 +3731,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
   /* Hover wash on the ring's inner disc — micro-feedback tier, so it rides the
      shared duration token (140ms with Cosmos, 120ms standalone). */
-  transition: background-color var(--cosmos-t-fast, 120ms) ease;
+  transition: background-color var(--mva-t);
 }
 .mva-ctx-ring:hover::after {
   background: var(--background-modifier-hover);
@@ -3597,7 +3754,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--cosmos-pop-shadow, var(--shadow-l));
+  box-shadow: var(--mva-shadow-lift);
 }
 .mva-ctx-pop-head,
 .mva-ctx-pop-value {
@@ -4459,7 +4616,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
-  .mva-caret { animation: none; opacity: 1; }
+  /* The identity glow collapses to nothing here, not just to "still". A frozen
+     glow is still a glow, and reduced motion is a request for less light on the
+     move, not for a permanent halo. Both surfaces stay perfectly legible: the
+     caret keeps its solid accent fill, the star its icon. */
+  .mva-caret { animation: none; opacity: 1; box-shadow: none; }
+  .mva-working-star { animation: none; filter: none; }
   .mva-steps .mva-tool.is-running .mva-tool-name,
   .mva-step-think.is-active .mva-step-think-label {
     animation: none;
@@ -4641,11 +4803,16 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   color: var(--text-muted);
   font-size: 12px;
 }
+/* The other half of the identity moment. The star is the only lit thing in a
+   settled-looking pane while a turn runs; the drop-shadow is the accent mixed
+   down, and the opacity beat carries the light with it, so the glow breathes on
+   the same heartbeat as the caret rather than sitting there as decoration. */
 .mva-working-star {
   display: inline-flex;
   width: 14px;
   height: 14px;
-  animation: mva-working-pulse 1.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 5px var(--mva-glow));
+  animation: mva-working-pulse var(--mva-heartbeat) ease-in-out infinite;
 }
 .mva-working-star svg {
   width: 14px;
@@ -4793,7 +4960,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-radius: var(--mva-r2);
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
-  box-shadow: var(--cosmos-pop-shadow, var(--shadow-l));
+  box-shadow: var(--mva-shadow-lift);
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -4936,7 +5103,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s, 0 4px 14px rgba(0, 0, 0, 0.18)));
+  box-shadow: var(--mva-shadow-rest);
 }
 .mva-inai-btn {
   display: inline-flex;
@@ -4972,7 +5139,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s, 0 6px 20px rgba(0, 0, 0, 0.2)));
+  box-shadow: var(--mva-shadow-rest);
 }
 .mva-inai-head {
   display: flex;
@@ -5098,7 +5265,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s, 0 6px 20px rgba(0, 0, 0, 0.2)));
+  box-shadow: var(--mva-shadow-rest);
 }
 .mva-inai-streamchip.is-shown,
 .mva-inai-actionbar.is-shown {
@@ -5362,10 +5529,14 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   align-items: center;
   gap: 5px;
 }
+/* Chrome, not prose: the chip's height is padding plus one line, stated as
+   such. It used to be spelled `line-height: 1.6` with zero vertical padding —
+   a reading rhythm doing a box's job, and the last one left in the file after
+   the §7 wave. Same 16px, said the way a chip means it. */
 .mva-board-chip {
   font-size: 10px;
-  line-height: 1.6;
-  padding: 0 6px;
+  line-height: 1;
+  padding: 3px 6px;
   border-radius: 999px;
   background: var(--background-modifier-hover);
   color: var(--text-muted);
@@ -5405,7 +5576,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border-radius: 50%;
   background: var(--interactive-accent);
   flex-shrink: 0;
-  animation: mva-board-pulse 1.4s ease-in-out infinite;
+  animation: mva-board-pulse var(--mva-heartbeat) ease-in-out infinite;
 }
 @keyframes mva-board-pulse {
   0%,
@@ -5600,7 +5771,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s);
   font-size: var(--font-ui-smaller); color: var(--text-muted); }
 .mva-ll-icon svg { width: 13px; height: 13px; color: var(--interactive-accent); }
-.mva-ll-icon.is-working svg { animation: mva-ll-pulse 1.2s ease-in-out infinite; }
+.mva-ll-icon.is-working svg { animation: mva-ll-pulse var(--mva-heartbeat) ease-in-out infinite; }
 .mva-ll-icon.is-ok svg { color: var(--color-green); }
 @keyframes mva-ll-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .mva-ll-icon.is-working svg { animation: none; } }
@@ -5794,9 +5965,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   min-width: 160px;
   padding: 6px;
   border: 1px solid var(--background-modifier-border, rgba(0, 0, 0, 0.1));
-  border-radius: var(--cosmos-r-floating-surface, 8px);
+  border-radius: var(--mva-r-floating);
   background: var(--background-primary, #fff);
-  box-shadow: var(--cosmos-pop-shadow, var(--shadow-s, 0 2px 8px rgba(0, 0, 0, 0.12)));
+  box-shadow: var(--mva-shadow-rest);
   font-size: var(--font-ui-small, 13px);
 }
 .exo-mention-popover-title {
@@ -6282,32 +6453,28 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   gap: 8px;
   padding: 6px 10px 4px;
 }
-/* Labels read from the kit's label family (--mv-label-*), so a Cosmos flavour
-   that turns tracking off, or drops the uppercase, reaches every header in the
-   suite at once instead of leaving this pane shouting on its own. Fallbacks are
-   the pre-kit values, so a Cosmos-less install renders byte-identically. */
+/* The pane heading and the section headers are both register A (design.md §3):
+   structural labels, not content. They wear the eyebrow class and declare no
+   type of their own, so a Cosmos flavour that turns tracking off, or drops the
+   uppercase, reaches every header in the suite at once through the seam instead
+   of leaving this pane shouting on its own. */
 .mva-chats-heading {
   flex: 1;
-  font-size: var(--mv-label-size, var(--font-ui-small));
-  font-weight: var(--mv-label-weight, var(--font-semibold));
-  color: var(--mv-label-color, var(--text-muted));
-  letter-spacing: var(--mv-label-track, 0.04em);
-  text-transform: var(--mv-label-transform, uppercase);
 }
 .mva-chats-search {
   margin: 0 10px 6px;
-  min-height: var(--mv-control-h, 26px);
-  padding: 5px var(--mv-control-pad, 9px);
+  min-height: var(--mva-control-h);
+  padding: 5px var(--mva-control-pad);
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mv-r1, var(--mva-r1, 6px));
+  border-radius: var(--mva-r1);
   background: var(--background-modifier-form-field);
   color: var(--text-normal);
   font-size: var(--font-ui-small);
-  transition: border-color var(--mv-t, var(--mva-t)), box-shadow var(--mv-t, var(--mva-t));
+  transition: border-color var(--mva-t), box-shadow var(--mva-t);
 }
 .mva-chats-search:focus {
   border-color: var(--interactive-accent);
-  box-shadow: 0 0 0 2px var(--mv-ring, transparent);
+  box-shadow: 0 0 0 2px var(--mva-ring);
   outline: none;
 }
 .mva-chats-body {
@@ -6338,12 +6505,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   gap: 6px;
   padding: 2px 9px 4px;
   cursor: pointer;
-  color: var(--mv-label-color, var(--text-faint));
-  font-size: var(--mv-label-size, var(--font-ui-smaller));
-  font-weight: var(--mv-label-weight, inherit);
-  letter-spacing: var(--mv-label-track, 0.04em);
-  text-transform: var(--mv-label-transform, uppercase);
-  transition: color var(--mv-t, var(--mva-t));
+  /* Register A owns the TYPE; the pane still owns its colour hierarchy. Section
+     headers sit one rung below the pane heading on the text ladder (faint vs
+     muted) — without that, heading and section label render identically and the
+     pane loses its top level. Colour is the only axis overridden here. */
+  color: var(--text-faint);
+  transition: color var(--mva-t);
 }
 .mva-chats-group-label:hover { color: var(--text-muted); }
 .mva-chats-group-name { flex-shrink: 0; }
@@ -6352,7 +6519,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-group-chevron {
   display: inline-flex;
   flex-shrink: 0;
-  transition: transform var(--mv-t, var(--mva-t));
+  transition: transform var(--mva-t);
 }
 .mva-chats-group-chevron svg { width: 12px; height: 12px; }
 .mva-chats-group:not(.is-collapsed) .mva-chats-group-chevron { transform: rotate(90deg); }
@@ -6378,7 +6545,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--mv-hairline, var(--background-modifier-border));
+  background: var(--mva-hairline);
 }
 .mva-chats-group-list { display: flex; flex-direction: column; }
 
@@ -6386,12 +6553,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    and active are the only painted states. */
 .mva-chats-row {
   position: relative;
-  border-radius: var(--mv-r1, var(--mva-r1, 6px));
+  border-radius: var(--mva-r1);
   background: transparent;
   cursor: pointer;
-  transition: background var(--mv-t, var(--mva-t));
+  transition: background var(--mva-t);
 }
-.mva-chats-row:hover { background: var(--mv-card-bg-hover, var(--background-modifier-hover)); }
+.mva-chats-row:hover { background: var(--mva-card-bg-hover); }
 /* The keyboard cursor is a stronger fill than hover, because it is the thing
    Enter will act on and it has to win against a pointer resting elsewhere. */
 .mva-chats-row.is-cursor { background: var(--background-modifier-active-hover); }
@@ -6436,7 +6603,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 6px;
   height: 6px;
   background: var(--interactive-accent);
-  animation: mva-chats-dot-pulse 2.6s ease-in-out infinite;
+  animation: mva-chats-dot-pulse var(--mva-heartbeat) ease-in-out infinite;
 }
 /* Needs you — a RING: an open shape reads as unfinished, and it is the largest
    of the three because it is the only one asking for something. */
@@ -6473,9 +6640,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-row.is-rich { padding: 7px 9px 7px 20px; }
 .mva-chats-line { display: flex; align-items: baseline; gap: 6px; }
 .mva-chats-preview {
+  --mva-type-body-size: var(--mva-type-body-size-sm);
   margin-top: 1px;
   color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
   line-height: var(--line-height-tight, 1.3);
   overflow: hidden;
   display: -webkit-box;
@@ -6496,7 +6663,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   /* The only genuinely changing thing on screen; a slow breath says "running"
      without a spinner competing with the text. Killed by the blanket
      prefers-reduced-motion block. */
-  animation: mva-chats-breathe 2s ease-in-out infinite;
+  animation: mva-chats-breathe var(--mva-heartbeat) ease-in-out infinite;
 }
 .mva-chats-row.is-needs-input .mva-chats-status { color: var(--color-orange); animation: none; }
 .mva-chats-status.is-unseen { color: var(--color-green); animation: none; }
@@ -6505,7 +6672,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-count {
   margin-left: auto;
   padding: 0 5px;
-  border-radius: var(--mv-r-chip, var(--mva-r1, 6px));
+  border-radius: var(--mva-r-chip);
   background: var(--background-modifier-border);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -6531,11 +6698,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Register B: a working-set row IS a card title. Weight and tracking come from
+   the register; only the colour and the truncation are this row's business. */
 .mva-chats-row.is-rich .mva-chats-name {
   flex: 1;
   min-width: 0;
   color: var(--text-normal);
-  font-weight: var(--font-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6571,10 +6739,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-size: var(--font-ui-smaller);
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  transition: color var(--mv-t, var(--mva-t));
+  transition: color var(--mva-t);
 }
 .mva-chats-kids:hover { color: var(--text-muted); }
-.mva-chats-kids-chevron { display: inline-flex; transition: transform var(--mv-t, var(--mva-t)); }
+.mva-chats-kids-chevron { display: inline-flex; transition: transform var(--mva-t); }
 /* 10px against the section chevron's 12: subordinate at a glance, without
    spending a second shape on saying so. */
 .mva-chats-kids-chevron svg { width: 10px; height: 10px; }
@@ -6607,7 +6775,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 100%;
   padding: 6px 9px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--mv-r1, var(--mva-r1, 6px));
+  border-radius: var(--mva-r1);
   background: var(--background-modifier-form-field);
   color: var(--text-normal);
 }

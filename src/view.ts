@@ -2721,7 +2721,7 @@ export class ChatView extends ItemView {
       if (m.role === "user") {
         lastUser = m.text;
         const el = c.listEl.createDiv({ cls: "mva-turn mva-user" });
-        void MarkdownRenderer.render(this.app, m.text, el.createDiv({ cls: "mva-bubble markdown-rendered" }), "", this);
+        void MarkdownRenderer.render(this.app, m.text, el.createDiv({ cls: "mva-bubble mva-type-body markdown-rendered" }), "", this);
         this.appendMsgTime(el, m.at);
       } else {
         const el = c.listEl.createDiv({ cls: "mva-turn mva-assistant" });
@@ -2736,7 +2736,7 @@ export class ChatView extends ItemView {
         for (const s of m.segments) {
           if (s.t === "text") {
             flushRun();
-            void MarkdownRenderer.render(this.app, s.md, body.createDiv({ cls: "mva-bubble markdown-rendered" }), "", this);
+            void MarkdownRenderer.render(this.app, s.md, body.createDiv({ cls: "mva-bubble mva-type-body markdown-rendered" }), "", this);
             full += s.md;
           } else if (s.t === "error") {
             flushRun();
@@ -3294,7 +3294,7 @@ export class ChatView extends ItemView {
     const at = Date.now();
     c.messages.push({ role: "user", text, at });
     const el = c.listEl.createDiv({ cls: "mva-turn mva-user" });
-    const bubble = el.createDiv({ cls: "mva-bubble" });
+    const bubble = el.createDiv({ cls: "mva-bubble mva-type-body" });
     if (images?.length) {
       const strip = bubble.createDiv({ cls: "mva-bubble-images" });
       for (const img of images) {
@@ -3537,7 +3537,7 @@ export class ChatView extends ItemView {
     this.dropThinking(ctx);
     if (!ctx.curTextEl) {
       this.closeStepsRun(ctx);
-      ctx.curTextEl = ctx.bodyEl.createDiv({ cls: "mva-bubble markdown-rendered" });
+      ctx.curTextEl = ctx.bodyEl.createDiv({ cls: "mva-bubble mva-type-body markdown-rendered" });
       ctx.curRaw = "";
       ctx.stableLen = 0;
       ctx.tailEl = null;

@@ -279,3 +279,229 @@ describe('mv-kit style contract', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// =========================================================================
+// The Cosmos Bridge — one token seam instead of scattered fallbacks
+// (docs/plans/2026-08-11-chat-cosmos-alignment-plan.md, Phases 1-3)
+// =========================================================================
+
+const SEAM_START = '/* ===== COSMOS BRIDGE START ===== */';
+const SEAM_END = '/* ===== COSMOS BRIDGE END ===== */';
+
+/** The seam block: the ONE place in the stylesheet allowed to name a Cosmos
+ * token. Everything else consumes the `--mva-` aliases it publishes. */
+function seam(): string {
+  const from = css.indexOf(SEAM_START);
+  const to = css.indexOf(SEAM_END);
+  expect(from, 'seam start sentinel missing from styles.css').toBeGreaterThan(-1);
+  expect(to, 'seam end sentinel missing from styles.css').toBeGreaterThan(from);
+  return css.slice(from, to + SEAM_END.length);
+}
+
+/** Everything outside the seam — the component layer. */
+function outsideSeam(): string {
+  const from = css.indexOf(SEAM_START);
+  const to = css.indexOf(SEAM_END);
+  return css.slice(0, from) + css.slice(to + SEAM_END.length);
+}
+
+describe('Cosmos bridge — Phase 1 token seam', () => {
+  it('the seam sits near the top of the stylesheet', () => {
+    // "Near the top": before any component rule, so a reader meets the token
+    // vocabulary before the first `.mva-` selector that spends it. The
+    // @settings block and the file header comment are the only things above it.
+    const seamStart = css.indexOf(SEAM_START);
+    const firstComponentRule = css.search(/^\.mva-/m);
+    expect(seamStart).toBeGreaterThan(-1);
+    expect(seamStart).toBeLessThan(firstComponentRule);
+  });
+
+  it('no rule outside the seam reads a Cosmos token directly', () => {
+    // The whole point of the seam: `--mv-` / `--cosmos-` names resolve ONCE.
+    // A component that reaches for one directly re-opens the 39-fallback
+    // problem the seam exists to close.
+    const offenders = stripComments(outsideSeam())
+      .split('\n')
+      .map((line, idx) => ({ line: line.trim(), n: idx + 1 }))
+      .filter(({ line }) => /var\(\s*--(?:mv|cosmos)-/.test(line));
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('every Cosmos reference inside the seam is a full resolution chain', () => {
+    // The chain is `--mv-x` → `--cosmos-x` → Obsidian fallback. A bare
+    // `var(--mv-x)` with no fallback silently un-styles the surface on a
+    // Cosmos-less install, which is exactly the regression the seam prevents.
+    const body = stripComments(seam());
+    const offenders: string[] = [];
+    for (const m of body.matchAll(/var\(\s*--(?:mv|cosmos)-[\w-]+\s*([,)])/g)) {
+      if (m[1] !== ',') offenders.push(m[0]);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('§1 surfaces: a 4-step ladder, color-mix based, aliased to Cosmos', () => {
+    const body = stripComments(seam());
+    for (const n of [0, 1, 2, 3]) {
+      const decl = body.match(new RegExp(`--mva-surface-${n}\\s*:[^;]+;`))?.[0];
+      expect(decl, `--mva-surface-${n} missing from the seam`).toBeTruthy();
+      expect(decl).toMatch(/var\(\s*--cosmos-surface-/);
+    }
+    // The middle rungs are BUILT (color-mix from Obsidian vars), not picked:
+    // 0 and 3 are the theme's own two surfaces, 1 and 2 the blend between them.
+    expect(body).toMatch(/--mva-surface-1\s*:[^;]*color-mix\(in srgb, var\(--background-primary\)/);
+    expect(body).toMatch(/--mva-surface-2\s*:[^;]*color-mix\(in srgb, var\(--background-primary\)/);
+  });
+
+  it('§1 elevation: the rest/lift pair aliases the kit card shadows', () => {
+    const body = stripComments(seam());
+    expect(body).toMatch(/--mva-shadow-rest\s*:\s*var\(\s*--mv-card-rest\s*,/);
+    expect(body).toMatch(/--mva-shadow-lift\s*:\s*var\(\s*--mv-card-lift\s*,/);
+  });
+
+  it('§1 radii are concentric by construction, not three loose numbers', () => {
+    // Inner = outer − inset, as a calc(). Three independent literals is the
+    // failure mode: they drift apart the first time one of them is nudged.
+    const body = stripComments(seam());
+    expect(body).toMatch(/--mva-r2\s*:[^;]*calc\([^;]*var\(--mva-r3\)[^;]*var\(--mva-r-inset\)/);
+    expect(body).toMatch(/--mva-r1\s*:[^;]*calc\([^;]*var\(--mva-r2\)[^;]*var\(--mva-r-inset/);
+    // …and only r3 carries a number of its own.
+    expect(body).not.toMatch(/--mva-r1\s*:\s*\d/);
+    expect(body).not.toMatch(/--mva-r2\s*:\s*\d/);
+  });
+
+  it('§1 one heartbeat: no rule declares its own pulse duration', () => {
+    // Nine unrelated rhythms (1.1s / 1.2s / 1.4s / 1.6s / 2s / 2.6s / 4.5s / 1s)
+    // read as eight different products breathing at once. One token, one pulse.
+    const body = stripComments(seam());
+    expect(body).toMatch(/--mva-heartbeat\s*:\s*[\d.]+m?s\s*;/);
+
+    // Every animation on a pulse-family keyframe must spend the token.
+    const PULSE_KEYFRAMES = /mva-(pulse|blink|breathe|working-pulse|board-pulse|ll-pulse|chats-dot-pulse|chats-breathe)\b/;
+    const offenders = stripComments(css)
+      .split('\n')
+      .map((line, idx) => ({ line: line.trim(), n: idx + 1 }))
+      .filter(({ line }) => /animation:/.test(line) && PULSE_KEYFRAMES.test(line))
+      .filter(({ line }) => !line.includes('var(--mva-heartbeat)'));
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('§1 the seam declares each alias exactly once', () => {
+    // A token defined twice is a token with two meanings. The seam is a
+    // vocabulary, and a vocabulary has one entry per word.
+    const body = stripComments(seam());
+    const counts = new Map<string, number>();
+    for (const m of body.matchAll(/(--mva-[\w-]+)\s*:/g)) {
+      counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
+    }
+    const dups = [...counts.entries()].filter(([, n]) => n > 1).map(([k]) => k);
+    expect(dups).toEqual([]);
+  });
+});
+
+describe('Cosmos bridge — Phase 2 type registers', () => {
+  it('§2 the three registers exist as tokens with size, weight and tracking', () => {
+    const body = stripComments(seam());
+    for (const register of ['eyebrow', 'title', 'body']) {
+      for (const axis of ['size', 'weight', 'track']) {
+        expect(
+          body,
+          `--mva-type-${register}-${axis} missing from the seam`,
+        ).toMatch(new RegExp(`--mva-type-${register}-${axis}\\s*:`));
+      }
+    }
+  });
+
+  it('§2 one class per register, and each spends its own tokens', () => {
+    const rules = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+      selector: m[1].replace(/\s+/g, ' ').trim(),
+      body: m[2],
+    }));
+    for (const register of ['eyebrow', 'title', 'body']) {
+      const rule = rules.find((r) => r.selector === `.mva-type-${register}`);
+      expect(rule, `.mva-type-${register} class missing`).toBeTruthy();
+      expect(rule?.body).toMatch(new RegExp(`font-size:\\s*var\\(--mva-type-${register}-size\\)`));
+      expect(rule?.body).toMatch(new RegExp(`font-weight:\\s*var\\(--mva-type-${register}-weight\\)`));
+      expect(rule?.body).toMatch(new RegExp(`letter-spacing:\\s*var\\(--mva-type-${register}-track\\)`));
+    }
+  });
+
+  it('§2 the eyebrow register never lands on a form-field label (design.md §3)', () => {
+    // design.md §3 + §7 anti-patterns: UPPERCASE eyebrows on form fields is the
+    // single most-repeated register mistake in the suite. Form labels are
+    // register C. Scanned in the TS that builds the DOM, not in the CSS.
+    const src = readFileSync(new URL('./ui/chat-list-view.ts', import.meta.url), 'utf8');
+    void src; // keeps the import path honest even if the scan below moves.
+    const FORM_LABEL_CLASSES = ['mva-pv-label', 'mva-task-modal-label', 'mva-auto-label'];
+    const files = ['./ui/chat-list-view.ts', './ui/composer.ts', './ui/steps.ts', './view.ts'];
+    const offenders: string[] = [];
+    for (const f of files) {
+      const text = readFileSync(new URL(f, import.meta.url), 'utf8');
+      for (const line of text.split('\n')) {
+        if (!line.includes('mva-type-eyebrow')) continue;
+        if (FORM_LABEL_CLASSES.some((c) => line.includes(c))) offenders.push(`${f}: ${line.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('Cosmos bridge — Phase 3 the running state is the identity moment', () => {
+  it('§3 the glow is a color-mix on the accent, never a literal, never a gradient', () => {
+    const body = stripComments(seam());
+    const decl = body.match(/--mva-glow\s*:[^;]+;/)?.[0];
+    expect(decl, '--mva-glow missing from the seam').toBeTruthy();
+    expect(decl).toMatch(/color-mix\(in srgb, var\(--interactive-accent\)/);
+    expect(decl).not.toMatch(/gradient/);
+    expect(decl).not.toMatch(/#[0-9a-fA-F]{3,8}/);
+  });
+
+  it('§3 only the working row and the caret carry the glow', () => {
+    const rules = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .map((m) => ({ selector: m[1].replace(/\s+/g, ' ').trim(), body: m[2] }))
+      .filter((r) => r.body.includes('var(--mva-glow)'));
+    const ALLOWED = new Set(['.mva-working-star', '.mva-caret', '50%']);
+    const offenders = rules.map((r) => r.selector).filter((s) => !ALLOWED.has(s));
+    expect(offenders).toEqual([]);
+  });
+
+  it('§3 the glow beats on the Phase 1 heartbeat and dies under reduced motion', () => {
+    const code = stripComments(css);
+    // The two glowing surfaces animate on the shared token, not their own timing.
+    expect(code).toMatch(/\.mva-working-star\s*\{[^}]*animation:[^;]*var\(--mva-heartbeat\)/);
+    expect(code).toMatch(/\.mva-caret\s*\{[^}]*animation:[^;]*var\(--mva-heartbeat\)/);
+    // …and the reduced-motion block zeroes the glow itself, not just the motion:
+    // a frozen glow is still a glow.
+    const reduced = code.slice(code.indexOf('@media (prefers-reduced-motion: reduce)'));
+    expect(reduced).toMatch(/\.mva-caret\s*\{[^}]*box-shadow:\s*none/);
+    expect(reduced).toMatch(/\.mva-working-star\s*\{[^}]*filter:\s*none/);
+  });
+
+  it('§3 --mva-accent exists and is spent only at decision points', () => {
+    const body = stripComments(seam());
+    expect(body).toMatch(/--mva-accent\s*:/);
+    const rules = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .map((m) => ({ selector: m[1].replace(/\s+/g, ' ').trim(), body: m[2] }))
+      .filter((r) => r.body.includes('var(--mva-accent)'));
+    // Primary action, active/focus ring, pending approval. Nothing decorative.
+    const ALLOWED = new Set([
+      '.mva-btn-primary',
+      '.mva-root :focus-visible',
+      // "Pending approval" is the permission card BEFORE it is answered — the
+      // renderer stamps `is-resolved` on it the moment a verdict lands, so the
+      // ring lives exactly as long as the decision does.
+      '.mva-perm:not(.is-resolved)',
+    ]);
+    const offenders = rules.map((r) => r.selector).filter((s) => !ALLOWED.has(s));
+    expect(offenders).toEqual([]);
+    expect(rules.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('§3 provider brand colours never appear in the stylesheet as brand fills', () => {
+    // The two brand accents are identity DOTS, applied from the provider
+    // adapters (`brandColor`) onto a dot element — never a surface fill, and
+    // never a literal in the stylesheet.
+    expect(stripComments(css)).not.toMatch(/#d97757/i);
+  });
+});

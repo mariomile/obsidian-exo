@@ -1006,3 +1006,83 @@ nessuna di queste è stata toccata nel codice.
   composer height animation at 1643, outline-tick width animation at 3984) are
   **untouched** by this wave — they are §3/§6 carried-forward items, not §7
   reading-rhythm issues, and none of them sits on a line this wave edited.
+
+---
+
+## Le sei proposte `.mva-bubble` — verdetti (ondata 2026-08-11, Cosmos Bridge)
+
+Le sei "Proposte per Mario" qui sopra erano rimaste aperte: osservazioni di
+gusto, nessuna applicata. La fase 2 del piano
+`docs/plans/2026-08-11-chat-cosmos-alignment-plan.md` le chiude tutte e sei in
+una sola seduta. Quattro erano già state decise dai fatti — le ondate
+successive al §7 le hanno risolte nel codice senza scrivere il verdetto qui, e
+questo è il verdetto mancante. Due richiedevano una decisione vera, e la
+trovano adesso.
+
+| # | Proposta | Verdetto | Dov'è |
+|---|---|---|---|
+| 1 | Chat prose size — 14px fisso vs `--font-text-size` | **adottata l'alternativa conservativa** | `.mva-bubble` |
+| 2 | Paragraph gap — `0.5em` vs `--p-spacing` | **adottata** | `.mva-bubble p` |
+| 3 | Heading ramp della bolla | **tenuta, e ora motivata** | `.mva-bubble h1…h6` |
+| 4 | Composer più stretto della bolla | **allineati** | `.mva-input` |
+| 5 | Selettori morti `.mva-inai-stream` / `-cont` / `-diff` | **rimossi** | — |
+| 6 | `.mva-board-chip` a `line-height: 1.6` | **sostituito da un'altezza esplicita** | `.mva-board-chip` |
+
+**1 — Chat prose size: adottata l'alternativa conservativa, non quella
+letterale.** Il §7 chiedeva `var(--font-text-size)`; la proposta stessa offriva
+come alternativa "un controllo Style Settings con default 14px". È quella che
+ha vinto, ed è la scelta giusta per il motivo che il §7 non poteva vedere:
+Cosmos ha nel frattempo portato l'editor a 24px, e a 24px una colonna di
+sidebar da 400px esce dalla misura comoda 45–75 caratteri. La bolla legge da
+`--exo-font-size` (Style Settings → Exo, 10–22px), disaccoppiata dalla nota
+accanto per decisione, non per dimenticanza. Questa ondata non la cambia: la
+sposta sullo slot dimensione del registro C, che è la stessa cosa detta nel
+vocabolario nuovo.
+
+**2 — Paragraph gap: adottata.** `.mva-bubble p` sta su `var(--p-spacing, 1rem)`.
+Il dubbio della proposta era che raddoppiare il respiro fosse "un cambio di
+ritmo vero, non una coerenza": lo era, ed è il ritmo giusto — a `0.5em` (≈7px)
+i paragrafi di una risposta strutturata correvano insieme. È lo stesso respiro
+della nota di fianco.
+
+**3 — Heading ramp: tenuta.** 1.5 / 1.3 / 1.15 / 1.02 / 0.92em restano. La
+proposta segnalava di rivederla "se un giorno il punto 1 alza il corpo a 16px":
+il punto 1 non ha alzato il corpo, l'ha reso regolabile, e questo rafforza la
+ramp invece di indebolirla. Essendo in `em`, scala con `--exo-font-size` da sola:
+a 22px un h1 resta proporzionato, mentre la scala Obsidian (1.618) darebbe un h1
+da 35px dentro una colonna di sidebar. Una scala tipografica propria per una
+colonna stretta è una scelta, non una deriva — ed è l'unico punto in cui Exo ne
+ha una.
+
+**4 — Composer e bolla: allineati.** `.mva-input` e `.mva-bubble` condividono
+ora sia la dimensione (`--exo-font-size`) sia l'interlinea
+(`var(--line-height-normal, 1.55)`). Il contro citato dalla proposta — "il
+composer è alto ~3 righe e a 1.6 cresce" — è stato pagato esplicitamente:
+`min-height` ricalcolata a 78px sulle nuove metriche. Quello che scrivi e
+quello che rileggi un istante dopo sono lo stesso testo, e adesso lo sembrano.
+
+**5 — Selettori morti: rimossi.** `.mva-inai-stream`, `.mva-inai-cont`,
+`.mva-inai-diff` non esistono più in `styles.css`. Le classi vive dell'inline-AI
+sono `…-streamchip` / `…-streamtext` / `…-input` / `…-chip`.
+
+**6 — Chip line-height: sostituito da un'altezza esplicita.** Era l'unico pezzo
+di chrome rimasto con un'interlinea da prosa. `line-height: 1.6` + `padding: 0 6px`
+diventa `line-height: 1` + `padding: 3px 6px`: **16px prima, 16px dopo**, zero
+delta visivo, ma l'altezza del chip ora è dichiarata come altezza invece che
+ottenuta di rimbalzo da un ritmo di lettura. Era esattamente la condizione posta
+dalla proposta ("se un domani il chip prende un padding verticale, quel 1.6 va
+sostituito"), e il padding verticale è arrivato con questa riga.
+
+### Cosa cambia nel contratto
+
+- I tre registri tipografici del `docs/design.md` §3 sono adesso token
+  (`--mva-type-eyebrow-*` / `-title-*` / `-body-*`) più una classe per registro,
+  dichiarati nel seam Cosmos in cima a `styles.css`. Le superfici della chat
+  (bolla, composer, righe di sidebar, header degli step) portano la classe e non
+  dichiarano più tipo per conto proprio.
+- Il registro A (eyebrow) resta vietato sulle label dei campi di form: è la
+  regola §3 e ha una sua assertion in `src/style-contract.test.ts`.
+- La normalizzazione di massa dei 15 eyebrow che questo documento aveva **waived**
+  più sopra resta waived: questa ondata tocca solo le superfici della chat
+  nominate dal piano (l'intestazione del pannello e le testate di sezione della
+  sidebar), non gallery, board, recap o Connections.

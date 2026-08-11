@@ -57,6 +57,24 @@ Getting the register wrong is the single most common mistake (it's what made the
 
 **C. Body & field labels.** Sentence case, native `--font-ui-*` sizes (smaller `~11px`, small `~12–13px`, medium `~14px`), normal weight. **Form-field labels use register C**, not A: `var(--font-ui-smaller)`, `var(--text-muted)`, `4px` bottom margin — this is the `.mva-pv-label` / `.mva-task-modal-label` pattern in Exo. Numbers that align in columns (scores, counts, dates) add `font-variant-numeric: tabular-nums`.
 
+### The registers as tokens (Exo, 2026-08-11)
+
+Exo stopped describing the three registers and started shipping them. Each one is a set of tokens declared once in the Cosmos bridge at the top of `styles.css`, plus one class that spends them:
+
+| Register | Tokens | Class |
+|---|---|---|
+| A. Eyebrow | `--mva-type-eyebrow-size` / `-weight` / `-track` / `-case` / `-color` | `.mva-type-eyebrow` |
+| B. Title | `--mva-type-title-size` / `-weight` / `-track` | `.mva-type-title` |
+| C. Body | `--mva-type-body-size` / `-size-sm` / `-weight` / `-track` | `.mva-type-body` |
+
+Three things follow from that, and they are the point:
+
+- **A surface declares its register, not its type.** The chat bubble, the composer, the sidebar rows and the step headers carry the class and declare no `font-size` / `font-weight` / `letter-spacing` of their own. What you see in the inspector is the register, in words.
+- **The size slot is the only local call.** A surface that genuinely owns its size overrides the token, not the property: `.mva-bubble { --mva-type-body-size: var(--exo-font-size, 14px); }`. Register C keeps a second step, `--mva-type-body-size-sm`, for the small chrome slot (previews, step headers) — the same register, one rung down.
+- **Register A resolves through Cosmos.** The eyebrow tokens chain through the theme's label family, so a Cosmos flavour that drops the uppercase or flattens the tracking reaches every eyebrow in the suite at once, instead of leaving one pane shouting on its own.
+
+`src/style-contract.test.ts` enforces two of these: that each class spends its own tokens, and that register A never lands on a form-field label (§7's most-repeated anti-pattern). Registers are not tokenized outside Exo yet — the other repos still inline the recipes above.
+
 ---
 
 ## 4. Color
@@ -105,7 +123,7 @@ Never a native `<select>` (its value clips and it ignores the theme). Use a chip
 Sonar's search input takes law 3 to the extreme: fully flat, `!important` resets on `:focus`/`:focus-within` to defeat theme rings — right for a spotlight field, overkill for a normal form.
 
 **Modal gotcha (learned 2026-07-09).** An Obsidian `Modal` renders in `.modal-container`, *outside* `.mva-root` — two things break there that don't inside the view:
-1. **Feature-scoped tokens are undefined.** `--mva-r1/r2/r3` and the timing tokens must live on `:root`, not `.mva-root`, or `var(--mva-r2)` resolves to empty in a modal and radii silently collapse to `0`. (Fixed by hoisting the geometry/timing constants to `:root`.)
+1. **Feature-scoped tokens are undefined.** `--mva-r1/r2/r3` and the timing tokens must never live on `.mva-root`, or `var(--mva-r2)` resolves to empty in a modal and radii silently collapse to `0`. Hoist them to an ancestor — and the right ancestor is **`body`, not `:root`** (learned 2026-08-11, measured in a browser). A custom property is substituted where it is *declared*, and both Obsidian's palette and every Cosmos token are declared on `body`. A chain written on `:root` (the `html` element, one level up) therefore resolves against nothing: it takes the fallback even under Cosmos, and it resolves the dark palette once and keeps it under a light theme. `.modal-container` is a child of `body`, so `body` fixes the modal case too. Pure constants with no theme or kit input (Exo's `--exo-font-size` Style Settings default) are the exception and stay on `:root`, above the `body` block Style Settings writes to.
 2. **The theme outranks the bare recipe classes.** The active theme (e.g. Cosmos) styles `.modal input/textarea/button` at specificity `0,1,1`, beating `.mva-pv-input` / `.mva-btn` (`0,1,0`) — and it styles `input` and `textarea` *differently*, so the two visibly diverge (one gets a fill, the other doesn't). Re-assert the recipe's surface scoped to `.modal-container .mva-pv-input` / `.modal-container .mva-btn*` (`0,2,0`), using the same tokens — enforcement, not a fork. Do this once at the canonical level so every modal (prompt-vars, task modal, …) inherits the fix.
 
 ### Card — the shared grid card (Masonry / TabX are near-identical twins)
