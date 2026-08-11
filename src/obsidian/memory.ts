@@ -6,6 +6,7 @@ import {
   type IdentityBlock,
 } from "../core/agent-self";
 import type { ExoPaths } from "../core/paths";
+import { bootFileHead, type BootHeadOpts } from "../core/boot-content";
 
 const cap = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + "\n…(truncated)" : s);
 
@@ -47,11 +48,13 @@ export interface BootOpts {
  * output is byte-identical to before this feature existed (seam test).
  */
 export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts = {}): Promise<string> {
-  const read = async (path: string, max: number): Promise<string> => {
+  // Head-slices are frontmatter-free (and, for generated logs, heading-anchored):
+  // the boot budget buys content, never YAML or a "this file is generated" warning.
+  const read = async (path: string, max: number, headOpts?: BootHeadOpts): Promise<string> => {
     const f = app.vault.getAbstractFileByPath(path);
     if (f instanceof TFile) {
       try {
-        return cap(await app.vault.cachedRead(f), max);
+        return bootFileHead(await app.vault.cachedRead(f), max, headOpts);
       } catch {
         /* ignore */
       }
@@ -99,7 +102,9 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
   // A non-empty `now.md` is a strictly-better "what matters right now" signal than
   // the recent-sessions digest, so we spend fewer chars on the log when it exists.
   const logChars = nowHasSignal ? SESSION_LOG_CHARS_WITH_NOW : SESSION_LOG_CHARS;
-  const log = await read(paths.sessionLog, logChars);
+  // The session log is GENERATED: its head is a title plus a "do not edit by hand"
+  // warning, so slice from the first `## ` entry or the section carries zero sessions.
+  const log = await read(paths.sessionLog, logChars, { fromFirstHeading: true });
   if (log) parts.push(`### Recent sessions (prior sessions — background, NOT the current conversation)\n${log}`);
 
   const loopsRaw = await read(paths.openLoops, MAX_LOOPS_RAW);
