@@ -13,6 +13,7 @@ import type {
   SessionOpts,
 } from "./types";
 import { normalizeUtilization } from "../core/rate-limit";
+import { routeCodexElicitation, type InFlightMcpCall } from "../core/codex-approval";
 
 type RpcId = number | string;
 type RpcMessage = {
@@ -294,6 +295,9 @@ export class CodexSession implements AgentSession {
   private ready: Promise<void>;
   private runtime: CodexSessionRuntime;
   private mcpStatuses = new Map<string, string>();
+  /** MCP tool calls started and not yet completed: the only thing that says
+   *  WHICH tool an approval request is about (the payload never names it). */
+  private inFlightMcp = new Map<string, InFlightMcpCall>();
 
   caps: SessionCaps | null = null;
   rateLimit: RateLimitInfo | null = null;
@@ -498,6 +502,42 @@ export class CodexSession implements AgentSession {
     }
 
     if (method === "mcpServer/elicitation/request") {
+      // Codex overloads this channel: a real elicitation form, OR an approval
+      // for an MCP tool call. Only the form has questions to ask.
+      const route = routeCodexElicitation({
+        params,
+        inFlight: this.inFlightMcp.values(),
+        readOnlySandbox: this.opts.sandboxMode === "read-only",
+        readTools: this.opts.obsidianReadTools ?? new Set<string>(),
+      });
+      if (route.kind === "decline") {
+        // Fail CLOSED: an unidentified (or sandbox-forbidden) tool is refused,
+        // never accepted. Said out loud, because a silent decline is exactly
+        // what made this bug invisible for a whole release.
+        this.onEvent?.({ kind: "notice", message: `Codex tool call refused: ${route.reason}` });
+        this.sendRpc({ id, result: { action: "decline" } });
+        return;
+      }
+      if (route.kind === "permission") {
+        // Exo's ONE permission decision (read auto-allow, rules, card) owns
+        // this, exactly as it owns the same tool on a Claude session.
+        let settled = false;
+        const answer = (action: "accept" | "decline" | "cancel") => {
+          if (settled) return;
+          settled = true;
+          this.approvalCancels.delete(id);
+          this.sendRpc({ id, result: action === "accept" ? { action, content: {} } : { action } });
+        };
+        this.approvalCancels.set(id, () => answer("cancel"));
+        this.onEvent?.({
+          kind: "permission-request",
+          id: `codex-${String(id)}`,
+          tool: route.tool,
+          input: route.input,
+          resolve: (decision) => answer(decision.behavior === "allow" ? "accept" : "decline"),
+        });
+        return;
+      }
       const questions = elicitationQuestions(params);
       if (!this.opts.requestUserInput || questions.length === 0) {
         this.sendRpc({ id, result: { action: "decline" } });
@@ -698,6 +738,13 @@ export class CodexSession implements AgentSession {
     }
     if (item.type === "mcpToolCall") {
       const name = `mcp__${item.server ?? "unknown"}__${item.tool ?? "tool"}`;
+      // Codex emits this ~50ms BEFORE the approval it gates, and the call cannot
+      // complete until the approval is answered, so the entry is always there
+      // when the approval arrives.
+      if (done) this.inFlightMcp.delete(id);
+      else if (item.server && item.tool) {
+        this.inFlightMcp.set(id, { server: item.server, tool: item.tool, args: item.arguments });
+      }
       this.onEvent?.(done
         ? { kind: "tool-call-result", id, ok: item.status === "completed", output: outputText(item.result ?? item.error) }
         : { kind: "tool-call-start", id, name, input: item.arguments });
@@ -921,6 +968,7 @@ export class CodexSession implements AgentSession {
     this.onTurnComplete = null;
     this.onTurnFailure = null;
     this.activeTurnId = undefined;
+    this.inFlightMcp.clear();
     this.cancelApprovals();
     this.cleanupImages();
     if (error) reject?.(error);

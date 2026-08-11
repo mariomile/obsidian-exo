@@ -849,6 +849,7 @@ export class ChatView extends ItemView {
       memoryPreamble,
       autoCompact: s.autoCompactEnabled,
       sandboxMode: s.codexSandbox,
+      obsidianReadTools: OBSIDIAN_READ_TOOLS,
       approvalPolicy: s.codexApproval,
       codexBridge,
       requestUserInput: async (questions) =>

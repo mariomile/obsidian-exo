@@ -396,6 +396,184 @@ describe("CodexSession app-server lifecycle", () => {
     session.dispose();
   });
 
+  it("answers an MCP tool-call approval through the permission path, not the form path", async () => {
+    // Codex 0.147 gates every MCP tool call behind this message. It is NOT a
+    // form: zero questions must never mean "decline".
+    const requestUserInput = vi.fn(async () => ({}));
+    const { session, child } = await readySession({
+      requestUserInput,
+      obsidianReadTools: new Set(["mcp__obsidian__list_notes"]),
+    });
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    child.push({ method: "item/started", params: { item: {
+      id: "exec-1", type: "mcpToolCall", server: "obsidian", tool: "create_note", status: "inProgress",
+      arguments: { path: "C.md", content: "hi" },
+    } } });
+    child.push({
+      id: 93,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "obsidian",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        mode: "form",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          tool_description: "Create a new note.",
+          tool_params: { path: "C.md", content: "hi" },
+        },
+        message: 'Allow the obsidian MCP server to run tool "create_note"?',
+        requestedSchema: { type: "object", properties: {} },
+      },
+    });
+    await vi.waitFor(() => expect(events.some((event) => event.kind === "permission-request")).toBe(true));
+    const approval = events.find((event) => event.kind === "permission-request");
+    expect(approval).toMatchObject({
+      tool: "mcp__obsidian__create_note",
+      input: { path: "C.md", content: "hi" },
+    });
+    expect(requestUserInput).not.toHaveBeenCalled();
+    if (approval?.kind === "permission-request") approval.resolve({ behavior: "allow" });
+    await vi.waitFor(() => expect(child.messages).toContainEqual({ id: 93, result: { action: "accept", content: {} } }));
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    session.dispose();
+  });
+
+  it("declines the approval when the user denies the card", async () => {
+    const { session, child } = await readySession();
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    child.push({ method: "item/started", params: { item: {
+      id: "exec-1", type: "mcpToolCall", server: "obsidian", tool: "create_note", status: "inProgress", arguments: {},
+    } } });
+    child.push({
+      id: 94,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "obsidian",
+        _meta: { codex_approval_kind: "mcp_tool_call", tool_params: {} },
+        message: 'Allow the obsidian MCP server to run tool "create_note"?',
+        requestedSchema: { type: "object", properties: {} },
+      },
+    });
+    await vi.waitFor(() => expect(events.some((event) => event.kind === "permission-request")).toBe(true));
+    const approval = events.find((event) => event.kind === "permission-request");
+    if (approval?.kind === "permission-request") approval.resolve({ behavior: "deny", message: "no" });
+    await vi.waitFor(() => expect(child.messages).toContainEqual({ id: 94, result: { action: "decline" } }));
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    session.dispose();
+  });
+
+  it("fails closed: an approval with no identifiable tool is declined, and says why", async () => {
+    const { session, child } = await readySession();
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    // The matching mcpToolCall already completed: nothing left to correlate.
+    child.push({
+      id: 95,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "obsidian",
+        _meta: { codex_approval_kind: "mcp_tool_call", tool_params: { path: "C.md" } },
+        message: 'Allow the obsidian MCP server to run tool "create_note"?',
+        requestedSchema: { type: "object", properties: {} },
+      },
+    });
+    await vi.waitFor(() => expect(child.messages).toContainEqual({ id: 95, result: { action: "decline" } }));
+    expect(events.some((event) => event.kind === "permission-request")).toBe(false);
+    expect(events.some((event) => event.kind === "notice")).toBe(true);
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    session.dispose();
+  });
+
+  it("never asks about a mutating bridge tool under a read-only sandbox", async () => {
+    const { session, child } = await readySession({
+      sandboxMode: "read-only",
+      obsidianReadTools: new Set(["mcp__obsidian__list_notes"]),
+    });
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    child.push({ method: "item/started", params: { item: {
+      id: "exec-1", type: "mcpToolCall", server: "obsidian", tool: "create_note", status: "inProgress", arguments: {},
+    } } });
+    child.push({
+      id: 96,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "obsidian",
+        _meta: { codex_approval_kind: "mcp_tool_call", tool_params: {} },
+        message: 'Allow the obsidian MCP server to run tool "create_note"?',
+        requestedSchema: { type: "object", properties: {} },
+      },
+    });
+    await vi.waitFor(() => expect(child.messages).toContainEqual({ id: 96, result: { action: "decline" } }));
+    expect(events.some((event) => event.kind === "permission-request")).toBe(false);
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    session.dispose();
+  });
+
+  it("cancels a pending approval when the turn ends under it", async () => {
+    const { session, child } = await readySession();
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    child.push({ method: "item/started", params: { item: {
+      id: "exec-1", type: "mcpToolCall", server: "obsidian", tool: "create_note", status: "inProgress", arguments: {},
+    } } });
+    child.push({
+      id: 97,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "obsidian",
+        _meta: { codex_approval_kind: "mcp_tool_call", tool_params: {} },
+        message: 'Allow the obsidian MCP server to run tool "create_note"?',
+        requestedSchema: { type: "object", properties: {} },
+      },
+    });
+    await vi.waitFor(() => expect(events.some((event) => event.kind === "permission-request")).toBe(true));
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await turn;
+    await vi.waitFor(() => expect(child.messages).toContainEqual({ id: 97, result: { action: "cancel" } }));
+    session.dispose();
+  });
+
+  it("never correlates an approval with a tool call left over from an earlier turn", async () => {
+    const { session, child } = await readySession();
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    // Turn dies with the call still open (interrupt, crash): no item/completed.
+    child.push({ method: "item/started", params: { item: {
+      id: "exec-1", type: "mcpToolCall", server: "obsidian", tool: "read_note", status: "inProgress", arguments: { path: "A.md" },
+    } } });
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-1", status: "interrupted" } } });
+    await turn;
+
+    const nextEvents: AgentEvent[] = [];
+    const next = session.send("again", (event) => nextEvents.push(event));
+    const start = await child.next("turn/start");
+    child.reply(start, { turn: { id: "turn-2" } });
+    child.push({ method: "turn/started", params: { threadId: "thread-1", turn: { id: "turn-2" } } });
+    child.push({
+      id: 98,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "obsidian",
+        _meta: { codex_approval_kind: "mcp_tool_call", tool_params: { path: "B.md", content: "x" } },
+        message: 'Allow the obsidian MCP server to run tool "create_note"?',
+        requestedSchema: { type: "object", properties: {} },
+      },
+    });
+    await vi.waitFor(() => expect(child.messages).toContainEqual({ id: 98, result: { action: "decline" } }));
+    expect(nextEvents.some((event) => event.kind === "permission-request")).toBe(false);
+    child.push({ method: "turn/completed", params: { turn: { id: "turn-2", status: "completed" } } });
+    await next;
+    session.dispose();
+  });
+
   it("normalizes Codex plans, subagents, web search, dynamic tools, and rate limits", async () => {
     const { session, child } = await readySession();
     const events: AgentEvent[] = [];

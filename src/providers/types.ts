@@ -156,6 +156,11 @@ export interface SessionOpts {
    *  + the generated stdio script path. Present only for Codex sessions with
    *  obsidian tools enabled. */
   codexBridge?: { port: number; token: string; scriptPath: string; stop?: () => void };
+  /** OBSIDIAN_READ_TOOLS: the read-classified bridge tools. Codex asks the
+   *  client to approve every MCP tool call, and the read-only sandbox must
+   *  never let a mutating bridge tool through (bridge writes run in the
+   *  Obsidian process, outside codex's sandbox). */
+  obsidianReadTools?: ReadonlySet<string>;
   /** Render a provider-native request for user input in the owning conversation. */
   requestUserInput?: (questions: UserQuestion[]) => Promise<Record<string, string>>;
 }
