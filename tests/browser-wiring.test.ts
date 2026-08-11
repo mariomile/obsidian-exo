@@ -13,6 +13,7 @@ import { join } from "node:path";
 const read = (...rel: string[]): string => readFileSync(join(__dirname, "..", ...rel), "utf8");
 const view = read("src", "view.ts");
 const tools = read("src", "obsidian", "tools.ts");
+const controller = read("src", "obsidian", "browser-controller.ts");
 
 describe("browser wiring", () => {
   it("view.ts builds a per-convo browser bridge for the Claude tool server", () => {
@@ -31,5 +32,14 @@ describe("browser wiring", () => {
 
   it("tools.ts registers the browser set only behind the bridge", () => {
     expect(tools).toMatch(/browserBridge \? buildBrowserTools\(browserBridge\) : \[\]/);
+  });
+
+  it("every entry point waits for dom-ready: the wait sits inside ensureView", () => {
+    const at = controller.indexOf("private async ensureView");
+    expect(at).toBeGreaterThan(-1);
+    const body = controller.slice(at, controller.indexOf("private async currentView"));
+    expect(body).toContain("await host.whenReady()");
+    // The host throws plain Errors; the caller must see a refusal, not a crash.
+    expect(body).toContain("BrowserToolRefused");
   });
 });

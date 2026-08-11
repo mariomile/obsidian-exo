@@ -86,6 +86,17 @@ export class BrowserController {
         "The agent browser is unavailable here (disabled, mobile, or no webview support)."
       );
     }
+    // The Electron guest attaches asynchronously, so the first call after the
+    // leaf is created reaches the webview before dom-ready and comes back as
+    // "The WebView must be attached to the DOM and the dom-ready event
+    // emitted". That is an infrastructure race, not a tool failure: waiting for
+    // it here means the agent never sees it and never has to guess a retry.
+    // Idempotent, so every later call through this path costs nothing.
+    try {
+      await host.whenReady();
+    } catch (e) {
+      throw new BrowserToolRefused(e instanceof Error ? e.message : String(e));
+    }
     return { view, host };
   }
 

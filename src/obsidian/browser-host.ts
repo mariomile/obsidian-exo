@@ -26,6 +26,19 @@ export const EXEC_RESULT_CAP = 64_000;
 const NAV_TIMEOUT_MS = 15_000;
 const SETTLE_EXTRA_MS = 300;
 
+/**
+ * How long an entry point waits for the guest to attach and emit `dom-ready`.
+ *
+ * The guest attaches asynchronously after the element enters the DOM, and every
+ * webview method rejects with "The WebView must be attached to the DOM and the
+ * dom-ready event emitted" until it has. Observed cost on a warm window is
+ * milliseconds, so 10s is a wide margin over the real case; it also stays under
+ * NAV_TIMEOUT_MS, so a guest that never attaches (a collapsed or hidden pane
+ * never composites one) fails with an actionable message rather than eating the
+ * caller's whole navigation budget. A hang is worse than a failure.
+ */
+export const READY_TIMEOUT_MS = 10_000;
+
 /** Attributes set on the webview BEFORE it enters the DOM: partition is
  *  immutable after attach. Pure and exported so a unit test pins the posture. */
 export const WEBVIEW_ATTRS: Record<string, string> = {
@@ -63,6 +76,13 @@ export function capExecResult(raw: unknown): string {
 export class BrowserHost {
   private webview: WebviewEl | null = null;
   private hardenedFlag = false;
+  private domReady = false;
+  /** Settles once, with why the wait ended. Created at attach so the listener
+   *  is registered in the same tick the element enters the DOM: no window in
+   *  which dom-ready could fire before anyone is listening. */
+  private readyGate: Promise<"ready" | "closed"> | null = null;
+  private settleGate: ((outcome: "ready" | "closed") => void) | null = null;
+  private dropReadyListener: (() => void) | null = null;
 
   constructor(private readonly container: HTMLElement) {}
 
@@ -88,8 +108,49 @@ export class BrowserHost {
       return false;
     }
     this.webview = el;
+    this.readyGate = new Promise<"ready" | "closed">((resolve) => {
+      this.settleGate = resolve;
+    });
+    const onDomReady = (): void => {
+      el.removeEventListener("dom-ready", onDomReady);
+      this.dropReadyListener = null;
+      this.domReady = true;
+      this.settleGate?.("ready");
+    };
+    el.addEventListener("dom-ready", onDomReady);
+    this.dropReadyListener = () => el.removeEventListener("dom-ready", onDomReady);
     this.hardenedFlag = this.hardenSession();
     return true;
+  }
+
+  /**
+   * Resolve once the guest is genuinely usable. Idempotent: after dom-ready has
+   * fired this returns without waiting and without registering a second
+   * listener (the first one is gone, and a second would never fire). Rejects,
+   * never hangs, when the wait expires or the leaf closes underneath it.
+   */
+  async whenReady(timeoutMs = READY_TIMEOUT_MS): Promise<void> {
+    if (this.domReady) return;
+    const gate = this.readyGate;
+    if (!gate) throw new Error("The agent browser is not attached.");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      gate,
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), timeoutMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (outcome === "closed") {
+      throw new Error("The agent browser tab was closed while its page was still starting up.");
+    }
+    if (outcome === "timeout") {
+      throw new Error(
+        `The agent browser did not become ready within ${Math.round(timeoutMs / 1000)}s. ` +
+          "Its tab is most likely hidden or collapsed, which stops the embedded browser from starting: " +
+          "ask Mario to bring the Agent browser tab into view, then try again."
+      );
+    }
   }
 
   /** Main-session hardening: deny-all permissions, block downloads. Runs once
@@ -186,6 +247,14 @@ export class BrowserHost {
   }
 
   destroy(): void {
+    this.dropReadyListener?.();
+    this.dropReadyListener = null;
+    // Anyone mid-wait gets a clean answer instead of a promise that never
+    // settles; the gate itself is dropped so a later call cannot reuse it.
+    this.settleGate?.("closed");
+    this.settleGate = null;
+    this.readyGate = null;
+    this.domReady = false;
     this.webview?.remove();
     this.webview = null;
   }
