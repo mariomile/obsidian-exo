@@ -9,6 +9,7 @@ import {
 } from "obsidian";
 import { Autocomplete, type AcItem } from "./autocomplete";
 import { buildDescIndex, codexSkillNames, type DescIndex } from "../core/capability-desc";
+import { mergeSlashEntries } from "../core/slash";
 import type ExoPlugin from "../main";
 import { ADAPTERS } from "../providers/registry";
 import type {
@@ -597,21 +598,15 @@ export class Composer {
       }
     }
     const [{ commands, skills }, descs] = await Promise.all([this.loadSlash(), this.loadDescs()]);
-    for (const c of commands) {
-      if (c.toLowerCase().includes(q))
-        // Skills surface in the CLI's command list too (`/skill-name`) without a
-        // commands/*.md of their own — fall back to the skill's description.
-        out.push({
-          label: c,
-          desc: descs.commands.get(c) ?? descs.skills.get(c),
-          detail: "command",
-          icon: "terminal",
-          insert: `/${c} `,
-        });
-    }
-    for (const sk of skills) {
-      if (sk.toLowerCase().includes(q))
-        out.push({ label: sk, desc: descs.skills.get(sk), detail: "skill", icon: "sparkles", insert: `/${sk} ` });
+    // One row per name — the CLI's command roster already carries every skill,
+    // so the two lists overlap and each skill would otherwise print twice.
+    for (const { name, kind } of mergeSlashEntries(commands, skills)) {
+      if (!name.toLowerCase().includes(q)) continue;
+      // Either roster may be the one that indexed the frontmatter: a skill
+      // exposed as `/name` can land in the command descriptions instead.
+      const [own, alt] = kind === "skill" ? [descs.skills, descs.commands] : [descs.commands, descs.skills];
+      const icon = kind === "skill" ? "sparkles" : "terminal";
+      out.push({ label: name, desc: own.get(name) ?? alt.get(name), detail: kind, icon, insert: `/${name} ` });
     }
     return out;
   }

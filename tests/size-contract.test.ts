@@ -50,7 +50,15 @@ const CEILINGS: Record<string, number> = {
   // sotto il 3492 da cui si partiva. Se finisce anche questo, si estrae:
   // il candidato è il blocco dei comandi.
   "src/main.ts": 3480,
-  "src/ui/composer.ts": 1723,
+  // Abbassato il 2026-08-11 dopo l'estrazione del merge command+skill del menu
+  // `/` in `core/slash.ts` (`mergeSlashEntries`): la lista non è UI, è la
+  // riconciliazione di due roster che si sovrappongono, e lì è testabile senza
+  // montare il composer. 1723 -> 1718 righe reali.
+  // Il tetto resta a 1720, non a 1718: stessa scelta motivata sui file qui
+  // sopra. 2 righe sono il margine dichiarato per il prossimo provider di
+  // autocomplete, non un permesso di ricrescita — il prossimo candidato
+  // all'estrazione è il blocco `atItems` (ricerca note + agenti).
+  "src/ui/composer.ts": 1720,
   // Abbassato il 2026-08-11: `BACKGROUND_MODEL_OPTIONS` è tornato a casa in
   // `core/model-options.ts`, il modulo che possiede già il catalogo dei modelli
   // per i picker — qui era un catalogo di prodotto parcheggiato in un file di

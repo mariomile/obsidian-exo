@@ -1,5 +1,5 @@
 /**
- * Slash-command hoisting — TUI parity for command placement.
+ * Slash-command surface — what `/` offers, and where a `/command` may sit.
  *
  * The CLI expands `/command` only when it opens the message. Claude Code's
  * terminal UI hides this because it intercepts commands at the input layer;
@@ -47,4 +47,39 @@ export function hoistSlashCommand(text: string, known: ReadonlySet<string>): str
     return ownArgs ? `${cmd} ${ownArgs}\n${rest}` : `${cmd} ${rest}`;
   }
   return text;
+}
+
+export interface SlashEntry {
+  name: string;
+  /** What the thing IS, not which roster it came from. Drives the label + icon. */
+  kind: "command" | "skill";
+}
+
+/**
+ * One row per name for the `/` menu.
+ *
+ * The CLI's command roster already contains every skill — a plugin skill is
+ * invocable as `/plugin:skill` without shipping a `commands/*.md` of its own.
+ * Listing both rosters therefore printed each skill twice, and the two rows
+ * were indistinguishable in effect: same name, same `/name ` insertion.
+ *
+ * A name present in both is a skill, so the skill kind wins. That keeps the
+ * kind tag meaningful: every `/` row says what the underlying artifact is,
+ * instead of leaking which of the two lists happened to yield it first.
+ * Commands keep their position ahead of skills.
+ */
+export function mergeSlashEntries(commands: readonly string[], skills: readonly string[]): SlashEntry[] {
+  const skillNames = new Set(skills);
+  const out: SlashEntry[] = [];
+  // `seen` also absorbs repeats inside a single roster — the vault scan reads
+  // .claude/skills as both folders and files, so `foo/` + `foo.md` collide.
+  const seen = new Set<string>();
+  const take = (name: string, kind: SlashEntry["kind"]) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    out.push({ name, kind });
+  };
+  for (const name of commands) if (!skillNames.has(name)) take(name, "command");
+  for (const name of skills) take(name, "skill");
+  return out;
 }
