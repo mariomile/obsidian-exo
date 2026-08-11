@@ -70,7 +70,7 @@ import {
 } from "./core/live-tasks";
 import { LiveTaskRegistry } from "./ui/live-task-registry";
 import { Composer } from "./ui/composer";
-import { noteTurnEnd, renderResumeVerbs, revealReentry } from "./ui/reentry";
+import { noteTurnEnd, reenterActive, renderResumeVerbs, revealReentry } from "./ui/reentry";
 import type {
   AssistantCtx,
   Convo,
@@ -467,8 +467,10 @@ export class ChatView extends ItemView {
     const refreshForLeafChange = debounce(() => {
       this.composer.refreshContext();
       this.refreshSurfacing();
+      reenterActive(this.active, this.containerEl, (p) => this.openNote(p), () => this.persist());
     }, 120, true);
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => refreshForLeafChange()));
+    this.registerEvent(this.app.workspace.on("layout-change", () => reenterActive(this.active, this.containerEl, (p) => this.openNote(p), () => this.persist()))); // sidebar riaperta: un rientro che non cambia chat attiva
     this.register(() => refreshForLeafChange.cancel());
     // Resizing the pane can flip a short transcript into overflow (or back) without
     // any content change — keep the tail "Related" section in sync with that too.
@@ -2398,6 +2400,7 @@ export class ChatView extends ItemView {
    */
   revealConversation(convoId: string): boolean {
     if (this.active?.id === convoId) {
+      reenterActive(this.active, this.containerEl, (p) => this.openNote(p), () => this.persist()); // same chat, back in view
       this.focusComposer();
       return true;
     }
@@ -2705,14 +2708,15 @@ export class ChatView extends ItemView {
   private renderConvoDom(c: Convo): void {
     c.listEl.empty();
     let lastUser = "";
-    for (const m of c.messages) {
+    for (const [i, m] of c.messages.entries()) {
+      // `data-msg` = the MESSAGE index, which is what the re-entry band anchors on: a `.mva-turn` does NOT always have a message behind it (`ui/reentry.ts` `anchorTurn`).
       if (m.role === "user") {
         lastUser = m.text;
-        const el = c.listEl.createDiv({ cls: "mva-turn mva-user" });
+        const el = c.listEl.createDiv({ cls: "mva-turn mva-user", attr: { "data-msg": i } });
         void MarkdownRenderer.render(this.app, m.text, el.createDiv({ cls: "mva-bubble mva-type-body markdown-rendered" }), "", this);
         this.appendMsgTime(el, m.at);
       } else {
-        const el = c.listEl.createDiv({ cls: "mva-turn mva-assistant" });
+        const el = c.listEl.createDiv({ cls: "mva-turn mva-assistant", attr: { "data-msg": i } });
         const body = el.createDiv({ cls: "mva-assistant-body" });
         let full = "";
         const touched: TouchedNote[] = [];
@@ -3281,7 +3285,7 @@ export class ChatView extends ItemView {
     }
     const at = Date.now();
     c.messages.push({ role: "user", text, at });
-    const el = c.listEl.createDiv({ cls: "mva-turn mva-user" });
+    const el = c.listEl.createDiv({ cls: "mva-turn mva-user", attr: { "data-msg": c.messages.length - 1 } });
     const bubble = el.createDiv({ cls: "mva-bubble mva-type-body" });
     if (images?.length) {
       const strip = bubble.createDiv({ cls: "mva-bubble-images" });
@@ -6268,11 +6272,8 @@ export class ChatView extends ItemView {
         ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
       }
       if (ctx.segments.length) {
-        c.messages.push({
-          role: "assistant",
-          segments: ctx.segments,
-          ...(checkpoint.size ? { checkpoint } : {}),
-        });
+        c.messages.push({ role: "assistant", segments: ctx.segments, ...(checkpoint.size ? { checkpoint } : {}) });
+        ctx.el.dataset.msg = String(c.messages.length - 1); // only NOW does this element have a message
       }
       // Turn finalized — the live phrase is gone (from the rail AND from this
       // conversation's sidebar row); refresh the recap (full-page rail only) as

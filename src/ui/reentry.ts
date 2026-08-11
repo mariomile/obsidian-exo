@@ -111,12 +111,61 @@ export function revealReentry(
   }
 
   // At the last-read position: immediately before the first turn the user has
-  // not seen. `.mva-turn` is one element per message, in message order, so the
-  // anchor index IS the DOM index.
-  const turns = c.listEl.querySelectorAll(".mva-turn");
-  const anchor = turns.item(anchorIndex);
+  // not seen.
+  const anchor = anchorTurn(c.listEl, anchorIndex);
   if (anchor) c.listEl.insertBefore(band, anchor);
   else c.listEl.appendChild(band);
+}
+
+/**
+ * The turn element the band goes above: the one rendering MESSAGE `index`.
+ *
+ * Deliberately NOT `querySelectorAll(".mva-turn").item(index)`. "One element
+ * per message, in message order" holds right up until a turn is stopped before
+ * its first token: that turn's element is created when the turn STARTS and
+ * keeps the "Stopped." confirmation, but with no segments nothing is pushed to
+ * `messages` for it — so from that turn on the DOM carries one more `.mva-turn`
+ * than the transcript, permanently. Positional lookup then lands one turn late
+ * and prints "since you left · 12 steps" above the prompt the user typed
+ * themselves, which is the exact failure `bandAnchor` exists to prevent.
+ *
+ * Every element that HAS a message carries its index (`data-msg`, stamped in
+ * `view.ts` at the two places a message is added). The ones that do not are
+ * invisible to this lookup, which is the point.
+ */
+export function anchorTurn(listEl: HTMLElement, index: number): HTMLElement | null {
+  return listEl.querySelector(`.mva-turn[data-msg="${index}"]`);
+}
+
+/**
+ * Re-entry through the PANE, rather than through a change of conversation.
+ *
+ * `revealReentry`'s other two callers are boot and `switchTo` — and `switchTo`
+ * is a change of active chat. But Exo's home is a collapsed right sidebar: you
+ * prompt, you collapse it, the agent works twelve steps, and when you come back
+ * the active chat never changed. Nothing on that path revealed anything, and
+ * `noteTurnEnd` deliberately leaves the position alone for a turn that ended
+ * while the pane was hidden — so without this the phase's flagship scenario
+ * ended in silence, and the band appeared only if you switched to another chat
+ * and back.
+ *
+ * Two gates, both load-bearing:
+ *  - `isShown()`: these are workspace-wide events, and a pane that is still
+ *    collapsed has not been re-entered.
+ *  - a band already on screen is left alone. `revealReentry` clears the old
+ *    band before painting, and the position has already moved by then, so
+ *    re-running it over a painted band would silently delete the line the user
+ *    is in the middle of reading.
+ */
+export function reenterActive(
+  c: Convo | null | undefined,
+  containerEl: HTMLElement,
+  onOpenNote: (path: string) => void,
+  onRead: () => void,
+): void {
+  if (!c || !containerEl.isShown()) return;
+  if (c.listEl?.querySelector(`.${BAND}`)) return;
+  revealReentry(c, onOpenNote, onRead);
 }
 
 /** Where a populated slot goes. Steps and questions are places in the

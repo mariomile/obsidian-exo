@@ -15,7 +15,7 @@ import {
   workSince,
   type ResumeState,
 } from "../src/core/reentry";
-import { noteTurnEnd } from "../src/ui/reentry";
+import { anchorTurn, noteTurnEnd } from "../src/ui/reentry";
 import type { Convo } from "../src/ui/convo-types";
 import type { Message } from "../src/core/model";
 
@@ -306,6 +306,49 @@ describe("the read position, over a session", () => {
 });
 
 /* ---------------------------------------------------------------------------
+ * Where the line lands. `anchorTurn` is the one piece of DOM lookup in the
+ * band's path, and it is the piece that was wrong: a `.mva-turn` element does
+ * NOT always have a message behind it, so the index of a message and the
+ * position of its element are two different numbers.
+ * ------------------------------------------------------------------------ */
+
+/** A `listEl` stand-in. `turns[i]` is the message index that turn renders, or
+ *  `null` for an element with no message behind it — the shape the DOM takes
+ *  after a turn is stopped before its first token. */
+const fakeList = (turns: (number | null)[]) => {
+  const els = turns.map((msg, pos) => ({ msg, pos }));
+  return {
+    querySelector(selector: string) {
+      const m = /^\.mva-turn\[data-msg="(\d+)"\]$/.exec(selector);
+      return m ? (els.find((el) => el.msg === Number(m[1])) ?? null) : null;
+    },
+  } as unknown as HTMLElement;
+};
+
+describe("the band's anchor element", () => {
+  it("is the turn RENDERING the message, not the nth turn in the DOM", () => {
+    // Prompt, Esc before the first token (an assistant element with nothing
+    // behind it), prompt again, walk away. Message 2 is the second prompt's
+    // reply and lives at DOM position 3.
+    const el = anchorTurn(fakeList([0, null, 1, 2]), 2) as unknown as { pos: number } | null;
+    expect(el?.pos).toBe(3);
+  });
+
+  it("keeps the line under the user's own prompt in that same DOM", () => {
+    // `bandAnchor` moves past the prompt you typed, so it returns 2 here. The
+    // element AT DOM position 2 is that very prompt (message 1) — inserting
+    // there is "since you left · 12 steps" printed above your own words.
+    const dom = fakeList([0, null, 1, 2]);
+    expect(bandAnchor([user("a"), user("b"), tool("Write", { file_path: "/v/a.md" })], 1)).toBe(2);
+    expect((anchorTurn(dom, 2) as unknown as { msg: number }).msg).toBe(2); // the reply, not the prompt
+  });
+
+  it("falls back to nothing (append) when the anchor has no element", () => {
+    expect(anchorTurn(fakeList([0, 1]), 5)).toBeNull();
+  });
+});
+
+/* ---------------------------------------------------------------------------
  * The wiring, read off the source. The band is DOM, and this suite runs in
  * `node` — so what is pinned here is the set of decisions that would otherwise
  * only be visible by mounting Obsidian.
@@ -329,6 +372,24 @@ describe("the re-entry band's wiring", () => {
   it("renders at the last-read position, not at the top or the bottom", () => {
     expect(ui).toMatch(/insertBefore/);
     expect(ui).toMatch(/\.mva-turn/);
+  });
+
+  it("looks its anchor up by message index, never by DOM position", () => {
+    expect(ui).toMatch(/\[data-msg="/);
+    expect(ui).not.toMatch(/turns\.item\(/);
+    // Both sites that add a message stamp the element with its index.
+    expect(view).toMatch(/"data-msg": i/);
+    expect(view).toMatch(/"data-msg": c\.messages\.length - 1/);
+    expect(view).toMatch(/ctx\.el\.dataset\.msg = String\(c\.messages\.length - 1\)/);
+  });
+
+  it("paints when the pane comes back with the SAME chat still active", () => {
+    // `switchTo` is a CHANGE of conversation, and Exo lives in a collapsed
+    // right sidebar — so the ordinary way back in never changes the active
+    // chat, and nothing on that path used to reveal anything.
+    expect(view).toMatch(/reenterActive\(this\.active/);
+    expect(view).toMatch(/"layout-change", \(\) => reenterActive/);
+    expect(ui).toMatch(/containerEl\.isShown\(\)/); // still collapsed is not re-entered
   });
 
   it("refuses to paint while a turn is streaming", () => {
