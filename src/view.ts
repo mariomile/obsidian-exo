@@ -57,6 +57,7 @@ import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { agentTaskRow } from "./core/agent-task";
 import { hoistSlashCommand } from "./core/slash";
+import { codexSessionToolset } from "./core/codex-toolset";
 import { setGoal, clearGoal, advance, resumeGoal, buildContinuationPrompt } from "./core/goal-loop";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
 import { classifyTurnOutput } from "./core/workflow-classify";
@@ -822,12 +823,7 @@ export class ChatView extends ItemView {
           rethinkBridge: (req) => this.rethinkBridge(c, req),
           paths: this.plugin.paths,
         });
-        const READ_BASENAMES = new Set(
-          [...OBSIDIAN_READ_TOOLS].map((n) => n.replace("mcp__obsidian__", ""))
-        );
-        b.bridge.setTools(
-          readOnlySandbox ? all.filter((t) => READ_BASENAMES.has(t.name) || t.name === "ask_user") : all
-        );
+        b.bridge.setTools(codexSessionToolset(all, readOnlySandbox, OBSIDIAN_READ_TOOLS));
         codexBridge = {
           port: b.bridge.port,
           token: b.bridge.token,
