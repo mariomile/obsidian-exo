@@ -1,0 +1,119 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { Notice } from "obsidian";
+import { registerChatCommands } from "../src/ui/chat-commands";
+import type ExoPlugin from "../src/main";
+import type { ChatRowSource } from "../src/core/chat-rows";
+
+/** A conversation as `listChatRows` reports it; every test overrides only what
+ *  it is about. */
+const src = (over: Partial<ChatRowSource> = {}): ChatRowSource => ({
+  id: "c1",
+  title: "Untitled",
+  preview: "",
+  provider: "claude",
+  model: "opus",
+  updatedAt: 1,
+  archived: false,
+  open: false,
+  pinned: false,
+  unseen: false,
+  messageCount: 1,
+  streaming: false,
+  pendingPerm: false,
+  pendingAsk: false,
+  poisoned: false,
+  stopped: false,
+  hasMessages: true,
+  ...over,
+});
+
+/** A conversation blocked on a permission prompt: still streaming, which is
+ *  deriveLane's whole precedence rule. */
+const blocked = (id: string, updatedAt: number): ChatRowSource =>
+  src({ id, updatedAt, streaming: true, pendingPerm: true });
+
+interface Harness {
+  run: (id: string) => void;
+  ids: string[];
+  revealed: string[];
+}
+
+/** Register the commands against a stub plugin and hand back a way to fire one. */
+function harness(rows: ChatRowSource[] | null, activeId: string | null): Harness {
+  const commands = new Map<string, () => void>();
+  const revealed: string[] = [];
+  const plugin = {
+    addCommand: (c: { id: string; callback: () => void }) => commands.set(c.id, c.callback),
+    listChatRows: () => rows,
+    activeConvoId: () => activeId,
+    revealConversation: (id: string) => {
+      revealed.push(id);
+      return Promise.resolve(true);
+    },
+    activateView: () => Promise.resolve(),
+    activateChats: () => Promise.resolve(),
+    backfillTitles: () => Promise.resolve(),
+  } as unknown as ExoPlugin;
+  registerChatCommands(plugin);
+  return {
+    run: (id) => commands.get(id)?.(),
+    ids: [...commands.keys()],
+    revealed,
+  };
+}
+
+describe("registerChatCommands", () => {
+  beforeEach(() => {
+    Notice.last = "";
+  });
+
+  it("keeps the ids the two moved commands already had", () => {
+    // Obsidian stores hotkeys BY ID: a rename here silently drops whatever the
+    // user had bound.
+    expect(harness([], null).ids).toEqual(["open-chat-list", "retitle-chats", "next-needs-you"]);
+  });
+});
+
+describe("the next-chat-needing-you key", () => {
+  const cycle = (rows: ChatRowSource[] | null, activeId: string | null): string[] => {
+    const h = harness(rows, activeId);
+    h.run("next-needs-you");
+    return h.revealed;
+  };
+
+  beforeEach(() => {
+    Notice.last = "";
+  });
+
+  it("goes to the blocked chat when you are somewhere else entirely", () => {
+    expect(cycle([blocked("a", 2), src({ id: "quiet", updatedAt: 3 })], "quiet")).toEqual(["a"]);
+  });
+
+  it("moves to the next blocked chat and wraps around", () => {
+    const rows = [blocked("new", 3), blocked("mid", 2), blocked("old", 1)];
+    // Newest first, same order the needs-you strip paints.
+    expect(cycle(rows, "new")).toEqual(["mid"]);
+    expect(cycle(rows, "mid")).toEqual(["old"]);
+    expect(cycle(rows, "old")).toEqual(["new"]);
+  });
+
+  it("says so instead of doing nothing when nothing is waiting", () => {
+    expect(cycle([src({ id: "quiet", streaming: true })], "quiet")).toEqual([]);
+    expect(Notice.last).toContain("nothing is waiting");
+  });
+
+  it("skips a chat that is merely running", () => {
+    // Running is not blocked: the key is for work that cannot continue.
+    expect(cycle([src({ id: "busy", streaming: true, updatedAt: 5 }), blocked("a", 1)], null))
+      .toEqual(["a"]);
+  });
+
+  it("opens Exo rather than reporting an empty queue when nothing is mounted", () => {
+    // `null` means no ChatView, not "no chats" — reporting an empty queue there
+    // would be a lie about data that exists.
+    const h = harness(null, null);
+    h.run("next-needs-you");
+    expect(h.revealed).toEqual([]);
+    expect(Notice.last).toBe("");
+  });
+});

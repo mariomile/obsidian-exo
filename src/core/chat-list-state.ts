@@ -1,15 +1,17 @@
 /**
- * Presentation state for the `exo-chats` sidebar — the two decisions that are
- * NOT derivable from the conversations themselves:
+ * Presentation state for the `exo-chats` sidebar — the decisions that are NOT
+ * derivable from the conversations themselves:
  *
- *  1. which sections the user has collapsed, and
- *  2. which status dot a row earns in the reserved gutter.
+ *  1. which sections the user has collapsed,
+ *  2. which status dot a row earns in the reserved gutter, and
+ *  3. what a row SAYS: its status chip, its preview line, and the signature
+ *     that decides whether saying it costs a rebuild.
  *
  * Pure and Obsidian-free, same discipline as `chat-rows.ts`: that module decides
  * what the list contains, this one decides how much of it is on screen, and the
  * view owns only the DOM. Both are unit-testable without mounting a pane.
  */
-import type { ChatSectionKey } from "./chat-rows";
+import type { ChatRow, ChatSectionKey } from "./chat-rows";
 
 /**
  * The three states the gutter dot can say, and nothing else. Deliberately NOT
@@ -40,6 +42,73 @@ export function chatDot(row: { lane?: "running" | "needs-input"; unseen: boolean
   if (row.lane === "needs-input") return "needs-you";
   if (row.lane === "running") return "running";
   return row.unseen ? "unseen" : null;
+}
+
+/**
+ * The status chip of a running or blocked row, or `null` when the row says it
+ * some other way.
+ *
+ * Three answers, and the third is the point of Phase 4:
+ *
+ *  - blocked → WHICH kind of answer is being waited on. The age already sits on
+ *    the title line, so the chip only has to say permission vs question.
+ *  - running with no phrase yet → `Working`. Between two tool calls there is
+ *    genuinely nothing to report, and a row that went blank mid-turn would read
+ *    as a chat that stopped.
+ *  - running WITH a phrase → nothing. The phrase is the status once there is
+ *    one, and a "Working" chip stacked above "Searching the vault" spends a
+ *    line of a 216px column saying the same thing twice.
+ */
+export function rowStatusText(r: Pick<ChatRow, "lane" | "reason" | "activity">): string | null {
+  if (r.lane === "needs-input") return `Needs ${r.reason === "perm" ? "permission" : "an answer"}`;
+  if (r.lane !== "running") return null;
+  return r.activity ? null : "Working";
+}
+
+/**
+ * What the preview line carries: the live phrase while a tool is actually
+ * running, the last exchange otherwise. `live` is the renderer's cue to treat
+ * it as one truncated line rather than two wrapped ones — a phrase is a
+ * sentence about right now, and letting it wrap would reflow the row on every
+ * tool call.
+ */
+export function rowPreview(
+  r: Pick<ChatRow, "preview" | "lane" | "activity">,
+): { text: string; live: boolean } {
+  if (r.lane === "running" && r.activity) return { text: r.activity, live: true };
+  return { text: r.preview, live: false };
+}
+
+/**
+ * Everything a painted row depends on, as one string. `reconcileList` rebuilds
+ * a node only when this moves, so this function IS the "a tick that changed
+ * nothing touches no DOM" guarantee — and, read the other way, anything the row
+ * renders and this omits is a stale pixel nothing will ever repaint.
+ *
+ * Two axes come from the renderer rather than the row: `rich` (the same
+ * conversation is a different element in the working set than in history, so
+ * crossing that line rebuilds rather than patches) and `age` — the rendered
+ * LABEL, not the raw `updatedAt`, because the label moves as `now` advances
+ * while the timestamp sits still, and a raw-ms signature would leave "now" on
+ * screen for an hour while also churning on milliseconds nobody can see.
+ *
+ * Deliberately ABSENT: whether the row's children or its section are currently
+ * collapsed. Both are applied as classes after reconciliation, so toggling one
+ * never rebuilds the row the user just pressed Enter on.
+ */
+export function chatRowSig(r: ChatRow, o: { rich: boolean; age: string }): string {
+  return [
+    o.rich, r.title, r.preview, r.lane ?? "", r.reason ?? "", r.badge ?? "",
+    // The two live strings. `activity` moves per tool call and never per token,
+    // which is what makes it affordable here at all.
+    r.activity ?? "", r.permRule ?? "",
+    r.provider, r.model, r.messageCount, r.open, r.pinned, r.unseen, o.age,
+    // A row that gains or loses its parent changes shape, so it has to rebuild
+    // rather than be patched in place at the wrong indent. Gaining or losing
+    // CHILDREN is the same kind of change — it adds or removes the collapse
+    // control.
+    r.depth, r.hasChildren,
+  ].join("|");
 }
 
 /**

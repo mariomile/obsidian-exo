@@ -1,12 +1,18 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   chatDot,
+  chatRowSig,
   collapseChildren,
   isParentCollapsed,
   isSectionCollapsed,
+  rowPreview,
+  rowStatusText,
   toggleParentCollapsed,
   toggleSectionCollapsed,
 } from "../src/core/chat-list-state";
+import type { ChatRow } from "../src/core/chat-rows";
 
 describe("chatDot", () => {
   it("says nothing for a row at rest — the gutter stays empty", () => {
@@ -213,5 +219,139 @@ describe("collapseChildren", () => {
     // simply never consulted, which is why the list needs no pruning pass.
     const out = collapseChildren(list, ["deleted-long-ago"]);
     expect([...out.hidden]).toEqual([]);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Phase 4/5 — what a row says, and when saying it costs a rebuild.
+ * ------------------------------------------------------------------------ */
+
+/** A settled row; every test overrides only the fields it is about. */
+const row = (over: Partial<ChatRow> = {}): ChatRow => ({
+  id: "c1",
+  title: "Untitled",
+  preview: "the last exchange",
+  provider: "claude",
+  model: "opus",
+  updatedAt: 1,
+  open: false,
+  pinned: false,
+  unseen: false,
+  messageCount: 3,
+  depth: 0,
+  hasChildren: false,
+  ...over,
+});
+
+describe("rowStatusText", () => {
+  it("says which kind of answer a blocked row is waiting on", () => {
+    expect(rowStatusText(row({ lane: "needs-input", reason: "perm" }))).toBe("Needs permission");
+    expect(rowStatusText(row({ lane: "needs-input", reason: "ask" }))).toBe("Needs an answer");
+  });
+
+  it("falls back to Working for a running row with no phrase yet", () => {
+    expect(rowStatusText(row({ lane: "running" }))).toBe("Working");
+  });
+
+  it("says nothing when the live phrase is already on screen", () => {
+    // The phrase IS the status once there is one: a "Working" chip above
+    // "Searching the vault" says the same thing twice in a 216px column.
+    expect(rowStatusText(row({ lane: "running", activity: "Searching the vault" }))).toBeNull();
+  });
+
+  it("says nothing for a row at rest", () => {
+    expect(rowStatusText(row())).toBeNull();
+  });
+});
+
+describe("rowPreview", () => {
+  it("gives the running row its live phrase in place of the last exchange", () => {
+    expect(rowPreview(row({ lane: "running", activity: "Searching the vault" }))).toEqual({
+      text: "Searching the vault",
+      live: true,
+    });
+  });
+
+  it("keeps the last exchange when nothing is running", () => {
+    expect(rowPreview(row())).toEqual({ text: "the last exchange", live: false });
+  });
+
+  it("keeps the last exchange on a running row with no phrase yet", () => {
+    expect(rowPreview(row({ lane: "running" }))).toEqual({
+      text: "the last exchange",
+      live: false,
+    });
+  });
+});
+
+describe("chatRowSig", () => {
+  const sig = (r: ChatRow) => chatRowSig(r, { rich: true, age: "now" });
+
+  it("is identical across a tick that changed nothing — no DOM is touched", () => {
+    // reconcileList rebuilds a node only when its signature moved, so an equal
+    // signature IS the "touches no DOM" guarantee.
+    const r = row({ lane: "running", activity: "Searching the vault" });
+    expect(sig(r)).toBe(sig(row({ lane: "running", activity: "Searching the vault" })));
+  });
+
+  it("moves when the phrase moves, so the row repaints on the next tool call", () => {
+    expect(sig(row({ lane: "running", activity: "Searching the vault" }))).not.toBe(
+      sig(row({ lane: "running", activity: "Reading Alpha" })),
+    );
+  });
+
+  it("moves when the rule an approval would grant moves", () => {
+    expect(sig(row({ lane: "needs-input", reason: "perm", permRule: "Bash(git)" }))).not.toBe(
+      sig(row({ lane: "needs-input", reason: "perm", permRule: "Bash(rm)" })),
+    );
+  });
+
+  it("still moves on the axes it already owned", () => {
+    expect(sig(row())).not.toBe(sig(row({ title: "Renamed" })));
+    expect(sig(row())).not.toBe(chatRowSig(row(), { rich: false, age: "now" }));
+    expect(sig(row())).not.toBe(chatRowSig(row(), { rich: true, age: "2h" }));
+  });
+});
+
+describe("the chats pane's reader/owner boundary", () => {
+  const source = readFileSync(join(__dirname, "..", "src/ui/chat-list-view.ts"), "utf8");
+  /** The file's CODE. The header comment is allowed — required, even — to name
+   *  `ChatView` while describing the boundary; the code is not. */
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("never reaches into ChatView: every mutation goes through a plugin wrapper", () => {
+    // Phase 5 gave the pane a decision to take (Allow / Deny), which is the
+    // first time it mutates a conversation. The boundary that survives is the
+    // one the file cannot cross by accident: no import of the view, and no
+    // handle on it to call.
+    expect(code).not.toMatch(/from "\.\.\/view"/);
+    expect(code).not.toMatch(/\bChatView\b/);
+    expect(code).not.toMatch(/chatView\s*\(/);
+  });
+
+  it("takes the permission decision through the plugin", () => {
+    expect(code).toMatch(/this\.plugin\.decidePermission\(/);
+  });
+});
+
+describe("the live phrase moves per tool call, never per token", () => {
+  const view = readFileSync(join(__dirname, "..", "src/view.ts"), "utf8");
+
+  it("is written in exactly one place: the tool-call-start handler", () => {
+    // The phrase sits in a row SIGNATURE, so its update rate is the sidebar's
+    // repaint rate. One assignment, on a tool boundary, is what keeps that
+    // affordable — a write from a render or streaming path would rebuild the
+    // row dozens of times a second.
+    expect([...view.matchAll(/\bc\.activity = /g)]).toHaveLength(1);
+    const at = view.indexOf("c.activity = ");
+    const openCase = view.lastIndexOf('case "tool-call-', at);
+    expect(view.slice(openCase, at)).toContain('case "tool-call-start"');
+  });
+
+  it("is cleared when the tool resolves and again when the turn ends", () => {
+    // Two clears, not one: a turn can end (stopped, errored, finished) without
+    // its last tool ever resolving, and a phrase left behind would sit on a
+    // settled row claiming live work.
+    expect([...view.matchAll(/delete c\.activity;/g)]).toHaveLength(2);
   });
 });

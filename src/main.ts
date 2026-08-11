@@ -23,6 +23,7 @@ import {
   activateAgents as activateAgentsView,
   activateChats as activateChatsView,
 } from "./ui/view-registry";
+import { registerChatCommands } from "./ui/chat-commands";
 import { registerExoIcons } from "./ui/icons";
 import * as convoBridge from "./ui/convo-bridge";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
@@ -598,16 +599,7 @@ export default class ExoPlugin extends Plugin {
       name: "Open Cockpit",
       callback: () => void this.openCockpit(),
     });
-    this.addCommand({
-      id: "open-chat-list",
-      name: "Open Exo chats",
-      callback: () => void this.activateChats(),
-    });
-    this.addCommand({
-      id: "retitle-chats",
-      name: "Retitle auto-named chats",
-      callback: () => void this.backfillTitles(),
-    });
+    registerChatCommands(this);
     this.addCommand({
       id: "open-proposals",
       name: "Review suggestions",
@@ -1172,6 +1164,8 @@ export default class ExoPlugin extends Plugin {
   deleteConversation(id: string): boolean { return convoBridge.deleteConversation(this.app, id); }
   async newConversation(): Promise<void> { await this.activateView(); convoBridge.chatView(this.app)?.newConversation(); }
   setConvoPinned(id: string, pinned: boolean): boolean { return convoBridge.setConvoPinned(this.app, id, pinned); }
+  decidePermission(id: string, verdict: "allow" | "deny"): boolean { return convoBridge.decidePermission(this.app, id, verdict); }
+  activeConvoId(): string | null { return convoBridge.activeConvoId(this.app); }
   retitleConversation(id: string): Promise<boolean> { return convoBridge.retitleConversation(this, id); }
   backfillTitles(): Promise<void> { return convoBridge.backfillTitles(this); }
 

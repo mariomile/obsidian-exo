@@ -20,3 +20,14 @@ export const Platform = { isMobile: false, isDesktopApp: true };
 export class ItemView {
   constructor(public leaf?: unknown) {}
 }
+
+/** User-facing feedback. Tests need it not to crash, and occasionally to read
+ *  back what was said — a command whose only outcome is a Notice ("nothing is
+ *  waiting on you") is otherwise untestable. */
+export class Notice {
+  static last = "";
+  constructor(public message: string) {
+    Notice.last = message;
+  }
+  hide(): void {}
+}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { matchPermRule, matchToolName, findToolRule, toolPermissionStatus, decidePermission, allowKey, permArgText, permRuleLine } from "../src/core/permissions";
+import { buildChatList, type ChatRowSource } from "../src/core/chat-rows";
 
 describe("matchPermRule", () => {
   it("matches Bash rules on command-token boundaries", () => {
@@ -222,5 +223,47 @@ describe("toolPermissionStatus", () => {
 
   it("falls back to asks when nothing matches", () => {
     expect(toolPermissionStatus("mcp__notion__create_pages", "mcp__notion__search", "")).toBe("asks");
+  });
+});
+
+describe("the inline decision path (chats sidebar)", () => {
+  /** A conversation blocked on a permission prompt, as `listChatRows` reports
+   *  it: still streaming (deriveLane's precedence), with the rule line the view
+   *  computed from the open card. */
+  const blockedOn = (tool: string, input: unknown): ChatRowSource => ({
+    id: "c1",
+    title: "Untitled",
+    preview: "",
+    provider: "claude",
+    model: "opus",
+    updatedAt: 1,
+    archived: false,
+    open: false,
+    pinned: false,
+    unseen: false,
+    messageCount: 1,
+    streaming: true,
+    pendingPerm: true,
+    pendingAsk: false,
+    poisoned: false,
+    stopped: false,
+    hasMessages: true,
+    permRule: permRuleLine(tool, input),
+  });
+
+  it("shows the row exactly the rule line the approval would grant", () => {
+    // One source of truth: the sidebar must not paraphrase the rule — what the
+    // row shows is what `permRuleLine` writes for the same call.
+    const vm = buildChatList([blockedOn("Bash", { command: "git status" })], { query: "", now: 2 });
+    expect(vm.blocked[0].permRule).toBe("Bash(git)");
+    expect(vm.blocked[0].reason).toBe("perm");
+  });
+
+  it("scopes a write rule to the file, not the tool", () => {
+    const vm = buildChatList([blockedOn("Write", { file_path: "Active/Foo.md" })], {
+      query: "",
+      now: 2,
+    });
+    expect(vm.blocked[0].permRule).toBe("Write(Active/Foo.md)");
   });
 });

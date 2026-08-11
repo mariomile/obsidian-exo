@@ -49,7 +49,15 @@ const CEILINGS: Record<string, number> = {
   // commit, cioè l'estrazione non compra niente di spendibile. 3480 è comunque
   // sotto il 3492 da cui si partiva. Se finisce anche questo, si estrae:
   // il candidato è il blocco dei comandi.
-  "src/main.ts": 3480,
+  //
+  // Abbassato il 2026-08-11 (fase 4-5 del piano chat+cosmos): i comandi della
+  // sidebar chat — `open-chat-list`, `retitle-chats` e il nuovo
+  // `next-needs-you` — vivono ora in `ui/chat-commands.ts`, cioè esattamente
+  // l'estrazione che il commento qui sopra indicava come prossima. 3480 -> 3474
+  // righe reali. Il tetto resta a 3474, senza margine, e stavolta è la scelta
+  // giusta e non un azzeramento: il blocco che cresce — i comandi — adesso ha
+  // un file dove atterrare, quindi il margine non serve più qui.
+  "src/main.ts": 3474,
   // Abbassato il 2026-08-11 dopo l'estrazione del merge command+skill del menu
   // `/` in `core/slash.ts` (`mergeSlashEntries`): la lista non è UI, è la
   // riconciliazione di due roster che si sovrappongono, e lì è testabile senza

@@ -3,6 +3,7 @@ import {
   buildChatList,
   relativeTime,
   modelLabel,
+  nextNeedsInput,
   type ChatListVM,
   type ChatRow,
   type ChatRowSource,
@@ -1010,5 +1011,121 @@ describe("buildChatList — hasChildren", () => {
         expect([row.id, row.hasChildren]).toEqual([row.id, row.depth === 0 && follows]);
       });
     }
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Phase 4 — the running row says what it is doing.
+ * ------------------------------------------------------------------------ */
+
+describe("buildChatList — the live activity phrase", () => {
+  it("carries the running tool's phrase onto the running row", () => {
+    const vm = build([src({ id: "a", streaming: true, activity: "Searching the vault" })]);
+    expect(rows(vm, "running")[0].activity).toBe("Searching the vault");
+  });
+
+  it("leaves a running row with no phrase yet without one", () => {
+    // Between two tool calls there is genuinely nothing to say; the row falls
+    // back to its status chip rather than showing the last tool's phrase.
+    const vm = build([src({ id: "a", streaming: true })]);
+    expect(rows(vm, "running")[0].activity).toBeUndefined();
+  });
+
+  it("never carries a phrase on a row that is not running", () => {
+    // A stale phrase on a settled row would be a lie about live work. The
+    // blocked case matters most: a conversation waiting on a permission prompt
+    // is STILL streaming, and its last tool phrase must not read as progress.
+    const settled = build([src({ id: "a", activity: "Searching the vault" })]);
+    expect(rows(settled, "settled")[0].activity).toBeUndefined();
+    const blockedVm = build([
+      src({ id: "b", streaming: true, pendingPerm: true, activity: "Running a command" }),
+    ]);
+    expect(rows(blockedVm, "needsYou")[0].activity).toBeUndefined();
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Phase 5 — the mission deck: the needs-you strip and the cycle key.
+ * ------------------------------------------------------------------------ */
+
+describe("buildChatList — the needs-you strip", () => {
+  it("is empty when nothing is blocked, so the strip renders nothing at all", () => {
+    const vm = build([src({ id: "a", streaming: true }), src({ id: "b" })]);
+    expect(vm.blocked).toEqual([]);
+  });
+
+  it("holds one entry per blocked chat, newest first, with the reason", () => {
+    const vm = build([
+      src({ id: "old", pendingAsk: true, streaming: true, updatedAt: NOON - HOUR }),
+      src({ id: "new", pendingPerm: true, streaming: true, updatedAt: NOON }),
+      src({ id: "running", streaming: true }),
+    ]);
+    expect(vm.blocked.map((r) => [r.id, r.reason])).toEqual([
+      ["new", "perm"],
+      ["old", "ask"],
+    ]);
+  });
+
+  it("survives every section being collapsed", () => {
+    // Collapse is a per-SECTION setting; the strip reads `blocked`, which is
+    // built before sectioning and is not addressable by a section key at all.
+    const vm = build([src({ id: "a", pendingPerm: true, streaming: true })]);
+    const everySection = vm.sections.map((s) => s.key);
+    expect(everySection.length).toBeGreaterThan(0);
+    expect(vm.blocked.map((r) => r.id)).toEqual(["a"]);
+    // Nothing the collapse state can say changes the answer above: `buildChatList`
+    // takes no collapse input, so a collapsed pane and an open one produce the
+    // same strip.
+    expect(build([src({ id: "a", pendingPerm: true, streaming: true })]).blocked.map((r) => r.id))
+      .toEqual(["a"]);
+  });
+
+  it("survives a search that filters the blocked chat off screen", () => {
+    // Stronger than collapse and the same principle: a chat that cannot move
+    // without you must never be reachable only through a filter you happen to
+    // be typing.
+    const vm = build([src({ id: "a", title: "Alpha", pendingPerm: true, streaming: true })], "zzz");
+    expect(allIds(vm)).toEqual([]);
+    expect(vm.blocked.map((r) => r.id)).toEqual(["a"]);
+  });
+
+  it("carries the rule an approval would grant on a permission block only", () => {
+    const vm = build([
+      src({ id: "perm", pendingPerm: true, streaming: true, permRule: "Bash(git)" }),
+      src({ id: "ask", pendingAsk: true, streaming: true, permRule: "Bash(git)" }),
+    ]);
+    const byId = new Map(vm.blocked.map((r) => [r.id, r]));
+    expect(byId.get("perm")?.permRule).toBe("Bash(git)");
+    // An open question is not a permission: there is no rule to grant, so the
+    // row must not offer Allow / Deny.
+    expect(byId.get("ask")?.permRule).toBeUndefined();
+  });
+
+  it("puts the rule on the section row too, so the row can decide in place", () => {
+    const vm = build([src({ id: "perm", pendingPerm: true, streaming: true, permRule: "Bash(git)" })]);
+    expect(rows(vm, "needsYou")[0].permRule).toBe("Bash(git)");
+  });
+});
+
+describe("nextNeedsInput", () => {
+  const blocked = [{ id: "a" }, { id: "b" }, { id: "c" }];
+
+  it("answers null when nothing needs you", () => {
+    expect(nextNeedsInput([], "a")).toBeNull();
+  });
+
+  it("starts at the first blocked chat when you are nowhere near one", () => {
+    expect(nextNeedsInput(blocked, null)).toBe("a");
+    expect(nextNeedsInput(blocked, "not-blocked")).toBe("a");
+  });
+
+  it("moves to the next one and wraps around", () => {
+    expect(nextNeedsInput(blocked, "a")).toBe("b");
+    expect(nextNeedsInput(blocked, "b")).toBe("c");
+    expect(nextNeedsInput(blocked, "c")).toBe("a");
+  });
+
+  it("stays put when the only blocked chat is the one you are in", () => {
+    expect(nextNeedsInput([{ id: "a" }], "a")).toBe("a");
   });
 });

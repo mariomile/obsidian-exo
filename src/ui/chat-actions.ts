@@ -34,6 +34,24 @@ export function setConvoPinned(view: ChatView, id: string, pinned: boolean): boo
   return true;
 }
 
+/**
+ * Settle a conversation's open permission prompt without opening its
+ * transcript — the chats sidebar's inline Allow / Deny. The handle it calls is
+ * the card's own `settle`, so the card resolves, stamps its verdict and clears
+ * the pending state exactly as if the user had clicked it there.
+ *
+ * False when there is nothing to settle: the prompt was already answered, or
+ * the chat is blocked on a question or a plan, neither of which is a one-line
+ * yes/no. The caller says so rather than leaving a dead button on screen.
+ */
+export function decidePermission(view: ChatView, id: string, verdict: "allow" | "deny"): boolean {
+  const decision = find(view, id)?.pendingDecision;
+  if (!decision) return false;
+  if (verdict === "allow") decision.allow();
+  else decision.deny();
+  return true;
+}
+
 /** The last complete exchange, in the shape `generateTitle` wants. Returns null
  *  when the conversation has no assistant reply yet — there is nothing to title
  *  from, and asking a model to name a monologue produces a paraphrase. */

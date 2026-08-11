@@ -1,17 +1,28 @@
 /**
  * The `exo-chats` sidebar — every AI conversation in one left-hand list,
  * grouped by state (what needs you, what is running, what you have open) or,
- * in `days` mode, by the day it was last touched.
+ * in `days` mode, by the day it was last touched. It is also the mission deck:
+ * a needs-you strip above the search field, and a decision you can take from
+ * the row itself when a chat is blocked on a permission.
  *
- * It is a READER, not an owner. The conversations live in `ChatView`; this pane
- * projects them through `plugin.listChatRows()` and mutates only through the
- * plugin wrappers. Clicking a row reveals the conversation in whatever Exo pane
- * is open — a row click never moves the chat and never spawns one. (The header
- * `+` does spawn one; that is an explicit gesture, not a side effect of
- * browsing.)
+ * THE BOUNDARY. This pane owns no conversation. It reads them through
+ * `plugin.listChatRows()` and it CHANGES them only through plugin wrappers —
+ * `main.ts` / `ui/convo-bridge.ts` — which is why nothing here holds a
+ * `ChatView`, imports one, or knows the shape of one. That was true when the
+ * pane only browsed; it is load-bearing now that it decides. An inline Allow
+ * resolves the same permission card the transcript would, through the card's
+ * own settle path (`ui/chat-actions.ts` `decidePermission`), so there is one
+ * verdict path and not two. A test enforces the rule the comment states
+ * (`tests/chat-list-state.test.ts`, "the chats pane's reader/owner boundary").
  *
- * All tiering, filtering and grouping is decided by `core/chat-rows`, which is
- * pure; this file owns the DOM, the clock read, and the gestures.
+ * What the pane may do on its own is unchanged: clicking a row reveals the
+ * conversation in whatever Exo pane is open — a row click never moves the chat
+ * and never spawns one. (The header `+` does spawn one; that is an explicit
+ * gesture, not a side effect of browsing.)
+ *
+ * All tiering, filtering and grouping is decided by `core/chat-rows`, and what
+ * a row SAYS by `core/chat-list-state` — both pure; this file owns the DOM, the
+ * clock read, and the gestures.
  */
 import { App, ItemView, Menu, Modal, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type ExoPlugin from "../main";
@@ -26,9 +37,12 @@ import {
 import type { ChatSectionKey } from "../core/chat-rows";
 import {
   chatDot,
+  chatRowSig,
   collapseChildren,
   isParentCollapsed,
   isSectionCollapsed,
+  rowPreview,
+  rowStatusText,
   toggleParentCollapsed,
   toggleSectionCollapsed,
   type ChatDot,
@@ -59,12 +73,6 @@ const BACKSTOP_MS = 5000;
  *  bridge returns `null` instead of `[]`. */
 type EmptyKind = "open-exo" | "no-chats" | "no-matches";
 
-/** Status chip for a running or blocked row. The age already sits on the title
- *  line, so this only has to say WHICH kind of answer is being waited on —
- *  `needs-input` already outranks `running` in the model. */
-const statusText = (r: ChatRow): string =>
-  r.lane === "needs-input" ? `Needs ${r.reason === "perm" ? "permission" : "an answer"}` : "Working";
-
 /** What the gutter dot says out loud. Shape and colour are the visual channel;
  *  a screen reader gets neither, so the meaning is spelled out. */
 const DOT_LABEL: Record<ChatDot, string> = {
@@ -76,6 +84,14 @@ const DOT_LABEL: Record<ChatDot, string> = {
 export class ChatListView extends ItemView {
   private query = "";
   private listHost: HTMLElement | null = null;
+  /** The needs-you strip, pinned above the search field. Outside `listHost` on
+   *  purpose: that is what makes it immune to section collapse — no section owns
+   *  it, so no section can put it away. */
+  private needsHost: HTMLElement | null = null;
+  /** Signature of the painted strip, so the 5s backstop rebuilds it only when
+   *  what is blocked actually changed. Same discipline as `reconcileList`, which
+   *  the strip is too small to be worth. */
+  private needsSig = "";
   private emptyHost: HTMLElement | null = null;
   private searchEl: HTMLInputElement | null = null;
   /** Which empty state is currently painted, so the 5s backstop doesn't rebuild
@@ -158,6 +174,12 @@ export class ChatListView extends ItemView {
     const add = head.createEl("button", { cls: "mva-icon-btn", attr: { "aria-label": "New chat" } });
     setIcon(add, "plus");
     add.onclick = () => void this.plugin.newConversation();
+
+    // Above the search field, below the header: the first thing read on the way
+    // in, and the one band of the pane a filter or a collapsed section cannot
+    // empty. Built once and left empty — an empty strip collapses to nothing in
+    // CSS (`:empty`), so at rest the pane looks exactly as it did before.
+    this.needsHost = root.createDiv({ cls: "mva-chats-needs" });
 
     const search = root.createEl("input", {
       cls: "mva-chats-search",
@@ -262,7 +284,10 @@ export class ChatListView extends ItemView {
   private paint(): void {
     if (!this.listHost) return;
     const sources = this.plugin.listChatRows();
-    if (sources === null) return this.renderEmpty("open-exo");
+    if (sources === null) {
+      this.renderNeedsStrip([]);
+      return this.renderEmpty("open-exo");
+    }
     // One clock read per paint: grouping and the row labels must agree, and two
     // Date.now() calls a few lines apart can straddle a minute boundary.
     const now = Date.now();
@@ -273,6 +298,10 @@ export class ChatListView extends ItemView {
       // Only feed the ranking back in if it answered the query on screen.
       semanticIds: this.semanticFor === this.query.trim() ? this.semanticIds : [],
     });
+    // BEFORE the empty states, deliberately: the strip answers "what is waiting
+    // on me", and a search that matches nothing must not be able to take that
+    // answer off screen (core/chat-rows, `blocked`).
+    this.renderNeedsStrip(vm.blocked);
     if (vm.total === 0) return this.renderEmpty("no-chats");
     if (vm.matched === 0) return this.renderEmpty("no-matches");
     if (this.emptyKind !== null) {
@@ -305,6 +334,52 @@ export class ChatListView extends ItemView {
       .map((r) => r.id);
     if (this.cursor && !this.order.includes(this.cursor)) this.cursor = null;
     this.paintCursor(false);
+  }
+
+  /* ---------------------------- needs-you strip ------------------------- */
+
+  /**
+   * One quiet chip per blocked chat, or nothing at all.
+   *
+   * Three rules, and they are the whole feature:
+   *
+   *  1. ABSENT WHEN EMPTY. Not a "0 waiting" badge, not an empty tray: a strip
+   *     that is always on screen is an alert surface, and this pane already
+   *     cured its alarm fatigue once. At rest the band does not exist.
+   *  2. IMMUNE TO COLLAPSE. It renders outside `listHost`, from `vm.blocked`,
+   *     which is built before sectioning — so no collapsed section and no
+   *     half-typed search can hide a chat that cannot move without you.
+   *  3. QUIET. A chip is a title and what it is waiting on, in the pane's own
+   *     text ladder. The urgency is carried by the fact that the band exists,
+   *     not by colour.
+   *
+   * Rebuilt only when the set actually changes: the 5s backstop calls this on
+   * every tick, and a rebuild would drop the focus ring off a chip the user is
+   * tabbing through.
+   */
+  private renderNeedsStrip(blocked: readonly ChatRow[]): void {
+    const host = this.needsHost;
+    if (!host) return;
+    const sig = blocked.map((r) => `${r.id}:${r.reason ?? ""}`).join("|");
+    if (sig === this.needsSig) return;
+    this.needsSig = sig;
+    host.empty();
+    if (blocked.length === 0) return;
+    for (const r of blocked) {
+      const chip = host.createDiv({ cls: "mva-chats-needs-chip" });
+      chip.createSpan({ cls: "mva-chats-needs-name", text: r.title });
+      chip.createSpan({
+        cls: "mva-chats-needs-why",
+        text: r.reason === "perm" ? "permission" : "answer",
+      });
+      // The chip says what it wants; a screen reader gets the whole sentence,
+      // because "Alpha permission" out of context is not one.
+      chip.setAttribute(
+        "aria-label",
+        `${r.title} — needs ${r.reason === "perm" ? "permission" : "an answer"}`,
+      );
+      clickable(chip, () => void this.plugin.revealConversation(r.id));
+    }
   }
 
   /* ------------------------------ keyboard ------------------------------ */
@@ -568,27 +643,12 @@ export class ChatListView extends ItemView {
   private rowModel(r: ChatRow, now: number): CardModel {
     // Running, open or pinned: something you are actively choosing between.
     const rich = r.lane != null || r.open || r.pinned;
-    // The rendered AGE LABEL, not the raw `updatedAt`: the label moves as `now`
-    // advances while the timestamp sits still, so a raw-ms signature would leave
-    // "now" on screen for an hour. It also collapses millisecond churn that
-    // changes nothing on screen into a no-op tick. `rich` is part of the
-    // identity too — the same conversation is a different element in the
-    // working set than in history, so crossing that line rebuilds rather than
-    // patches.
+    // The rendered AGE LABEL, not the raw `updatedAt` — see `chatRowSig`, which
+    // owns the rest of that argument and everything a painted row depends on.
     const age = r.updatedAt ? relativeTime(r.updatedAt, now) : "";
     return {
       key: r.id,
-      sig: [
-        rich, r.title, r.preview, r.lane ?? "", r.reason ?? "", r.badge ?? "",
-        r.provider, r.model, r.messageCount, r.open, r.pinned, r.unseen, age,
-        // A row that gains or loses its parent changes shape, so it has to
-        // rebuild rather than be patched in place at the wrong indent. Gaining
-        // or losing CHILDREN is the same kind of change — it adds or removes
-        // the collapse control. Whether that control is currently collapsed is
-        // deliberately absent: that is applied as a class afterwards, so
-        // toggling never rebuilds the row you are standing on.
-        r.depth, r.hasChildren,
-      ].join("|"),
+      sig: chatRowSig(r, { rich, age }),
       build: () => (rich ? this.buildRichRow(r, now) : this.buildCompactRow(r, now)),
     };
   }
@@ -609,6 +669,12 @@ export class ChatListView extends ItemView {
     // gutter dot carries those two states now, and a class nothing styles is a
     // hook that quietly rots.
     if (r.lane === "needs-input") row.addClass("is-needs-input");
+    // The attention rung: a row that wants a human reads at full luminosity and
+    // everything healthy sits one step down. Membership is `needsYou`'s own
+    // definition (core/chat-rows `activityKey`) — blocked, or finished badly —
+    // so the brightest rows on screen are exactly the section's rows, wherever
+    // grouping happens to have put them.
+    if (r.lane === "needs-input" || r.badge) row.addClass("is-attention");
     if (r.open) row.addClass("is-active");
 
     this.dotInto(row, r);
@@ -622,19 +688,73 @@ export class ChatListView extends ItemView {
     this.kidsToggleInto(head, r);
     head.createSpan({ cls: "mva-chats-age", text: r.updatedAt ? relativeTime(r.updatedAt, now) : "" });
 
-    // A conversation can be streaming its very first turn with no assistant text
-    // to preview yet; omit the line rather than repeating the title under it.
-    if (r.preview) row.createDiv({ cls: "mva-chats-preview mva-type-body", text: r.preview });
+    // The preview line carries the last exchange — or, while a tool is actually
+    // running, what that tool is doing ("Searching the vault"). Same line, so a
+    // turn starting never adds a row height; `is-activity` makes it one
+    // truncated line instead of two wrapped ones, because a phrase that wrapped
+    // would reflow the row on every tool call. A conversation streaming its very
+    // first turn can still have nothing to say: omit the line rather than
+    // repeating the title under it.
+    const preview = rowPreview(r);
+    if (preview.text) {
+      const line = row.createDiv({ cls: "mva-chats-preview mva-type-body", text: preview.text });
+      if (preview.live) line.addClass("is-activity");
+    }
 
+    const status = rowStatusText(r);
     const meta = row.createDiv({ cls: "mva-chats-meta" });
-    if (r.lane) meta.createSpan({ cls: "mva-chats-status", text: statusText(r) });
-    else if (r.unseen) meta.createSpan({ cls: "mva-chats-status is-unseen", text: "New reply" });
+    if (status) meta.createSpan({ cls: "mva-chats-status", text: status });
+    else if (!r.lane && r.unseen) meta.createSpan({ cls: "mva-chats-status is-unseen", text: "New reply" });
     meta.createSpan({ text: modelLabel(r.provider, r.model) });
     meta.createSpan({ cls: "mva-chats-count", text: `${r.messageCount}` });
     this.badgeInto(meta, r);
+    this.decideInto(row, r);
     row.dataset.id = r.id;
     this.wireRow(row, r);
     return row;
+  }
+
+  /**
+   * Inline Allow / Deny, on a row blocked on a permission and nowhere else.
+   *
+   * The rule line is the point: `Bash(git)` says what a yes covers, so the
+   * decision is legible where it is taken and the transcript is not the only
+   * place the scope is written down. It is `permRuleLine`'s own output, carried
+   * through the row source — the sidebar never paraphrases a permission.
+   *
+   * Two verdicts, not the card's three. "Always allow" writes a standing rule,
+   * and a standing rule is not something a single click in a sidebar should be
+   * able to grant; that decision stays where the full detail of the call is.
+   *
+   * Both handlers STOP PROPAGATION — the row's own click reveals the
+   * conversation, and answering a prompt must not also yank the pane over to
+   * it, for the click and for the Enter/Space `clickable` wires.
+   */
+  private decideInto(row: HTMLElement, r: ChatRow): void {
+    if (!r.permRule) return;
+    const box = row.createDiv({ cls: "mva-chats-decide" });
+    box.createSpan({ cls: "mva-chats-rule", text: r.permRule });
+    const act = (label: string, cls: string, verdict: "allow" | "deny") => {
+      const btn = box.createEl("button", { cls, text: label });
+      btn.setAttr("aria-label", `${label} ${r.permRule} in "${r.title}"`);
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        this.decide(r, verdict);
+      };
+    };
+    act("Allow", "mva-btn mva-btn-primary mva-chats-decide-btn", "allow");
+    act("Deny", "mva-btn mva-chats-decide-btn", "deny");
+  }
+
+  /** Take the verdict through the plugin — never through the view that owns the
+   *  conversation (see the file header). A false answer means the prompt was
+   *  already settled somewhere else, which is worth saying: the row was showing
+   *  a decision that no longer existed. */
+  private decide(r: ChatRow, verdict: "allow" | "deny"): void {
+    if (!this.plugin.decidePermission(r.id, verdict)) {
+      new Notice("That request was already answered.");
+    }
+    this.paint();
   }
 
   /**
@@ -672,6 +792,11 @@ export class ChatListView extends ItemView {
   private buildCompactRow(r: ChatRow, now: number): HTMLElement {
     const row = createDiv({ cls: "mva-chats-row is-compact" });
     if (r.depth === 1) row.addClass("is-child");
+    // Same rung as the rich rows: a turn that ended badly wants a human, and
+    // filing it in history does not make it less true. A blocked row can never
+    // reach this density (a lane always earns a rich row), so this is the whole
+    // of the attention rule down here.
+    if (r.badge) row.addClass("is-attention");
     if (r.open) row.addClass("is-active");
     this.dotInto(row, r);
     row.createSpan({ cls: "mva-chats-name mva-type-body", text: r.title });

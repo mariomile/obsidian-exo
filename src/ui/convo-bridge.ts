@@ -41,6 +41,19 @@ export function setConvoPinned(app: App, convoId: string, pinned: boolean): bool
   return view ? actions.setConvoPinned(view, convoId, pinned) : false;
 }
 
+/** Answer a conversation's open permission prompt from the chats sidebar. This
+ *  is the ONLY route the pane has to a verdict: it never holds a `ChatView`. */
+export function decidePermission(app: App, convoId: string, verdict: "allow" | "deny"): boolean {
+  const view = chatView(app);
+  return view ? actions.decidePermission(view, convoId, verdict) : false;
+}
+
+/** Which conversation the user is standing in, or null when Exo is not mounted.
+ *  The anchor the "next chat needing you" cycle counts from. */
+export function activeConvoId(app: App): string | null {
+  return chatView(app)?.active?.id ?? null;
+}
+
 export async function retitleConversation(plugin: ExoPlugin, convoId: string): Promise<boolean> {
   const view = chatView(plugin.app);
   return view ? actions.retitleConversation(view, plugin, convoId) : false;

@@ -6460,6 +6460,46 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-heading {
   flex: 1;
 }
+/* The needs-you strip — the mission deck's top band. Pinned above the search
+   field, one chip per chat that cannot move without you, and ABSENT when there
+   is nothing: `:empty` is the whole no-alarm-fatigue rule expressed in CSS. A
+   strip that were always on screen (an empty tray, a "0 waiting" badge) would
+   be a standing alert, which is exactly what the chip redesign cured.
+
+   Quiet by construction: no fill of its own, the kit hairline for an edge, the
+   pane's own text ladder for colour. What makes it urgent is that it EXISTS. */
+.mva-chats-needs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 10px 6px;
+}
+.mva-chats-needs:empty { display: none; }
+.mva-chats-needs-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 7px;
+  border: 1px solid var(--mva-hairline);
+  border-radius: var(--mva-r-chip);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+  transition: background var(--mva-t), border-color var(--mva-t);
+}
+.mva-chats-needs-chip:hover { background: var(--mva-card-bg-hover); }
+/* Top of the ladder: these are the rows that want a human. */
+.mva-chats-needs-name {
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* …and what it is waiting on sits a rung below, because it is the qualifier,
+   not the thing. */
+.mva-chats-needs-why { flex-shrink: 0; color: var(--text-faint); }
+
 .mva-chats-search {
   margin: 0 10px 6px;
   min-height: var(--mva-control-h);
@@ -6648,6 +6688,24 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
+/* The live phrase — what the running tool is doing, on the line the last
+   exchange would otherwise use. ONE line, never two: the phrase changes per tool
+   call, and a wrapping one would grow and shrink the row every few seconds while
+   the eye is elsewhere.
+
+   A mask, not an ellipsis: the text runs to the edge and dissolves, which reads
+   as "still going" rather than "cut off" — the right feeling for a sentence
+   about work in progress. It is a MASK and not a painted gradient: nothing is
+   drawn over the row, so the treatment holds on any surface underneath it,
+   which is the whole reason the fade band elsewhere in this file has to know
+   its own background colour and this does not. */
+.mva-chats-preview.is-activity {
+  display: block;
+  white-space: nowrap;
+  -webkit-line-clamp: none;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 22px), transparent);
+}
 .mva-chats-meta {
   display: flex;
   align-items: center;
@@ -6698,18 +6756,29 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   white-space: nowrap;
 }
 /* Register B: a working-set row IS a card title. Weight and tracking come from
-   the register; only the colour and the truncation are this row's business. */
+   the register; only the colour and the truncation are this row's business.
+
+   THE ATTENTION LADDER. Colour here is one axis with three rungs, spent in the
+   order the pane is read: a row that wants a human at full luminosity
+   (`--text-normal`), everything healthy and settled one rung down
+   (`--text-muted`), and the metadata under both a rung lower again
+   (`--text-faint`, already on `.mva-chats-meta` / `.mva-chats-age`). Nothing new
+   is invented for it — no second colour, no weight bump, no badge: dimming what
+   is fine is what makes what is not fine legible across a full pane. Hover,
+   cursor and the open tab still brighten, because those are things you are
+   pointing at. */
 .mva-chats-row.is-rich .mva-chats-name {
   flex: 1;
   min-width: 0;
-  color: var(--text-normal);
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mva-chats-row.is-compact:hover .mva-chats-name,
-.mva-chats-row.is-compact.is-active .mva-chats-name,
-.mva-chats-row.is-compact.is-cursor .mva-chats-name { color: var(--text-normal); }
+.mva-chats-row.is-attention .mva-chats-name,
+.mva-chats-row:hover .mva-chats-name,
+.mva-chats-row.is-active .mva-chats-name,
+.mva-chats-row.is-cursor .mva-chats-name { color: var(--text-normal); }
 .mva-chats-age { flex-shrink: 0; color: var(--text-faint); font-size: var(--font-ui-smaller); }
 
 /* Fan-out children — indented one step under the conversation that spawned
@@ -6750,6 +6819,38 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    follow, and for the same reason: a control that hides rows without saying how
    many turns "put this away" into "forget it exists". */
 .mva-chats-kids-count:empty { display: none; }
+
+/* Inline decision — Allow / Deny on a row blocked on a permission, with the one
+   line that says what a yes covers. Only ever on that row, so this is not a
+   surface the pane wears at rest: it appears exactly as long as a prompt is
+   open and disappears with it.
+
+   The rule line reads as code because it IS the rule, character for character,
+   the transcript would write; a rewritten-in-prose version would be a second
+   source of truth about what the user just granted. */
+.mva-chats-decide {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+}
+.mva-chats-rule {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Same buttons as everywhere else in the kit, one size down: a sidebar is 216px
+   wide and a full-size pair would own the row. */
+.mva-chats-decide-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: var(--font-ui-smaller);
+}
 
 /* Markers — pin and the stopped/error badge, shared by both densities. */
 .mva-chats-pin,

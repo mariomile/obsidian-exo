@@ -91,6 +91,21 @@ export interface ConvoData {
   messages: PersistedMessage[];
 }
 
+/**
+ * An open permission prompt, as seen from outside the transcript. Two verdicts
+ * only — the card's third, "Always allow", writes a standing rule, and granting
+ * a standing rule is not something a one-click sidebar row should be able to do
+ * — plus the one line that says what a yes covers (`Bash(git)`), so the choice
+ * is legible where it is taken.
+ */
+export interface PermDecision {
+  /** The rule line an approval would grant, from `core/permissions`'
+   *  `permRuleLine` — never paraphrased by the surface that shows it. */
+  rule: string;
+  allow: () => void;
+  deny: () => void;
+}
+
 /** A live task plus its scroll-to target card. The DOM-free `LiveTask` fields
  *  feed the pure core; `cardEl` is view-only. */
 export type LiveTaskRecord = LiveTask & { cardEl: HTMLElement };
@@ -164,6 +179,19 @@ export interface Convo {
   goal?: GoalState;
   pendingPerm: (() => void) | null; // cancels an open permission card on stop
   pendingAsk: (() => void) | null; // cancels an open ask card on stop
+  /** The open permission prompt, reduced to what a surface outside the
+   *  transcript needs to settle it — the chats sidebar's inline Allow / Deny.
+   *  Has exactly the life of the card (see `setPendingCard`, the one mutation
+   *  point that clears it), so no row can hold a live button over a prompt that
+   *  is already answered. Runtime-only, never persisted: an unanswered prompt
+   *  does not survive a reload — the turn holding it is gone. */
+  pendingDecision?: PermDecision | null;
+  /** What this conversation is doing RIGHT NOW, as a human phrase ("Searching
+   *  the vault") — set on tool-call-start, cleared on result and at turn end,
+   *  so it moves per tool call and never per token. Read by the Context rail
+   *  for the active chat and by the chats sidebar for every running row.
+   *  Runtime-only. */
+  activity?: string;
   /** A turn completed on this conversation while it was not the focused tab.
    *  Runtime-only, never persisted (same discipline as `aiTitleAttempts`): after
    *  a reload there is nothing you "have not seen". */

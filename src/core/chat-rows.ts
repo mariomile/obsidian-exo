@@ -57,6 +57,17 @@ export interface ChatRowSource {
   poisoned: boolean;
   stopped: boolean;
   hasMessages: boolean;
+  /** What the tool running RIGHT NOW is doing, as a human phrase ("Searching
+   *  the vault"). Written by the view per TOOL CALL and never per token, which
+   *  is the whole reason it can sit in a row signature: a phrase that moved on
+   *  every token would rebuild the row dozens of times a second. Absent between
+   *  calls and whenever nothing is running. */
+  activity?: string;
+  /** The one-line permission rule the open permission prompt is asking about
+   *  (`Bash(git)`), so the decision can be taken from the row without opening
+   *  the transcript. Absent unless a permission card is open on this
+   *  conversation. */
+  permRule?: string;
 }
 
 export interface ChatRow {
@@ -94,6 +105,16 @@ export interface ChatRow {
   lane?: "running" | "needs-input";
   reason?: NeedsInputReason;
   badge?: SessionBadge;
+  /** The running tool's human phrase — present only on a `running` row, and
+   *  only once a tool call has actually started. Deliberately NOT carried on a
+   *  blocked row: a conversation waiting on a permission prompt is still
+   *  `streaming: true`, and its last tool phrase would read as progress on the
+   *  one row that cannot progress. */
+  activity?: string;
+  /** The rule an approval would grant, on a row blocked on a PERMISSION only
+   *  (`reason === "perm"`). An open question has no rule to grant, so the row
+   *  offers no inline decision. */
+  permRule?: string;
 }
 
 /**
@@ -149,6 +170,20 @@ export interface ChatListVM {
    * their own rather than mixed into the results.
    */
   sections: ChatSection[];
+  /**
+   * Every conversation blocked on a human right now — a permission prompt or an
+   * open question — newest first. The needs-you strip's whole source.
+   *
+   * Deliberately NOT a section: it is derived from the visible set BEFORE the
+   * query filter and outside the section machinery entirely, because that is
+   * the only thing "immune to collapse" can honestly mean. A chat that cannot
+   * move without you must not be reachable only through a section the user put
+   * away, or through a search they happen to be halfway through typing.
+   *
+   * Empty when nothing is blocked, and the strip then renders nothing at all —
+   * no chrome, no placeholder, no standing alert surface.
+   */
+  blocked: ChatRow[];
   /** Rows before the query filter. Distinguishes "no chats yet" from "no chats
    *  match" — different empty states, and collapsing them makes a search look
    *  like it deleted the user's data. */
@@ -327,6 +362,46 @@ function toRow(s: ChatRowSource): ChatRow {
   return row;
 }
 
+/**
+ * Stamp the live facts on a row: which lane it is in, why, and the two live
+ * strings the sidebar renders — the running tool's phrase and the rule an
+ * approval would grant. One function because the section rows and the needs-you
+ * strip are built by two different passes over the same conversations, and two
+ * copies of this rule would drift the day one of them gained a third string.
+ */
+function stampLive(row: ChatRow, s: ChatRowSource, d: ReturnType<typeof deriveLane>): ChatRow {
+  if (d.lane === "running" || d.lane === "needs-input") {
+    row.lane = d.lane;
+    if (d.reason) row.reason = d.reason;
+  }
+  // The badge is independent of the lane and survives into any section: a chat
+  // whose last turn errored says so whether it is open, pinned or filed.
+  if (d.badge) row.badge = d.badge;
+  if (row.lane === "running" && s.activity) row.activity = s.activity;
+  if (row.reason === "perm" && s.permRule) row.permRule = s.permRule;
+  return row;
+}
+
+/**
+ * The next conversation to attend to, cycling and wrapping — the idle-worker
+ * key. `fromId` is where the user is standing now; a `fromId` that is not
+ * itself blocked (the usual case: you are reading something unrelated) starts
+ * the walk at the first blocked chat rather than nowhere.
+ *
+ * Wrapping is right here and not in the sidebar's arrow keys, which
+ * deliberately stop at both ends: this list is short and is a QUEUE, so the
+ * gesture is "give me the next one" and running off the end would mean the last
+ * unanswered chat is the one you cannot reach twice.
+ */
+export function nextNeedsInput(
+  blocked: readonly { id: string }[],
+  fromId: string | null,
+): string | null {
+  if (blocked.length === 0) return null;
+  const at = fromId ? blocked.findIndex((r) => r.id === fromId) : -1;
+  return blocked[(at + 1) % blocked.length].id;
+}
+
 /** Stamp the nesting `groupAcrossHomes` decided — the indent AND whether
  *  anything sits under the row — onto each row of one output collection. A row
  *  that is neither indented nor a parent already says so (`toRow`), so it comes
@@ -375,18 +450,17 @@ export function buildChatList(
   }
 
   const rows: ChatRow[] = [];
-  for (const s of matched) {
+  for (const s of matched) rows.push(stampLive(toRow(s), s, deriveLane(s)));
+
+  // The needs-you strip, over `visible` rather than `matched` — see `blocked`
+  // on ChatListVM for why it is built here, off to the side, instead of being
+  // read back out of a section.
+  const blocked: ChatRow[] = [];
+  for (const s of visible) {
     const d = deriveLane(s);
-    const row = toRow(s);
-    if (d.lane === "running" || d.lane === "needs-input") {
-      row.lane = d.lane;
-      if (d.reason) row.reason = d.reason;
-    }
-    // The badge is independent of the lane and survives into any section: a
-    // chat whose last turn errored says so whether it is open, pinned or filed.
-    if (d.badge) row.badge = d.badge;
-    rows.push(row);
+    if (d.lane === "needs-input") blocked.push(stampLive(toRow(s), s, d));
   }
+  blocked.sort(byRecency);
 
   // Named homes for the nesting pass, in paint order. `related` is deliberately
   // NOT one of them — see below.
@@ -446,6 +520,7 @@ export function buildChatList(
     // a parent elsewhere — is dropped rather than rendered as a header over
     // nothing: a label with no rows under it promises content that isn't there.
     sections: sections.filter((s) => s.items.length > 0),
+    blocked,
     total: visible.length,
     // Related rows count as matches: without them a search whose only hits are
     // semantic would report zero and render the "no matches" empty state over a

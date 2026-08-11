@@ -311,10 +311,6 @@ export class ChatView extends ItemView {
   private memoryObserver: MemoryObserver | null = null;
   /** The Agent Is the Folder — block reader/writer, lazily created (one per view). */
   private agentFolder: AgentFolder | null = null;
-  /** In-flight tool phrase for the Context panel's live activity row while a turn
-   *  streams (set on tool-call-start, cleared on result/turn-end). Only the idle
-   *  path — `updateRecap()` — ignores it; `updateContextLive()` renders it. */
-  private currentActivity: { phrase: string } | null = null;
   /** Last computed wide state — only rebuild the Context panel on the transition. */
   private wasWide = false;
   private brandDot!: HTMLElement;
@@ -576,7 +572,7 @@ export class ChatView extends ItemView {
     this.recapPanel.render(
       this.recapHost,
       buildConvoRecap(live, (p) => this.relPath(p)),
-      this.currentActivity,
+      this.active.activity ? { phrase: this.active.activity } : null,
       { enabled: this.active.researchMode.enabled }
     );
   }
@@ -2255,6 +2251,11 @@ export class ChatView extends ItemView {
       poisoned: !!c.resumeRisky,
       stopped: c.stopped,
       hasMessages: c.messages.length > 0,
+      // The two live strings the sidebar renders. Both are facts about a card
+      // or a tool call that is open RIGHT NOW; `buildChatList` decides which
+      // rows are allowed to show them.
+      activity: c.activity,
+      permRule: c.pendingDecision?.rule,
     }));
   }
 
@@ -4462,6 +4463,15 @@ export class ChatView extends ItemView {
     // If the user presses Stop while this card is open, cancel it (the provider
     // side is already unblocked via interrupt → deny).
     this.setPendingCard(c, "perm", () => finishCard("Cancelled", { behavior: "deny", message: "Stopped." }));
+    // The same two verdicts, reachable from outside the transcript (the chats
+    // sidebar decides in place). Routed through `settle`, so a decision taken
+    // from a sidebar row resolves this card, stamps its verdict and clears the
+    // pending state through exactly the path the buttons below use.
+    c.pendingDecision = {
+      rule: permRuleLine(tool, input),
+      allow: () => settle({ behavior: "allow" }),
+      deny: () => settle({ behavior: "deny", message: "Denied by user." }),
+    };
     this.plugin.emitConvoState(c.id, "needs-input", { reason: "perm" }); // fire-and-forget board hook (no-op when off; can't throw)
     actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Allow once" }).onclick = () =>
       settle({ behavior: "allow" });
@@ -5012,8 +5022,13 @@ export class ChatView extends ItemView {
    *  The two construction sites (`makeConvo`, `restore`) stay literal: a
    *  conversation being built has no tab to repaint yet. */
   private setPendingCard(c: Convo, kind: "perm" | "ask", cancel: (() => void) | null): void {
+    // The out-of-transcript decision handle has exactly the life of the card,
+    // and this is the one place every close path goes through — a verdict, a
+    // Stop, the turn teardown — so clearing it here is what stops a sidebar row
+    // holding a live Allow button over a prompt that is already answered.
     if (kind === "perm") c.pendingPerm = cancel;
     else c.pendingAsk = cancel;
+    if (kind === "perm" && !cancel) c.pendingDecision = null;
     this.refreshTabs();
   }
 
@@ -5770,12 +5785,16 @@ export class ChatView extends ItemView {
           // stays visible below the tool card during execution.
           this.setWorkingLabel(ctx, toolWorkingLabel(e.name, e.input));
           this.syncWorking(ctx);
-          // Context panel goes live: show what this tool is doing right now. Guarded
-          // to the active convo + wide main so nothing runs in the sidebar.
-          if (c === this.active && this.isWideMain()) {
-            this.currentActivity = { phrase: describeActivity(e.name, e.input) };
-            this.updateContextLive(ctx);
-          }
+          // What this conversation is doing right now, in one human phrase. On
+          // the CONVO, not the view: the chats sidebar reads it off every
+          // running row through `listChatRows`, so it is recorded for every
+          // conversation and not only for the one the Context rail is looking
+          // at. Written here, on tool-call-start — so it moves per TOOL CALL
+          // and never per token.
+          c.activity = describeActivity(e.name, e.input);
+          // The rail is still guarded to the active convo + wide main, so no
+          // panel work happens in the sidebar.
+          if (c === this.active && this.isWideMain()) this.updateContextLive(ctx);
           break;
         }
         case "tool-call-result": {
@@ -5830,12 +5849,11 @@ export class ChatView extends ItemView {
           // working row while the agent decides what to do next.
           this.setWorkingLabel(ctx, "Thinking…");
           this.syncWorking(ctx);
-          // The tool resolved: drop the live current row and fold the now-resolved
-          // segment into the accumulated Context sections.
-          if (c === this.active && this.isWideMain()) {
-            this.currentActivity = null;
-            this.updateContextLive(ctx);
-          }
+          // The tool resolved: drop the live phrase (the sidebar row falls back
+          // to its "Working" chip until the next call) and fold the
+          // now-resolved segment into the accumulated Context sections.
+          delete c.activity;
+          if (c === this.active && this.isWideMain()) this.updateContextLive(ctx);
           break;
         }
         case "permission-request": {
@@ -6249,9 +6267,10 @@ export class ChatView extends ItemView {
           ...(checkpoint.size ? { checkpoint } : {}),
         });
       }
-      // Turn finalized — the live activity row is gone; refresh the conversation
-      // recap (full-page rail only) as the idle post-hoc summary.
-      this.currentActivity = null;
+      // Turn finalized — the live phrase is gone (from the rail AND from this
+      // conversation's sidebar row); refresh the recap (full-page rail only) as
+      // the idle post-hoc summary.
+      delete c.activity;
       if (c === this.active) this.updateRecap();
       // Background shells can outlive the turn (Exo can't poll them) — note them
       // honestly as "started this turn" rather than claiming a live running count.
