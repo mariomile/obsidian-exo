@@ -3,6 +3,7 @@ import type { ChatView } from "../view";
 import type { Convo } from "./convo-types";
 import { ADAPTERS } from "../providers/registry";
 import { clickable } from "./dom";
+import { formatCompactDate, formatRelativeDays } from "../core/history";
 
 /** One temporal group: a header row plus its cards. The cards stay DIRECT
  *  children of the grid — the group header is a sibling, not a wrapper — so
@@ -104,11 +105,11 @@ function renderCard(
   meta.createSpan({ text: ADAPTERS[c.provider].displayName });
   const count = c.messages.filter((m) => m.role === "user").length;
   meta.createSpan({ text: `${count} message${count === 1 ? "" : "s"}` });
-  if (c.updatedAt) meta.createSpan({ text: view.formatDate(c.updatedAt) });
+  if (c.updatedAt) meta.createSpan({ text: formatCompactDate(c.updatedAt) });
   // Only inside the retired group: elsewhere the retirement date answers a
   // question nobody asked, here it explains why the card is in this group.
   if (retiredContext && c.retiredAt) {
-    meta.createSpan({ text: `ritirata ${view.formatRelative(c.retiredAt)}` });
+    meta.createSpan({ text: `ritirata ${formatRelativeDays(c.retiredAt)}` });
   }
 
   clickable(card, (e) => {

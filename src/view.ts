@@ -32,6 +32,7 @@ import {
   type RethinkRequest,
 } from "./obsidian/tools";
 import { adaptAppToTaskVault, createBacklogTask } from "./obsidian/task-store";
+import { browserBridgeFor } from "./obsidian/browser-controller";
 import { MemoryObserver, type ObserverWrite } from "./obsidian/observer";
 import { AgentFolder, type BlockWrite } from "./obsidian/agent-folder";
 import { planRethink, type BlockName } from "./core/agent-self";
@@ -107,7 +108,6 @@ import {
 import type { TabAgents, TabVM, TabFacts } from "./core/working-set";
 import { chooseDensity } from "./core/strip-density";
 import type { StripDensity } from "./core/strip-density";
-import { startOfDay, DAY_MS } from "./core/history";
 import type { ChatRowSource } from "./core/chat-rows";
 import {
   drainReportsForParent,
@@ -699,6 +699,7 @@ export class ChatView extends ItemView {
       s.codexSandbox,
       s.codexApproval,
       s.orchestrationEnabled,
+      s.browserEnabled,
       c.provider === "claude" ? s.claudeBin : s.codexBin,
       c.id,
     ].join("|");
@@ -764,7 +765,8 @@ export class ChatView extends ItemView {
           (req) => this.rethinkBridge(c, req),
           // Same contract for the single-file Open-Loops Ledger (paths/parentConvoId trail it below).
           this.plugin.loopsWriteQueue,
-          this.plugin.paths, c.id // parentConvoId — gates spawn_task
+          this.plugin.paths, c.id, // parentConvoId — gates spawn_task
+          browserBridgeFor(this.plugin, c.id) // agent browser: undefined when off/mobile
         )
       : undefined;
 
@@ -822,6 +824,7 @@ export class ChatView extends ItemView {
           agentFolderEnabled: s.agentFolderEnabled && !readOnlySandbox,
           rethinkBridge: (req) => this.rethinkBridge(c, req),
           paths: this.plugin.paths,
+          browserBridge: browserBridgeFor(this.plugin, c.id),
         });
         b.bridge.setTools(codexSessionToolset(all, readOnlySandbox, OBSIDIAN_READ_TOOLS));
         codexBridge = {
@@ -2605,29 +2608,6 @@ export class ChatView extends ItemView {
       if (s.length > 320) break;
     }
     return s.trim();
-  }
-
-  formatDate(ts: number): string {
-    const d = new Date(ts);
-    const now = new Date();
-    const sameDay = d.toDateString() === now.toDateString();
-    if (sameDay) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-    return d.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
-  }
-
-  /** "3 giorni fa" style relative time, for the retired-group badge — absolute
-   *  dates (formatDate) answer "when"; this answers "how long has it been
-   *  sitting there", which is what explains why the card is in this group.
-   *
-   *  Counts CALENDAR days, the same vocabulary `groupByTime` uses, not raw
-   *  24-hour periods: a chat retired yesterday at 23:00 and read this morning
-   *  is "ieri", not "oggi". `Math.round` because a DST day is 23 or 25 hours
-   *  long and the quotient would otherwise land just off the integer. */
-  formatRelative(ts: number): string {
-    const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / DAY_MS);
-    if (days <= 0) return "oggi";
-    if (days === 1) return "ieri";
-    return `${days} giorni fa`;
   }
 
   /* --------------------------- rendering ---------------------------- */

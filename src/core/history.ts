@@ -28,6 +28,30 @@ export function startOfDay(ts: number): number {
   return d.getTime();
 }
 
+/** Compact absolute date for card metadata: clock time today, "12 Aug"
+ *  otherwise. Absolute dates answer "when". */
+export function formatCompactDate(ts: number): string {
+  const d = new Date(ts);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  if (sameDay) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+}
+
+/** "3 giorni fa" relative time, for the retired-group badge: it answers "how
+ *  long has it been sitting there", which is what explains why the card is in
+ *  this group.
+ *
+ *  Counts CALENDAR days, the same vocabulary `groupByTime` uses, not raw
+ *  24-hour periods: a chat retired yesterday at 23:00 and read this morning is
+ *  "ieri", not "oggi". `Math.round` because a DST day is 23 or 25 hours long
+ *  and the quotient would otherwise land just off the integer. */
+export function formatRelativeDays(ts: number): string {
+  const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / DAY_MS);
+  if (days <= 0) return "oggi";
+  if (days === 1) return "ieri";
+  return `${days} giorni fa`;
+}
+
 /**
  * Bucket `items` by `updatedAt` relative to `now`, in five fixed buckets, each
  * emitted only when non-empty. Ordering within a bucket is NOT touched — the
