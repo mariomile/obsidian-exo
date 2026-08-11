@@ -50,6 +50,7 @@ import {
 import { automationSlug } from "./automation-store";
 import { ok, err, getExo, type Result } from "./tool-kit";
 import { buildCapabilityTools, CAPABILITY_READ_TOOLS } from "./capability-tools";
+import { buildBrowserTools, BROWSER_READ_TOOLS, type BrowserBridge } from "./browser-tools";
 
 
 /** Structured question shape for `ask_user`. Duplicated from view.ts to avoid a
@@ -188,6 +189,10 @@ export interface ObsidianToolOpts {
    *  registered without it, since a child with no parent has nobody to
    *  report to. */
   parentConvoId?: string;
+  /** Per-convo bridge to the shared agent-browser tab. Absent → the browser_*
+   *  tools are not registered at all (feature off, mobile, or headless run):
+   *  the tool list must stay byte-identical to before the feature existed. */
+  browserBridge?: BrowserBridge;
   agentFolderEnabled?: boolean;
   rethinkBridge?: (req: RethinkRequest) => Promise<string>;
   /** Resolved memory-layer paths. Absent → the legacy root (test/fallback). */
@@ -225,6 +230,11 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
      *  headless runs — `spawn_task` is gated on this being present, in
      *  addition to `orchestrationEnabled`. */
     parentConvoId,
+    /** Bridge to the shared agent-browser tab, curried for THIS conversation by
+     *  the plugin controller. Absent is the normal case: feature off, mobile, or
+     *  a headless run, which must not drive a surface whose whole point is that
+     *  Mario watches it. */
+    browserBridge,
     /** The Agent Is the Folder master flag (default OFF). Gates `rethink_memory`
      *  ONLY (in addition to memoryWrite) — every other tool is byte-identical to
      *  before this parameter existed when this is false. */
@@ -1429,6 +1439,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     ...(memoryWrite && agentFolderEnabled && rethinkBridge ? [rethinkMemory] : []),
     ...(orchestrationEnabled ? [addTask, listTasks] : []),
     ...(orchestrationEnabled && parentConvoId ? [spawnTask] : []),
+    ...(browserBridge ? buildBrowserTools(browserBridge) : []),
   ];
 }
 
@@ -1455,7 +1466,10 @@ export function createObsidianToolServer(
   // positional API so existing callers retain their argument slots (same
   // convention as `loopsWriteQueue` above). Absent for headless runs, which
   // must not get `spawn_task` — a child with no parent has nobody to report to.
-  parentConvoId?: string
+  parentConvoId?: string,
+  // Shared agent-browser bridge: trailing for the same reason as parentConvoId,
+  // and absent for every caller that has no visible tab to drive.
+  browserBridge?: BrowserBridge
 ) {
   return createSdkMcpServer({
     name: "obsidian",
@@ -1473,6 +1487,7 @@ export function createObsidianToolServer(
       orchestrationEnabled,
       tasksWriteQueue,
       parentConvoId,
+      browserBridge,
       agentFolderEnabled,
       rethinkBridge,
       paths,
@@ -1500,6 +1515,11 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   // "check on work you handed off" — raising a write-permission card for that
   // turns a status glance into an interruption.
   "mcp__obsidian__list_tasks",
+  // Browser observers: they change nothing on the page or in the vault. The
+  // interacting tools (open/navigate/click/type/scroll) are deliberately NOT
+  // here: their permission card, showing the URL/selector, is the evidence
+  // trail for what the agent did in a shared, visible surface.
+  ...BROWSER_READ_TOOLS,
   ...CAPABILITY_READ_TOOLS,
 ]);
 

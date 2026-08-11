@@ -12,6 +12,30 @@ const PREFIX = "mcp__obsidian__";
  *  `mcp__obsidian__` prefix at runtime, so the classifier Sets (which use the
  *  full names) must match these stripped of the prefix. Every optional feature
  *  flag is enabled so the full possible tool surface registers. */
+const fakeStatus = {
+  url: "u",
+  title: "t",
+  loading: false,
+  scrollY: 0,
+  scrollHeight: 0,
+  viewportHeight: 0,
+  ownerConvoId: null,
+};
+/** The agent browser registers only behind a live bridge, so the fullest
+ *  surface needs one: without it the three browser read tools would be listed
+ *  in OBSIDIAN_READ_TOOLS but absent from the server, which is exactly the
+ *  drift the first assertion below exists to catch. */
+const fakeBrowserBridge = {
+  open: async () => fakeStatus,
+  navigate: async () => fakeStatus,
+  snapshot: async () => ({ status: fakeStatus, elements: [] }),
+  readPage: async () => ({ status: fakeStatus, text: "", total: 0 }),
+  screenshot: async () => ({ status: fakeStatus, pngB64: "" }),
+  click: async () => fakeStatus,
+  type: async () => fakeStatus,
+  scroll: async () => fakeStatus,
+};
+
 function registeredBareNames(): Set<string> {
   const app = { vault: {}, workspace: {}, metadataCache: {} } as unknown as App;
   const server = createObsidianToolServer(
@@ -24,7 +48,11 @@ function registeredBareNames(): Set<string> {
     /* orchestrationEnabled */ true,
     /* tasksWriteQueue */ undefined,
     /* agentFolderEnabled */ true,
-    /* rethinkBridge  */ async () => ""
+    /* rethinkBridge  */ async () => "",
+    /* loopsWriteQueue */ undefined,
+    /* paths          */ undefined,
+    /* parentConvoId  */ "convo-test",
+    /* browserBridge  */ fakeBrowserBridge
   );
   const reg = (server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools;
   return new Set(Object.keys(reg));
@@ -62,6 +90,24 @@ describe("obsidian tool classifier registries stay in sync with registered tools
    * tools are writes and belong to no Set. So the rule is stated where it is
    * knowable — a tool whose name says it only reads must be classified as one.
    */
+  /**
+   * The browser observers do not match the list_/get_ name heuristic below, so
+   * they get their own rule: looking at the shared tab writes nothing and
+   * changes nothing, and must not raise a permission card. The mutating five
+   * (open/navigate/click/type/scroll) must stay OUT: their card, showing the
+   * URL or selector, is the evidence trail for a shared, visible surface.
+   */
+  it("the browser observers are read-only and the mutators are not", () => {
+    for (const bare of ["browser_snapshot", "browser_read_page", "browser_screenshot"]) {
+      expect(registered.has(bare), `${bare} is not registered`).toBe(true);
+      expect(OBSIDIAN_READ_TOOLS.has(`${PREFIX}${bare}`), bare).toBe(true);
+    }
+    for (const bare of ["browser_open", "browser_navigate", "browser_click", "browser_type", "browser_scroll"]) {
+      expect(registered.has(bare), `${bare} is not registered`).toBe(true);
+      expect(OBSIDIAN_READ_TOOLS.has(`${PREFIX}${bare}`), bare).toBe(false);
+    }
+  });
+
   it("every list_*/get_* tool on the server is classified read-only", () => {
     const readShaped = [...registered].filter((n) => /^(list|get)_/.test(n));
     expect(readShaped.length, "the name heuristic matched nothing — it has stopped testing anything").toBeGreaterThan(5);

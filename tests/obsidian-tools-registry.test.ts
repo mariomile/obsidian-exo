@@ -6,6 +6,37 @@ const app = {} as App;
 const names = (opts?: Parameters<typeof buildObsidianTools>[1]) =>
   buildObsidianTools(app, opts).map((t) => t.name);
 
+const fakeStatus = {
+  url: "u",
+  title: "t",
+  loading: false,
+  scrollY: 0,
+  scrollHeight: 0,
+  viewportHeight: 0,
+  ownerConvoId: null,
+};
+const fakeBrowserBridge = {
+  open: async () => fakeStatus,
+  navigate: async () => fakeStatus,
+  snapshot: async () => ({ status: fakeStatus, elements: [] }),
+  readPage: async () => ({ status: fakeStatus, text: "", total: 0 }),
+  screenshot: async () => ({ status: fakeStatus, pngB64: "" }),
+  click: async () => fakeStatus,
+  type: async () => fakeStatus,
+  scroll: async () => fakeStatus,
+};
+
+const BROWSER_TOOLS = [
+  "browser_open",
+  "browser_navigate",
+  "browser_snapshot",
+  "browser_read_page",
+  "browser_screenshot",
+  "browser_click",
+  "browser_type",
+  "browser_scroll",
+];
+
 describe("buildObsidianTools", () => {
   it("default build carries the full read+write set, no memory writes off-flag", () => {
     const n = names({ memoryWrite: true, memoryRead: true });
@@ -36,6 +67,17 @@ describe("buildObsidianTools", () => {
     expect(
       names({ memoryWrite: true, agentFolderEnabled: true, rethinkBridge: async () => "" })
     ).toContain("rethink_memory");
+  });
+
+  it("browser tools register only when a bridge is present, byte-identical otherwise", () => {
+    const off = names({});
+    for (const t of BROWSER_TOOLS) expect(off, t).not.toContain(t);
+    // Pre-feature call shape vs post-feature with no bridge: identical lists.
+    expect(names({})).toEqual(names({ browserBridge: undefined }));
+    const on = names({ browserBridge: fakeBrowserBridge });
+    for (const t of BROWSER_TOOLS) expect(on, t).toContain(t);
+    // The bridge adds the browser set and NOTHING else.
+    expect(on.filter((n) => !n.startsWith("browser_"))).toEqual(off);
   });
 
   it("every tool exposes name, description, inputSchema, handler", () => {
