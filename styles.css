@@ -20,7 +20,7 @@ settings:
 */
 
 /* ===== COSMOS BRIDGE START ===== */
-/* THE COSMOS BRIDGE — the one place in this file that names a theme token.
+/* THE COSMOS BRIDGE: the one place in this file that names a theme token.
 
    Before this block existed, 39 declarations scattered across the stylesheet
    each re-derived their own Cosmos fallback chain by hand. Same token, seven
@@ -30,10 +30,10 @@ settings:
        kit token  ->  theme token  ->  Obsidian's own variable
 
    and publishes the result as an `--mva-` alias. Component rules consume the
-   aliases and nothing else — that rule is enforced by src/style-contract.test.ts,
+   aliases and nothing else: that rule is enforced by src/style-contract.test.ts,
    which fails if any selector outside this block reads a theme token directly.
 
-   The seam is declared on `body`, and that is not a detail — it is the only
+   The seam is declared on `body`. That is not a detail, it is the only
    scope where the bridge actually bridges. Verified 2026-08-11 in a browser,
    not assumed: Obsidian declares its own palette on `body` (inside its
    `.theme-dark` / `.theme-light` blocks), and Cosmos declares EVERY token it
@@ -79,7 +79,7 @@ body {
      subtracting the physical inset that separates them, so a rounded thing
      inside a rounded thing stays concentric by construction instead of by
      three literals that drift apart the first time one is nudged.
-     Today: 13px outer, 9px base (13 - 4), 6px control (9 - 3) — the values
+     Today: 13px outer, 9px base (13 - 4), 6px control (9 - 3), the values
      already in docs/design.md §2, now derived rather than repeated. */
   --mva-r-inset: 4px;
   --mva-r-inset-tight: 3px;
@@ -108,7 +108,7 @@ body {
 
   /* ---- type registers (docs/design.md §3) ---------------------------------
      Three registers, no fourth. A. eyebrow = structural section headers,
-     uppercase and quiet — NEVER a form-field label. B. title = card and row
+     uppercase and quiet: NEVER a form-field label. B. title = card and row
      headings, tight tracking. C. body = everything you actually read, plus
      form-field labels. Cosmos publishes the eyebrow recipe as its label
      family, so a flavour that drops the uppercase reaches the whole suite at
@@ -143,7 +143,7 @@ body {
 /* ===== COSMOS BRIDGE END ===== */
 
 /* The three type registers as classes. Declared here, above every component
-   rule, so a surface can still override a single axis locally — and so the
+   rule, so a surface can still override a single axis locally, and so the
    register a surface belongs to is a class on the element, readable in the
    inspector, instead of five font declarations repeated per family. */
 .mva-type-eyebrow {
@@ -192,7 +192,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 0;
 }
 
-/* Keyboard focus ring for every focusable control inside the view — one of the
+/* Keyboard focus ring for every focusable control inside the view: one of the
    three places the accent is allowed to spend itself (it marks the thing the
    next keystroke will act on, which is a decision point). */
 .mva-root :focus-visible {
@@ -945,7 +945,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: 8px 10px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--mva-r2);
-  /* Rung 1 of the surface ladder — a card at rest. The mix lives in the seam
+  /* Rung 1 of the surface ladder: a card at rest. The mix lives in the seam
      now (law 4, never a flat hard-coded fill), so under Cosmos this lands on
      the theme's own luminosity step instead of a near-miss of it. */
   background: var(--mva-surface-1);
@@ -1030,7 +1030,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
      which no longer fits that measure in a narrow sidebar. Exo now reads at
      its own dedicated size (--exo-font-size, Style Settings → Exo), not tied
      to the note editor or to the rest of the interface's UI scale. Register C
-     (body) with its size slot overridden — the register still owns weight,
+     (body) with its size slot overridden: the register still owns weight,
      tracking and case; only the reading size is this surface's own call. */
   --mva-type-body-size: var(--exo-font-size, 14px);
   /* Leading tracks Cosmos' intentional desktop/phone split (1.6 / 1.55)
@@ -2182,12 +2182,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   height: 13px;
 }
 
-/* streaming caret — signals the agent is still writing, and one of exactly two
+/* streaming caret: signals the agent is still writing, and one of exactly two
    surfaces allowed to glow (the other is the working row). The running turn is
    Exo's single identity moment: everything else in the pane stays monochrome
    quiet, so when something IS lit you know without reading that work is live.
-   The light is the accent mixed down with color-mix — never a literal colour,
-   never a gradient — and it beats on the shared heartbeat, so caret and working
+   The light is the accent mixed down with color-mix: never a literal colour,
+   never a gradient. It beats on the shared heartbeat, so caret and working
    row breathe together instead of at two unrelated rates. */
 .mva-caret {
   display: inline-block;
@@ -2223,7 +2223,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
      .mva-bubble's --exo-font-size (Style Settings → Exo). The "~3 lines"
      intent below is re-derived at the new metrics
      (3 x 14px x 1.55 = 65px of text + 13px of vertical padding). Register C,
-     same size slot as the bubble — that is what keeps the two identical. */
+     same size slot as the bubble: that is what keeps the two identical. */
   --mva-type-body-size: var(--exo-font-size, 14px);
   min-height: 78px;
   max-height: 200px;
@@ -2711,7 +2711,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   margin: 4px 0;
 }
 /* Register C at its small step: a step header is a label you read, not a
-   structural eyebrow — uppercasing it would shout at every tool call. */
+   structural eyebrow: uppercasing it would shout at every tool call. */
 .mva-steps-head {
   --mva-type-body-size: var(--mva-type-body-size-sm);
   display: flex;
@@ -3029,7 +3029,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding: var(--mva-card-pad);
   font-size: 12.5px;
 }
-/* A permission still waiting for an answer is a decision point — the third and
+/* A permission still waiting for an answer is a decision point: the third and
    last sanctioned accent spend. A hairline inset ring, not a fill: the card is
    already caution-tinted, and stacking a second colour volume on it is how
    permission alarm fatigue came back the first time. The ring goes as soon as
@@ -3350,7 +3350,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-btn:hover {
   background: var(--background-modifier-active-hover, var(--background-modifier-hover));
 }
-/* The primary action — the second of the three sanctioned accent spends. */
+/* The primary action: the second of the three sanctioned accent spends. */
 .mva-btn-primary {
   color: var(--text-on-accent);
   background: var(--mva-accent);
@@ -5530,7 +5530,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   gap: 5px;
 }
 /* Chrome, not prose: the chip's height is padding plus one line, stated as
-   such. It used to be spelled `line-height: 1.6` with zero vertical padding —
+   such. It used to be spelled `line-height: 1.6` with zero vertical padding,
    a reading rhythm doing a box's job, and the last one left in the file after
    the §7 wave. Same 16px, said the way a chip means it. */
 .mva-board-chip {
@@ -6507,7 +6507,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   cursor: pointer;
   /* Register A owns the TYPE; the pane still owns its colour hierarchy. Section
      headers sit one rung below the pane heading on the text ladder (faint vs
-     muted) — without that, heading and section label render identically and the
+     muted). Without that, heading and section label render identically and the
      pane loses its top level. Colour is the only axis overridden here. */
   color: var(--text-faint);
   transition: color var(--mva-t);

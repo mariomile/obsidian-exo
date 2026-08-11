@@ -281,7 +281,7 @@ describe('mv-kit style contract', () => {
 });
 
 // =========================================================================
-// The Cosmos Bridge — one token seam instead of scattered fallbacks
+// The Cosmos Bridge: one token seam instead of scattered fallbacks
 // (docs/plans/2026-08-11-chat-cosmos-alignment-plan.md, Phases 1-3)
 // =========================================================================
 
@@ -298,14 +298,14 @@ function seam(): string {
   return css.slice(from, to + SEAM_END.length);
 }
 
-/** Everything outside the seam — the component layer. */
+/** Everything outside the seam: the component layer. */
 function outsideSeam(): string {
   const from = css.indexOf(SEAM_START);
   const to = css.indexOf(SEAM_END);
   return css.slice(0, from) + css.slice(to + SEAM_END.length);
 }
 
-describe('Cosmos bridge — Phase 1 token seam', () => {
+describe('Cosmos bridge: Phase 1 token seam', () => {
   it('the seam sits near the top of the stylesheet', () => {
     // "Near the top": before any component rule, so a reader meets the token
     // vocabulary before the first `.mva-` selector that spends it. The
@@ -400,7 +400,7 @@ describe('Cosmos bridge — Phase 1 token seam', () => {
   });
 });
 
-describe('Cosmos bridge — Phase 2 type registers', () => {
+describe('Cosmos bridge: Phase 2 type registers', () => {
   it('§2 the three registers exist as tokens with size, weight and tracking', () => {
     const body = stripComments(seam());
     for (const register of ['eyebrow', 'title', 'body']) {
@@ -447,7 +447,7 @@ describe('Cosmos bridge — Phase 2 type registers', () => {
   });
 });
 
-describe('Cosmos bridge — Phase 3 the running state is the identity moment', () => {
+describe('Cosmos bridge: Phase 3 the running state is the identity moment', () => {
   it('§3 the glow is a color-mix on the accent, never a literal, never a gradient', () => {
     const body = stripComments(seam());
     const decl = body.match(/--mva-glow\s*:[^;]+;/)?.[0];
@@ -488,7 +488,7 @@ describe('Cosmos bridge — Phase 3 the running state is the identity moment', (
     const ALLOWED = new Set([
       '.mva-btn-primary',
       '.mva-root :focus-visible',
-      // "Pending approval" is the permission card BEFORE it is answered — the
+      // "Pending approval" is the permission card BEFORE it is answered: the
       // renderer stamps `is-resolved` on it the moment a verdict lands, so the
       // ring lives exactly as long as the decision does.
       '.mva-perm:not(.is-resolved)',
@@ -500,7 +500,7 @@ describe('Cosmos bridge — Phase 3 the running state is the identity moment', (
 
   it('§3 provider brand colours never appear in the stylesheet as brand fills', () => {
     // The two brand accents are identity DOTS, applied from the provider
-    // adapters (`brandColor`) onto a dot element — never a surface fill, and
+    // adapters (`brandColor`) onto a dot element: never a surface fill, and
     // never a literal in the stylesheet.
     expect(stripComments(css)).not.toMatch(/#d97757/i);
   });

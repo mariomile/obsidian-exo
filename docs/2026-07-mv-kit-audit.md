@@ -1009,26 +1009,26 @@ nessuna di queste è stata toccata nel codice.
 
 ---
 
-## Le sei proposte `.mva-bubble` — verdetti (ondata 2026-08-11, Cosmos Bridge)
+## Le sei proposte `.mva-bubble`: verdetti (ondata 2026-08-11, Cosmos Bridge)
 
 Le sei "Proposte per Mario" qui sopra erano rimaste aperte: osservazioni di
 gusto, nessuna applicata. La fase 2 del piano
 `docs/plans/2026-08-11-chat-cosmos-alignment-plan.md` le chiude tutte e sei in
-una sola seduta. Quattro erano già state decise dai fatti — le ondate
+una sola seduta. Quattro erano già state decise dai fatti: le ondate
 successive al §7 le hanno risolte nel codice senza scrivere il verdetto qui, e
 questo è il verdetto mancante. Due richiedevano una decisione vera, e la
 trovano adesso.
 
 | # | Proposta | Verdetto | Dov'è |
 |---|---|---|---|
-| 1 | Chat prose size — 14px fisso vs `--font-text-size` | **adottata l'alternativa conservativa** | `.mva-bubble` |
-| 2 | Paragraph gap — `0.5em` vs `--p-spacing` | **adottata** | `.mva-bubble p` |
+| 1 | Chat prose size: 14px fisso vs `--font-text-size` | **adottata l'alternativa conservativa** | `.mva-bubble` |
+| 2 | Paragraph gap: `0.5em` vs `--p-spacing` | **adottata** | `.mva-bubble p` |
 | 3 | Heading ramp della bolla | **tenuta, e ora motivata** | `.mva-bubble h1…h6` |
 | 4 | Composer più stretto della bolla | **allineati** | `.mva-input` |
-| 5 | Selettori morti `.mva-inai-stream` / `-cont` / `-diff` | **rimossi** | — |
+| 5 | Selettori morti `.mva-inai-stream` / `-cont` / `-diff` | **rimossi** | (nessuna) |
 | 6 | `.mva-board-chip` a `line-height: 1.6` | **sostituito da un'altezza esplicita** | `.mva-board-chip` |
 
-**1 — Chat prose size: adottata l'alternativa conservativa, non quella
+**1. Chat prose size: adottata l'alternativa conservativa, non quella
 letterale.** Il §7 chiedeva `var(--font-text-size)`; la proposta stessa offriva
 come alternativa "un controllo Style Settings con default 14px". È quella che
 ha vinto, ed è la scelta giusta per il motivo che il §7 non poteva vedere:
@@ -1039,33 +1039,33 @@ accanto per decisione, non per dimenticanza. Questa ondata non la cambia: la
 sposta sullo slot dimensione del registro C, che è la stessa cosa detta nel
 vocabolario nuovo.
 
-**2 — Paragraph gap: adottata.** `.mva-bubble p` sta su `var(--p-spacing, 1rem)`.
+**2. Paragraph gap: adottata.** `.mva-bubble p` sta su `var(--p-spacing, 1rem)`.
 Il dubbio della proposta era che raddoppiare il respiro fosse "un cambio di
-ritmo vero, non una coerenza": lo era, ed è il ritmo giusto — a `0.5em` (≈7px)
+ritmo vero, non una coerenza": lo era, ed è il ritmo giusto: a `0.5em` (≈7px)
 i paragrafi di una risposta strutturata correvano insieme. È lo stesso respiro
 della nota di fianco.
 
-**3 — Heading ramp: tenuta.** 1.5 / 1.3 / 1.15 / 1.02 / 0.92em restano. La
+**3. Heading ramp: tenuta.** 1.5 / 1.3 / 1.15 / 1.02 / 0.92em restano. La
 proposta segnalava di rivederla "se un giorno il punto 1 alza il corpo a 16px":
 il punto 1 non ha alzato il corpo, l'ha reso regolabile, e questo rafforza la
 ramp invece di indebolirla. Essendo in `em`, scala con `--exo-font-size` da sola:
 a 22px un h1 resta proporzionato, mentre la scala Obsidian (1.618) darebbe un h1
 da 35px dentro una colonna di sidebar. Una scala tipografica propria per una
-colonna stretta è una scelta, non una deriva — ed è l'unico punto in cui Exo ne
+colonna stretta è una scelta, non una deriva, ed è l'unico punto in cui Exo ne
 ha una.
 
-**4 — Composer e bolla: allineati.** `.mva-input` e `.mva-bubble` condividono
+**4. Composer e bolla: allineati.** `.mva-input` e `.mva-bubble` condividono
 ora sia la dimensione (`--exo-font-size`) sia l'interlinea
-(`var(--line-height-normal, 1.55)`). Il contro citato dalla proposta — "il
-composer è alto ~3 righe e a 1.6 cresce" — è stato pagato esplicitamente:
+(`var(--line-height-normal, 1.55)`). Il contro citato dalla proposta ("il
+composer è alto ~3 righe e a 1.6 cresce") è stato pagato esplicitamente, con
 `min-height` ricalcolata a 78px sulle nuove metriche. Quello che scrivi e
 quello che rileggi un istante dopo sono lo stesso testo, e adesso lo sembrano.
 
-**5 — Selettori morti: rimossi.** `.mva-inai-stream`, `.mva-inai-cont`,
+**5. Selettori morti: rimossi.** `.mva-inai-stream`, `.mva-inai-cont`,
 `.mva-inai-diff` non esistono più in `styles.css`. Le classi vive dell'inline-AI
 sono `…-streamchip` / `…-streamtext` / `…-input` / `…-chip`.
 
-**6 — Chip line-height: sostituito da un'altezza esplicita.** Era l'unico pezzo
+**6. Chip line-height: sostituito da un'altezza esplicita.** Era l'unico pezzo
 di chrome rimasto con un'interlinea da prosa. `line-height: 1.6` + `padding: 0 6px`
 diventa `line-height: 1` + `padding: 3px 6px`: **16px prima, 16px dopo**, zero
 delta visivo, ma l'altezza del chip ora è dichiarata come altezza invece che
