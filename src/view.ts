@@ -57,7 +57,7 @@ import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { agentTaskRow } from "./core/agent-task";
 import { hoistSlashCommand } from "./core/slash";
-import { codexSessionToolset } from "./core/codex-toolset";
+import { codexSessionToolset, mapUserInputAnswers } from "./core/codex-toolset";
 import { setGoal, clearGoal, advance, resumeGoal, buildContinuationPrompt } from "./core/goal-loop";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
 import { classifyTurnOutput } from "./core/workflow-classify";
@@ -851,12 +851,8 @@ export class ChatView extends ItemView {
       sandboxMode: s.codexSandbox,
       approvalPolicy: s.codexApproval,
       codexBridge,
-      requestUserInput: async (questions) => {
-        const answers = await this.askBridge(c, questions);
-        return Object.fromEntries(
-          questions.map((question) => [question.id, answers[question.header] ?? ""])
-        );
-      },
+      requestUserInput: async (questions) =>
+        mapUserInputAnswers(questions, await this.askBridge(c, questions)),
     });
     // Capability snapshot (system/init, CLI ≥2.1.199): the real skills/commands/
     // agents/MCP this session sees. Cache view-wide for the autocomplete menus

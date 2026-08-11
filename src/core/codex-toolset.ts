@@ -29,3 +29,17 @@ export function codexSessionToolset<T extends { name: string }>(
   );
   return all.filter((t) => readBasenames.has(t.name) || INTERACTION_TOOLS.has(t.name));
 }
+
+/**
+ * Map ask-card answers to the id-keyed record a Codex app-server reply needs.
+ * The card resolves answers keyed by `header` (that is what the user saw);
+ * codex addresses questions by `id`. Missing answers become "" so every id is
+ * present in the reply — the app-server's answer shape expects a string per
+ * question, and an absent key would be dropped by the reply serializer.
+ */
+export function mapUserInputAnswers(
+  questions: { id: string; header: string }[],
+  answers: Record<string, string>
+): Record<string, string> {
+  return Object.fromEntries(questions.map((q) => [q.id, answers[q.header] ?? ""]));
+}
