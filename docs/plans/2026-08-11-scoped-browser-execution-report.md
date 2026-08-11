@@ -311,3 +311,115 @@ future style can surface the weaker posture without touching TypeScript.
   contained change to `SNAPSHOT_SCRIPT`.
 - The repo-root `main.js` build artifact (gitignored) was refreshed by the
   temp-dir bundle check. The live vault copy was not touched.
+
+---
+
+# Follow-up: the first `browser_open` always failed (fixed)
+
+Session of 2026-08-11, after the live end-to-end verification the report above
+could not run. Commit `ee60985`.
+
+## The defect, as the agent saw it
+
+A real turn asked for a page. The transcript:
+
+1. `browser_open` -> **FAILED**: `The WebView must be attached to the DOM and
+   the dom-ready event emitted`
+2. `browser_open` again, byte-identical arguments -> **succeeded**
+3. `browser_read_page` -> correct content
+
+Deterministic, not flaky: the controller created the leaf and called into the
+guest in the same breath. Electron attaches the guest asynchronously and every
+webview method rejects until `dom-ready` has fired, so the FIRST call after the
+leaf is created was always the one that paid the race.
+
+That model retried and even explained the failure to itself. That is luck. The
+same message reads to another model as "the browser is broken", and the feature
+looks dead on first use. A tool must not hand the caller an infrastructure race
+as a failure.
+
+## The fix
+
+`BrowserHost` now owns a readiness gate:
+
+- The `dom-ready` listener is registered in the **same tick** the element enters
+  the DOM (inside `attach()`, right after `this.webview = el`), so there is no
+  window in which the event could fire before anyone is listening.
+- `whenReady(timeoutMs = READY_TIMEOUT_MS)` resolves when the guest is ready.
+  It is **idempotent**: once `dom-ready` has fired the flag short-circuits it,
+  so it never waits twice and never registers a second listener (the first is
+  removed when it fires, and a second one would never fire at all).
+- The wait is bounded by a real signal, never by a sleep. **`READY_TIMEOUT_MS =
+  10_000`**: the observed cost on a warm window is milliseconds, so 10s is a
+  wide margin over the real case, and it stays under `NAV_TIMEOUT_MS` (15s) so a
+  guest that never attaches fails before it can eat the caller's whole
+  navigation budget. On expiry the error names the likely cause and the fix:
+  the tab is hidden or collapsed, which is exactly the state that stops the
+  guest from compositing (same root cause as the empty-capture finding above).
+- `destroy()` settles anyone mid-wait with `"closed"`, drops the listener and
+  drops the gate, so closing the leaf during the wait yields a clean error and
+  leaks neither a listener nor a pending promise.
+
+`BrowserController.ensureView` awaits it for **every** entry point (`open` and,
+through `currentView`, all the others) and converts the host's plain `Error`
+into a `BrowserToolRefused`, so a genuine timeout still renders as an answer
+rather than a crash. The host keeps zero imports.
+
+The empty-capture refusal is untouched and now has a test of its own, so it
+cannot be weakened by accident.
+
+## Tests
+
+Strict TDD: red first (`host.whenReady is not a function`, then the wiring
+assertion), then the implementation.
+
+- `tests/browser-host.test.ts` grew a fake `<webview>` harness (node env, no
+  DOM: `document.createElement` is stubbed for the duration) that emits
+  `dom-ready` on demand and counts its own listeners. Five readiness tests: the
+  wait does not resolve early; an already-ready host returns with a **zero**
+  budget and adds no listener; expiry carries the actionable text; closing the
+  leaf mid-wait rejects and leaves zero listeners; a destroyed host refuses to
+  wait at all. Plus one test pinning `capture()` returning `""` for an unpainted
+  guest.
+- `tests/browser-wiring.test.ts` pins the seam: `await host.whenReady()` lives
+  inside `ensureView`, next to a `BrowserToolRefused`.
+
+Gate: `pnpm vitest run` **156 files, 2538 tests, 0 failures** (was 151 / 2396);
+`tsc -noEmit` exit 0; `pnpm lint` 0 errors, 8 pre-existing warnings. Ratchets
+untouched: this fix lives entirely in the browser modules.
+
+## Live retest: the run the report above could not do
+
+Tree was clean of other sessions' work, so `pnpm build` (deploys into the live
+vault) and `obsidian-cli plugin:reload id=exo` were run for real.
+
+From a genuinely fresh state (`exo-browser` leaves detached, zero webviews,
+`browserEnabled` on, window visible and focused), one turn was driven through
+`app.plugins.plugins.exo.askExo(...)` asking for exactly one `browser_open` on
+`https://example.com` and explicitly forbidding a retry.
+
+Transcript of the probe conversation `c215`, read back from
+`conversations.json`:
+
+```json
+{"t":"tool","name":"mcp__obsidian__browser_open","input":{"url":"https://example.com"},
+ "ok":true,"output":"url: https://example.com/\ntitle: Example Domain\nscroll: 0 to 777 of 777px (100% seen)"}
+```
+
+**One** `browser_open` segment, `ok: true`, page really loaded. The string
+`must be attached to the DOM` does not appear anywhere in the turn. The first
+call now opens the page.
+
+Cleanup: probe conversation archived (not deleted) and its tab closed, the
+`exo-browser` leaf detached, zero agent-browser webviews left (the one webview
+still in the DOM is Obsidian's core Web viewer, partition
+`persist:vault-…`, not `persist:exo-agent-browser`). `browserEnabled` left ON as
+asked. `permissionMode` was already `bypassPermissions` and was not changed.
+`dev:errors` shows only a pre-existing Obsidian Sync "Disconnected" trace from
+before the session.
+
+## Still open from the report above
+
+Unchanged by this fix: `will-download` blocking is still unexercised, the Codex
+image-block seam (plan seam 4) is still untested, and the snapshot cap can still
+crowd form controls out on link-dense pages.
