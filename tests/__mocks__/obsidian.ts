@@ -10,3 +10,13 @@ export class TFile {
   basename = "";
   stat = { mtime: 0 };
 }
+
+/** Mutable so a test can assert the mobile branch of a desktop-only gate and
+ *  put it back. Desktop is the default because that is where Exo runs. */
+export const Platform = { isMobile: false, isDesktopApp: true };
+
+/** Base class for the views the browser controller instanceof-checks. Real
+ *  Obsidian gives it a leaf and a contentEl; nothing here needs either. */
+export class ItemView {
+  constructor(public leaf?: unknown) {}
+}
