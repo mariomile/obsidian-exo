@@ -169,3 +169,25 @@ Run against the merged build deployed to the real vault, Exo reloaded, board ope
   the array. `allConvos()` is untouched by this branch (`git log 2f7e0fe..8542f29 -L`
   over those lines is empty); last changed by f8b7df8 / 3e931cb. Transient at reload;
   the sidebar paints normally afterwards. Worth a separate one-line guard.
+
+## Follow-up: the tab-strip inclusion anomaly — not reproducible
+
+The single anomaly recorded above ("does not work — sidebar indent never
+fires") also included an observation that one board-closed spawn left its
+child IN the tab strip, contradicting `stripAfterChildSpawn`. Investigated
+separately after the sidebar/orchestration work landed:
+
+- 3 controlled repro attempts against the current code, including the
+  harder case (two `spawn_task` calls fired in the same parent turn, the
+  scenario `stripAfterChildSpawn`'s own doc comment calls out as the reason
+  the exclusion exists) — **all 3 excluded their children from the strip
+  correctly.** Verified via a live polling probe sampling `openTabs` every
+  80-100ms across the whole spawn→settle window, not just start/end snapshots.
+- The original anomaly was observed once, immediately after a plugin reload
+  during the same session that shipped the sidebar redesign and the
+  plugin-level orchestration hoist — plausibly a transient boot-time state
+  (`this.active` in flux right after reload) rather than a logic defect.
+- Conclusion: not chased further. No reproducible bug, no data loss in any
+  run (the report always delivered correctly regardless of strip state), and
+  further investigation would mean instrumenting production code to catch a
+  one-off. Noted here so it isn't silently forgotten if it resurfaces.
