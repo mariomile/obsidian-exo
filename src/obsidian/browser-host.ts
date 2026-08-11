@@ -1,51 +1,56 @@
 /**
- * Browser host: the thin impure wrapper around one Electron `<webview>`
- * element (Obsidian desktop only; the tag does not exist on mobile).
+ * Browser host: a thin driver over Obsidian's OWN Web Viewer leaf.
  *
- * Security posture, decided in the plan and pinned by tests on WEBVIEW_ATTRS:
- * a dedicated persistent partition (logins survive restarts, isolated from
- * Obsidian's own sessions), contextIsolation + sandbox on, no node
- * integration, no popups (window.open is inert without `allowpopups`). On top
- * of that, MAIN-session hardening through the remote module: deny-all
- * permission handlers and a download block. Electron GRANTS permission
- * requests by default when no handler is set, so a failed hardening is a
- * weaker posture, not a neutral one, and `hardened` exists to say so out loud
- * (the leaf surfaces it; it is never swallowed).
+ * It creates nothing. The `webviewer` core plugin owns the `<webview>` element,
+ * its lifecycle, its chrome (address bar, history, favicon) and its session;
+ * this module only reads the element off the view and calls into it.
  *
- * All page access goes through executeJavaScript with the Task-3 scripts
- * (JSON-string protocol, capped results). No API here takes raw agent input:
- * the controller passes scripts in; this host stays script-agnostic and has
- * no core imports at all.
+ * SECURITY POSTURE, stated plainly because it changed and a stale comment would
+ * be worse than none. The native viewer runs in Obsidian's OWN vault session
+ * (partition `persist:vault-<hash>`, from `app.getWebviewPartition()`), so:
  *
- * Probed live 2026-08-11 (see the plan's Probe results): the element exposes
- * loadURL/executeJavaScript/capturePage/getURL/getTitle/isLoading directly,
- * executeJavaScript hands back a string, and `remote.session` is available.
+ * - There is no dedicated partition, and no deny-all permission handler or
+ *   download block of ours. Whatever posture Obsidian sets for its Web Viewer
+ *   is the posture the agent gets. We do not harden it and we do not claim to.
+ * - The agent therefore browses AS MARIO: any site he is logged into in the Web
+ *   Viewer is a site the agent sees authenticated, and `browser_click` /
+ *   `browser_type` act inside those sessions. That is the deliberate trade of
+ *   this design, not an oversight: research behind a login is the use case.
+ *
+ * What is still OURS and still enforced: the http/https URL gate
+ * (`core/browser-page`) and the JSON-escaped script protocol
+ * (`core/browser-inject`). No API here takes raw agent input; the controller
+ * passes finished scripts in, and this host stays script-agnostic with no core
+ * imports at all.
+ *
+ * Probed live 2026-08-11 against the running app (results in the execution
+ * report): the native view exposes `webview`, `webviewMounted`,
+ * `webviewFirstLoadFinished`, `url` and `navigate()`, and the element exposes
+ * loadURL/executeJavaScript/capturePage/getURL/getTitle/isLoading/stop.
  */
-export const BROWSER_PARTITION = "persist:exo-agent-browser";
+
+/** Obsidian's own view type for the Web Viewer. Not ours: never rename it, and
+ *  never register it. */
+export const WEBVIEWER_VIEW_TYPE = "webviewer";
+
 export const EXEC_RESULT_CAP = 64_000;
 const NAV_TIMEOUT_MS = 15_000;
 const SETTLE_EXTRA_MS = 300;
+const READY_POLL_MS = 25;
 
 /**
- * How long an entry point waits for the guest to attach and emit `dom-ready`.
+ * How long an entry point waits for the native view's guest to attach.
  *
- * The guest attaches asynchronously after the element enters the DOM, and every
- * webview method rejects with "The WebView must be attached to the DOM and the
- * dom-ready event emitted" until it has. Observed cost on a warm window is
- * milliseconds, so 10s is a wide margin over the real case; it also stays under
- * NAV_TIMEOUT_MS, so a guest that never attaches (a collapsed or hidden pane
- * never composites one) fails with an actionable message rather than eating the
- * caller's whole navigation budget. A hang is worse than a failure.
+ * The flags are plain fields, not events (Obsidian sets `webviewMounted` inside
+ * its own `dom-ready` listener), so the wait is a bounded poll rather than a
+ * subscription: an element that gets re-instantiated underneath us cannot slip
+ * past a poll the way it would slip past a listener bound to the old element.
+ * Observed cost live: 61ms for a background tab, ~400ms to 1s for a visible one
+ * loading a page. 10s is a wide margin over the real case and still under
+ * NAV_TIMEOUT_MS, so a guest that never attaches fails with an actionable
+ * message rather than eating the caller's whole navigation budget.
  */
 export const READY_TIMEOUT_MS = 10_000;
-
-/** Attributes set on the webview BEFORE it enters the DOM: partition is
- *  immutable after attach. Pure and exported so a unit test pins the posture. */
-export const WEBVIEW_ATTRS: Record<string, string> = {
-  partition: BROWSER_PARTITION,
-  webpreferences: "contextIsolation=yes,sandbox=yes",
-  src: "about:blank",
-};
 
 /** A captured frame, as Electron's NativeImage hands it over. */
 interface CapturedImage {
@@ -57,8 +62,9 @@ interface CapturedImage {
 
 /** The slice of the webview element this host uses (Electron types are not a
  *  dependency of this repo: declare only what we touch). */
-interface WebviewEl extends HTMLElement {
-  loadURL(url: string): Promise<void>;
+interface WebviewEl {
+  addEventListener(type: string, fn: () => void): void;
+  removeEventListener(type: string, fn: () => void): void;
   getURL(): string;
   getTitle(): string;
   isLoading(): boolean;
@@ -67,128 +73,76 @@ interface WebviewEl extends HTMLElement {
   capturePage(): Promise<CapturedImage>;
 }
 
+/**
+ * The slice of Obsidian's WebViewerView this host drives.
+ *
+ * `webview` is nullable and MUTABLE on purpose: Obsidian re-instantiates the
+ * element (on `destroyed`, and when the leaf moves to another window) and
+ * resets both flags when it does. Nothing here may cache the element.
+ */
+export interface WebViewerView {
+  webview: WebviewEl | null;
+  webviewMounted: boolean;
+  webviewFirstLoadFinished: boolean;
+  /** Obsidian's own navigation: it also switches the view out of its blank
+   *  mode, which a raw `loadURL` does not do (probed live). */
+  navigate(url: string, pushHistory?: boolean): void;
+}
+
 /** Cap + coerce an executeJavaScript return value to a bounded string. */
 export function capExecResult(raw: unknown): string {
   const s = raw == null ? "" : typeof raw === "string" ? raw : String(raw);
   return s.length > EXEC_RESULT_CAP ? s.slice(0, EXEC_RESULT_CAP) : s;
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 export class BrowserHost {
-  private webview: WebviewEl | null = null;
-  private hardenedFlag = false;
-  private domReady = false;
-  /** Settles once, with why the wait ended. Created at attach so the listener
-   *  is registered in the same tick the element enters the DOM: no window in
-   *  which dom-ready could fire before anyone is listening. */
-  private readyGate: Promise<"ready" | "closed"> | null = null;
-  private settleGate: ((outcome: "ready" | "closed") => void) | null = null;
-  private dropReadyListener: (() => void) | null = null;
-
-  constructor(private readonly container: HTMLElement) {}
-
-  get supported(): boolean {
-    return this.webview !== null;
-  }
-
-  get hardened(): boolean {
-    return this.hardenedFlag;
-  }
-
-  /** Create and mount the webview. Returns false when the environment has no
-   *  usable webview tag (mobile, or a future Electron without it). */
-  attach(): boolean {
-    if (this.webview) return true;
-    const el = document.createElement("webview") as WebviewEl;
-    for (const [k, v] of Object.entries(WEBVIEW_ATTRS)) el.setAttribute(k, v);
-    el.classList.add("mva-browser-webview");
-    this.container.appendChild(el);
-    if (typeof el.executeJavaScript !== "function" && typeof el.loadURL !== "function") {
-      // Methods bind on attach; if they never appear this build has no webview.
-      el.remove();
-      return false;
-    }
-    this.webview = el;
-    this.readyGate = new Promise<"ready" | "closed">((resolve) => {
-      this.settleGate = resolve;
-    });
-    const onDomReady = (): void => {
-      el.removeEventListener("dom-ready", onDomReady);
-      this.dropReadyListener = null;
-      this.domReady = true;
-      this.settleGate?.("ready");
-    };
-    el.addEventListener("dom-ready", onDomReady);
-    this.dropReadyListener = () => el.removeEventListener("dom-ready", onDomReady);
-    this.hardenedFlag = this.hardenSession();
-    return true;
-  }
+  constructor(private readonly view: WebViewerView) {}
 
   /**
-   * Resolve once the guest is genuinely usable. Idempotent: after dom-ready has
-   * fired this returns without waiting and without registering a second
-   * listener (the first one is gone, and a second would never fire). Rejects,
-   * never hangs, when the wait expires or the leaf closes underneath it.
+   * Resolve once the native guest is genuinely usable, i.e. once Obsidian has
+   * seen `dom-ready` for the element currently on the view.
+   *
+   * Gated on `webviewMounted` ALONE. `webviewFirstLoadFinished` looks like the
+   * stronger signal and is a trap: Obsidian's `commitPageLoad` returns early
+   * for the blank `data:text/plain,` URL a Web Viewer tab opens on, so on a tab
+   * with no page that flag never flips (probed live: still false after 3.3s,
+   * while the guest was already executing scripts at 61ms). Requiring it would
+   * hang `browser_open` with no url, permanently.
    */
   async whenReady(timeoutMs = READY_TIMEOUT_MS): Promise<void> {
-    if (this.domReady) return;
-    const gate = this.readyGate;
-    if (!gate) throw new Error("The agent browser is not attached.");
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const outcome = await Promise.race([
-      gate,
-      new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), timeoutMs);
-      }),
-    ]);
-    clearTimeout(timer);
-    if (outcome === "closed") {
-      throw new Error("The agent browser tab was closed while its page was still starting up.");
-    }
-    if (outcome === "timeout") {
-      throw new Error(
-        `The agent browser did not become ready within ${Math.round(timeoutMs / 1000)}s. ` +
-          "Its tab is most likely hidden or collapsed, which stops the embedded browser from starting: " +
-          "ask Mario to bring the Agent browser tab into view, then try again."
-      );
-    }
-  }
-
-  /** Main-session hardening: deny-all permissions, block downloads. Runs once
-   *  per host per partition. Failure is REPORTED (via `hardened`), not fatal
-   *  and never silent: with no handler installed Electron grants requests. */
-  private hardenSession(): boolean {
-    try {
-      const electron = require("electron") as {
-        remote?: {
-          session?: {
-            fromPartition(p: string): {
-              setPermissionRequestHandler(
-                h: ((wc: unknown, p: string, cb: (ok: boolean) => void) => void) | null
-              ): void;
-              setPermissionCheckHandler(h: ((wc: unknown, p: string) => boolean) | null): void;
-              on(ev: "will-download", h: (e: { preventDefault(): void }) => void): void;
-            };
-          };
-        };
-      };
-      const session = electron.remote?.session?.fromPartition(BROWSER_PARTITION);
-      if (!session) return false;
-      session.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
-      session.setPermissionCheckHandler(() => false);
-      session.on("will-download", (e) => e.preventDefault());
-      return true;
-    } catch {
-      return false;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (this.view.webviewMounted && this.view.webview) return;
+      const left = deadline - Date.now();
+      if (left <= 0) {
+        throw new Error(
+          `Obsidian's Web viewer did not become ready within ${Math.round(timeoutMs / 1000)}s. ` +
+            "Its tab did not finish starting up: ask Mario to check that the Web viewer core plugin " +
+            "is enabled and that the tab is not stuck, then try again."
+        );
+      }
+      await sleep(Math.min(READY_POLL_MS, left));
     }
   }
 
   private need(): WebviewEl {
-    if (!this.webview) throw new Error("The agent browser is not attached.");
-    return this.webview;
+    const wv = this.view.webview;
+    if (!wv) throw new Error("Obsidian's Web viewer has no page attached.");
+    return wv;
   }
 
-  /** Navigate and wait for the load to settle (did-stop-loading, did-fail-load,
-   *  or the timeout, whichever comes first, plus a short paint-settle delay). */
+  /**
+   * Navigate and wait for the load to settle (did-stop-loading, did-fail-load,
+   * or the timeout, whichever comes first, plus a short paint-settle delay).
+   *
+   * Goes through the view's own `navigate` rather than `webview.loadURL`: from
+   * a blank Web Viewer tab a raw loadURL loads the page but leaves the view in
+   * `mode === "blank"`, which keeps the element hidden and makes every capture
+   * come back empty. Obsidian's `stop()` on an idle guest emits nothing, so it
+   * cannot settle this wait early (both probed live).
+   */
   async navigate(url: string, timeoutMs = NAV_TIMEOUT_MS): Promise<void> {
     const wv = this.need();
     await new Promise<void>((resolve) => {
@@ -203,22 +157,21 @@ export class BrowserHost {
       wv.addEventListener("did-stop-loading", finish);
       wv.addEventListener("did-fail-load", finish);
       setTimeout(finish, timeoutMs);
-      void wv.loadURL(url).catch(() => finish());
+      this.view.navigate(url, true);
     });
-    await new Promise((r) => setTimeout(r, SETTLE_EXTRA_MS));
+    await sleep(SETTLE_EXTRA_MS);
   }
 
   /** After a click that may have triggered navigation: wait for quiet. */
   async settleAfterAction(maxMs = 5_000): Promise<void> {
-    const wv = this.need();
     const start = Date.now();
-    await new Promise((r) => setTimeout(r, SETTLE_EXTRA_MS));
-    while (wv.isLoading() && Date.now() - start < maxMs) {
-      await new Promise((r) => setTimeout(r, 200));
+    await sleep(SETTLE_EXTRA_MS);
+    while (this.need().isLoading() && Date.now() - start < maxMs) {
+      await sleep(200);
     }
   }
 
-  /** Run one of the Task-3 scripts; returns the (capped) JSON string. */
+  /** Run one of the injected scripts; returns the (capped) JSON string. */
   async exec(script: string): Promise<string> {
     return capExecResult(await this.need().executeJavaScript(script, false));
   }
@@ -227,11 +180,12 @@ export class BrowserHost {
    * Capture the visible page, downscaled to bound tokens, as base64 PNG.
    *
    * Returns "" when the compositor has nothing painted for this webview.
-   * That case is NOT hypothetical and NOT loud: probed 2026-08-11, an
-   * off-composite webview resolves capturePage() with a 0x0, isEmpty(),
-   * zero-byte image rather than throwing. Handing that to the model as a
-   * screenshot would be handing it a blank page it cannot tell from a real
-   * one, so the empty string is the signal the controller refuses on.
+   * That case is NOT hypothetical and NOT loud: re-probed 2026-08-11 against
+   * the NATIVE viewer, a Web Viewer tab sitting in the background resolves
+   * capturePage() with a 0x0, isEmpty(), zero-byte image rather than throwing.
+   * Handing that to the model as a screenshot would be handing it a blank page
+   * it cannot tell from a real one, so the empty string is the signal the
+   * controller refuses on.
    */
   async capture(maxWidth = 1024): Promise<string> {
     const img = await this.need().capturePage();
@@ -244,18 +198,5 @@ export class BrowserHost {
   pageBasics(): { url: string; title: string; loading: boolean } {
     const wv = this.need();
     return { url: wv.getURL(), title: wv.getTitle(), loading: wv.isLoading() };
-  }
-
-  destroy(): void {
-    this.dropReadyListener?.();
-    this.dropReadyListener = null;
-    // Anyone mid-wait gets a clean answer instead of a promise that never
-    // settles; the gate itself is dropped so a later call cannot reuse it.
-    this.settleGate?.("closed");
-    this.settleGate = null;
-    this.readyGate = null;
-    this.domReady = false;
-    this.webview?.remove();
-    this.webview = null;
   }
 }

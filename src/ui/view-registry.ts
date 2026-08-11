@@ -6,7 +6,6 @@ import { CockpitView, COCKPIT_VIEW_TYPE } from "./cockpit-view";
 import { AgentsView, AGENTS_VIEW_TYPE } from "./agents-view";
 import { HubView, HUB_VIEW_TYPE, type HubTab } from "./hub/hub-view";
 import { ChatListView, CHATS_VIEW_TYPE } from "./chat-list-view";
-import { BrowserView, EXO_BROWSER_VIEW_TYPE } from "./browser-view";
 
 /** Every Exo view is registered here, in one place, so `main.ts` carries the
  *  plugin lifecycle and not a catalogue of panes. Registration is unconditional
@@ -23,9 +22,8 @@ export function registerExoViews(plugin: ExoPlugin): void {
   plugin.registerView(HUB_VIEW_TYPE, (leaf) => new HubView(leaf, plugin));
   plugin.registerView(AGENTS_VIEW_TYPE, (leaf) => new AgentsView(leaf, plugin));
   plugin.registerView(CHATS_VIEW_TYPE, (leaf) => new ChatListView(leaf, plugin));
-  // Same contract as the board: always registered so a restored leaf renders,
-  // gated at entry so it never creates a webview while the flag is off.
-  plugin.registerView(EXO_BROWSER_VIEW_TYPE, (leaf) => new BrowserView(leaf, plugin));
+  // The agent browser registers nothing: it drives Obsidian's own `webviewer`
+  // leaf, which the core plugin owns and registers.
 }
 
 /** Open `viewType` as a main-pane tab, reusing an existing leaf if one is open. */
