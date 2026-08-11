@@ -6,6 +6,16 @@
  */
 import type { ModelOption } from "../providers/types";
 
+/** Options for the "Background AI model" dropdown — Sonnet-class only. Product
+ *  constraint: the floor for background passes is Sonnet — never offer (or
+ *  default to) a Haiku model here, even though Haiku is available as the
+ *  observer's own hardcoded fast-path model elsewhere. Keep in sync with the
+ *  pinned ids in `providers/claude.ts`. */
+export const BACKGROUND_MODEL_OPTIONS: ReadonlyArray<ModelOption> = [
+  { id: "claude-sonnet-5", label: "Sonnet 5" },
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+];
+
 /** Split the comma/newline-separated custom-models textarea into trimmed ids. */
 export function parseCustomModels(raw: string): string[] {
   return raw

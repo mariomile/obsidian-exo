@@ -4,7 +4,7 @@ import type { PermissionMode, ProviderId } from "./providers/types";
 import { cliDiagnostics, updateClaudeCli } from "./cli";
 import { compareSemver } from "./core/semver";
 import { ADAPTERS } from "./providers/registry";
-import { modelOptions } from "./core/model-options";
+import { modelOptions, BACKGROUND_MODEL_OPTIONS } from "./core/model-options";
 import type { AutomationConfig } from "./core/automations";
 import { initialDailyPulseReviewState, type DailyPulseReviewState } from "./core/daily-pulse";
 import type { MemorySetup } from "./core/vault-setup";
@@ -325,16 +325,6 @@ export const DEFAULT_SETTINGS: MVASettings = {
   connectionsInlineUnderline: true,
   connectionsStemming: true,
 };
-
-/** Options for the "Background AI model" dropdown — Sonnet-class only.
- *  Product constraint: the floor for background
- *  passes is Sonnet — never offer (or default to) a Haiku model here, even
- *  though Haiku is available as the observer's own hardcoded fast-path model
- *  elsewhere. Keep in sync with the pinned ids in `providers/claude.ts`. */
-const BACKGROUND_MODEL_OPTIONS: ReadonlyArray<{ id: string; label: string }> = [
-  { id: "claude-sonnet-5", label: "Sonnet 5" },
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
-];
 
 export class MVASettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: ExoPlugin) {

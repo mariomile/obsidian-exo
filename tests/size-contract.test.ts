@@ -51,7 +51,19 @@ const CEILINGS: Record<string, number> = {
   // il candidato è il blocco dei comandi.
   "src/main.ts": 3480,
   "src/ui/composer.ts": 1723,
-  "src/settings.ts": 1343,
+  // Abbassato il 2026-08-11: `BACKGROUND_MODEL_OPTIONS` è tornato a casa in
+  // `core/model-options.ts`, il modulo che possiede già il catalogo dei modelli
+  // per i picker — qui era un catalogo di prodotto parcheggiato in un file di
+  // UI. 1348 -> 1337 righe reali, e il tetto scende comunque sotto il 1343 da
+  // cui si partiva.
+  // Il tetto resta a 1340, non a 1337: stessa scelta motivata su view.ts e
+  // main.ts qui sopra. Al conteggio esatto questo file NON aveva margine, ed è
+  // esattamente il caso in cui si è rotto — su una singola chiave di
+  // `MVASettings`, che per costruzione non può stare in un altro file. 3 righe
+  // sono il margine dichiarato per la prossima preferenza persistita, non un
+  // permesso di ricrescita: la prossima feature che chiede più spazio qui
+  // estrae lo schema (`MVASettings` + `DEFAULT_SETTINGS`) dal tab di settings.
+  "src/settings.ts": 1340,
 };
 
 /** Righe come le conta `wc -l`: i newline, non i segmenti — così il numero nel
