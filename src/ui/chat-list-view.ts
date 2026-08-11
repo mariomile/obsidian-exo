@@ -26,9 +26,13 @@ import {
 import type { ChatSectionKey } from "../core/chat-rows";
 import {
   chatDot,
+  collapseChildren,
+  isParentCollapsed,
   isSectionCollapsed,
+  toggleParentCollapsed,
   toggleSectionCollapsed,
   type ChatDot,
+  type ChildCollapse,
 } from "../core/chat-list-state";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 import { clickable } from "./dom";
@@ -282,13 +286,22 @@ export class ChatListView extends ItemView {
     // sections and dropped the empty ones, and it owns the section KEYS: a key
     // has to survive a label being reworded, so this file never derives one
     // from display text.
-    this.renderSections(vm.sections, now);
+    // Resolved ONCE, over every section at a time: the renderer and the
+    // arrow-key axis have to agree about which rows are on screen, and two
+    // passes over the same rule is how they stop agreeing.
+    const kids = collapseChildren(
+      vm.sections.flatMap((s) => s.items),
+      this.plugin.settings.chatsCollapsedParents,
+    );
+    this.renderSections(vm.sections, now, kids);
     // Only what is on screen is on the arrow-key axis: a collapsed section's
-    // rows are not painted, so leaving them in the order would make Down walk
-    // the cursor into nothing and Enter open a chat the user cannot see.
+    // rows are not painted and a collapsed parent's children are hidden, so
+    // leaving either in the order would make Down walk the cursor into nothing
+    // and Enter open a chat the user cannot see.
     this.order = vm.sections
       .filter((s) => !this.collapsed(s.key))
       .flatMap((s) => s.items)
+      .filter((r) => !kids.hidden.has(r.id))
       .map((r) => r.id);
     if (this.cursor && !this.order.includes(this.cursor)) this.cursor = null;
     this.paintCursor(false);
@@ -367,6 +380,22 @@ export class ChatListView extends ItemView {
     this.paint();
   }
 
+  private parentCollapsed(convoId: string): boolean {
+    return isParentCollapsed(this.plugin.settings.chatsCollapsedParents, convoId);
+  }
+
+  /** Fold one conversation's fan-out away, or bring it back. A second, fully
+   *  independent axis: it writes its own list, so a parent stays folded through
+   *  a section being collapsed and reopened, and vice versa. */
+  private toggleParent(convoId: string): void {
+    this.plugin.settings.chatsCollapsedParents = toggleParentCollapsed(
+      this.plugin.settings.chatsCollapsedParents,
+      convoId,
+    );
+    void this.plugin.saveSettings();
+    this.paint();
+  }
+
   /**
    * One reconciled list per section, with the section's header as its SIBLING.
    * Sections are keyed by `ChatSectionKey` and reused across paints, so a chat
@@ -379,7 +408,11 @@ export class ChatListView extends ItemView {
    * accessibility tree, and building rows nobody can see costs a paint on every
    * 5s tick for a section the user explicitly put away.
    */
-  private renderSections(specs: readonly ChatSection[], now: number): void {
+  private renderSections(
+    specs: readonly ChatSection[],
+    now: number,
+    kids: ChildCollapse,
+  ): void {
     const host = this.listHost;
     if (!host) return;
     const wanted = new Set<string>(specs.map((s) => s.key));
@@ -409,7 +442,9 @@ export class ChatListView extends ItemView {
         .querySelector<HTMLElement>(".mva-chats-group-count")
         ?.setText(collapsed ? String(spec.items.length) : "");
       const list = sec.querySelector<HTMLElement>(".mva-chats-group-list");
-      if (list) reconcileList(list, collapsed ? [] : spec.items.map((r) => this.rowModel(r, now)));
+      if (!list) return;
+      reconcileList(list, collapsed ? [] : spec.items.map((r) => this.rowModel(r, now)));
+      if (!collapsed) this.applyChildCollapse(list, spec.items, kids);
     });
   }
 
@@ -447,6 +482,54 @@ export class ChatListView extends ItemView {
     list.setAttribute("role", "region");
     list.setAttribute("aria-labelledby", headerId);
     return sec;
+  }
+
+  /**
+   * Per-parent collapse, applied to the rows `reconcileList` just settled.
+   *
+   * A CLASS on the element that is already there, never a rebuild and never a
+   * shorter model list: the whole gesture is meant to feel instant in both
+   * directions, and re-deriving the list would make expanding pay for a rebuild
+   * of rows that never left the DOM. Same reason the collapsed flag stays OUT
+   * of the row signature — a rebuild here would drop focus mid-keystroke, on
+   * exactly the control the user just pressed Enter on.
+   *
+   * Indexed rather than queried: after reconciliation `list.children` is
+   * `spec.items` in order, by construction, so this needs no second lookup.
+   */
+  private applyChildCollapse(
+    list: HTMLElement,
+    items: readonly ChatRow[],
+    kids: ChildCollapse,
+  ): void {
+    const els = Array.from(list.children) as HTMLElement[];
+    items.forEach((r, i) => {
+      const el = els[i];
+      if (!el) return;
+      if (r.depth === 1) {
+        el.toggleClass("is-kid-hidden", kids.hidden.has(r.id));
+        return;
+      }
+      if (!r.hasChildren) return;
+      const collapsed = this.parentCollapsed(r.id);
+      el.toggleClass("is-kids-collapsed", collapsed);
+      const toggle = el.querySelector<HTMLElement>(".mva-chats-kids");
+      if (!toggle) return;
+      const n = kids.counts.get(r.id) ?? 0;
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      // The shape and the number are the sighted channel; this is the whole of
+      // it for a screen reader, so it names the count rather than saying
+      // "expand" over a row that could be hiding one reply or nine.
+      toggle.setAttribute(
+        "aria-label",
+        collapsed ? `Show ${n} nested chat${n === 1 ? "" : "s"}` : "Hide nested chats",
+      );
+      // Only while collapsed, exactly like a section header's count: expanded,
+      // the rows are right there and the number is noise.
+      toggle.querySelector<HTMLElement>(".mva-chats-kids-count")?.setText(
+        collapsed ? String(n) : "",
+      );
+    });
   }
 
   private renderEmpty(kind: EmptyKind): void {
@@ -499,8 +582,12 @@ export class ChatListView extends ItemView {
         rich, r.title, r.preview, r.lane ?? "", r.reason ?? "", r.badge ?? "",
         r.provider, r.model, r.messageCount, r.open, r.pinned, r.unseen, age,
         // A row that gains or loses its parent changes shape, so it has to
-        // rebuild rather than be patched in place at the wrong indent.
-        r.depth,
+        // rebuild rather than be patched in place at the wrong indent. Gaining
+        // or losing CHILDREN is the same kind of change — it adds or removes
+        // the collapse control. Whether that control is currently collapsed is
+        // deliberately absent: that is applied as a class afterwards, so
+        // toggling never rebuilds the row you are standing on.
+        r.depth, r.hasChildren,
       ].join("|"),
       build: () => (rich ? this.buildRichRow(r, now) : this.buildCompactRow(r, now)),
     };
@@ -532,6 +619,7 @@ export class ChatListView extends ItemView {
     // rows and holds on the many. Left gutter = live state, title column, then
     // trailing markers and age.
     if (r.pinned) setIcon(head.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
+    this.kidsToggleInto(head, r);
     head.createSpan({ cls: "mva-chats-age", text: r.updatedAt ? relativeTime(r.updatedAt, now) : "" });
 
     // A conversation can be streaming its very first turn with no assistant text
@@ -591,10 +679,45 @@ export class ChatListView extends ItemView {
     // every row whether or not it is pinned or carries a badge.
     if (r.pinned) setIcon(row.createSpan({ cls: "mva-chats-pin", attr: { "aria-label": "Pinned" } }), "pin");
     this.badgeInto(row, r);
+    this.kidsToggleInto(row, r);
     row.createSpan({ cls: "mva-chats-age", text: r.updatedAt ? relativeTime(r.updatedAt, now) : "" });
     row.dataset.id = r.id;
     this.wireRow(row, r);
     return row;
+  }
+
+  /**
+   * The collapse control for a conversation that fanned out. Same gesture as a
+   * section header, one rung down: the same chevron, the same rotation, the
+   * same count-only-while-collapsed rule — reusing the language rather than
+   * inventing a second one for the same idea.
+   *
+   * It TRAILS the title, like the pin and the badge and for the same reason: a
+   * leading chevron would shift the title right on exactly the few rows that
+   * fanned out, breaking the column the whole list is read down. It is smaller
+   * and fainter than the section chevron, because a parent row is one row among
+   * many and not a boundary between groups.
+   *
+   * A `div` made operable by `clickable`, never a `<button>` — Obsidian's
+   * `button:not(.clickable-icon)` rule out-specifies a single-class selector
+   * and would strip the layout out from under it, the same trap documented on
+   * the section header.
+   *
+   * The handler STOPS PROPAGATION: this sits inside the row, and the row's own
+   * click reveals the conversation. Without it, folding the children would also
+   * open the chat — for the click AND for the Enter/Space that `clickable`
+   * wires, since both bubble to the row's identical handlers.
+   */
+  private kidsToggleInto(host: HTMLElement, r: ChatRow): void {
+    if (!r.hasChildren) return;
+    const toggle = host.createSpan({ cls: "mva-chats-kids" });
+    // A rotation, not two icons — same reasoning as the section chevron.
+    setIcon(toggle.createSpan({ cls: "mva-chats-kids-chevron" }), "chevron-right");
+    toggle.createSpan({ cls: "mva-chats-kids-count" });
+    clickable(toggle, (e) => {
+      e.stopPropagation();
+      this.toggleParent(r.id);
+    });
   }
 
   private wireRow(row: HTMLElement, r: ChatRow): void {
