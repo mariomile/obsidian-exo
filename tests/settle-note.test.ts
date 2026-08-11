@@ -90,7 +90,32 @@ describe("the frontmatter schema", () => {
     expect(note.frontmatter.outcome).toBe("settled");
     expect(note.frontmatter.files_touched).toEqual(["Notes/copy.md"]);
     expect(note.frontmatter.tags).toEqual([SETTLE_TAG]);
-    expect(note.frontmatter[SETTLE_CONVO_KEY]).toBe("c7");
+    expect(note.frontmatter[SETTLE_CONVO_KEY]).toMatch(/^c7-/);
+  });
+
+  it("stamps identity with something the id counter cannot hand out twice", () => {
+    // `c7` is a recycled counter value, not an identity: delete the
+    // highest-numbered chat and the next new one mints as `c7` again. The
+    // stamp therefore carries the opening turn as well, so a fresh chat
+    // wearing a dead chat's number cannot claim its note.
+    const opening: Message[] = [{ role: "user", text: "Make the onboarding copy shorter", at: 111 }];
+    const mine = distillConversation(source({ messages: opening }), EMPTY_RECAP);
+    const recycled = distillConversation(
+      source({ messages: [{ role: "user", text: "Draft the launch email", at: 222 }] }),
+      EMPTY_RECAP,
+    );
+    expect(recycled.frontmatter[SETTLE_CONVO_KEY]).not.toBe(mine.frontmatter[SETTLE_CONVO_KEY]);
+
+    // And it is STABLE as the same conversation grows, or the second settle
+    // would write a second note instead of updating the first.
+    const grown = distillConversation(
+      source({
+        messages: [...opening, { role: "assistant", segments: [{ t: "text", md: "Done." }] }],
+        title: "Renamed since",
+      }),
+      EMPTY_RECAP,
+    );
+    expect(grown.frontmatter[SETTLE_CONVO_KEY]).toBe(mine.frontmatter[SETTLE_CONVO_KEY]);
   });
 
   it("states an unbound agent explicitly rather than omitting the key", () => {
@@ -257,7 +282,13 @@ const fakeVault = () => {
   const files = new Map<string, string>();
   const folders = new Set<string>();
   const adapter: SettleVaultAdapter = {
-    listFiles: async (dir) => [...files.keys()].filter((p) => p.startsWith(`${dir}/`)),
+    // Same listing the real adapter produces: one folder deep, `.md` only
+    // (`adapter.list(dir).files.filter(endsWith(".md"))`). A recursive or
+    // unfiltered fake would test the writer against input it can never get.
+    listFiles: async (dir) =>
+      [...files.keys()].filter(
+        (p) => p.startsWith(`${dir}/`) && !p.slice(dir.length + 1).includes("/") && p.endsWith(".md"),
+      ),
     read: async (path) => {
       const raw = files.get(path);
       if (raw === undefined) throw new Error(`no such file: ${path}`);
@@ -325,14 +356,43 @@ describe("settling a conversation to its note", () => {
     expect(vault.files.get(theirs)).toMatch(/c8/);
   });
 
-  it("survives an unreadable neighbour instead of refusing to settle", async () => {
+  it("does not let a chat that inherited a dead chat's id destroy its note", async () => {
+    // The premise of the feature is that the note outlives the chat. Settle
+    // c7, delete chat c7, reload — the seed drops back and the next new chat
+    // mints as c7. It must not walk into the old note and replace the body.
     const vault = fakeVault();
-    vault.files.set(`${folder}/Ghost.md`, "");
+    const mine = await settleConversationToNote(
+      vault.adapter,
+      paths,
+      source({ messages: talk("rewrite the onboarding copy", "did X") }),
+    );
+    const recycled = await settleConversationToNote(
+      vault.adapter,
+      paths,
+      source({ id: "c7", title: "Draft the launch email", messages: talk("draft the email", "did Y") }),
+    );
+    expect(recycled).not.toBe(mine);
+    expect(vault.files.get(mine)).toMatch(/did X/);
+    expect(vault.files.get(mine)).not.toMatch(/did Y/);
+    expect(vault.files.size).toBe(2);
+  });
+
+  it("never overwrites a neighbour it could not read", async () => {
+    // The file the source title wants is already there and CANNOT BE READ — a
+    // note deleted between the list and the read under Sync, a permission
+    // error, undecodable bytes. Unreadable means "not this conversation's
+    // note", never "free to take": the collision set is the listing, not the
+    // files that happened to read back.
+    const vault = fakeVault();
+    const ghost = `${folder}/Rewrite the onboarding copy.md`;
+    vault.files.set(ghost, "someone else's note, in bytes we cannot decode\n");
     vault.adapter.read = async () => {
       throw new Error("EACCES");
     };
     const path = await settleConversationToNote(vault.adapter, paths, source({ messages: talk("a", "b") }));
-    expect(path).toBe(`${folder}/Rewrite the onboarding copy.md`);
+    expect(path).toBe(`${folder}/Rewrite the onboarding copy 2.md`);
+    expect(vault.files.get(ghost)).toBe("someone else's note, in bytes we cannot decode\n");
+    expect(vault.files.size).toBe(2);
   });
 });
 

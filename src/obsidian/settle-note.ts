@@ -21,6 +21,7 @@ import {
   findSettledNote,
   renderSettleNote,
   settleFolder,
+  settleStamp,
   uniqueSettlePath,
   type SettleSource,
 } from "../core/settle-note";
@@ -93,8 +94,12 @@ export async function settleConversationToNote(
     }
   }
 
-  const owned = findSettledNote(files, src.id);
-  const takenByOthers = files.map((f) => f.path).filter((p) => p !== owned);
+  const owned = findSettledNote(files, settleStamp(src));
+  // Taken is the LISTING, not the files that read back. A note we could not
+  // read is not this conversation's note, but it is still a file: deriving the
+  // collision set from `files` would hand back its exact path and `write`
+  // would resolve it to a TFile and replace it wholesale.
+  const takenByOthers = existingPaths.filter((p) => p !== owned);
   const target = owned ?? uniqueSettlePath(folder, src.title, takenByOthers);
   const existing = owned ? (files.find((f) => f.path === owned)?.raw ?? null) : null;
 

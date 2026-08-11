@@ -154,7 +154,7 @@ export function distillConversation(src: SettleSource, recap: Recap): SettleNote
   const outcome = settleOutcome(src);
   const written = recap.written.map((w) => w.path);
   const frontmatter: Record<string, unknown> = {
-    [SETTLE_CONVO_KEY]: src.id,
+    [SETTLE_CONVO_KEY]: settleStamp(src),
     agent: src.agent ?? null,
     provider: src.provider,
     model: src.model,
@@ -246,6 +246,44 @@ export function uniqueSettlePath(folder: string, title: string, taken: readonly 
 }
 
 /**
+ * WHO THIS NOTE BELONGS TO. Not `src.id` on its own: that is a counter value,
+ * re-seeded on every reload from the ids that survived (`maxIdSuffix` over the
+ * stored conversations), so deleting the highest-numbered chat frees its
+ * number and the next new chat mints it again. The note is meant to outlive
+ * the chat — that is the whole premise of settling — so a bare id lets a
+ * stranger walk into a dead chat's note and replace its body.
+ *
+ * The second half is the turn that OPENED the conversation, the one thing
+ * about it that is both durable and unique in practice: rewind and fork only
+ * ever cut from the end or mint a new id, so it survives every edit a chat can
+ * receive while it stays the same chat. Clearing a tab to a fresh session
+ * (`newSessionInTab`) keeps the id but empties the transcript, and that
+ * deliberately reads as a different conversation: a brand-new chat wearing an
+ * old number gets its own note instead of overwriting the record of the one
+ * before it.
+ */
+export function settleStamp(src: SettleSource): string {
+  return `${src.id}-${fnv1a(opening(src.messages))}`;
+}
+
+/** The opening user turn, text and timestamp, or "" when there is none. */
+function opening(messages: readonly Message[]): string {
+  for (const m of messages) {
+    if (m.role === "user") return `${m.at ?? 0}:${m.text ?? ""}`;
+  }
+  return "";
+}
+
+function fnv1a(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/**
  * Find the note a conversation was already settled to, by its frontmatter
  * stamp rather than by its filename. Re-settling a chat whose title changed
  * (or whose note the user renamed) must still land on the same page, and the
@@ -253,11 +291,11 @@ export function uniqueSettlePath(folder: string, title: string, taken: readonly 
  */
 export function findSettledNote(
   files: readonly { path: string; raw: string }[],
-  convoId: string,
+  stamp: string,
 ): string | null {
-  const stamp = new RegExp(`^${SETTLE_CONVO_KEY}:\\s*"?${escapeRe(convoId)}"?\\s*$`, "m");
+  const line = new RegExp(`^${SETTLE_CONVO_KEY}:\\s*"?${escapeRe(stamp)}"?\\s*$`, "m");
   for (const f of files) {
-    if (stamp.test(frontmatterBlock(f.raw))) return f.path;
+    if (line.test(frontmatterBlock(f.raw))) return f.path;
   }
   return null;
 }
