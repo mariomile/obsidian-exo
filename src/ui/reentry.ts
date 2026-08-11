@@ -25,17 +25,35 @@ import type { Convo } from "./convo-types";
 import type { ComposerDraft } from "./composer";
 import {
   advanceReadIndex,
-  clampReadIndex,
+  planReveal,
   reentrySlots,
   resumeVerbs,
-  shouldRenderReentry,
-  workSince,
   type ReentrySlotKey,
   type ResumeVerb,
 } from "../core/reentry";
 
 const BAND = "mva-reentry";
 const VERBS = "mva-resume-verbs";
+
+/**
+ * The read position after a turn ENDS, which is the other half of the
+ * lifecycle and the one that is easy to forget: a reveal reads the chat you
+ * switch to, and this reads the chat you are already looking at.
+ *
+ * Without it the position only moves on a tab switch, so the next switch back
+ * reports as news the twelve steps and three files you sat and watched land —
+ * and prints them above the prompt you typed yourself.
+ *
+ *  - `active`: this is the conversation the view is showing. Its complement is
+ *    the existing unread dot, which is the same question asked of the strip.
+ *  - `visible`: the pane itself is on screen. A turn that finished while the
+ *    Exo pane was behind another Obsidian tab is exactly the work the band
+ *    exists to report, so it must NOT count as read.
+ */
+export function noteTurnEnd(c: Convo, seen: { active: boolean; visible: boolean }): void {
+  if (!seen.active) c.unread = true;
+  else if (seen.visible) c.readIndex = advanceReadIndex(c.messages.length);
+}
 
 /**
  * Reveal a conversation: paint the "since you left" line at the last-read
@@ -48,16 +66,28 @@ const VERBS = "mva-resume-verbs";
  * were away.
  *
  * `onOpenNote` is the files slot's target. Everything else scrolls inside the
- * transcript, so no other host service is needed.
+ * transcript, so no other host service is needed. `onRead` fires only when the
+ * position actually moved: it is how the caller gets the new number onto disk,
+ * and a band that was read in a session that then quit without touching
+ * anything else would otherwise come back on the next launch.
  */
-export function revealReentry(c: Convo, onOpenNote: (path: string) => void): void {
+export function revealReentry(
+  c: Convo,
+  onOpenNote: (path: string) => void,
+  onRead?: () => void,
+): void {
   c.listEl.querySelector(`.${BAND}`)?.remove();
-  if (c.streaming) return;
-  const total = c.messages.length;
-  const readIndex = clampReadIndex(c.readIndex, total);
-  const work = workSince(c.messages, readIndex);
-  c.readIndex = advanceReadIndex(total);
-  if (!shouldRenderReentry({ streaming: false, readIndex, total, work })) return;
+  const decision = planReveal({
+    messages: c.messages,
+    readIndex: c.readIndex,
+    streaming: c.streaming,
+  });
+  if (decision.readIndex !== null && decision.readIndex !== c.readIndex) {
+    c.readIndex = decision.readIndex;
+    onRead?.();
+  }
+  if (!decision.band) return;
+  const { work, anchor: anchorIndex } = decision.band;
 
   const band = createDiv({ cls: `${BAND} mva-type-eyebrow` });
   band.createSpan({ cls: "mva-reentry-lede", text: "since you left" });
@@ -65,8 +95,8 @@ export function revealReentry(c: Convo, onOpenNote: (path: string) => void): voi
     const el = band.createSpan({ cls: "mva-reentry-slot", text: slot.label });
     el.dataset.slot = slot.key;
     if (!slot.populated) {
-      // An empty slot holds its position and says nothing: the line's second
-      // number always means files, whether or not there were any.
+      // An empty slot renders nothing (`styles.css` hides it): what is fixed is
+      // the ORDER, so the second number you read always means files.
       el.addClass("is-empty");
       el.setText("");
       continue;
@@ -82,9 +112,9 @@ export function revealReentry(c: Convo, onOpenNote: (path: string) => void): voi
 
   // At the last-read position: immediately before the first turn the user has
   // not seen. `.mva-turn` is one element per message, in message order, so the
-  // read index IS the DOM index.
+  // anchor index IS the DOM index.
   const turns = c.listEl.querySelectorAll(".mva-turn");
-  const anchor = turns.item(readIndex);
+  const anchor = turns.item(anchorIndex);
   if (anchor) c.listEl.insertBefore(band, anchor);
   else c.listEl.appendChild(band);
 }

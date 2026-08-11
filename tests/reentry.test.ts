@@ -4,8 +4,10 @@ import { join } from "node:path";
 import {
   REENTRY_SLOTS,
   advanceReadIndex,
+  bandAnchor,
   clampReadIndex,
   hasReentryNews,
+  planReveal,
   reentryLine,
   reentrySlots,
   resumeVerbs,
@@ -13,6 +15,8 @@ import {
   workSince,
   type ResumeState,
 } from "../src/core/reentry";
+import { noteTurnEnd } from "../src/ui/reentry";
+import type { Convo } from "../src/ui/convo-types";
 import type { Message } from "../src/core/model";
 
 /**
@@ -41,11 +45,13 @@ describe("the read position", () => {
     expect(advanceReadIndex(7)).toBe(7);
   });
 
-  it("reads an absent position as never-read", () => {
-    // Every conversation that existed before this phase has no stored value,
-    // and none of them may claim to have been read.
-    expect(clampReadIndex(undefined, 5)).toBe(0);
-    expect(clampReadIndex(Number.NaN, 5)).toBe(0);
+  it("keeps 'never opened' distinct from 'opened at position 0'", () => {
+    // Every conversation that existed before this phase has no stored value.
+    // Absent is NOT 0: 0 is a chat you opened while it was empty, and that one
+    // has a real "since you left" the moment it works without you.
+    expect(clampReadIndex(undefined, 5)).toBeUndefined();
+    expect(clampReadIndex(Number.NaN, 5)).toBeUndefined();
+    expect(clampReadIndex(0, 5)).toBe(0);
   });
 
   it("clamps a stored position to a transcript that shrank (a rewind)", () => {
@@ -142,10 +148,6 @@ describe("when the band may appear", () => {
     expect(shouldRenderReentry({ streaming: true, readIndex: 2, total: 6, work })).toBe(false);
   });
 
-  it("never appears on a chat you have never opened", () => {
-    expect(shouldRenderReentry({ streaming: false, readIndex: 0, total: 6, work })).toBe(false);
-  });
-
   it("never appears when the position has already caught up", () => {
     expect(shouldRenderReentry({ streaming: false, readIndex: 6, total: 6, work })).toBe(false);
   });
@@ -211,6 +213,99 @@ describe("resume verbs", () => {
 });
 
 /* ---------------------------------------------------------------------------
+ * The lifecycle of the one persisted number, as a SEQUENCE. Every bug this
+ * phase had was a moment the position failed to move — never a wrong count —
+ * and no test of `advanceReadIndex` on its own can see that. So these drive
+ * the two functions the view actually calls, in the order the view calls them.
+ * ------------------------------------------------------------------------ */
+
+const convo = (messages: Message[], readIndex?: number): Convo =>
+  ({ messages, readIndex, unread: false }) as unknown as Convo;
+
+/** One reveal, applied exactly as `revealReentry` applies it. */
+const reveal = (c: Convo, streaming = false) => {
+  const d = planReveal({ messages: c.messages, readIndex: c.readIndex, streaming });
+  if (d.readIndex !== null) c.readIndex = d.readIndex;
+  return d.band;
+};
+
+const work12 = (): Message[] => [
+  tool("Write", { file_path: "/v/a.md" }),
+  tool("Edit", { file_path: "/v/b.md" }),
+];
+
+describe("the read position, over a session", () => {
+  it("says nothing on a chat it has never seen, and starts counting from there", () => {
+    const c = convo([user("hi"), ...work12()]);
+    expect(reveal(c)).toBeNull(); // no "left" to be since
+    expect(c.readIndex).toBe(3);
+  });
+
+  it("reports work done while you were away on a chat opened when it was empty", () => {
+    // The flagship path: you make a chat, it is empty, you send and walk away.
+    const c = convo([]);
+    expect(reveal(c)).toBeNull();
+    expect(c.readIndex).toBe(0); // a position, not an absence
+    c.messages.push(user("do X"), ...work12());
+    const band = reveal(c);
+    expect(band?.work.steps).toBe(2);
+    expect(band?.work.files).toBe(2);
+  });
+
+  it("puts the line under your own prompt, never above it", () => {
+    // You typed it, so you have read it: the news starts at the reply.
+    const c = convo([user("a"), tool("Write", { file_path: "/v/a.md" })], 0);
+    expect(reveal(c)?.anchor).toBe(1);
+    expect(bandAnchor([user("a"), user("b")], 0)).toBe(2);
+  });
+
+  it("never reports a turn that finished in front of you", () => {
+    // reveal → the turn completes while this chat is the visible one → come
+    // back: the band has nothing to say, because you watched it happen.
+    const c = convo([user("a"), tool("Read", { file_path: "/v/a.md" })]);
+    reveal(c);
+    c.messages.push(user("do X"), ...work12());
+    noteTurnEnd(c, { active: true, visible: true });
+    expect(c.readIndex).toBe(c.messages.length);
+    expect(c.unread).toBe(false);
+    expect(reveal(c)).toBeNull();
+  });
+
+  it("still reports a turn that finished while the pane was not on screen", () => {
+    const c = convo([user("a")], 1);
+    c.messages.push(...work12());
+    noteTurnEnd(c, { active: true, visible: false });
+    expect(c.readIndex).toBe(1); // the active chat, but nobody was looking
+    expect(reveal(c)?.work.steps).toBe(2);
+  });
+
+  it("marks a turn that landed in another chat unread and leaves its position", () => {
+    const c = convo([user("a")], 1);
+    c.messages.push(...work12());
+    noteTurnEnd(c, { active: false, visible: true });
+    expect(c.unread).toBe(true);
+    expect(c.readIndex).toBe(1);
+    expect(reveal(c)?.work.files).toBe(2);
+  });
+
+  it("dissolves once read and does not return for the same position", () => {
+    const c = convo([user("a")], 1);
+    c.messages.push(...work12());
+    expect(reveal(c)).not.toBeNull();
+    expect(c.readIndex).toBe(3); // moved by the reveal that painted it
+    expect(reveal(c)).toBeNull(); // and the same position never speaks twice
+  });
+
+  it("leaves the position untouched on a chat revealed mid-stream", () => {
+    // Coming back mid-turn must not swallow the news: the band waits.
+    const c = convo([user("a"), ...work12()], 1);
+    expect(reveal(c, true)).toBeNull();
+    expect(c.readIndex).toBe(1);
+    expect(reveal(c)?.work.steps).toBe(2);
+  });
+});
+
+/* ---------------------------------------------------------------------------
  * The wiring, read off the source. The band is DOM, and this suite runs in
  * `node` — so what is pinned here is the set of decisions that would otherwise
  * only be visible by mounting Obsidian.
@@ -248,6 +343,20 @@ describe("the re-entry band's wiring", () => {
   it("persists the read position with the conversation", () => {
     // Both directions: written to disk in `toConvoData`, read back in `restore`.
     expect(view).toMatch(/readIndex/);
+    // 0 is a position and has to survive a quit — `if (c.readIndex)` would drop it.
+    expect(view).toMatch(/c\.readIndex !== undefined \? \{ readIndex/);
     expect(read("src/ui/convo-types.ts")).toMatch(/readIndex\?: number/);
+  });
+
+  it("moves the position at turn end, not only on a tab switch", () => {
+    // The behaviour is tested above against `noteTurnEnd` itself; what can only
+    // be read off the source is that the turn-end path calls it at all.
+    expect(view).toMatch(/noteTurnEnd\(c, \{ active: c === this\.active/);
+  });
+
+  it("writes the moved position when a band is read at launch", () => {
+    // restore()'s reveal has no other reason to persist, so a session that
+    // opened, read the band and quit would show the same band next launch.
+    expect(view).toMatch(/revealReentry\(this\.active,.{0,60}\(\) => this\.persist\(\)\)/);
   });
 });

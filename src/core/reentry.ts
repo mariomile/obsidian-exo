@@ -11,6 +11,12 @@
  * the DOM index of the first unread turn — one number that answers both "what
  * is new" and "where does the line go".
  *
+ * "Seen" is the whole contract, and it has two halves: a reveal reads
+ * everything on screen (`planReveal`), and a turn that FINISHES in front of
+ * you is read as it lands (`ui/reentry`'s `noteTurnEnd`). Without the second
+ * half the number only ever moves when you switch tabs, and the line ends up
+ * reporting twelve steps you sat and watched.
+ *
  * Everything here is Obsidian-free and DOM-free, same discipline as
  * `chat-rows.ts`: this decides what the line SAYS and whether it may appear,
  * `ui/reentry.ts` owns the elements and the click targets.
@@ -127,10 +133,14 @@ export function reentryLine(work: ReentryWork): string {
  *  - Never while a turn is streaming. THE STREAMING INVARIANT: exactly one of
  *    {working row, open card, caret} is the live surface, and a band that
  *    appeared mid-stream would be a second one.
- *  - Never at position 0. A chat you have never opened has no "since you left"
- *    — there is no left to be since, and the band would sit above the first
- *    message describing the whole conversation.
+ *  - Never past the end of the transcript: the position has caught up and
+ *    there is nothing between it and the last turn.
  *  - Never when there is nothing to report.
+ *
+ * Position 0 is a POSITION, not an absence: a chat you opened while it was
+ * empty and left to work has read nothing and everything is news. "Never
+ * opened" is the ABSENT position, and it is `planReveal` that turns it away —
+ * this predicate is only ever asked about a position that exists.
  */
 export function shouldRenderReentry(o: {
   streaming: boolean;
@@ -139,7 +149,7 @@ export function shouldRenderReentry(o: {
   work: ReentryWork;
 }): boolean {
   if (o.streaming) return false;
-  if (o.readIndex <= 0 || o.readIndex >= o.total) return false;
+  if (o.readIndex < 0 || o.readIndex >= o.total) return false;
   return hasReentryNews(o.work);
 }
 
@@ -150,10 +160,60 @@ export function advanceReadIndex(total: number): number {
   return Math.max(0, total);
 }
 
+/**
+ * Where the line goes: the last-read position, moved past any messages the
+ * user wrote there. A prompt you typed is one you have seen, so the band
+ * belongs UNDER it — otherwise a chat you kicked off and walked away from
+ * prints "since you left · 12 steps" above your own words.
+ */
+export function bandAnchor(messages: readonly Message[], readIndex: number): number {
+  let i = Math.max(0, Math.min(readIndex, messages.length));
+  while (i < messages.length && messages[i].role === "user") i++;
+  return i;
+}
+
+/** What one reveal does: where the read position lands, and whether a band is
+ *  painted on the way. `readIndex: null` means leave the position alone — a
+ *  conversation revealed mid-stream is not a conversation you have read. */
+export interface RevealDecision {
+  readIndex: number | null;
+  band: { work: ReentryWork; anchor: number } | null;
+}
+
+/**
+ * The whole reveal, decided in one place and with no DOM in sight: what the
+ * band says, where it goes, and where the read position ends up. `ui/reentry`
+ * only applies this, so the lifecycle of the one persisted number in this
+ * phase is testable as a SEQUENCE — reveal, work, reveal again — rather than
+ * as three functions that happen to be called in the right order.
+ */
+export function planReveal(o: {
+  messages: readonly Message[];
+  readIndex: number | undefined;
+  streaming: boolean;
+}): RevealDecision {
+  const total = o.messages.length;
+  // Reading a chat mid-turn must not silently swallow the news of what it did
+  // while you were away, so the position is left exactly where it was.
+  if (o.streaming) return { readIndex: null, band: null };
+  const stored = clampReadIndex(o.readIndex, total);
+  const next = advanceReadIndex(total);
+  // Never opened: there is no "left" to be since.
+  if (stored === undefined) return { readIndex: next, band: null };
+  const work = workSince(o.messages, stored);
+  if (!shouldRenderReentry({ streaming: false, readIndex: stored, total, work })) {
+    return { readIndex: next, band: null };
+  }
+  return { readIndex: next, band: { work, anchor: bandAnchor(o.messages, stored) } };
+}
+
 /** A stored read position, clamped to a transcript that may have shrunk (a
- *  rewind) or grown since it was written. */
-export function clampReadIndex(stored: number | undefined, total: number): number {
-  if (typeof stored !== "number" || !Number.isFinite(stored)) return 0;
+ *  rewind) or grown since it was written. `undefined` — no stored value at
+ *  all — stays `undefined`: a conversation that has never been opened is a
+ *  different fact from one opened at position 0, and only the second one can
+ *  ever have a "since you left". */
+export function clampReadIndex(stored: number | undefined, total: number): number | undefined {
+  if (typeof stored !== "number" || !Number.isFinite(stored)) return undefined;
   return Math.max(0, Math.min(Math.floor(stored), total));
 }
 

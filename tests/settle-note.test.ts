@@ -15,6 +15,10 @@ import {
   uniqueSettlePath,
   type SettleSource,
 } from "../src/core/settle-note";
+import {
+  settleConversationToNote,
+  type SettleVaultAdapter,
+} from "../src/obsidian/settle-note";
 import { buildRecap } from "../src/core/recap";
 import { exoPaths } from "../src/core/paths";
 import type { Message } from "../src/core/model";
@@ -239,6 +243,96 @@ describe("re-settling the same conversation", () => {
     expect(out).toMatch(/project: "\[\[Onboarding\]\]"/);
     expect(out).toMatch(/new body/);
     expect(out).not.toMatch(/old body/);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * The writer, driven end to end against a fake vault. The pieces above are
+ * each correct on their own; what is tested here is the decision the writer
+ * makes with them — whose note this is, and whether a second settle writes a
+ * second file. That is the criterion, and it lives nowhere else.
+ * ------------------------------------------------------------------------ */
+
+const fakeVault = () => {
+  const files = new Map<string, string>();
+  const folders = new Set<string>();
+  const adapter: SettleVaultAdapter = {
+    listFiles: async (dir) => [...files.keys()].filter((p) => p.startsWith(`${dir}/`)),
+    read: async (path) => {
+      const raw = files.get(path);
+      if (raw === undefined) throw new Error(`no such file: ${path}`);
+      return raw;
+    },
+    write: async (path, content) => void files.set(path, content),
+    ensureFolder: async (dir) => void folders.add(dir),
+  };
+  return { adapter, files, folders };
+};
+
+describe("settling a conversation to its note", () => {
+  const paths = exoPaths("_exo");
+  const folder = settleFolder(paths);
+  const talk = (ask: string, answer: string): Message[] => [
+    { role: "user", text: ask },
+    { role: "assistant", segments: [{ t: "text", md: answer }] },
+  ];
+
+  it("creates the folder and writes one note", async () => {
+    const vault = fakeVault();
+    const path = await settleConversationToNote(vault.adapter, paths, source({ messages: talk("do X", "did X") }));
+    expect(path).toBe(`${folder}/Rewrite the onboarding copy.md`);
+    expect(vault.folders.has(folder)).toBe(true);
+    expect([...vault.files.keys()]).toEqual([path]);
+    expect(vault.files.get(path)).toMatch(/did X/);
+  });
+
+  it("re-settles into the same file, updated, instead of a second copy", async () => {
+    const vault = fakeVault();
+    const first = await settleConversationToNote(vault.adapter, paths, source({ messages: talk("do X", "did X") }));
+    const again = await settleConversationToNote(
+      vault.adapter,
+      paths,
+      source({ messages: [...talk("do X", "did X"), ...talk("now do Y", "did Y")] }),
+    );
+    expect(again).toBe(first);
+    expect(vault.files.size).toBe(1);
+    expect(vault.files.get(first)).toMatch(/did Y/);
+    expect(vault.files.get(first)).not.toMatch(/did X/); // the body is replaced, not appended to
+  });
+
+  it("follows its own note after the user renames it", async () => {
+    const vault = fakeVault();
+    const src = source({ messages: talk("do X", "did X") });
+    const first = await settleConversationToNote(vault.adapter, paths, src);
+    const renamed = `${folder}/Onboarding copy — final.md`;
+    vault.files.set(renamed, vault.files.get(first)!);
+    vault.files.delete(first);
+    expect(await settleConversationToNote(vault.adapter, paths, src)).toBe(renamed);
+    expect(vault.files.size).toBe(1);
+  });
+
+  it("never overwrites another chat's note that happens to share a title", async () => {
+    const vault = fakeVault();
+    const mine = await settleConversationToNote(vault.adapter, paths, source({ messages: talk("a", "b") }));
+    const theirs = await settleConversationToNote(
+      vault.adapter,
+      paths,
+      source({ id: "c8", messages: talk("c", "d") }),
+    );
+    expect(theirs).toBe(`${folder}/Rewrite the onboarding copy 2.md`);
+    expect(vault.files.size).toBe(2);
+    expect(vault.files.get(mine)).toMatch(/c7/);
+    expect(vault.files.get(theirs)).toMatch(/c8/);
+  });
+
+  it("survives an unreadable neighbour instead of refusing to settle", async () => {
+    const vault = fakeVault();
+    vault.files.set(`${folder}/Ghost.md`, "");
+    vault.adapter.read = async () => {
+      throw new Error("EACCES");
+    };
+    const path = await settleConversationToNote(vault.adapter, paths, source({ messages: talk("a", "b") }));
+    expect(path).toBe(`${folder}/Rewrite the onboarding copy.md`);
   });
 });
 

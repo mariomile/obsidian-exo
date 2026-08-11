@@ -48,9 +48,14 @@ export function stepPlacement(name: string, input: unknown): StepPlacement {
   return "timeline";
 }
 
-/** Fold-header label: "1 step" / "N steps" (no minimum threshold — 1 folds too). */
-export function stepsLabel(n: number): string {
-  return n === 1 ? "1 step" : `${n} steps`;
+/** Fold-header label: "1 step" / "N steps" (no minimum threshold — 1 folds too).
+ *  `elapsed` is the same pre-formatted duration `milestoneLine` takes, and for
+ *  the same reason: a run with no tool call has no outcome to state, but it
+ *  still took time, and the fold moves that time out of its own span and into
+ *  the one line the header is allowed. Empty omits the clause. */
+export function stepsLabel(n: number, elapsed = ""): string {
+  const label = n === 1 ? "1 step" : `${n} steps`;
+  return elapsed ? `${label} · ${elapsed}` : label;
 }
 
 /** Dedup key for "files edited" — the path a write tool touches (matched by

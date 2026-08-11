@@ -72,6 +72,13 @@ describe("stepsLabel", () => {
     expect(stepsLabel(1)).toBe("1 step");
     expect(stepsLabel(4)).toBe("4 steps");
   });
+
+  it("carries the frozen duration a fold takes out of the elapsed span", () => {
+    // A thinking-only run has no milestone to state but still took time, and
+    // `close()` empties the elapsed span — so the label has to say it.
+    expect(stepsLabel(4, "41s")).toBe("4 steps · 41s");
+    expect(stepsLabel(4, "")).toBe("4 steps"); // a restored run has no honest clock
+  });
 });
 
 describe("fileEditKey", () => {

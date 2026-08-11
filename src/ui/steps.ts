@@ -64,10 +64,12 @@ export class StepsRun {
    *     it rather than inventorying it.
    *   - OPEN with real work → the live inventory ("18 tools · 5 files edited").
    *   - no tool ever ran → the old "N steps" (a thinking-only burst never
-   *     calls noteToolAdded). */
+   *     calls noteToolAdded), carrying the frozen duration once folded: the
+   *     fold empties the elapsed span, so without this a thinking-only run
+   *     would lose its "41s" on the way down. */
   private refreshLabel(): void {
     if (this.toolCount === 0) {
-      this.labelEl.setText(stepsLabel(this.steps));
+      this.labelEl.setText(stepsLabel(this.steps, this.closed ? this.frozenElapsed : ""));
       return;
     }
     const stats = { tools: this.toolCount, files: this.fileEdits.size, commands: this.commands };

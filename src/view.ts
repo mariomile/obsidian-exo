@@ -70,7 +70,7 @@ import {
 } from "./core/live-tasks";
 import { LiveTaskRegistry } from "./ui/live-task-registry";
 import { Composer } from "./ui/composer";
-import { renderResumeVerbs, revealReentry } from "./ui/reentry";
+import { noteTurnEnd, renderResumeVerbs, revealReentry } from "./ui/reentry";
 import type {
   AssistantCtx,
   Convo,
@@ -1190,9 +1190,9 @@ export class ChatView extends ItemView {
     this.listHost.appendChild(this.active.listEl);
     if (this.active.messages.length === 0) this.renderEmptyState();
     this.refreshProviderUI();
-    this.renderTabs();
+    this.refreshTabs(); // the strip AND the resume verbs: boot IS a re-entry moment
     this.scrollToBottom();
-    revealReentry(this.active, (p) => this.openNote(p)); // a chat that worked overnight says so
+    revealReentry(this.active, (p) => this.openNote(p), () => this.persist()); // worked overnight
     this.renderTailSurfacing(this.active);
     this.rebuildOutline();
   }
@@ -1223,7 +1223,7 @@ export class ChatView extends ItemView {
       // the reload left the sidebar advertising news it could never deliver.
       ...(c.pendingChildReports?.length ? { pendingChildReports: c.pendingChildReports } : {}),
       ...(c.titleLocked ? { titleLocked: true } : {}),
-      ...(c.readIndex ? { readIndex: c.readIndex } : {}), // 0 = never read, so it need not be written
+      ...(c.readIndex !== undefined ? { readIndex: c.readIndex } : {}), // 0 is a position, not an absence
       messages: c.messages.map((message) =>
         persistMessage(message, {
           maxToolOutput: MAX_PERSIST_OUTPUT,
@@ -6289,10 +6289,10 @@ export class ChatView extends ItemView {
         });
       }
       c.updatedAt = Date.now();
-      // A turn that finished somewhere you were not looking is the one fact the
-      // strip cannot recover later: the transcript keeps the answer, but not
-      // that you never saw it arrive. Cleared the moment the tab is focused.
-      if (c !== this.active) c.unread = true;
+      // Where this turn landed, in the two facts that depend on it: the unread
+      // dot on a chat you were not looking at, and the read position on the one
+      // you were — work watched live can never come back as "since you left".
+      noteTurnEnd(c, { active: c === this.active, visible: this.containerEl.isShown() });
       this.refreshTabs();
       // Two-stage session recovery (Claude-Code-style resume). The pure reducer
       // decides the session action + flags from the turn's state so this ladder,
