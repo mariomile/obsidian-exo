@@ -1,4 +1,4 @@
-# Agent Browser: Shared, Session-Scoped Browser Tab — Implementation Plan
+# Agent Browser: Shared, Session-Scoped Browser Tab (Implementation Plan)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,12 +10,12 @@
 
 ## Design decisions (each final, with rationale)
 
-- **Surface: one global leaf + a conversation lease, not one leaf per conversation.** The user is one human who can watch one tab; N parallel visible browsers multiply workspace clutter and fragment logins across partitions for zero research value. T3 needed multi-tab because multiple remote threads drive one desktop; Exo's conversations all live in front of the same person. The lease (owner convo id, in memory, no clock — T3 learned the hard way that expiring leases migrate live flows) prevents two conversations interleaving a multi-step interaction. View type string is `exo-browser` and, like `exo-connections`, **never changes** once shipped (workspace-persistent).
+- **Surface: one global leaf + a conversation lease, not one leaf per conversation.** The user is one human who can watch one tab; N parallel visible browsers multiply workspace clutter and fragment logins across partitions for zero research value. T3 needed multi-tab because multiple remote threads drive one desktop; Exo's conversations all live in front of the same person. The lease (owner convo id, in memory, no clock; T3 learned the hard way that expiring leases migrate live flows) prevents two conversations interleaving a multi-step interaction. View type string is `exo-browser` and, like `exo-connections`, **never changes** once shipped (workspace-persistent).
 - **Tool set v1: 8 tools, research-first.** `browser_open`, `browser_navigate`, `browser_snapshot`, `browser_read_page`, `browser_screenshot`, `browser_click`, `browser_type`, `browser_scroll`. Deliberately absent vs T3's 14: `evaluate` (arbitrary JS in the page is the single riskiest tool and research does not need it), `press` (folded into `browser_type`'s `submit`), `wait_for` (navigate/click already settle-wait; a re-snapshot covers dynamic content), `resize`/`set_appearance`/`recording` (dev-preview features, out of scope per YAGNI), `status` (every tool already returns status).
-- **Scoping: per-convo bridge closure on the existing tool server.** `browserBridgeFor(plugin, convoId)` returns a `BrowserBridge` bound to the conversation (or `undefined` when the feature is off or on mobile — which unregisters the tools entirely). Mutations check the lease and refuse with an explanatory message naming the owner; reads never need the lease (looking at the shared tab disturbs nobody). Headless runs get no bridge: a non-interactive run must not drive a surface whose whole point is that Mario watches it.
+- **Scoping: per-convo bridge closure on the existing tool server.** `browserBridgeFor(plugin, convoId)` returns a `BrowserBridge` bound to the conversation (or `undefined` when the feature is off or on mobile, which unregisters the tools entirely). Mutations check the lease and refuse with an explanatory message naming the owner; reads never need the lease (looking at the shared tab disturbs nobody). Headless runs get no bridge: a non-interactive run must not drive a surface whose whole point is that Mario watches it.
 - **Permission posture:** `browser_snapshot`, `browser_read_page`, `browser_screenshot` go into `OBSIDIAN_READ_TOOLS` (auto-allowed under `autoAllowRead`, same reasoning as `list_tasks`: they write nothing and observe only). `browser_open`, `browser_navigate`, `browser_click`, `browser_type`, `browser_scroll` stay out: each raises the standard permission card whose input (URL, selector, text) **is** the evidence trail, and per-convo "always allow" covers a research session after the first approval.
-- **Security (the riskiest part, so explicit):** single persistent partition `persist:exo-agent-browser` (logins survive restarts — useful for paywalled sources; per-convo partitions buy nothing when the tab is shared). Webview created with `partition` set **before** DOM attach, `webpreferences="contextIsolation=yes,sandbox=yes"`, no `nodeintegration`, no `allowpopups` (so `window.open` is inert). Best-effort main-session hardening via `require("electron").remote`: deny-all permission request+check handlers (Electron's default with NO handler is **grant**), and `will-download` → `preventDefault()` (no downloads, v1). URL gate: http/https only, no embedded credentials, enforced in a pure function before every navigation. `executeJavaScript` results are capped at 64 KB (T3's number) and every injected script embeds parameters exclusively via `JSON.stringify`. No tool evaluates agent-supplied JS.
-- **Screenshot return path:** MCP image content block. The vendored `@modelcontextprotocol/sdk` `CallToolResult` accepts `{ type: "image", data: <base64>, mimeType }` (verified in `node_modules/@modelcontextprotocol/sdk/dist/esm/types.d.ts`, `ImageContentSchema`), and Exo's UI-side `stringifyToolResult` (`src/providers/claude.ts:754`) maps non-text blocks to `""` so the tool card shows only the text part — safe. Image is downscaled to ≤1024 px width before PNG-encoding to bound tokens. Whether the Claude Code CLI forwards MCP image blocks to the model is a flagged seam with a defined fallback (see Known unverified seams).
+- **Security (the riskiest part, so explicit):** single persistent partition `persist:exo-agent-browser` (logins survive restarts, useful for paywalled sources; per-convo partitions buy nothing when the tab is shared). Webview created with `partition` set **before** DOM attach, `webpreferences="contextIsolation=yes,sandbox=yes"`, no `nodeintegration`, no `allowpopups` (so `window.open` is inert). Best-effort main-session hardening via `require("electron").remote`: deny-all permission request+check handlers (Electron's default with NO handler is **grant**), and `will-download` → `preventDefault()` (no downloads, v1). URL gate: http/https only, no embedded credentials, enforced in a pure function before every navigation. `executeJavaScript` results are capped at 64 KB (T3's number) and every injected script embeds parameters exclusively via `JSON.stringify`. No tool evaluates agent-supplied JS.
+- **Screenshot return path:** MCP image content block. The vendored `@modelcontextprotocol/sdk` `CallToolResult` accepts `{ type: "image", data: <base64>, mimeType }` (verified in `node_modules/@modelcontextprotocol/sdk/dist/esm/types.d.ts`, `ImageContentSchema`), and Exo's UI-side `stringifyToolResult` (`src/providers/claude.ts:754`) maps non-text blocks to `""` so the tool card shows only the text part, safe. Image is downscaled to ≤1024 px width before PNG-encoding to bound tokens. Whether the Claude Code CLI forwards MCP image blocks to the model is a flagged seam with a defined fallback (see Known unverified seams).
 - **Gating:** new setting `browserEnabled`, default **OFF** (same contract as `orchestrationEnabled`): when false, the tool list sent to sessions is **byte-identical** to before this feature existed, enforced by test. The session signature (`sessionSigOf`) includes the flag so flipping it respawns tools correctly.
 
 ## Global Constraints
@@ -23,11 +23,11 @@
 - Test runner: `pnpm test` (vitest). Typecheck: `pnpm typecheck`. Lint: `pnpm lint`. Full gate: `pnpm release:check`.
 - ⚠️ `pnpm build` **deploys `main.js` into Mario's live vault** (`.obsidian-plugin-dir`) and `release:check` includes it. Run neither until the final verification task, and never reload the plugin while a turn is in flight.
 - New logic goes in pure modules under `src/core/` with **no Obsidian imports**. `src/view.ts` and `src/main.ts` get thin wiring only.
-- Size ratchets (`tests/size-contract.test.ts`), verified 2026-08-11: `view.ts` **6600/6600** (zero headroom), `main.ts` **3480/3480** (zero headroom), `settings.ts` 1338/1340 (2 lines). Consequences baked into this plan: `main.ts` receives **zero new lines** (controller uses a WeakMap accessor; view registration goes through the un-ratcheted `ui/view-registry.ts`); `settings.ts` does the extraction its own ratchet comment sanctions (schema → new file) in Task 6; `view.ts` wiring is paid for by the `formatDate`/`formatRelative` extraction in Task 10. **Never raise a ceiling.** Re-verify counts with `wc -l` before editing — they may have moved since this plan was written.
+- Size ratchets (`tests/size-contract.test.ts`), verified 2026-08-11: `view.ts` **6600/6600** (zero headroom), `main.ts` **3480/3480** (zero headroom), `settings.ts` 1338/1340 (2 lines). Consequences baked into this plan: `main.ts` receives **zero new lines** (controller uses a WeakMap accessor; view registration goes through the un-ratcheted `ui/view-registry.ts`); `settings.ts` does the extraction its own ratchet comment sanctions (schema → new file) in Task 6; `view.ts` wiring is paid for by the `formatDate`/`formatRelative` extraction in Task 10. **Never raise a ceiling.** Re-verify counts with `wc -l` before editing; they may have moved since this plan was written.
 - Style contract (`src/style-contract.test.ts`): no `!important`, no raw hex outside tokens; new classes use the `mva-browser-` prefix; controls are the house `mv-*`/`mva-*` primitives (divs, never bare `<button>` for chips/icon buttons); **no emoji** anywhere in UI or tool text.
 - The webview partition string `persist:exo-agent-browser` and the view type `exo-browser` are workspace/disk-persistent: fix them now, never rename.
 - Injected page scripts embed every parameter via `JSON.stringify`; no string concatenation of raw agent input into JS.
-- Commit after each task, staging explicit paths only. `docs/` plans are gitignored — stage them with `git add -f`.
+- Commit after each task, staging explicit paths only. `docs/` plans are gitignored: stage them with `git add -f`.
 
 ---
 
@@ -109,7 +109,7 @@ describe("releaseLease", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pnpm vitest run tests/browser-lease.test.ts`
-Expected: FAIL — cannot resolve `../src/core/browser-lease`.
+Expected: FAIL (cannot resolve `../src/core/browser-lease`).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -117,7 +117,7 @@ Create `src/core/browser-lease.ts`:
 
 ```typescript
 /**
- * Browser lease — the pure ownership rule for the shared agent-browser tab
+ * Browser lease: the pure ownership rule for the shared agent-browser tab
  * (no Obsidian imports).
  *
  * One visible tab, many conversations: without a lease, two convos driving it
@@ -125,7 +125,7 @@ Create `src/core/browser-lease.ts`:
  * same problem with a host-assignment lease). Exo's version is deliberately
  * minimal: the lease is in-memory, has NO expiry clock (an expiring lease can
  * migrate a live flow mid-interaction), and changes hands ONLY through
- * `browser_open` — which raises a permission card, so the human ratifies every
+ * `browser_open`, which raises a permission card, so the human ratifies every
  * takeover. Reads never need the lease; only mutations do.
  */
 
@@ -135,7 +135,7 @@ export interface BrowserLease {
 }
 
 /** Grant (or refresh) the lease for `convoId`. Taking it from another
- *  conversation is allowed by design — `tookOverFrom` lets the caller say so. */
+ *  conversation is allowed by design: `tookOverFrom` lets the caller say so. */
 export function acquireLease(
   current: BrowserLease | null,
   convoId: string,
@@ -167,7 +167,7 @@ export function checkLease(
     ok: false,
     reason:
       `The shared browser tab is currently driven by another conversation (${current.ownerConvoId}). ` +
-      "Call browser_open to take it over — the tab is shared, so taking over interrupts that conversation's flow. " +
+      "Call browser_open to take it over; the tab is shared, so taking over interrupts that conversation's flow. " +
       "Reading tools (browser_snapshot, browser_read_page, browser_screenshot) work without taking over.",
   };
 }
@@ -193,7 +193,7 @@ git commit -m "feat(browser): pure conversation lease for the shared browser tab
 
 ---
 
-### Task 2: Page model — URL gate, status and snapshot formatting (pure)
+### Task 2: Page model, URL gate, status and snapshot formatting (pure)
 
 **Files:**
 - Create: `src/core/browser-page.ts`
@@ -229,7 +229,7 @@ import {
 
 const status: BrowserPageStatus = {
   url: "https://example.com/pricing",
-  title: "Pricing — Example",
+  title: "Pricing: Example",
   loading: false,
   scrollY: 0,
   scrollHeight: 4000,
@@ -265,7 +265,7 @@ describe("formatStatus", () => {
   it("names url, title, and scroll position", () => {
     const out = formatStatus(status);
     expect(out).toContain("https://example.com/pricing");
-    expect(out).toContain("Pricing — Example");
+    expect(out).toContain("Pricing: Example");
     expect(out).toMatch(/scroll/i);
   });
 
@@ -325,7 +325,7 @@ describe("capPageText", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pnpm vitest run tests/browser-page.test.ts`
-Expected: FAIL — cannot resolve `../src/core/browser-page`.
+Expected: FAIL (cannot resolve `../src/core/browser-page`).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -333,7 +333,7 @@ Create `src/core/browser-page.ts`:
 
 ```typescript
 /**
- * Browser page model — pure formatting and validation for the agent browser
+ * Browser page model: pure formatting and validation for the agent browser
  * (no Obsidian imports, no DOM).
  *
  * The impure host executes scripts inside the webview and hands raw records
@@ -353,7 +353,7 @@ export interface BrowserPageStatus {
 }
 
 /** One interactive/semantic element surfaced by the snapshot script. `ref` is
- *  the `data-exo-ref` stamped on the live element — valid until the next
+ *  the `data-exo-ref` stamped on the live element: valid until the next
  *  navigation or snapshot re-stamp. */
 export interface PageElement {
   ref: string;
@@ -405,7 +405,7 @@ export function formatStatus(s: BrowserPageStatus): string {
   return [
     `url: ${s.url}`,
     `title: ${s.title || "(untitled)"}`,
-    ...(s.loading ? ["(still loading — snapshot again if content looks incomplete)"] : []),
+    ...(s.loading ? ["(still loading: snapshot again if content looks incomplete)"] : []),
     `scroll: ${Math.round(s.scrollY)}–${Math.round(bottom)} of ${Math.round(s.scrollHeight)}px (${pct}% seen)`,
   ].join("\n");
 }
@@ -428,7 +428,7 @@ export function formatSnapshot(status: BrowserPageStatus, elements: PageElement[
   }
   const shown = elements.slice(0, SNAPSHOT_ELEMENT_CAP);
   const cut = elements.length - shown.length;
-  const tail = cut > 0 ? `\n(+${cut} more elements not shown — scroll or narrow the page first)` : "";
+  const tail = cut > 0 ? `\n(+${cut} more elements not shown: scroll or narrow the page first)` : "";
   return `${head}\n\nElements (use ref with browser_click / browser_type):\n${shown.map(elementLine).join("\n")}${tail}`;
 }
 
@@ -437,7 +437,7 @@ export function capPageText(text: string, totalLen: number): string {
   if (text.length <= PAGE_TEXT_CAP) return text;
   return (
     text.slice(0, PAGE_TEXT_CAP) +
-    `\n… [truncated: showing ${PAGE_TEXT_CAP} of ${totalLen} chars — the page is long; use browser_snapshot to find anchors, or ask for a specific section]`
+    `\n… [truncated: showing ${PAGE_TEXT_CAP} of ${totalLen} chars: the page is long; use browser_snapshot to find anchors, or ask for a specific section]`
   );
 }
 ```
@@ -541,7 +541,7 @@ describe("parameter escaping", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pnpm vitest run tests/browser-inject.test.ts`
-Expected: FAIL — cannot resolve `../src/core/browser-inject`.
+Expected: FAIL (cannot resolve `../src/core/browser-inject`).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -549,11 +549,11 @@ Create `src/core/browser-inject.ts`:
 
 ```typescript
 /**
- * Injected page scripts — the strings the browser host runs inside the
+ * Injected page scripts: the strings the browser host runs inside the
  * webview's page world via `executeJavaScript` (no Obsidian imports).
  *
  * Contract: every script is a self-contained IIFE that returns a JSON STRING
- * (never an object — structured-clone quirks across the guest boundary are not
+ * (never an object; structured-clone quirks across the guest boundary are not
  * our problem if only strings cross it). Action scripts return
  * `{ ok, reason? }`. Every parameter is embedded via JSON.stringify: agent
  * input can never escape a string literal, which the escaping tests pin down.
@@ -564,7 +564,7 @@ export interface ElementTarget {
   selector?: string;
 }
 
-/** In-page element cap — the pure formatter caps again at SNAPSHOT_ELEMENT_CAP. */
+/** In-page element cap: the pure formatter caps again at SNAPSHOT_ELEMENT_CAP. */
 const IN_PAGE_MAX = 200;
 
 /** JS expression resolving the target element (or null). */
@@ -636,7 +636,7 @@ export function clickScript(target: ElementTarget): string {
   return `(() => {
   try {
     const el = ${findExpr(target)};
-    if (!el) return JSON.stringify({ ok: false, reason: "no element matched — take a fresh browser_snapshot" });
+    if (!el) return JSON.stringify({ ok: false, reason: "no element matched: take a fresh browser_snapshot" });
     el.scrollIntoView({ block: "center" });
     const r = el.getBoundingClientRect();
     const opts = { bubbles: true, cancelable: true, view: window, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
@@ -668,7 +668,7 @@ export function typeIntoScript(
   return `(() => {
   try {
     const el = ${findExpr(target)};
-    if (!el) return JSON.stringify({ ok: false, reason: "no element matched — take a fresh browser_snapshot" });
+    if (!el) return JSON.stringify({ ok: false, reason: "no element matched: take a fresh browser_snapshot" });
     el.focus();
     const text = ${JSON.stringify(text)};
     const clear = ${JSON.stringify(!!opts.clear)};
@@ -703,7 +703,7 @@ export function scrollScript(op: { to?: "top" | "bottom"; pages?: number }): str
 }
 ```
 
-Note: inside the template literals, `\\s` is intentional — it must reach the page as `\s`.
+Note: inside the template literals, `\\s` is intentional: it must reach the page as `\s`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -729,10 +729,10 @@ git commit -m "feat(browser): injected page scripts with JSON-escaped parameters
 - Consumes: `formatStatus`, `formatSnapshot`, `capPageText`, `isAllowedUrl`, `PageElement`, `BrowserPageStatus` (Task 2); `ElementTarget` (Task 3, type only).
 - Produces:
   - `interface BrowserStatus extends BrowserPageStatus { ownerConvoId: string | null }`
-  - `class BrowserToolRefused extends Error` — expected-traffic refusals (lease, unsupported platform, invalid URL); tools surface `e.message` as a normal `ok()` result so the model reads an answer, not a retryable failure (same pattern as `ChildTaskRefused`).
+  - `class BrowserToolRefused extends Error`: expected-traffic refusals (lease, unsupported platform, invalid URL); tools surface `e.message` as a normal `ok()` result so the model reads an answer, not a retryable failure (same pattern as `ChildTaskRefused`).
   - `interface BrowserBridge` with methods `open(url?)`, `navigate(url)`, `snapshot()`, `readPage()`, `screenshot()`, `click(target)`, `type(target, text, opts)`, `scroll(op)` (exact signatures in the code below).
-  - `buildBrowserTools(bridge: BrowserBridge): SdkMcpToolDefinition<any>[]` — the 8 tools.
-  - `BROWSER_READ_TOOLS: Set<string>` — full `mcp__obsidian__` names of the 3 read tools.
+  - `buildBrowserTools(bridge: BrowserBridge): SdkMcpToolDefinition<any>[]` (the 8 tools).
+  - `BROWSER_READ_TOOLS: Set<string>` (full `mcp__obsidian__` names of the 3 read tools).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -862,7 +862,7 @@ describe("refusals are answers, not errors", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pnpm vitest run tests/browser-tools.test.ts`
-Expected: FAIL — cannot resolve `../src/obsidian/browser-tools`.
+Expected: FAIL (cannot resolve `../src/obsidian/browser-tools`).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -870,13 +870,13 @@ Create `src/obsidian/browser-tools.ts`:
 
 ```typescript
 /**
- * Agent-browser tools — the eight `browser_*` tool definitions for the shared,
+ * Agent-browser tools: the eight `browser_*` tool definitions for the shared,
  * visible browser tab (see docs/plans/2026-08-11-scoped-browser-plan.md).
  *
  * This module is deliberately Obsidian-free at runtime: it depends only on the
  * `BrowserBridge` interface, which the plugin's browser controller implements
  * per conversation (`browserBridgeFor`). That keeps the tool surface testable
- * with a fake bridge and mirrors the askBridge/rethinkBridge pattern —
+ * with a fake bridge and mirrors the askBridge/rethinkBridge pattern:
  * tools.ts must never import view or controller code.
  */
 import { z } from "zod";
@@ -899,7 +899,7 @@ export interface BrowserStatus extends BrowserPageStatus {
 
 /** Expected-traffic refusal (lease held elsewhere, feature unsupported here,
  *  URL rejected). Tools surface the message as a normal result so the model
- *  reads an answer instead of retrying — same contract as ChildTaskRefused. */
+ *  reads an answer instead of retrying, same contract as ChildTaskRefused. */
 export class BrowserToolRefused extends Error {}
 
 /** What the plugin-side controller implements, curried per conversation. */
@@ -924,7 +924,7 @@ async function run(fn: () => Promise<ReturnType<typeof ok>>): Promise<ReturnType
   }
 }
 
-/** Exactly one of ref/selector, as an ElementTarget — or an error string. */
+/** Exactly one of ref/selector, as an ElementTarget, or an error string. */
 function targetOf(args: { ref?: string; selector?: string }): ElementTarget | string {
   if (!!args.ref === !!args.selector) {
     return "Pass exactly one of `ref` (from browser_snapshot) or `selector` (CSS).";
@@ -935,7 +935,7 @@ function targetOf(args: { ref?: string; selector?: string }): ElementTarget | st
 export function buildBrowserTools(bridge: BrowserBridge): SdkMcpToolDefinition<any>[] {
   const browserOpen = tool(
     "browser_open",
-    "Open the shared agent-browser tab in the workspace (creating it if needed) and take control of it for this conversation. Use it to research a source IN FRONT of Mario — he sees the same page you read, which beats a blind web fetch whenever the source matters. Optionally pass a url to navigate immediately. If another conversation was driving the tab, this takes over (say so).",
+    "Open the shared agent-browser tab in the workspace (creating it if needed) and take control of it for this conversation. Use it to research a source IN FRONT of Mario; he sees the same page you read, which beats a blind web fetch whenever the source matters. Optionally pass a url to navigate immediately. If another conversation was driving the tab, this takes over (say so).",
     { url: z.string().optional().describe("http(s) URL to open right away.") },
     async (args) =>
       run(async () => {
@@ -957,7 +957,7 @@ export function buildBrowserTools(bridge: BrowserBridge): SdkMcpToolDefinition<a
 
   const browserSnapshot = tool(
     "browser_snapshot",
-    "Inspect the current page before interacting: returns URL, title, scroll position, and an outline of visible interactive elements (links, buttons, inputs, headings), each with a ref you can pass to browser_click / browser_type. Refs go stale on navigation — snapshot again after the page changes.",
+    "Inspect the current page before interacting: returns URL, title, scroll position, and an outline of visible interactive elements (links, buttons, inputs, headings), each with a ref you can pass to browser_click / browser_type. Refs go stale on navigation: snapshot again after the page changes.",
     {},
     async () =>
       run(async () => {
@@ -1067,7 +1067,7 @@ export const BROWSER_READ_TOOLS = new Set([
 ]);
 ```
 
-Note: the screenshot handler returns a `CallToolResult` literal (image + text blocks) rather than the text-only `Result` from `tool-kit.ts`; the SDK's `tool()` handler type accepts any `CallToolResult`, so no widening of the shared kit. If `run`'s return type fights the image literal, type `run` as `Promise<CallToolResult>` (import the type from `@modelcontextprotocol/sdk/types.js` via the same path `sdk.d.ts` uses) — do not loosen `tool-kit.ts`.
+Note: the screenshot handler returns a `CallToolResult` literal (image + text blocks) rather than the text-only `Result` from `tool-kit.ts`; the SDK's `tool()` handler type accepts any `CallToolResult`, so no widening of the shared kit. If `run`'s return type fights the image literal, type `run` as `Promise<CallToolResult>` (import the type from `@modelcontextprotocol/sdk/types.js` via the same path `sdk.d.ts` uses): do not loosen `tool-kit.ts`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1123,12 +1123,12 @@ with, near the top of the file:
 const fakeStatus = { url: "u", title: "t", loading: false, scrollY: 0, scrollHeight: 0, viewportHeight: 0, ownerConvoId: null };
 ```
 
-In `tests/tool-registries.test.ts`, the sync test asserts every name in the classifier Sets is actually registered — so `registeredBareNames()` must now build the fullest surface **including** a browser bridge. Add a fake bridge (same literal as above) and pass it as the new trailing argument of the `createObsidianToolServer` call in that helper. Do NOT weaken the assertion direction.
+In `tests/tool-registries.test.ts`, the sync test asserts every name in the classifier Sets is actually registered, so `registeredBareNames()` must now build the fullest surface **including** a browser bridge. Add a fake bridge (same literal as above) and pass it as the new trailing argument of the `createObsidianToolServer` call in that helper. Do NOT weaken the assertion direction.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm vitest run tests/obsidian-tools-registry.test.ts tests/tool-registries.test.ts`
-Expected: FAIL — `browserBridge` not a known option; browser names absent.
+Expected: FAIL (`browserBridge` not a known option; browser names absent).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -1144,12 +1144,12 @@ import { buildBrowserTools, type BrowserBridge } from "./browser-tools";
 
 ```typescript
   /** Per-convo bridge to the shared agent-browser tab. Absent → the browser_*
-   *  tools are not registered at all (feature off, mobile, or headless run) —
+   *  tools are not registered at all (feature off, mobile, or headless run):
    *  the tool list must stay byte-identical to before the feature existed. */
   browserBridge?: BrowserBridge;
 ```
 
-3. Destructure it in `buildObsidianTools` beside `parentConvoId` (`browserBridge,` — no default).
+3. Destructure it in `buildObsidianTools` beside `parentConvoId` (`browserBridge,`; no default).
 
 4. Extend the registration return, after the orchestration spreads:
 
@@ -1161,7 +1161,7 @@ import { buildBrowserTools, type BrowserBridge } from "./browser-tools";
 
 ```typescript
   parentConvoId?: string,
-  // Shared agent-browser bridge — trailing for the same reason as parentConvoId.
+  // Shared agent-browser bridge: trailing for the same reason as parentConvoId.
   browserBridge?: BrowserBridge
 ```
 
@@ -1172,7 +1172,7 @@ and inside the `tools:` opts object: `browserBridge,`.
 ```typescript
   // Browser observers: they change nothing on the page or in the vault. The
   // interacting tools (open/navigate/click/type/scroll) are deliberately NOT
-  // here — their permission card, showing the URL/selector, is the evidence
+  // here: their permission card, showing the URL/selector, is the evidence
   // trail for what the agent did in a shared, visible surface.
   ...BROWSER_READ_TOOLS,
 ```
@@ -1182,7 +1182,7 @@ adding `BROWSER_READ_TOOLS` to the import from `./browser-tools`.
 - [ ] **Step 4: Run tests**
 
 Run: `pnpm vitest run tests/obsidian-tools-registry.test.ts tests/tool-registries.test.ts tests/tools-add-task.test.ts tests/tools-annotations.test.ts && pnpm typecheck`
-Expected: PASS (the existing positional call sites are unaffected — the new param is optional and trailing).
+Expected: PASS (the existing positional call sites are unaffected; the new param is optional and trailing).
 
 - [ ] **Step 5: Commit**
 
@@ -1208,11 +1208,11 @@ git commit -m "feat(tools): register browser_* behind the bridge, classify the r
 
 - [ ] **Step 1: Extract the schema (mechanical, no behavior change)**
 
-Move the block from `src/settings.ts` — the `LEGACY_QUEUE_FOLDER` const, the whole `export interface MVASettings { … }` and the whole `export const DEFAULT_SETTINGS: MVASettings = { … }` (currently ~lines 14–327) — into a new `src/settings-schema.ts`, carrying exactly the imports that block needs (verify by typecheck; expected: `ProviderId`/`PermissionMode` from `./providers/types`, `AutomationConfig` from `./core/automations`, `initialDailyPulseReviewState`/`DailyPulseReviewState` from `./core/daily-pulse`, `exoPaths`/`LEGACY_MEMORY_ROOT` from `./core/paths`). Header comment for the new file:
+Move the block from `src/settings.ts` (the `LEGACY_QUEUE_FOLDER` const, the whole `export interface MVASettings { … }` and the whole `export const DEFAULT_SETTINGS: MVASettings = { … }` (currently ~lines 14–327)) into a new `src/settings-schema.ts`, carrying exactly the imports that block needs (verify by typecheck; expected: `ProviderId`/`PermissionMode` from `./providers/types`, `AutomationConfig` from `./core/automations`, `initialDailyPulseReviewState`/`DailyPulseReviewState` from `./core/daily-pulse`, `exoPaths`/`LEGACY_MEMORY_ROOT` from `./core/paths`). Header comment for the new file:
 
 ```typescript
 /**
- * Exo settings schema — the MVASettings shape and its defaults, extracted from
+ * Exo settings schema: the MVASettings shape and its defaults, extracted from
  * settings.ts per its size-ratchet plan (the tab renders settings; the schema
  * IS settings). settings.ts re-exports both so external importers keep their
  * `from "./settings"` path.
@@ -1231,7 +1231,7 @@ and delete the imports the tab no longer uses (typecheck + lint tell you which).
 - [ ] **Step 2: Verify no behavior change, then ratchet down**
 
 Run: `pnpm typecheck && pnpm vitest run`
-Expected: all green with zero test edits. Then `wc -l src/settings.ts`, and in `tests/size-contract.test.ts` lower the `"src/settings.ts"` ceiling to that count + 8, with a comment dated 2026-08-11 explaining the extraction (mirror the tone of the existing entries; the +8 is declared margin, not regrowth permission). Run `pnpm vitest run tests/size-contract.test.ts` — green.
+Expected: all green with zero test edits. Then `wc -l src/settings.ts`, and in `tests/size-contract.test.ts` lower the `"src/settings.ts"` ceiling to that count + 8, with a comment dated 2026-08-11 explaining the extraction (mirror the tone of the existing entries; the +8 is declared margin, not regrowth permission). Run `pnpm vitest run tests/size-contract.test.ts`: green.
 
 - [ ] **Step 3: Add the flag and its toggle**
 
@@ -1253,7 +1253,7 @@ In `src/settings.ts`, after the Orchestration Board block (anchor: the `this.tog
     this.toggleSetting(
       el,
       "Enable agent browser",
-      "Gives the agent a real, visible browser tab inside Obsidian (desktop only): it can open a page in front of you, read it, click, type, scroll and screenshot it — a tab you both share, instead of a blind web fetch. Off by default. Opening, navigating and interacting always ask through the standard permission card; only looking (snapshot, read, screenshot) rides the auto-allowed read tools.",
+      "Gives the agent a real, visible browser tab inside Obsidian (desktop only): it can open a page in front of you, read it, click, type, scroll and screenshot it, a tab you both share, instead of a blind web fetch. Off by default. Opening, navigating and interacting always ask through the standard permission card; only looking (snapshot, read, screenshot) rides the auto-allowed read tools.",
       "browserEnabled"
     );
 ```
@@ -1272,7 +1272,7 @@ git commit -m "feat(settings): extract schema per ratchet plan; add browserEnabl
 
 ---
 
-### Task 7: Webview host (`browser-host.ts`) — probe first, then build
+### Task 7: Webview host (`browser-host.ts`), probe first, then build
 
 **Files:**
 - Create: `src/obsidian/browser-host.ts`
@@ -1298,7 +1298,7 @@ obsidian-cli eval code="(() => { try { const e = require('electron'); return JSO
 obsidian-cli eval code="(async () => { const w = document.createElement('webview'); w.setAttribute('partition','persist:exo-probe'); w.setAttribute('src','about:blank'); w.style.cssText='position:fixed;left:-10px;top:-10px;width:1px;height:1px;'; document.body.appendChild(w); await new Promise(r => { w.addEventListener('dom-ready', r, { once: true }); setTimeout(r, 4000); }); const out = { loadURL: typeof w.loadURL, executeJavaScript: typeof w.executeJavaScript, capturePage: typeof w.capturePage, getURL: typeof w.getURL, getTitle: typeof w.getTitle, isLoading: typeof w.isLoading }; w.remove(); return JSON.stringify(out); })()"
 ```
 
-Record both outputs verbatim in this plan file under a new `## Probe results` section (committed with this task). Expected: all method typeofs `"function"`. If `executeJavaScript`/`capturePage` are missing on the element, the fallback is `e.remote.webContents.fromId(w.getWebContentsId())` — adapt `BrowserHost` to route through that handle and note it in Probe results. If `hasRemote` is false, permission-handler hardening is impossible from the renderer: proceed, set `hardened = false`, and flag it in the header UI (Task 8) and in the final report — do NOT silently skip.
+Record both outputs verbatim in this plan file under a new `## Probe results` section (committed with this task). Expected: all method typeofs `"function"`. If `executeJavaScript`/`capturePage` are missing on the element, the fallback is `e.remote.webContents.fromId(w.getWebContentsId())`: adapt `BrowserHost` to route through that handle and note it in Probe results. If `hasRemote` is false, permission-handler hardening is impossible from the renderer: proceed, set `hardened = false`, and flag it in the header UI (Task 8) and in the final report: do NOT silently skip.
 
 - [ ] **Step 2: Write the failing test (pure surface)**
 
@@ -1342,19 +1342,19 @@ Run: `pnpm vitest run tests/browser-host.test.ts` → FAIL (unresolvable module)
 
 ```typescript
 /**
- * Browser host — the thin impure wrapper around one Electron `<webview>`
+ * Browser host: the thin impure wrapper around one Electron `<webview>`
  * element (Obsidian desktop only; the tag does not exist on mobile).
  *
  * Security posture, decided in the plan and pinned by tests on WEBVIEW_ATTRS:
  * a dedicated persistent partition (logins survive restarts, isolated from
  * Obsidian's own sessions), contextIsolation + sandbox on, no node
  * integration, no popups (window.open is inert without `allowpopups`). On top
- * of that, best-effort MAIN-session hardening through the remote module —
+ * of that, best-effort MAIN-session hardening through the remote module.
  * Electron GRANTS permission requests by default when no handler is set, so
  * without remote access the posture is weaker and `hardened` says so.
  *
  * All page access goes through executeJavaScript with the Task-3 scripts
- * (JSON-string protocol, capped results). No API here takes raw agent input —
+ * (JSON-string protocol, capped results). No API here takes raw agent input:
  * the controller passes scripts in; this host stays script-agnostic and has
  * no core imports at all.
  */
@@ -1363,7 +1363,7 @@ export const EXEC_RESULT_CAP = 64_000;
 const NAV_TIMEOUT_MS = 15_000;
 const SETTLE_EXTRA_MS = 300;
 
-/** Attributes set on the webview BEFORE it enters the DOM — partition is
+/** Attributes set on the webview BEFORE it enters the DOM: partition is
  *  immutable after attach. Pure and exported so a unit test pins the posture. */
 export const WEBVIEW_ATTRS: Record<string, string> = {
   partition: BROWSER_PARTITION,
@@ -1372,7 +1372,7 @@ export const WEBVIEW_ATTRS: Record<string, string> = {
 };
 
 /** The slice of the webview element this host uses (Electron types are not a
- *  dependency of this repo — declare only what we touch). */
+ *  dependency of this repo: declare only what we touch). */
 interface WebviewEl extends HTMLElement {
   loadURL(url: string): Promise<void>;
   getURL(): string;
@@ -1453,7 +1453,7 @@ export class BrowserHost {
   }
 
   /** Navigate and wait for the load to settle (did-stop-loading, did-fail-load,
-   *  or the timeout — whichever first — plus a short paint-settle delay). */
+   *  or the timeout (whichever first) plus a short paint-settle delay). */
   async navigate(url: string, timeoutMs = NAV_TIMEOUT_MS): Promise<void> {
     const wv = this.need();
     await new Promise<void>((resolve) => {
@@ -1528,7 +1528,7 @@ git commit -m "feat(browser): webview host with pinned security posture (probed 
 
 **Files:**
 - Create: `src/ui/browser-view.ts`
-- Modify: `src/ui/view-registry.ts` (register the view — registration stays unconditional, BoardView pattern)
+- Modify: `src/ui/view-registry.ts` (register the view; registration stays unconditional, BoardView pattern)
 - Modify: `styles.css` (webview fill + header)
 
 **Interfaces:**
@@ -1541,13 +1541,13 @@ Create `src/ui/browser-view.ts`:
 
 ```typescript
 /**
- * Agent browser view — the workspace leaf hosting the shared webview.
+ * Agent browser view: the workspace leaf hosting the shared webview.
  *
  * Registered unconditionally (a leaf restored from a saved layout must render)
  * but gated at ENTRY, exactly like BoardView: with `browserEnabled` off, or on
  * mobile, or when the environment has no webview tag, it renders a placeholder
  * and never creates a webview. The view owns the DOM and the BrowserHost; the
- * plugin-level BrowserController owns the lease and drives the host — closing
+ * plugin-level BrowserController owns the lease and drives the host: closing
  * the leaf drops the page, and the next browser_open simply recreates it.
  */
 import { ItemView, Platform, WorkspaceLeaf } from "obsidian";
@@ -1617,7 +1617,7 @@ export class BrowserView extends ItemView {
     if (!host.attach()) {
       this.bodyEl.createDiv({
         cls: "mva-browser-placeholder",
-        text: "This Obsidian build exposes no webview tag — the agent browser cannot run here.",
+        text: "This Obsidian build exposes no webview tag: the agent browser cannot run here.",
       });
       return null;
     }
@@ -1657,10 +1657,10 @@ import { BrowserView, EXO_BROWSER_VIEW_TYPE } from "./browser-view";
 
 - [ ] **Step 3: Styles**
 
-In `styles.css`, beside the other `mva-` view blocks (match neighboring token usage — no raw hex, no `!important`):
+In `styles.css`, beside the other `mva-` view blocks (match neighboring token usage, no raw hex, no `!important`):
 
 ```css
-/* Agent browser leaf — the webview must fill the pane under a slim header. */
+/* Agent browser leaf: the webview must fill the pane under a slim header. */
 .mva-browser {
   display: flex;
   flex-direction: column;
@@ -1717,12 +1717,12 @@ git commit -m "feat(browser): exo-browser leaf with gated placeholder and webvie
 
 ---
 
-### Task 9: Browser controller — lease + leaf orchestration + bridge factory
+### Task 9: Browser controller, lease + leaf orchestration + bridge factory
 
 **Files:**
 - Create: `src/obsidian/browser-controller.ts`
-- Test: `tests/browser-controller.test.ts` (gating of `browserBridgeFor` only — the controller itself is impure by design; its logic lives in Tasks 1–3 modules)
-- Modify: `tests/__mocks__/obsidian.ts` (add a `Platform` export — the mock's header allows adding exports a test genuinely needs)
+- Test: `tests/browser-controller.test.ts` (gating of `browserBridgeFor` only, the controller itself is impure by design; its logic lives in Tasks 1–3 modules)
+- Modify: `tests/__mocks__/obsidian.ts` (add a `Platform` export, the mock's header allows adding exports a test genuinely needs)
 
 **Interfaces:**
 - Consumes: `acquireLease`/`checkLease` (Task 1), scripts (Task 3), `BrowserBridge`/`BrowserStatus`/`BrowserToolRefused` (Task 4), `BrowserHost` (Task 7), `BrowserView`/`EXO_BROWSER_VIEW_TYPE` (Task 8), `isAllowedUrl`/`PageElement` (Task 2).
@@ -1783,7 +1783,7 @@ describe("browserBridgeFor gating", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pnpm vitest run tests/browser-controller.test.ts`
-Expected: FAIL — cannot resolve `../src/obsidian/browser-controller`.
+Expected: FAIL (cannot resolve `../src/obsidian/browser-controller`).
 
 - [ ] **Step 3: Write the implementation**
 
@@ -1791,10 +1791,10 @@ Create `src/obsidian/browser-controller.ts`:
 
 ```typescript
 /**
- * Browser controller — the plugin-level owner of the shared agent browser.
+ * Browser controller: the plugin-level owner of the shared agent browser.
  *
  * One controller per plugin instance (WeakMap accessor, so main.ts carries
- * ZERO wiring lines for it — it is at its size-ratchet ceiling). It owns the
+ * ZERO wiring lines for it: it is at its size-ratchet ceiling). It owns the
  * lease, finds-or-creates the exo-browser leaf, and translates BrowserBridge
  * calls into host operations plus Task-3 scripts. All refusals go through
  * BrowserToolRefused so the tools render them as answers.
@@ -1830,7 +1830,7 @@ export function getBrowserController(plugin: ExoPlugin): BrowserController {
   return c;
 }
 
-/** Per-convo bridge, or undefined when the feature is gated off — undefined is
+/** Per-convo bridge, or undefined when the feature is gated off: undefined is
  *  what keeps the session tool list byte-identical with the flag off. */
 export function browserBridgeFor(plugin: ExoPlugin, convoId: string): BrowserBridge | undefined {
   if (!plugin.settings.browserEnabled || Platform.isMobile) return undefined;
@@ -1864,7 +1864,7 @@ export class BrowserController {
       leaf = workspace.getLeaf(true);
       await leaf.setViewState({ type: EXO_BROWSER_VIEW_TYPE, active: reveal });
     }
-    // A leaf restored from layout may still be deferred — realize it first.
+    // A leaf restored from layout may still be deferred: realize it first.
     await (leaf as WorkspaceLeaf & { loadIfDeferred?: () => Promise<void> }).loadIfDeferred?.();
     if (reveal) workspace.revealLeaf(leaf);
     const view = leaf.view;
@@ -1880,7 +1880,7 @@ export class BrowserController {
     return { view, host };
   }
 
-  /** Existing, live view+host — for tools that must not create the tab. */
+  /** Existing, live view+host: for tools that must not create the tab. */
   private async currentView(): Promise<{ view: BrowserView; host: BrowserHost }> {
     const leaves = this.plugin.app.workspace.getLeavesOfType(EXO_BROWSER_VIEW_TYPE);
     if (!leaves.length) {
@@ -1900,7 +1900,7 @@ export class BrowserController {
     try {
       scroll = JSON.parse(await host.exec(STATUS_SCRIPT)) as typeof scroll;
     } catch {
-      /* about:blank or a crashed guest — basics still stand */
+      /* about:blank or a crashed guest: basics still stand */
     }
     view.setStatus(basics.url, basics.title);
     return { ...basics, ...scroll, ownerConvoId: this.lease?.ownerConvoId ?? null };
@@ -1953,7 +1953,7 @@ export class BrowserController {
       text = parsed.text;
       total = parsed.total;
     } catch {
-      /* leave empty — status still reports the URL */
+      /* leave empty: status still reports the URL */
     }
     return { status: await this.status(view, host), text, total };
   }
@@ -2000,7 +2000,7 @@ export class BrowserController {
 - [ ] **Step 4: Run tests**
 
 Run: `pnpm vitest run tests/browser-controller.test.ts && pnpm typecheck && pnpm vitest run`
-Expected: PASS across the suite (the mock's new `Platform` export must not break other tests — it is additive).
+Expected: PASS across the suite (the mock's new `Platform` export must not break other tests; it is additive).
 
 - [ ] **Step 5: Commit**
 
@@ -2051,7 +2051,7 @@ export function formatRelativeDays(ts: number): string {
 
 In `src/view.ts`: delete the `formatDate` and `formatRelative` methods (currently ~lines 2617–2638) and the `import { startOfDay, DAY_MS } from "./core/history";` line (~line 109) after verifying with a grep that nothing else in `view.ts` uses those two symbols. In `src/ui/gallery-cards.ts`: replace `view.formatDate(c.updatedAt)` → `formatCompactDate(c.updatedAt)` and `view.formatRelative(c.retiredAt)` → `formatRelativeDays(c.retiredAt)`, importing both from `../core/history`.
 
-Run: `pnpm typecheck && pnpm vitest run tests/size-contract.test.ts` — green, with `view.ts` now ~23 lines under ceiling.
+Run: `pnpm typecheck && pnpm vitest run tests/size-contract.test.ts`: green, with `view.ts` now ~23 lines under ceiling.
 
 - [ ] **Step 2: Write the failing wiring test**
 
@@ -2063,7 +2063,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * Browser wiring contract — the seams that connect the tested browser core to
+ * Browser wiring contract: the seams that connect the tested browser core to
  * the untestable view.ts. Same rationale as fanout-wiring.test.ts: every link
  * is a plain call whose failure mode is silence. A session that never receives
  * the bridge simply has no browser tools; a session signature that ignores
@@ -2095,7 +2095,7 @@ describe("browser wiring", () => {
 });
 ```
 
-Run: `pnpm vitest run tests/browser-wiring.test.ts` — FAIL (three assertions).
+Run: `pnpm vitest run tests/browser-wiring.test.ts`: FAIL (three assertions).
 
 - [ ] **Step 3: Wire view.ts**
 
@@ -2107,10 +2107,10 @@ In `src/view.ts`:
 import { browserBridgeFor } from "./obsidian/browser-controller";
 ```
 
-2. Claude tool-server call site (the positional `createObsidianToolServer(...)` inside `spawnSession`, whose last args are currently `this.plugin.paths, c.id // parentConvoId — gates spawn_task`): append the new trailing argument:
+2. Claude tool-server call site (the positional `createObsidianToolServer(...)` inside `spawnSession`, whose last args are currently `this.plugin.paths, c.id // parentConvoId: gates spawn_task`): append the new trailing argument:
 
 ```typescript
-          this.plugin.paths, c.id, // parentConvoId — gates spawn_task
+          this.plugin.paths, c.id, // parentConvoId: gates spawn_task
           browserBridgeFor(this.plugin, c.id) // agent browser (undefined when off/mobile)
 ```
 
@@ -2171,18 +2171,18 @@ Expected output: `browserEnabled=true`.
 
 - [ ] **Step 3: Tool registration probe**
 
-Open a NEW Exo conversation (new tab — the session signature change means old sessions keep the old tool list) and ask: `Which browser_* tools do you have? Just list them.` Expected: the eight names. Also confirm in Capabilities Hub → Tools after the session's init snapshot lands.
+Open a NEW Exo conversation (new tab, the session signature change means old sessions keep the old tool list) and ask: `Which browser_* tools do you have? Just list them.` Expected: the eight names. Also confirm in Capabilities Hub → Tools after the session's init snapshot lands.
 
-- [ ] **Step 4: Happy path — research in front of Mario**
+- [ ] **Step 4: Happy path, research in front of Mario**
 
 In that conversation: `Open https://example.com in your browser and tell me the page's main heading.` Verify, in order:
 
 1. A permission card for `browser_open` appears with the URL visible; approve it.
 2. The `exo-browser` leaf opens in the main pane and `https://example.com/` renders in it.
 3. The agent reads the heading ("Example Domain") via snapshot/read_page WITHOUT further permission cards (read set auto-allowed).
-4. `obsidian-cli dev:screenshot path=/tmp/exo-browser-verify.png` — inspect: the browser leaf is visible next to the chat.
+4. `obsidian-cli dev:screenshot path=/tmp/exo-browser-verify.png`, inspect: the browser leaf is visible next to the chat.
 
-Then: `Take a screenshot of the page and describe what you see.` Verify the agent's description matches the actual page (this is the image-block seam test — if the agent says it cannot see an image, record it and implement the fallback in Known unverified seams, item 3).
+Then: `Take a screenshot of the page and describe what you see.` Verify the agent's description matches the actual page (this is the image-block seam test; if the agent says it cannot see an image, record it and implement the fallback in Known unverified seams, item 3).
 
 - [ ] **Step 5: Lease and gate refusals**
 
@@ -2218,14 +2218,14 @@ git commit -m "docs: record agent-browser live verification results"
 The implementer must **check these rather than assume**; each has a decided fallback.
 
 1. **Webview element surface inside an Obsidian leaf** (`loadURL`, `executeJavaScript`, `capturePage`, `did-stop-loading` on the element). Obsidian's core Web Viewer proves the tag exists on desktop, but the method surface on OUR partition is probed in Task 7 Step 1 before any host code is written. Fallback: route through `remote.webContents.fromId(el.getWebContentsId())`.
-2. **`require("electron").remote.session` availability** for deny-all permission handlers and download blocking. Probed in Task 7 Step 1. Fallback: proceed with `hardened=false`, surface it in the leaf header tooltip and the final report — Electron's no-handler default GRANTS permission requests, so this must never be silent.
+2. **`require("electron").remote.session` availability** for deny-all permission handlers and download blocking. Probed in Task 7 Step 1. Fallback: proceed with `hardened=false`, surface it in the leaf header tooltip and the final report. Electron's no-handler default GRANTS permission requests, so this must never be silent.
 3. **Claude Code CLI forwarding MCP image content blocks to the model.** The MCP type supports it and the Exo UI tolerates it (verified in-repo); whether the CLI relays the image to the model is verified live in Task 11 Step 4. Fallback if it does not: `browser_screenshot` additionally writes the PNG under `paths.reports + "/browser/"` (a mechanism path, safe to create) and returns the vault path in the text block so the agent can `Read` it.
 4. **Codex loopback bridge and image blocks.** The Codex↔Obsidian bridge serializes tool results; it may drop the image block. Browser tools otherwise work on Codex unchanged (same registry). If screenshots degrade there, apply the same file fallback for Codex sessions only; do not block the Claude path on it.
 5. **`capturePage` on a backgrounded window** may return an empty image (Obsidian throttles hidden surfaces). The feature's premise is a visible tab, so this is acceptable; if Task 11 hits it, have `screenshot()` refuse with "the browser tab is not visible" instead of returning a blank image.
-6. **Exact anchors in `view.ts`** (the positional call site's final args, the codex opts object, `sessionSigOf`'s array) and the current ratchet counts — re-verify with grep/`wc -l` at execution time; they were exact on 2026-08-11 but this file is touched by 40% of commits.
+6. **Exact anchors in `view.ts`** (the positional call site's final args, the codex opts object, `sessionSigOf`'s array) and the current ratchet counts: re-verify with grep/`wc -l` at execution time; they were exact on 2026-08-11 but this file is touched by 40% of commits.
 7. **The moved settings-schema import set** (Task 6 Step 1 lists the expected four; typecheck is the arbiter).
-8. **`tests/tool-registries.test.ts` assertion direction** — the plan assumes it checks "classifier ⊆ registered"; read the second half of the file before editing and satisfy whichever direction it enforces.
-9. **styles.css spacing tokens** (`--size-4-*` etc.) — match what neighbouring rules in the file actually use.
+8. **`tests/tool-registries.test.ts` assertion direction**: the plan assumes it checks "classifier ⊆ registered"; read the second half of the file before editing and satisfy whichever direction it enforces.
+9. **styles.css spacing tokens** (`--size-4-*` etc.): match what neighbouring rules in the file actually use.
 
 ## Self-Review
 
