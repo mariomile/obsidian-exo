@@ -13,8 +13,10 @@
  * where this function is not in the path.
  */
 
-/** Interaction tools that stay in a read-only sandbox besides the read set. */
-const INTERACTION_TOOLS = new Set(["ask_user"]);
+/** Interaction tools that stay in a read-only sandbox besides the read set.
+ *  Exported so the approval router (`codex-approval.ts`) permits exactly what
+ *  this filter offers: one list, so a tool can never be offered and then refused. */
+export const INTERACTION_TOOLS = new Set(["ask_user"]);
 
 const MCP_PREFIX = "mcp__obsidian__";
 

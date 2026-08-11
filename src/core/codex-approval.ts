@@ -10,6 +10,8 @@
  *  the provider can hand it to Exo's ONE permission decision (`decidePermission`)
  *  instead of growing a second, codex-shaped rule set. */
 
+import { INTERACTION_TOOLS } from "./codex-toolset";
+
 /** Bridge server name registered in `mcpOverride` (`mcp_servers.obsidian=…`).
  *  Bridge tools run inside the Obsidian process, so they bypass codex's own
  *  sandbox, which is why the read-only gate below is scoped to this server. */
@@ -96,7 +98,15 @@ export function routeCodexElicitation(p: {
   const tool = recoverApprovalTool(p.params, p.inFlight);
   if (!tool) return { kind: "decline", reason: "Exo could not tell which tool codex asked to approve." };
   const name = `mcp__${String(p.params.serverName)}__${tool}`;
-  if (p.readOnlySandbox && p.params.serverName === OBSIDIAN_MCP_SERVER && !p.readTools.has(name)) {
+  // ask_user is permitted in every sandbox mode: it mutates nothing, and it IS
+  // the human-in-the-loop, so it needs no gate of its own (view.ts answers it
+  // without a card: a permission card in front of a question card would be two
+  // prompts for one human). Same list the sandbox toolset filter keeps.
+  const bridge = p.params.serverName === OBSIDIAN_MCP_SERVER;
+  if (bridge && INTERACTION_TOOLS.has(tool)) {
+    return { kind: "permission", tool: name, input: record(p.params._meta).tool_params ?? {} };
+  }
+  if (p.readOnlySandbox && bridge && !p.readTools.has(name)) {
     return { kind: "decline", reason: `${tool} mutates the vault; the Codex sandbox is read-only.` };
   }
   return { kind: "permission", tool: name, input: record(p.params._meta).tool_params ?? {} };

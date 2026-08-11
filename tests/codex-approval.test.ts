@@ -122,6 +122,24 @@ describe("codex MCP tool-call approvals", () => {
       .toBe("permission");
   });
 
+  it("lets ask_user through a READ-ONLY sandbox: it is a question, not a write", () => {
+    // The sandbox toolset (codexSessionToolset) deliberately KEEPS ask_user in a
+    // read-only session. The router has to agree, or the tool is offered and
+    // then refused on every call.
+    const params = approval(
+      { message: 'Allow the obsidian MCP server to run tool "ask_user"?' },
+      { tool_params: { questions: [{ question: "A or B?" }] } },
+    );
+    const calls = inFlight({ server: "obsidian", tool: "ask_user", args: { questions: [{ question: "A or B?" }] } });
+    expect(route(params, calls, true)).toEqual({
+      kind: "permission",
+      tool: "mcp__obsidian__ask_user",
+      input: { questions: [{ question: "A or B?" }] },
+    });
+    // ...and identically when the sandbox is not read-only.
+    expect(route(params, calls, false).kind).toBe("permission");
+  });
+
   it("the read-only sandbox gate is scoped to the obsidian bridge, not to codex's own MCP servers", () => {
     const decision = routeCodexElicitation({
       params: approval({ serverName: "notion", message: 'Allow the notion MCP server to run tool "create_page"?' }),
