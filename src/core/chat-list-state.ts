@@ -112,6 +112,21 @@ export function chatRowSig(r: ChatRow, o: { rich: boolean; age: string }): strin
 }
 
 /**
+ * The same discipline for the needs-you strip, which is rebuilt whole rather
+ * than reconciled: a chip is two words, so patching one is not worth a keyed
+ * list — but a rebuild on every 5s tick would drop the focus ring off a chip
+ * the user is tabbing through, so the strip only rebuilds when this moves.
+ *
+ * It carries exactly what a chip renders: who is waiting and what for. The
+ * title is in there because a blocked chat can be retitled while its prompt is
+ * open (the generated-title path does it unprompted), and a chip left on the
+ * old name is a chip pointing at a chat the user can no longer find by name.
+ */
+export function needsStripSig(blocked: readonly Pick<ChatRow, "id" | "title" | "reason">[]): string {
+  return blocked.map((r) => `${r.id}:${r.title}:${r.reason ?? ""}`).join("|");
+}
+
+/**
  * The one collapse rule, shared by the two things that collapse. Absent means
  * EXPANDED, which is what lets either feature ship without a migration: an
  * install that never toggled anything has an empty list and opens exactly as it

@@ -41,6 +41,7 @@ import {
   collapseChildren,
   isParentCollapsed,
   isSectionCollapsed,
+  needsStripSig,
   rowPreview,
   rowStatusText,
   toggleParentCollapsed,
@@ -49,7 +50,7 @@ import {
   type ChildCollapse,
 } from "../core/chat-list-state";
 import { reconcileList, type CardModel } from "./keyed-reconcile";
-import { clickable } from "./dom";
+import { clickable, isolateActivation } from "./dom";
 import { recallChats, reindexChats, recallHost, isRecallUnavailable } from "./chat-recall";
 
 export const CHATS_VIEW_TYPE = "exo-chats";
@@ -64,7 +65,16 @@ let paneSeq = 0;
 /** How often the list re-derives when nothing emits. Matches the board's
  *  backstop (board-view.ts:162) — it also advances the relative-time labels,
  *  which no event announces. reconcileList diffs by signature, so a tick with
- *  no change touches no DOM. */
+ *  no change touches no DOM.
+ *
+ *  This is also the live phrase's SAMPLE RATE, and that is an accepted
+ *  tradeoff, not an oversight. Nothing emits convo-state on a tool call, and
+ *  the channel is a no-op with orchestration off, so a running row picks the
+ *  phrase up on the next tick: a burst of sub-second tool calls will be caught
+ *  mid-call sometimes and between calls ("Working") others. What the row must
+ *  never do is show a phrase for a tool that has finished — and it cannot, the
+ *  phrase is deleted on the result. Sampling the truth is fine; a push on every
+ *  tool call would be a new event surface bought for a phrase. */
 const BACKSTOP_MS = 5000;
 
 /** The three empty states, kept distinct on purpose. `open-exo` means the data
@@ -360,7 +370,7 @@ export class ChatListView extends ItemView {
   private renderNeedsStrip(blocked: readonly ChatRow[]): void {
     const host = this.needsHost;
     if (!host) return;
-    const sig = blocked.map((r) => `${r.id}:${r.reason ?? ""}`).join("|");
+    const sig = needsStripSig(blocked);
     if (sig === this.needsSig) return;
     this.needsSig = sig;
     host.empty();
@@ -726,9 +736,11 @@ export class ChatListView extends ItemView {
    * and a standing rule is not something a single click in a sidebar should be
    * able to grant; that decision stays where the full detail of the call is.
    *
-   * Both handlers STOP PROPAGATION — the row's own click reveals the
-   * conversation, and answering a prompt must not also yank the pane over to
-   * it, for the click and for the Enter/Space `clickable` wires.
+   * `isolateActivation` is what makes them buttons rather than parts of the
+   * row: the row reveals the conversation on click AND on Enter/Space, and its
+   * Enter handling would otherwise cancel the button's own activation — so
+   * answering a prompt from the keyboard would yank the pane to the chat and
+   * settle nothing (tests/dom.test.ts).
    */
   private decideInto(row: HTMLElement, r: ChatRow): void {
     if (!r.permRule) return;
@@ -737,10 +749,8 @@ export class ChatListView extends ItemView {
     const act = (label: string, cls: string, verdict: "allow" | "deny") => {
       const btn = box.createEl("button", { cls, text: label });
       btn.setAttr("aria-label", `${label} ${r.permRule} in "${r.title}"`);
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        this.decide(r, verdict);
-      };
+      isolateActivation(btn);
+      btn.onclick = () => this.decide(r, verdict);
     };
     act("Allow", "mva-btn mva-btn-primary mva-chats-decide-btn", "allow");
     act("Deny", "mva-btn mva-chats-decide-btn", "deny");

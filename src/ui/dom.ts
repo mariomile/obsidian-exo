@@ -17,3 +17,22 @@ export function clickable(el: HTMLElement, handler: (e: Event) => void): void {
     }
   });
 }
+
+/**
+ * Give a real `<button>` nested inside a `clickable` element its own gesture
+ * back. Stopping the CLICK is only half of it: `clickable` also answers
+ * Enter/Space, and its `preventDefault()` cancels the button's own activation
+ * click — so a button inside a clickable row does the ROW's job from the
+ * keyboard while doing its own from the mouse. Stopping the key press before it
+ * reaches the row is what makes the two agree.
+ *
+ * `stopPropagation`, never `preventDefault`: the default IS the button's click.
+ * Only Enter and Space, so an ancestor's arrow-key navigation still works while
+ * focus sits on the button.
+ */
+export function isolateActivation(el: HTMLElement): void {
+  el.addEventListener("click", (e: Event) => e.stopPropagation());
+  el.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+  });
+}

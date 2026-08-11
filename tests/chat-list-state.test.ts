@@ -7,6 +7,7 @@ import {
   collapseChildren,
   isParentCollapsed,
   isSectionCollapsed,
+  needsStripSig,
   rowPreview,
   rowStatusText,
   toggleParentCollapsed,
@@ -313,6 +314,32 @@ describe("chatRowSig", () => {
   });
 });
 
+describe("needsStripSig", () => {
+  const chip = (over: Partial<ChatRow> = {}): ChatRow =>
+    ({ id: "c1", title: "Alpha", reason: "perm", ...over }) as ChatRow;
+
+  it("is identical across a tick where nothing about the blocked set moved", () => {
+    // The strip is rebuilt whole, so an equal signature is what keeps the focus
+    // ring on a chip the user is tabbing through across a 5s tick.
+    expect(needsStripSig([chip()])).toBe(needsStripSig([chip()]));
+  });
+
+  it("moves when a blocked chat is retitled while its prompt is open", () => {
+    // The generated-title path renames chats unprompted, including blocked
+    // ones: a chip left on the old name points at a chat the user cannot find.
+    expect(needsStripSig([chip()])).not.toBe(needsStripSig([chip({ title: "Renamed" })]));
+  });
+
+  it("moves when what a chat is waiting on changes", () => {
+    expect(needsStripSig([chip()])).not.toBe(needsStripSig([chip({ reason: "ask" })]));
+  });
+
+  it("moves when the set itself changes", () => {
+    expect(needsStripSig([chip()])).not.toBe(needsStripSig([chip(), chip({ id: "c2" })]));
+    expect(needsStripSig([chip()])).not.toBe(needsStripSig([]));
+  });
+});
+
 describe("the chats pane's reader/owner boundary", () => {
   const source = readFileSync(join(__dirname, "..", "src/ui/chat-list-view.ts"), "utf8");
   /** The file's CODE. The header comment is allowed — required, even — to name
@@ -331,6 +358,15 @@ describe("the chats pane's reader/owner boundary", () => {
 
   it("takes the permission decision through the plugin", () => {
     expect(code).toMatch(/this\.plugin\.decidePermission\(/);
+  });
+
+  it("isolates the decide buttons from the row that wraps them", () => {
+    // The buttons live inside a `clickable` row, whose keydown listener answers
+    // Enter/Space with preventDefault — which cancels a nested button's own
+    // activation click. Without the isolation, Enter on Allow reveals the chat
+    // instead of allowing anything (tests/dom.test.ts holds the behaviour).
+    const decideInto = /private decideInto\([\s\S]*?\n {2}\}/.exec(code)?.[0] ?? "";
+    expect(decideInto).toMatch(/isolateActivation\(btn\)/);
   });
 });
 
