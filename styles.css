@@ -2371,8 +2371,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    its own rhythm. It is gone: §3 gives the glow to the RUNNING turn and to
    nothing else, and an idle screen that glows spends the identity moment before
    anything has happened. It was also the file's only radial-gradient and its
-   only blur() (design.md laws 2 and 5). The star keeps the accent as its
-   colour; the light belongs to the run. */
+   only blur(), so it was the file's only two breaches of design.md law 2 (and
+   of the §7 anti-pattern that repeats it): no gradients, no glassmorphism. The
+   star keeps the accent as its colour; the light belongs to the run.
+   Verdict written up in docs/2026-07-mv-kit-audit.md, which had waived both. */
 .mva-empty-title {
   font-size: 18px;
   font-weight: 650;

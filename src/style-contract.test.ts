@@ -438,16 +438,31 @@ describe('Cosmos bridge: Phase 2 type registers', () => {
     // design.md §3 + §7 anti-patterns: UPPERCASE eyebrows on form fields is the
     // single most-repeated register mistake in the suite. Form labels are
     // register C. Scanned in the TS that builds the DOM, not in the CSS.
-    const src = readFileSync(new URL('./ui/chat-list-view.ts', import.meta.url), 'utf8');
-    void src; // keeps the import path honest even if the scan below moves.
     const FORM_LABEL_CLASSES = ['mva-pv-label', 'mva-task-modal-label', 'mva-auto-label'];
     const files = ['./ui/chat-list-view.ts', './ui/composer.ts', './ui/steps.ts', './view.ts'];
     const offenders: string[] = [];
     for (const f of files) {
       const text = readFileSync(new URL(f, import.meta.url), 'utf8');
-      for (const line of text.split('\n')) {
-        if (!line.includes('mva-type-eyebrow')) continue;
-        if (FORM_LABEL_CLASSES.some((c) => line.includes(c))) offenders.push(`${f}: ${line.trim()}`);
+      // Statements, not lines: a builder call chained across four lines is one
+      // statement, and reading line by line would let a form label pick up the
+      // eyebrow simply by wrapping.
+      for (const statement of text.split(';')) {
+        if (!statement.includes('mva-type-eyebrow')) continue;
+        if (FORM_LABEL_CLASSES.some((c) => statement.includes(c)))
+          offenders.push(`${f}: ${statement.replace(/\s+/g, ' ').trim()}`);
+      }
+      // …and the second shape: the element is built as a form label on one
+      // statement and given the eyebrow on another, through the variable that
+      // holds it. Track the names, then watch what gets added to them.
+      const labelVars = new Set<string>();
+      for (const m of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=([\s\S]{0,400}?);/g)) {
+        if (FORM_LABEL_CLASSES.some((c) => m[2].includes(c))) labelVars.add(m[1]);
+      }
+      for (const m of text.matchAll(
+        /\b([A-Za-z_$][\w$]*)\s*\.\s*(?:addClass|classList\s*\.\s*add|addClasses)\s*\(([^)]*)\)/g,
+      )) {
+        if (labelVars.has(m[1]) && m[2].includes('mva-type-eyebrow'))
+          offenders.push(`${f}: ${m[0].replace(/\s+/g, ' ').trim()}`);
       }
     }
     expect(offenders).toEqual([]);
@@ -470,6 +485,39 @@ describe('Cosmos bridge: Phase 3 the running state is the identity moment', () =
       .filter((r) => r.body.includes('var(--mva-glow)'));
     const ALLOWED = new Set(['.mva-working-star', '.mva-caret', '50%']);
     const offenders = rules.map((r) => r.selector).filter((s) => !ALLOWED.has(s));
+    expect(offenders).toEqual([]);
+  });
+
+  it('§3 no second glow: blurs, drop-shadows and radial auras belong to the run', () => {
+    // Companion to the assertion above, which can only see rules that already
+    // spend `--mva-glow` and is therefore blind to a glow built straight from
+    // the accent. That blind spot was real: the idle welcome star wore a
+    // blurred radial aura of `--mva-brand`, on the empty state, where nothing
+    // is running. This scan reads the effect, not the token name.
+    // A ring is not a glow: `0 0 0 2px accent` has a blur radius of 0 and is a
+    // border drawn with a shadow. Only a non-zero blur radius is light.
+    const IDENTITY = /var\(\s*--(?:mva-glow|mva-brand|mva-accent|interactive-accent)\b/;
+    const ALLOWED = new Set(['.mva-working-star', '.mva-caret']);
+    const offenders: string[] = [];
+    for (const rule of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = rule[1].replace(/\s+/g, ' ').trim();
+      if ([...ALLOWED].some((s) => selector === s || selector.endsWith(` ${s}`))) continue;
+      for (const decl of rule[2].split(';')) {
+        const prop = decl.split(':')[0].trim();
+        const value = decl.slice(decl.indexOf(':') + 1).trim();
+        if (!decl.includes(':') || !IDENTITY.test(value)) continue;
+        if (/radial-gradient\(/.test(value)) {
+          offenders.push(`${selector} { ${prop}: radial aura }`);
+        } else if (/^(?:-webkit-)?(?:backdrop-)?filter$/.test(prop) && /\b(?:blur|drop-shadow)\(/.test(value)) {
+          offenders.push(`${selector} { ${prop} }`);
+        } else if (prop === 'box-shadow') {
+          const blurred = [...value.matchAll(/(-?[\d.]+)(?:px)?\s+(-?[\d.]+)(?:px)?\s+([\d.]+)(?:px)?/g)].some(
+            (m) => Number(m[3]) > 0,
+          );
+          if (blurred) offenders.push(`${selector} { box-shadow (blurred) }`);
+        }
+      }
+    }
     expect(offenders).toEqual([]);
   });
 
@@ -509,6 +557,26 @@ describe('Cosmos bridge: Phase 3 the running state is the identity moment', () =
     // The two brand accents are identity DOTS, applied from the provider
     // adapters (`brandColor`) onto a dot element: never a surface fill, and
     // never a literal in the stylesheet.
-    expect(stripComments(css)).not.toMatch(/#d97757/i);
+    // Both hexes are read from the adapters rather than typed here, because a
+    // test that pins only the colour it knows is clean is not a test. Codex's
+    // green was in this file 14 times as the `var(--color-green, #19c37d)`
+    // semantic fallback — the same bytes doing a different job, which reads as
+    // "the provider's green means success" to anyone grepping. It is now
+    // `#3fb950`, and the collision cannot come back unnoticed. Verdict in
+    // docs/2026-07-mv-kit-audit.md.
+    const brands = ['./providers/claude.ts', './providers/codex.ts'].map((file) => {
+      const hex = readFileSync(new URL(file, import.meta.url), 'utf8').match(
+        /brandColor:\s*["'](#[0-9a-fA-F]{3,8})["']/,
+      )?.[1];
+      expect(hex, `brandColor missing from ${file}`).toBeTruthy();
+      return hex as string;
+    });
+    expect(brands).toHaveLength(2);
+    const code = stripComments(css);
+    for (const hex of brands) {
+      expect(code, `${hex} is a provider brand colour and must not be in styles.css`).not.toMatch(
+        new RegExp(hex, 'i'),
+      );
+    }
   });
 });

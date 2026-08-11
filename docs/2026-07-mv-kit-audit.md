@@ -1086,3 +1086,82 @@ sostituito"), e il padding verticale è arrivato con questa riga.
   più sopra resta waived: questa ondata tocca solo le superfici della chat
   nominate dal piano (l'intestazione del pannello e le testate di sezione della
   sidebar), non gallery, board, recap o Connections.
+
+---
+
+## Due verdetti che ribaltano righe di questo documento (ondata 2026-08-11, Cosmos Bridge §3)
+
+La fase 3 del piano dà il bagliore a un solo stato (il turno che gira) e i due
+accenti di brand a un solo ruolo (il pallino di identità). Applicandola sono
+cadute due righe che qui sopra avevano un **pass**. Le riscrivo invece di
+lasciarle contraddette: chi legge la tabella dei hex o la riga §6 sul vetro
+deve trovare il verdetto valido, non quello di luglio.
+
+### 1. Il verde semantico non è più il verde di Codex
+
+**Ribalta:** la riga 1 della tabella dei hex (`var(--color-green, #19c37d)` ×15,
+"pass, pass-in-fallback ... deliberatamente riusato perché il verde di 'fatto'
+combaci con il mark del provider").
+
+**Verdetto nuovo: FIX, applicato.** Tutte le occorrenze del fallback sono
+passate a `#3fb950`, che è il verde che due dischi di stato in questo file già
+usavano (riga 2 della stessa tabella): un solo verde semantico invece di tre.
+Il pattern resta identico (`var(--color-green, #hex)`, pass-in-fallback), il
+conteggio hex non si muove, e nulla cambia sotto un tema che definisce
+`--color-green`, cioè quasi sempre.
+
+Il riuso era motivato, ma la motivazione non regge il criterio della fase 3:
+`#19c37d` è **byte per byte** il `brandColor` di `src/providers/codex.ts`, e in
+`styles.css` faceva 14 volte (erano 15 a luglio) da riempimento di stati di
+successo: testo dei diff aggiunti, wash al 10%, spunte, dischi. Un colore di brand che riempie
+superfici non è più un pallino di identità: è la seconda identità visiva del
+pannello, quella che il §3 toglie di mezzo. E la coincidenza era invisibile a
+chi grep-pa: lo stesso valore diceva "Codex" in TypeScript e "riuscito" in CSS.
+
+Chi lo tiene fermo adesso: `§3 provider brand colours never appear in the
+stylesheet as brand fills` legge **entrambi** gli hex dai due adapter
+(`brandColor`) invece di scriverli a mano, e fallisce se uno dei due ricompare
+in `styles.css`. Prima l'assertion nominava solo `#d97757`, cioè l'unico dei due
+che era già a posto.
+
+### 2. L'aura della welcome star è rimossa
+
+**Ribalta:** la riga §6 sul vetro ("l'unico `blur()` del file è un'aura
+decorativa"), la riga §3 sullo stato vuoto (`.mva-empty` come "hero con aura che
+respira"), la riga 4 della tabella reduced-motion (`animation: none` sull'aura
+da 4.5s) e la riga che enumera i loop infiniti.
+
+**Verdetto nuovo: rimossa.** `.mva-empty-star::before` non esiste più, né la sua
+riga nel blocco `prefers-reduced-motion`. La stella tiene l'accento come
+**colore**; la luce se la prende il turno che gira.
+
+Tre motivi, in ordine di peso. Uno: il criterio della fase 3 dice che a
+brillare è solo lo stato che lavora, e l'aura brillava sullo schermo vuoto,
+cioè spendeva il momento di identità prima che fosse successo qualcosa. Due:
+era l'unico `radial-gradient` e l'unico `blur()` del file, quindi le uniche due
+violazioni della legge 2 del `docs/design.md`, ripetuta fra le anti-pattern del
+§7 (niente gradienti, niente glassmorphism). Questo documento le aveva waivate
+come "decorazione, non superficie", e con la legge scritta il waiver non ha più
+su cosa reggersi. Tre:
+portandola sul battito unico da 1.6s (0.55→1 di opacità, 0.92→1.08 di scala)
+smetteva di "respirare lentamente" come diceva il suo commento e cominciava a
+pulsare. Le alternative erano tre: rallentarla di nuovo fuori dal battito
+(riapre le nove cadenze che la fase 1 chiude), tenerla ferma (un bagliore
+congelato è comunque un bagliore), o toglierla. È tolta.
+
+Chi lo tiene fermo adesso: `§3 no second glow: blurs, drop-shadows and radial
+auras belong to the run` non guarda il nome del token ma l'effetto: qualunque
+`filter: blur()/drop-shadow()`, qualunque `radial-gradient` e qualunque
+`box-shadow` con raggio di sfocatura **diverso da zero** che spenda
+`--mva-glow`, `--mva-brand`, `--mva-accent` o `--interactive-accent` fuori da
+`.mva-working-star` e `.mva-caret` fa fallire il test. L'assertion precedente
+filtrava sulle regole che contengono `var(--mva-glow)`, quindi per costruzione
+non poteva vedere un secondo bagliore costruito sull'accento grezzo: è
+esattamente il buco da cui l'aura era passata. Un anello (`0 0 0 2px accento`,
+sfocatura 0) resta lecito: è un bordo disegnato con un'ombra, non luce.
+
+**Conteggio loop infiniti:** `grep -c infinite styles.css` scende da **18 a 17**
+con questa rimozione (erano 16 al tempo del §6: la differenza è cresciuta con le
+ondate successive, non con questa). La riga della tabella §6 resta valida per
+tutti gli altri; l'ingresso `mva-breathe` e la sua chiusura reduced-motion non
+hanno più un referente.
