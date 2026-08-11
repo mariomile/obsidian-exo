@@ -765,7 +765,7 @@ export class ChatView extends ItemView {
           (req) => this.rethinkBridge(c, req),
           // Same contract for the single-file Open-Loops Ledger (paths/parentConvoId trail it below).
           this.plugin.loopsWriteQueue,
-          this.plugin.paths, c.id, // parentConvoId — gates spawn_task
+          this.plugin.paths, c.id, // parentConvoId: gates spawn_task
           browserBridgeFor(this.plugin, c.id) // agent browser: undefined when off/mobile
         )
       : undefined;
