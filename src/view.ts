@@ -1004,7 +1004,7 @@ export class ChatView extends ItemView {
     setTooltip(apps, "Apps");
     apps.onclick = (e) => {
       const menu = new Menu();
-      menu.addItem((i) => i.setTitle("Chats").setIcon("messages-square").onClick(() => void this.plugin.activateChats()));
+      menu.addItem((i) => i.setTitle("Chats").setIcon("hi-messages").onClick(() => void this.plugin.activateChats()));
       menu.addItem((i) => i.setTitle("Cockpit").setIcon("hi-dashboard-speed").onClick(() => void this.plugin.openCockpit()));
       menu.addItem((i) => i.setTitle("Capabilities").setIcon("hi-puzzle").onClick(() => void this.plugin.activateHub()));
       if (this.plugin.settings.orchestrationEnabled) {

@@ -2,51 +2,76 @@
  * Custom icon registration. Lives here rather than in `main.ts` so the plugin
  * lifecycle file carries behaviour, not a wall of SVG path data.
  *
+ * Icons are Solar (Iconify, CC-BY-4.0), `bold duotone` variant — the same set
+ * and style Portal reskins onto core Obsidian's Lucide icons app-wide. Exo
+ * vendors its own copies here instead of relying on that reskin, because
+ * these ids (`hi-*`) aren't Lucide names Portal's registry can match, and a
+ * plugin's own UI shouldn't depend on a sibling plugin being installed to
+ * look right. Attribution: Solar icon set, CC-BY-4.0, https://icons8.com/icon/set/solar.
+ *
  * `addIcon` wraps whatever it is given in an `<svg viewBox="0 0 100 100">` and
  * that viewBox is NOT configurable — every icon authored on a different grid
- * has to be scaled into it explicitly, which is why the Huge Icons below (a
+ * has to be scaled into it explicitly, which is why the Solar icons below (a
  * 24x24 grid) are wrapped in `<g transform="scale(4.166667)">` (100/24). Drop
  * that wrapper and the glyph renders at a quarter size in the corner.
  */
 import { addIcon } from "obsidian";
 import { EXO_ICON } from "../view";
 import { BOARD_ICON } from "./board-view";
+import { CHATS_ICON } from "./chat-list-view";
 import { COCKPIT_ICON } from "./cockpit-view";
 import { HUB_ICON } from "./hub/hub-view";
 
-/** 100/24 — the Huge Icons grid scaled into addIcon's fixed 100x100 viewBox. */
-const HUGE = '<g transform="scale(4.166667)" fill="none" stroke="currentColor"';
+/** 100/24 — the Solar icons' 24x24 grid scaled into addIcon's fixed 100x100 viewBox. */
+const SOLAR = '<g transform="scale(4.166667)">';
 
 export function registerExoIcons(): void {
   // Exo brand mark — a concave 4-point star (matches the product logo).
-  // Authored directly on the 100x100 grid, so no scale wrapper.
+  // Authored directly on the 100x100 grid, so no scale wrapper. This is
+  // Exo's own mark, not a library glyph, so it stays outside the Solar set.
   addIcon(
     EXO_ICON,
     '<path fill="currentColor" d="M50 3 Q 50 50 97 50 Q 50 50 50 97 Q 50 50 3 50 Q 50 50 50 3 Z"/>',
   );
 
-  // Orchestration board — Huge Icons (hugeicons.com, free/MIT, Stroke Rounded).
+  // Orchestration board — Solar "structure" (bold duotone): four connected nodes.
   addIcon(
     BOARD_ICON,
-    `${HUGE} stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">` +
-      '<path d="M12 21c3.75 0 5.625 0 6.939-.955a5 5 0 0 0 1.106-1.106C21 17.625 21 15.749 21 12s0-5.625-.955-6.939a5 5 0 0 0-1.106-1.106C17.625 3 15.749 3 12 3s-5.625 0-6.939.955A5 5 0 0 0 3.955 5.06C3 6.375 3 8.251 3 12s0 5.625.955 6.939a5 5 0 0 0 1.106 1.106C6.375 21 8.251 21 12 21m0-14v4m5-4v10M7 7v7"/>' +
+    SOLAR +
+      '<path fill="currentColor" d="M8 5a3 3 0 1 1-6 0a3 3 0 0 1 6 0m14 0a3 3 0 1 1-6 0a3 3 0 0 1 6 0M8 19a3 3 0 1 1-6 0a3 3 0 0 1 6 0m14 0a3 3 0 1 1-6 0a3 3 0 0 1 6 0"/>' +
+      '<path fill="currentColor" d="M16.093 4.256A1 1 0 0 0 16 4.25H8a1 1 0 0 0-.093.006a3 3 0 0 1 0 1.488q.045.006.093.006h8a1 1 0 0 0 .093-.006a3 3 0 0 1 0-1.488M19 8q.386 0 .744-.093q.006.045.006.093v8a1 1 0 0 1-.006.093a3 3 0 0 0-1.488 0A1 1 0 0 1 18.25 16V8q0-.048.006-.093q.358.091.744.093m-2.907 10.256A1 1 0 0 0 16 18.25H8a1 1 0 0 0-.093.006a3 3 0 0 1 0 1.488q.045.006.093.006h8a1 1 0 0 0 .093-.006a3 3 0 0 1 0-1.488M5 8q-.386 0-.744-.093A1 1 0 0 0 4.25 8v8q0 .048.006.093a3 3 0 0 1 1.488 0A1 1 0 0 0 5.75 16V8a1 1 0 0 0-.006-.093Q5.386 7.998 5 8" opacity=".5"/>' +
       "</g>",
   );
 
-  // Connections marketplace — Huge Icons puzzle piece.
+  // Connections marketplace — Solar "puzzle" (bold duotone). Same glyph
+  // Portal reskins onto core Obsidian's "puzzle" Lucide icon.
   addIcon(
     HUB_ICON,
-    `${HUGE} stroke-linejoin="round" stroke-width="1.5">` +
-      '<path d="M12.828 6.001a3 3 0 1 0-5.658 0c-2.285.008-3.504.09-4.292.878S2.008 8.886 2 11.17a3 3 0 1 1 0 5.66c.008 2.284.09 3.503.878 4.291s2.007.87 4.291.878a3 3 0 1 1 5.66 0c2.284-.008 3.503-.09 4.291-.878s.87-2.007.878-4.292a3 3 0 1 0 0-5.658c-.008-2.285-.09-3.504-.878-4.292c-.788-.789-2.007-.87-4.292-.878Z"/>' +
+    SOLAR +
+      '<path fill="currentColor" fill-rule="evenodd" d="M17.5 2.75a.75.75 0 0 1 .75.75v2.25h2.25a.75.75 0 0 1 0 1.5h-2.25V9.5a.75.75 0 0 1-1.5 0V7.25H14.5a.75.75 0 0 1 0-1.5h2.25V3.5a.75.75 0 0 1 .75-.75" clip-rule="evenodd"/>' +
+      '<path fill="currentColor" d="M2 6.5c0-2.121 0-3.182.659-3.841S4.379 2 6.5 2s3.182 0 3.841.659S11 4.379 11 6.5s0 3.182-.659 3.841S8.621 11 6.5 11s-3.182 0-3.841-.659S2 8.621 2 6.5m11 11c0-2.121 0-3.182.659-3.841S15.379 13 17.5 13s3.182 0 3.841.659S22 15.379 22 17.5s0 3.182-.659 3.841S19.621 22 17.5 22s-3.182 0-3.841-.659S13 19.621 13 17.5"/>' +
+      '<path fill="currentColor" d="M2 17.5c0-2.121 0-3.182.659-3.841S4.379 13 6.5 13s3.182 0 3.841.659S11 15.379 11 17.5s0 3.182-.659 3.841S8.621 22 6.5 22s-3.182 0-3.841-.659S2 19.621 2 17.5" opacity=".5"/>' +
       "</g>",
   );
 
-  // Cockpit — Huge Icons dashboard-speed (gauge with needle).
+  // Cockpit — Solar "speedometer" (bold duotone, middle needle position).
   addIcon(
     COCKPIT_ICON,
-    `${HUGE} stroke-width="1.5">` +
-      '<path stroke-linecap="round" d="M13.5 13L17 9m-3 6a2 2 0 1 1-4 0a2 2 0 0 1 4 0Zm-8-3a6 6 0 0 1 9-5.197"/>' +
-      '<path d="M2.5 12c0-4.478 0-6.717 1.391-8.109c1.392-1.39 3.63-1.39 8.11-1.39c4.477 0 6.717 0 8.108 1.39c1.391 1.392 1.391 3.63 1.391 8.11c0 4.477 0 6.717-1.391 8.108S16.479 21.5 12 21.5c-4.478 0-6.717 0-8.109-1.391c-1.39-1.391-1.39-3.63-1.39-8.109Z"/>' +
+    SOLAR +
+      '<path fill="currentColor" d="M9.02 13.015a3.006 3.006 0 0 0 3.008 3.004a3.006 3.006 0 0 0 3.008-3.004c0-.631-.435-1.507-.974-2.35c-.807-1.26-1.21-1.89-2.034-1.89s-1.227.63-2.034 1.89c-.54.844-.974 1.719-.974 2.35"/>' +
+      '<path fill="currentColor" d="M22 12c0 5.523-4.477 10-10 10S2 17.523 2 12S6.477 2 12 2s10 4.477 10 10" opacity=".5"/>' +
+      '<path fill="currentColor" d="M4.42 5.476q.49-.566 1.057-1.055l.053.048l1.5 1.5A.75.75 0 0 1 5.97 7.03l-1.5-1.5zM2.028 12.75a10 10 0 0 1 0-1.5H4a.75.75 0 0 1 0 1.5zm3.448 6.83a10 10 0 0 1-1.055-1.056l.049-.055l1.5-1.5a.75.75 0 0 1 1.06 1.061l-1.5 1.5zm14.104-1.056q-.49.566-1.056 1.055l-.054-.049l-1.5-1.5a.75.75 0 1 1 1.06-1.06l1.5 1.5zm2.392-7.274a10 10 0 0 1 0 1.5H20a.75.75 0 0 1 0-1.5zm-3.448-6.83q.566.49 1.055 1.056l-.049.054l-1.5 1.5a.75.75 0 1 1-1.06-1.06l1.5-1.5zM12.75 2.028V4a.75.75 0 0 1-1.5 0V2.028a10 10 0 0 1 1.5 0"/>' +
+      "</g>",
+  );
+
+  // Chats — Solar "chat square" (bold duotone). Same glyph Portal reskins
+  // onto core Obsidian's "message-square" Lucide icon.
+  addIcon(
+    CHATS_ICON,
+    SOLAR +
+      '<path fill="currentColor" d="M21.975 13.814A10.95 10.95 0 0 1 17 15.001C10.925 15 6 10.076 6 4q.001-.945.154-1.847c-.715.106-1.277.284-1.766.584a5 5 0 0 0-1.651 1.65C2 5.591 2 7.228 2 10.501v1c0 2.33 0 3.495.38 4.413a5 5 0 0 0 2.707 2.706c.66.274 1.447.35 2.703.372c.85.015 1.275.022 1.613.219c.337.196.548.551.968 1.262l.542.916c.483.816 1.69.816 2.174 0l.542-.916c.42-.71.63-1.066.968-1.262c.338-.197.763-.204 1.613-.219c1.256-.021 2.043-.098 2.703-.372a5 5 0 0 0 2.706-2.706c.227-.547.319-1.182.356-2.1"/>' +
+      '<path fill="currentColor" fill-rule="evenodd" d="m13.087 21.389l.542-.916c.42-.71.63-1.066.968-1.262c.338-.197.763-.204 1.613-.219c1.256-.021 2.043-.098 2.703-.372a5 5 0 0 0 2.706-2.706c.227-.547.319-1.182.356-2.1A10.95 10.95 0 0 1 17 15.001C10.925 15 6 10.076 6 4q.001-.945.154-1.847c-.715.106-1.277.284-1.766.584a5 5 0 0 0-1.651 1.65C2 5.591 2 7.228 2 10.501v1c0 2.33 0 3.495.38 4.413a5 5 0 0 0 2.707 2.706c.66.274 1.447.35 2.703.372c.85.015 1.275.022 1.613.219c.337.196.548.551.968 1.262l.542.916c.483.816 1.69.816 2.174 0" clip-rule="evenodd"/>' +
+      '<path fill="currentColor" d="M13.5 2h-3c-1.94 0-3.305 0-4.346.153Q6.001 3.055 6 4c0 6.075 4.925 11 11 11c1.79 0 3.48-.428 4.975-1.187C22 13.192 22 12.441 22 11.5v-1c0-3.273 0-4.91-.737-6.112a5 5 0 0 0-1.65-1.651C18.41 2 16.773 2 13.5 2" opacity=".5"/>' +
       "</g>",
   );
 }

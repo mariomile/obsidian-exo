@@ -39,7 +39,7 @@ import { clickable } from "./dom";
 import { recallChats, reindexChats, recallHost, isRecallUnavailable } from "./chat-recall";
 
 export const CHATS_VIEW_TYPE = "exo-chats";
-export const CHATS_ICON = "messages-square";
+export const CHATS_ICON = "hi-messages";
 
 /** Per-pane prefix for the header/list id pairs that wire `aria-controls` and
  *  `aria-labelledby`. Obsidian allows the same view type in two leaves, and two
