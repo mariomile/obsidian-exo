@@ -423,3 +423,179 @@ before the session.
 Unchanged by this fix: `will-download` blocking is still unexercised, the Codex
 image-block seam (plan seam 4) is still untested, and the snapshot cap can still
 crowd form controls out on link-dense pages.
+
+---
+
+# Native Web Viewer migration
+
+Session of 2026-08-11, later the same evening. The agent browser no longer owns
+a `<webview>`: it drives Obsidian's core Web Viewer leaf. Mario asked for this
+with the trade-off stated and confirmed, so the sections above describing a
+dedicated partition and deny-all hardening now describe a design that is gone.
+
+## Why, in one line
+
+The dedicated partition meant a dedicated empty session, so every login the
+agent hit was a login it did not have. Research behind a login is the use case.
+The native viewer runs in the vault session Mario is already signed into.
+
+## Commits
+
+| SHA | What |
+|---|---|
+| `fd3d3c9` | `BrowserHost` becomes a driver over the native view; controller owns one `webviewer` leaf; `view-registry` registers no browser view |
+| `84ce326` | Delete `src/ui/browser-view.ts` (re-delete, see the cross-session note below) |
+
+The `.mva-browser*` CSS removal and the removal-pinning wiring tests landed
+inside `c533489`, a parallel session's commit, not by choice: see below.
+
+## What the readiness flags actually mean
+
+Probed against the running app before any code was written, because the whole
+point of the old `dom-ready` gate was that the first `browser_open` failed
+without it. Both flags are fields Obsidian sets imperatively, not events.
+
+**`webviewMounted`** is set to `true` inside Obsidian's own `dom-ready`
+listener, and reset to `false` at the top of `instantiateWebView()`. It means
+exactly "the element currently on this view has emitted dom-ready and its
+methods work". It is the precise native equivalent of the gate it replaces.
+
+**`webviewFirstLoadFinished`** is set inside `commitPageLoad()`, the debounced
+handler behind dom-ready / did-navigate-in-page / did-fail-load. It means "this
+view has committed a first page load", i.e. its URL and title are populated.
+
+Neither survives a re-instantiation, and both are reset together by it. Both
+LATCH across ordinary navigation: measured on a live leaf, navigating from
+example.com to a Wikipedia article left both `true` throughout, including
+across `dom-ready` for the new document. So they answer "has this view ever
+started", not "is this view idle right now".
+
+**The trap, and why the gate uses `webviewMounted` alone.** `commitPageLoad`
+returns early for the blank `data:text/plain,` URL a Web Viewer tab opens on.
+On a tab with no page, `webviewFirstLoadFinished` therefore never flips:
+measured still `false` after 3.3s, while the guest was already running
+`executeJavaScript` at **61ms**. Gating on it would hang `browser_open` with no
+url, permanently. `webviewMounted` is the honest signal and the only one used.
+
+Timings measured: 61ms for a background tab; 419ms and 956ms for two visible
+tabs loading a page. The bound stays 10s, same discipline as before, with an
+error that now names the real cause instead of the old one.
+
+## Two other things the probes changed
+
+**Visibility is not required for readiness, but is still required for capture.**
+A Web Viewer leaf sitting as a background tab (0x0 content rect) reaches
+`webviewMounted` and executes scripts normally. The same tab resolves
+`capturePage()` with a **0x0, `isEmpty()`, zero-byte image without throwing**,
+exactly as the custom webview did. The empty-capture refusal is therefore
+unchanged and still load-bearing, and it now has two tests rather than one.
+
+**Navigation must go through the view, not the element.** From a blank Web
+Viewer tab, a raw `webview.loadURL()` loads the page but leaves the view in
+`mode === "blank"`, which keeps the element hidden and makes every capture
+empty. `view.navigate(url, true)` switches the mode and updates the address bar
+and history. Its internal `stop()` emits nothing on an idle guest, so the
+settle wait (`did-stop-loading` / `did-fail-load` / timeout) is unaffected.
+
+## Leaf reuse: ours only, never his
+
+The controller remembers the ONE `webviewer` leaf it opened and reuses it for
+the whole plugin session. It never adopts a Web Viewer tab Mario opened.
+
+A Web Viewer leaf carries no owner marker, so "the first webviewer leaf" and
+"ours" are indistinguishable from the workspace's side. They are not
+indistinguishable for Mario: driving his tab navigates away from whatever he
+was reading, mid-read, because the agent was asked to look something up, and
+that page is not ours to give back. An extra tab is. If he closes the agent's
+tab, the next `browser_open` makes a new one; a plugin reload forgets the
+reference and costs one more tab, which is the price of not claiming a tab we
+did not open.
+
+## Security, restated because it changed
+
+The host's header now says what is true: the native viewer runs in Obsidian's
+own vault session (measured: `persist:vault-c3c1704dc948d6bf`), we set no
+partition, install no permission or download handlers, and the agent therefore
+browses with Mario's logins and acts as him via `browser_click` / `browser_type`
+on any authenticated site. The URL gate (http/https) and the JSON-escaped
+script protocol stay: they are ours and still enforced. A wiring test pins all
+of this against the source, so a host that quietly grew its own webview back,
+or a comment claiming hardening we no longer do, fails the suite.
+
+## Gate
+
+- `pnpm vitest run`: **156 files, 2563 tests, 7 failures**, all 7 in
+  `tests/reentry.test.ts` from a parallel session's uncommitted work in
+  `src/core/reentry.ts` and `src/ui/reentry.ts`. Every browser test passes.
+- `tsc -noEmit` on a clean worktree of `84ce326`: **exit 0, zero errors**. In
+  the shared working tree the only error is that same session's
+  `src/ui/reentry.ts(171): Cannot find name 'bandIsStale'`.
+- `pnpm lint`: 0 errors, 8 warnings, all pre-existing and unchanged.
+- Ratchets untouched, none raised: `view.ts` 6600/6600, `main.ts` 3474/3474,
+  `settings.ts` 1032/1032. `view-registry.ts` gave 2 lines back (99 -> 97).
+
+## What the live run proved
+
+Built from a clean worktree of `84ce326` (never from the shared tree, which
+carried another session's unfinished work) and deployed into the live vault,
+then `plugin:reload id=exo`.
+
+1. **`exo-browser` is gone from the view registry.** Six `exo-*` view types
+   remain: view, board, cockpit, connections, agents, chats.
+2. **`browser_open` succeeds on the FIRST call, with no retry.** From a fresh
+   state (zero `webviewer` leaves, zero webviews), one turn through
+   `askExo(...)` asked for exactly one `browser_open` and explicitly forbade a
+   second. Transcript of conversation `c216`:
+
+   ```json
+   {"name":"mcp__obsidian__browser_open","input":{"url":"https://www.youtube.com"},
+    "ok":true,"output":"url: https://www.youtube.com/\ntitle: (244) YouTube\nscroll: 0 to 845 of 5669px (15% seen)"}
+   ```
+
+   One segment, `ok: true`. The string `must be attached to the DOM` appears
+   nowhere in the turn.
+3. **The page opened in a NATIVE leaf.** After the turn: one `webviewer` leaf on
+   `https://www.youtube.com/`, one webview in the DOM, its partition
+   `persist:vault-c3c1704dc948d6bf`, and zero `exo-browser` leaves.
+4. **Session sharing works, which is the whole reason for the change.** The
+   target was chosen by reading the vault session's cookie DOMAINS only (117
+   cookies across google, youtube, x, claude, github, linkedin), then verifying
+   YouTube specifically: `ytcfg.get("LOGGED_IN") === true`, avatar present, no
+   sign-in link. Harmless and read-only.
+
+   The agent then proved it with its own tools, not with a probe. The title
+   `(244) YouTube` is the unread-subscriptions counter, which only renders
+   signed in, and `browser_read_page` returned a personalised Italian homepage
+   with "Caricamenti recenti", "Guardati" and "Novità per te" and named
+   subscriptions. Its own answer: "Signed-in, personalised account. There's no
+   Sign in button in the page content... I called browser_open exactly once."
+5. Cleanup: the leaf was detached, conversation `c216` was **archived, not
+   deleted** (present in `conversations-archive.json`, absent from
+   `conversations.json`), zero webviews left, `browserEnabled` left ON.
+   `dev:errors` shows only the pre-existing Obsidian Sync "Disconnected" trace
+   from 22:59, before this work.
+
+## Cross-session accident worth knowing about
+
+This tree was shared with an active session working on settle/reentry, and the
+two collided three times. The record, so nobody re-derives it:
+
+- A `git stash` taken here (to measure a lint baseline) was a mistake in a
+  shared tree and could not be popped: the other session had rewritten
+  `src/ui/reentry.ts` underneath it. Recovered by checking out only this
+  session's paths from `stash@{0}`. **`stash@{0}` was deliberately NOT dropped**,
+  because it also holds a snapshot of the other session's work. It is safe to
+  drop once that session confirms it does not need it.
+- The staged deletion of `src/ui/browser-view.ts` was swept into that session's
+  unrelated commit `2862d5d`, then restored by its revert `c533489`, which in
+  turn swept up this session's `styles.css` and `tests/browser-wiring.test.ts`.
+  The file was re-deleted in `84ce326`. Net state is correct; the history is
+  interleaved.
+- Lesson, already the house rule and now paid for: explicit pathspecs on every
+  commit, and no `git stash` at all while another session is live.
+
+## Still open, unchanged by this migration
+
+The Codex image-block seam is still untested, and the snapshot cap can still
+crowd form controls out on link-dense pages. `will-download` blocking is no
+longer ours to test: downloads now follow Obsidian's Web Viewer behaviour.
