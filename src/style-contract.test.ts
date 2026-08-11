@@ -340,17 +340,24 @@ describe('Cosmos bridge: Phase 1 token seam', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('§1 surfaces: a 4-step ladder, color-mix based, aliased to Cosmos', () => {
+  it('§1 surfaces: a 4-step ladder whose ends alias Cosmos and whose middle is built', () => {
     const body = stripComments(seam());
     for (const n of [0, 1, 2, 3]) {
       const decl = body.match(new RegExp(`--mva-surface-${n}\\s*:[^;]+;`))?.[0];
       expect(decl, `--mva-surface-${n} missing from the seam`).toBeTruthy();
-      expect(decl).toMatch(/var\(\s*--cosmos-surface-/);
     }
-    // The middle rungs are BUILT (color-mix from Obsidian vars), not picked:
-    // 0 and 3 are the theme's own two surfaces, 1 and 2 the blend between them.
-    expect(body).toMatch(/--mva-surface-1\s*:[^;]*color-mix\(in srgb, var\(--background-primary\)/);
-    expect(body).toMatch(/--mva-surface-2\s*:[^;]*color-mix\(in srgb, var\(--background-primary\)/);
+    // Only the two ENDS alias the kit: rung 0 is the canvas, rung 3 the theme's
+    // own raised surface, and both track the active flavour.
+    expect(body).toMatch(/--mva-surface-0\s*:[^;]*var\(\s*--cosmos-surface-0/);
+    expect(body).toMatch(/--mva-surface-3\s*:[^;]*var\(\s*--cosmos-surface-3/);
+    // The middle rungs are BUILT between those ends, never aliased to Cosmos's
+    // own 1 and 2: there rung 1 is chrome, not elevation, so it equals rung 0
+    // under `realcraft` and sits DARKER than rung 0 under `linear`. Aliasing it
+    // would flatten a raised surface under one flavour and recess it under
+    // another; mixing between the ends keeps a raise a raise everywhere.
+    expect(body).toMatch(/--mva-surface-1\s*:[^;]*color-mix\(in srgb, var\(--mva-surface-0\)[^;]*var\(--mva-surface-3\)/);
+    expect(body).toMatch(/--mva-surface-2\s*:[^;]*color-mix\(in srgb, var\(--mva-surface-0\)[^;]*var\(--mva-surface-3\)/);
+    expect(body).not.toMatch(/--mva-surface-[12]\s*:[^;]*var\(\s*--cosmos-surface-/);
   });
 
   it('§1 elevation: the rest/lift pair aliases the kit card shadows', () => {
