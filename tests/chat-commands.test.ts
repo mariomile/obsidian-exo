@@ -69,8 +69,15 @@ describe("registerChatCommands", () => {
 
   it("keeps the ids the two moved commands already had", () => {
     // Obsidian stores hotkeys BY ID: a rename here silently drops whatever the
-    // user had bound.
-    expect(harness([], null).ids).toEqual(["open-chat-list", "retitle-chats", "next-needs-you"]);
+    // user had bound. Exact list, not a `toContain`: a rename has to fail here,
+    // and adding a command (as Phase 7's `settle-chat-to-note` did) is a
+    // one-line, deliberate change to this array.
+    expect(harness([], null).ids).toEqual([
+      "open-chat-list",
+      "retitle-chats",
+      "next-needs-you",
+      "settle-chat-to-note",
+    ]);
   });
 });
 

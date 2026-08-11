@@ -2760,6 +2760,86 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   padding-left: 10px;
 }
 
+/* ---- re-entry: the "since you left" line -------------------------------
+   A rule drawn across the transcript at the last-read position, with the
+   fixed-slot line sitting in the gap. Eyebrow register (the class is applied
+   from TypeScript), no surface of its own: it is a mark on the page, not a
+   card, and a card here would compete with the turn it sits above.
+   Deliberately NOT width-gated the way the Recap Rail is — one row inside the
+   column that already exists costs a sidebar nothing. */
+.mva-reentry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 10px;
+}
+.mva-reentry::before,
+.mva-reentry::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--background-modifier-border);
+}
+.mva-reentry-slot.is-empty {
+  /* An unpopulated slot renders nothing. Its POSITION is still fixed — the
+     order never changes — but a "0 files changed" would be noise on the one
+     line that has to be read at a glance. */
+  display: none;
+}
+.mva-reentry-slot.is-populated {
+  cursor: pointer;
+  border-radius: var(--mva-r1);
+  padding: 0 2px;
+  transition: color var(--mva-t);
+}
+.mva-reentry-slot.is-populated::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--text-faint);
+}
+.mva-reentry-slot.is-populated:hover {
+  color: var(--text-normal);
+}
+
+/* ---- re-entry: the resume verbs ----------------------------------------
+   A short row of quiet chips immediately above an empty composer. Same
+   reading column as the transcript and the composer, so it lines up with
+   both. It carries no accent: these are a fast path, not a decision point. */
+.mva-resume-verbs {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  max-width: var(--mva-content-max);
+  margin: 0 auto;
+  padding: 0 12px 6px;
+}
+.mva-resume-verbs.is-hidden {
+  display: none;
+}
+.mva-resume-verb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: var(--mva-card-border);
+  border-radius: var(--mva-r-chip);
+  background: var(--mva-surface-1);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--mva-t), background var(--mva-t);
+}
+.mva-resume-verb:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.mva-resume-verb-ico {
+  display: inline-flex;
+}
+.mva-resume-verb-ico .svg-icon {
+  width: 12px;
+  height: 12px;
+}
+
 /* thinking step */
 .mva-step-think-head {
   --mva-type-body-size: var(--mva-type-body-size-sm);

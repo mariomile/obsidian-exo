@@ -70,6 +70,7 @@ import {
 } from "./core/live-tasks";
 import { LiveTaskRegistry } from "./ui/live-task-registry";
 import { Composer } from "./ui/composer";
+import { renderResumeVerbs, revealReentry } from "./ui/reentry";
 import type {
   AssistantCtx,
   Convo,
@@ -1134,6 +1135,7 @@ export class ChatView extends ItemView {
         parentConvoId: d.parentConvoId,
         pendingChildReports: reviveChildReports(d.pendingChildReports),
         titleLocked: d.titleLocked === true,
+        readIndex: d.readIndex, // the read position: absent = never read (core/reentry)
         provider,
         model,
         allow: new Set(),
@@ -1190,6 +1192,7 @@ export class ChatView extends ItemView {
     this.refreshProviderUI();
     this.renderTabs();
     this.scrollToBottom();
+    revealReentry(this.active, (p) => this.openNote(p)); // a chat that worked overnight says so
     this.renderTailSurfacing(this.active);
     this.rebuildOutline();
   }
@@ -1220,6 +1223,7 @@ export class ChatView extends ItemView {
       // the reload left the sidebar advertising news it could never deliver.
       ...(c.pendingChildReports?.length ? { pendingChildReports: c.pendingChildReports } : {}),
       ...(c.titleLocked ? { titleLocked: true } : {}),
+      ...(c.readIndex ? { readIndex: c.readIndex } : {}), // 0 = never read, so it need not be written
       messages: c.messages.map((message) =>
         persistMessage(message, {
           maxToolOutput: MAX_PERSIST_OUTPUT,
@@ -1505,6 +1509,7 @@ export class ChatView extends ItemView {
     this.listHost.empty();
     this.listHost.appendChild(c.listEl);
     if (c.listEl.childElementCount === 0) this.renderEmptyState();
+    revealReentry(c, (p) => this.openNote(p)); // "since you left", then move the read position
     this.syncActiveSurfaces(c);
     this.renderTabs();
     this.applyWorkingSet();
@@ -1549,6 +1554,7 @@ export class ChatView extends ItemView {
     // transition it has to observe; the popover re-renders or closes with it.
     this.refreshAgentIndicators();
     this.renderAgentPopover();
+    renderResumeVerbs(this.listWrap, c, this.composer); // state-contextual re-entry verbs
   }
 
   /* ----------------------------- tab bar ---------------------------- */
@@ -1569,6 +1575,7 @@ export class ChatView extends ItemView {
    */
   private refreshTabs(): void {
     this.renderTabs();
+    if (this.listWrap && this.active) renderResumeVerbs(this.listWrap, this.active, this.composer);
   }
 
   /** Render the open-conversation tab strip. */

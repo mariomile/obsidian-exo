@@ -85,6 +85,34 @@ export function summarizeSteps(tools: number, files: number, commands: number): 
   return parts.join(" · ");
 }
 
+/**
+ * The one line a SETTLED run says: "Edited 3 files, ran 2 commands · 41s".
+ *
+ * Different question from `summarizeSteps`, which inventories a run that is
+ * still open ("18 tools · 5 files edited · 2 commands"): once a turn is over
+ * nobody is auditing the tool count, they are asking what came of it. So the
+ * milestone leads with the outcome — files changed, commands run — and falls
+ * back to the tool count only when the run did neither.
+ *
+ * `elapsed` is a pre-formatted label (the run's own frozen duration) rather
+ * than a number, so this stays free of the view's duration formatter; an empty
+ * string omits the clause, which is what a restored turn passes — its start
+ * time is not on disk and inventing one would be a lie with a decimal point.
+ */
+export function milestoneLine(
+  s: { tools: number; files: number; commands: number },
+  elapsed = "",
+): string {
+  const parts: string[] = [];
+  if (s.files) parts.push(`Edited ${s.files} file${s.files === 1 ? "" : "s"}`);
+  if (s.commands) {
+    parts.push(`${parts.length ? "ran" : "Ran"} ${s.commands} command${s.commands === 1 ? "" : "s"}`);
+  }
+  if (!parts.length) parts.push(`${s.tools} tool${s.tools === 1 ? "" : "s"}`);
+  const line = parts.join(", ");
+  return elapsed ? `${line} · ${elapsed}` : line;
+}
+
 /** First non-empty line of a tool's output, trimmed and capped — for the
  *  collapsed error preview so a failure's reason shows without expanding. */
 export function firstErrorLine(output: string, max = 120): string {

@@ -1,0 +1,297 @@
+/**
+ * Settle to note — the pure half of "a settled chat joins the vault graph".
+ *
+ * A conversation that is finished is knowledge in a place the vault cannot
+ * see: not in search, not in the graph, with no backlinks from the notes it
+ * touched. This module turns one into a real note — frontmatter plus a
+ * DISTILLED body — and decides where it goes and whether it may be written at
+ * all. The Obsidian half (`obsidian/settle-note.ts`) only reads and writes
+ * files.
+ *
+ * Two rules the shape encodes:
+ *
+ *  1. **Never a transcript dump.** The body is a summary: what was asked
+ *     (capped and trimmed), what came back (the last answer, trimmed), and the
+ *     work as links. Tool inputs, tool outputs, thinking and intermediate
+ *     turns never reach the page. A markdown mirror of a chat is unreadable
+ *     and unsearchable, and it is exactly what "settled chats join the graph"
+ *     is NOT asking for.
+ *  2. **Settled only.** Live chats stay in the hand-rolled DOM: streaming and
+ *     the one-live-surface invariant cannot be expressed in markdown, so a
+ *     running or blocked conversation has no note to write yet.
+ */
+import type { Message } from "./model";
+import type { ExoPaths } from "./paths";
+import type { Recap } from "./recap";
+import { patchFrontmatter } from "./frontmatter-patch";
+
+/** The frontmatter key that ties a note back to the conversation it mirrors.
+ *  This — not the filename — is what makes re-settling an UPDATE: a chat that
+ *  was renamed after it was settled still finds its own note. */
+export const SETTLE_CONVO_KEY = "exo_convo";
+
+/** The tag every settled chat carries, so the whole set is one vault query. */
+export const SETTLE_TAG = "exo/chat";
+
+/** How much of the conversation reaches the page. Caps, not truncation of a
+ *  dump: the point is a note you can read in fifteen seconds. */
+const MAX_ASKS = 6;
+const ASK_CHARS = 220;
+const ANSWER_CHARS = 900;
+
+/** How a settled conversation ended. */
+export type SettleOutcome = "settled" | "stopped" | "error";
+
+/** The live facts the gate reads. Same vocabulary as `deriveLane`'s snapshot,
+ *  deliberately: "settled" here must mean exactly what the sidebar's Settled
+ *  section means. */
+export interface SettleGate {
+  streaming: boolean;
+  pendingPerm: boolean;
+  pendingAsk: boolean;
+  hasMessages: boolean;
+}
+
+/**
+ * May this conversation be settled to a note? Running and blocked are both
+ * refused — a turn in flight has no outcome yet, and a chat waiting on you has
+ * an answer that is not written. An empty chat has nothing to distil.
+ */
+export function canSettle(s: SettleGate): boolean {
+  if (s.streaming || s.pendingPerm || s.pendingAsk) return false;
+  return s.hasMessages;
+}
+
+/**
+ * The same gate as seen from a sidebar row, which has a lane instead of the
+ * raw live flags. A `lane` at all means running or blocked, and both are
+ * refused; a BADGE is not — a chat that stopped or errored has still finished,
+ * and its note says so in `outcome`. Kept beside `canSettle` so the two
+ * readings of "settled" cannot drift.
+ */
+export function canSettleRow(r: {
+  lane?: "running" | "needs-input";
+  messageCount: number;
+}): boolean {
+  return !r.lane && r.messageCount > 0;
+}
+
+/** `stopped` wins over `poisoned`, matching `terminalConvoState`: a turn the
+ *  user stopped reads as a stop, not an error. */
+export function settleOutcome(s: { stopped: boolean; poisoned: boolean }): SettleOutcome {
+  if (s.stopped) return "stopped";
+  if (s.poisoned) return "error";
+  return "settled";
+}
+
+/** Everything the distiller needs about one conversation. Structural, not
+ *  `Convo`: this module never sees the view's types. */
+export interface SettleSource {
+  id: string;
+  title: string;
+  /** Provider DISPLAY name ("Claude" / "Codex"), not the id — the note is read
+   *  by a person. */
+  provider: string;
+  model: string;
+  /** Slug of the agent the chat was bound to via `/as`, when there was one. */
+  agent?: string;
+  stopped: boolean;
+  poisoned: boolean;
+  messages: readonly Message[];
+}
+
+/** A note, split the way it is written: keys to merge into the frontmatter,
+ *  and the whole body below it. */
+export interface SettleNote {
+  frontmatter: Record<string, unknown>;
+  body: string;
+}
+
+const trim = (s: string, max: number): string => {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+};
+
+/** Every user turn, trimmed — the "what was asked" spine of the note. */
+function asks(messages: readonly Message[]): string[] {
+  const out: string[] = [];
+  for (const m of messages) {
+    if (m.role !== "user") continue;
+    const text = trim(m.text ?? "", ASK_CHARS);
+    if (text) out.push(text);
+  }
+  return out;
+}
+
+/** The last assistant prose — the outcome. Tool segments are skipped: the work
+ *  is reported as links further down, never as its own raw output. */
+function lastAnswer(messages: readonly Message[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    const text = m.segments
+      .filter((s) => s.t === "text")
+      .map((s) => (s.t === "text" ? s.md : ""))
+      .join("\n")
+      .trim();
+    if (text) return trim(text, ANSWER_CHARS);
+  }
+  return "";
+}
+
+/** A vault path as a wikilink — this is what buys the note its backlinks and
+ *  its place in the graph. The `.md` extension is dropped so the link resolves
+ *  the way a hand-written one would. */
+const link = (path: string): string => `[[${path.replace(/\.md$/i, "")}]]`;
+
+/**
+ * Distil one conversation into a note. `recap` is the conversation rollup
+ * `core/recap.ts` already builds for the Recap Rail — reused rather than
+ * re-derived, so the note and the rail can never disagree about what a chat
+ * touched.
+ */
+export function distillConversation(src: SettleSource, recap: Recap): SettleNote {
+  const outcome = settleOutcome(src);
+  const written = recap.written.map((w) => w.path);
+  const frontmatter: Record<string, unknown> = {
+    [SETTLE_CONVO_KEY]: src.id,
+    agent: src.agent ?? null,
+    provider: src.provider,
+    model: src.model,
+    outcome,
+    files_touched: written,
+    tags: [SETTLE_TAG],
+  };
+
+  const questions = asks(src.messages);
+  const shown = questions.slice(0, MAX_ASKS);
+  const answer = lastAnswer(src.messages);
+  const lines: string[] = [`# ${src.title}`, ""];
+
+  if (outcome !== "settled") {
+    lines.push(
+      outcome === "stopped"
+        ? "> [!warning] This chat was stopped before it finished."
+        : "> [!warning] This chat ended with an error.",
+      "",
+    );
+  }
+
+  if (shown.length) {
+    lines.push("## Asked", "");
+    for (const q of shown) lines.push(`- ${q}`);
+    const rest = questions.length - shown.length;
+    if (rest > 0) lines.push(`- _…and ${rest} more turn${rest === 1 ? "" : "s"}._`);
+    lines.push("");
+  }
+
+  if (answer) lines.push("## Outcome", "", answer, "");
+
+  if (written.length || recap.read.length) {
+    lines.push("## Work", "");
+    for (const w of recap.written) {
+      lines.push(`- Changed ${link(w.path)}${w.count && w.count > 1 ? ` ×${w.count}` : ""}`);
+    }
+    for (const r of recap.read) lines.push(`- Read ${link(r)}`);
+    lines.push("");
+  }
+
+  if (recap.skills.length) lines.push(`**Skills:** ${recap.skills.join(", ")}`, "");
+  if (recap.web.length) {
+    lines.push("## Sources", "");
+    for (const w of recap.web) lines.push(w.url ? `- <${w.url}>` : `- ${w.label}`);
+    lines.push("");
+  }
+
+  return { frontmatter, body: `${lines.join("\n").trimEnd()}\n` };
+}
+
+/**
+ * WHERE SETTLED CHATS GO — one documented choice, resolved through the memory
+ * root rather than hard-coded: `<memoryRoot>/chats`. It sits beside `reports/`
+ * and `agents/` because it is the same kind of thing — output Exo produced that
+ * the vault now owns — and it moves with `memoryRoot` for free, so a vault on
+ * `_system/` and a fresh one on `_exo/` both get it in the right place without
+ * a second setting.
+ */
+export function settleFolder(paths: ExoPaths): string {
+  return paths.chats;
+}
+
+/** Filename-safe title. The characters Obsidian refuses in a filename, plus
+ *  the wikilink brackets, which would make the note's own name unlinkable. */
+export function settleFileName(title: string): string {
+  const safe = title.replace(/[\\/:#^[\]|?*"<>]/g, "").trim();
+  return safe || "Chat";
+}
+
+/** The path a chat's note wants, before collisions are considered. */
+export function settleNotePath(folder: string, title: string): string {
+  return `${folder}/${settleFileName(title)}.md`;
+}
+
+/**
+ * The path to actually write. `taken` is every path in the folder that belongs
+ * to a DIFFERENT conversation; two chats named "New chat" must not overwrite
+ * each other, so the second one gets a numeric suffix.
+ */
+export function uniqueSettlePath(folder: string, title: string, taken: readonly string[]): string {
+  const base = settleNotePath(folder, title);
+  if (!taken.includes(base)) return base;
+  const name = settleFileName(title);
+  for (let n = 2; ; n++) {
+    const candidate = `${folder}/${name} ${n}.md`;
+    if (!taken.includes(candidate)) return candidate;
+  }
+}
+
+/**
+ * Find the note a conversation was already settled to, by its frontmatter
+ * stamp rather than by its filename. Re-settling a chat whose title changed
+ * (or whose note the user renamed) must still land on the same page, and the
+ * filename cannot promise that.
+ */
+export function findSettledNote(
+  files: readonly { path: string; raw: string }[],
+  convoId: string,
+): string | null {
+  const stamp = new RegExp(`^${SETTLE_CONVO_KEY}:\\s*"?${escapeRe(convoId)}"?\\s*$`, "m");
+  for (const f of files) {
+    if (stamp.test(frontmatterBlock(f.raw))) return f.path;
+  }
+  return null;
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The raw text between the two `---` fences, or "" when there is none. */
+function frontmatterBlock(content: string): string {
+  if (!/^---\r?\n/.test(content)) return "";
+  const start = content.indexOf("\n") + 1;
+  const end = content.slice(start).search(/^---(\r?\n|$)/m);
+  return end < 0 ? "" : content.slice(start, start + end);
+}
+
+/**
+ * The file to write. A new note is frontmatter + body; an EXISTING note keeps
+ * every frontmatter key we did not write (via `patchFrontmatter`, the same
+ * byte-preserving patcher the agent tools use) and has its body replaced.
+ *
+ * Body replacement, not append: the note is a mirror of the conversation, and
+ * a mirror that grows a second copy every time you look at it is a duplicate
+ * by another name. Frontmatter is merged rather than replaced because the user
+ * may well have filed the note — added a `project`, a `status`, a link — and
+ * settling again is not a reason to lose that.
+ */
+export function renderSettleNote(existing: string | null, note: SettleNote): string {
+  if (existing === null) return patchFrontmatter(note.body, note.frontmatter);
+  const patched = patchFrontmatter(existing, note.frontmatter);
+  const block = frontmatterBlock(patched);
+  if (!block && !/^---\r?\n/.test(patched)) return patchFrontmatter(note.body, note.frontmatter);
+  const start = patched.indexOf("\n") + 1;
+  const closeAt = patched.slice(start).search(/^---(\r?\n|$)/m);
+  const head = patched.slice(0, start + closeAt);
+  return `${head}---\n${note.body}`;
+}

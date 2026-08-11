@@ -52,6 +52,8 @@ import {
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 import { clickable, isolateActivation } from "./dom";
 import { recallChats, reindexChats, recallHost, isRecallUnavailable } from "./chat-recall";
+import { canSettleRow } from "../core/settle-note";
+import { settleToNote } from "./convo-bridge";
 
 export const CHATS_VIEW_TYPE = "exo-chats";
 export const CHATS_ICON = "hi-messages";
@@ -903,6 +905,29 @@ export class ChatListView extends ItemView {
           this.paint();
         }),
     );
+    // Settled chats only. Not greyed out but ABSENT on a running or blocked
+    // row: a chat mid-turn has no outcome to write down yet, and an item that
+    // is permanently there and permanently dead teaches the user to ignore it.
+    if (canSettleRow(r)) {
+      menu.addItem((i) =>
+        i.setTitle("Settle to note").setIcon("file-plus-2").onClick(() => {
+          const pending = new Notice("Settling…", 0);
+          void settleToNote(this.plugin, r.id)
+            .then((path) => {
+              pending.hide();
+              new Notice(
+                path
+                  ? `Settled to ${path}`
+                  : "Couldn't settle this chat. Open Exo, and let any running turn finish.",
+              );
+            })
+            .catch(() => {
+              pending.hide();
+              new Notice("Couldn't write the note.");
+            });
+        }),
+      );
+    }
     menu.addItem((i) =>
       i.setTitle("Archive").setIcon("archive").onClick(() => {
         // Three causes reach this false — a streaming turn, no mounted ChatView,

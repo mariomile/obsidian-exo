@@ -54,6 +54,17 @@ export function activeConvoId(app: App): string | null {
   return chatView(app)?.active?.id ?? null;
 }
 
+/**
+ * Mirror a settled conversation into a vault note; resolves to the note's path,
+ * or null when nothing was written (no ChatView mounted, unknown id, or the
+ * chat is running/blocked/empty — the settled-only gate). The caller reports
+ * the outcome: the pane cannot tell those cases apart, and neither can this.
+ */
+export async function settleToNote(plugin: ExoPlugin, convoId: string): Promise<string | null> {
+  const view = chatView(plugin.app);
+  return view ? actions.settleToNote(view, plugin, convoId) : null;
+}
+
 export async function retitleConversation(plugin: ExoPlugin, convoId: string): Promise<boolean> {
   const view = chatView(plugin.app);
   return view ? actions.retitleConversation(view, plugin, convoId) : false;

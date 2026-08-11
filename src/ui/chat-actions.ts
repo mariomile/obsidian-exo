@@ -10,11 +10,14 @@
  * missed both windows has no path back to a good title, which is how a history
  * list ends up two thirds unreadable. These give it one.
  */
-import { Notice } from "obsidian";
+import { FileSystemAdapter, Notice } from "obsidian";
 import type { ChatView } from "../view";
 import type ExoPlugin from "../main";
 import type { Convo } from "./convo-types";
 import { looksAutoTitled } from "../core/title-ownership";
+import { canSettle, type SettleSource } from "../core/settle-note";
+import { adaptAppToSettleVault, settleConversationToNote } from "../obsidian/settle-note";
+import { ADAPTERS } from "../providers/registry";
 
 /** Same active fallback the other convo mutations use — the active conversation
  *  is not always in `convos` (several paths push it lazily). */
@@ -50,6 +53,50 @@ export function decidePermission(view: ChatView, id: string, verdict: "allow" | 
   if (verdict === "allow") decision.allow();
   else decision.deny();
   return true;
+}
+
+/**
+ * Mirror a settled conversation into its vault note, and return the path (null
+ * when there is nothing to write). MANUAL only: this has exactly two callers,
+ * the sidebar's row menu and the palette command — nothing on the turn path
+ * reaches it, so no chat is ever settled behind the user's back.
+ *
+ * The gate is re-checked here rather than trusted from the caller: a row menu
+ * is painted from a snapshot that can be seconds old, and a chat that started
+ * running in the meantime must not be frozen into a note that claims an
+ * outcome it does not have yet.
+ */
+export async function settleToNote(
+  view: ChatView,
+  plugin: ExoPlugin,
+  id: string,
+): Promise<string | null> {
+  const c = find(view, id);
+  if (!c) return null;
+  const gate = {
+    streaming: c.streaming,
+    pendingPerm: c.pendingPerm != null,
+    pendingAsk: c.pendingAsk != null,
+    hasMessages: c.messages.length > 0,
+  };
+  if (!canSettle(gate)) return null;
+  // Built-in Write/Edit report absolute paths; the note's links have to be
+  // vault-relative or they resolve to nothing. Same rule as `ChatView.relPath`.
+  const adapter = plugin.app.vault.adapter;
+  const base = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
+  const rel = (p: string): string =>
+    base && base !== "." && p.startsWith(`${base}/`) ? p.slice(base.length + 1) : p;
+  const src: SettleSource = {
+    id: c.id,
+    title: c.title,
+    provider: ADAPTERS[c.provider].displayName,
+    model: c.model,
+    ...(c.agent ? { agent: c.agent } : {}),
+    stopped: c.stopped,
+    poisoned: !!c.resumeRisky,
+    messages: c.messages,
+  };
+  return settleConversationToNote(adaptAppToSettleVault(plugin.app), plugin.paths, src, rel);
 }
 
 /** The last complete exchange, in the shape `generateTitle` wants. Returns null

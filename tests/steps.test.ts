@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { stepPlacement, stepsLabel, fileEditKey, isCommandTool, summarizeSteps } from "../src/core/steps";
+import { milestoneLine } from "../src/core/steps";
 import { firstErrorLine, isLargeContent } from "../src/core/steps";
 import { isSubagentTool, shouldFoldStepsRun } from "../src/core/steps";
 
@@ -124,6 +127,48 @@ describe("summarizeSteps", () => {
 
   it("pluralizes files and commands", () => {
     expect(summarizeSteps(18, 5, 2)).toBe("18 tools · 5 files edited · 2 commands");
+  });
+});
+
+describe("milestoneLine", () => {
+  it("leads with the outcome, the way the settled turn reads it", () => {
+    expect(milestoneLine({ tools: 9, files: 3, commands: 2 }, "41s")).toBe(
+      "Edited 3 files, ran 2 commands · 41s",
+    );
+  });
+
+  it("capitalizes whichever clause comes first", () => {
+    expect(milestoneLine({ tools: 4, files: 0, commands: 2 }, "8s")).toBe("Ran 2 commands · 8s");
+  });
+
+  it("falls back to the tool count when a run changed and ran nothing", () => {
+    expect(milestoneLine({ tools: 5, files: 0, commands: 0 }, "3s")).toBe("5 tools · 3s");
+    expect(milestoneLine({ tools: 1, files: 0, commands: 0 }, "1s")).toBe("1 tool · 1s");
+  });
+
+  it("omits the duration when there is none (a restored turn)", () => {
+    expect(milestoneLine({ tools: 2, files: 1, commands: 1 })).toBe("Edited 1 file, ran 1 command");
+  });
+});
+
+describe("the settled turn folds by default", () => {
+  // The fold is DOM, and this suite runs in `node`; what is pinned here is the
+  // decision, read off `StepsRun.close()` — the header collapses the body and
+  // becomes the milestone line, and the head stays a one-click toggle.
+  const src = readFileSync(join(__dirname, "..", "src/ui/steps.ts"), "utf8");
+  const close = /close\(scroller[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? "";
+
+  it("collapses the work section when the run closes", () => {
+    expect(close).toMatch(/addClass\("is-collapsed"\)/);
+  });
+
+  it("stamps the milestone line on the folded header", () => {
+    expect(src).toMatch(/milestoneLine\(/);
+  });
+
+  it("keeps the header a one-click toggle", () => {
+    expect(src).toMatch(/clickable\(this\.headEl/);
+    expect(src).toMatch(/toggleClass\("is-collapsed"/);
   });
 });
 

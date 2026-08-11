@@ -10,7 +10,7 @@
 
 import { setIcon } from "obsidian";
 import { clickable } from "./dom";
-import { stepsLabel, summarizeSteps, fileEditKey, isCommandTool } from "../core/steps";
+import { stepsLabel, summarizeSteps, milestoneLine, fileEditKey, isCommandTool } from "../core/steps";
 
 export class StepsRun {
   private rootEl: HTMLElement;
@@ -28,6 +28,13 @@ export class StepsRun {
   private fileEdits = new Set<string>();
   private commands = 0;
   private startedAt = Date.now();
+  /** The turn's duration formatter, captured from the first `tick`. A run that
+   *  never ticked (a transcript rebuilt from disk) has no honest elapsed time,
+   *  so its milestone simply omits the clause. */
+  private fmt: ((ms: number) => string) | null = null;
+  /** The elapsed label frozen at fold time, so the milestone keeps saying how
+   *  long the work took long after the clock stopped. */
+  private frozenElapsed = "";
   closed = false;
 
   constructor(parent: HTMLElement) {
@@ -51,13 +58,23 @@ export class StepsRun {
     return this.steps;
   }
 
-  /** Header text: rich stats once a real tool has run, else the old "N steps"
-   *  (covers a thinking-only burst that never calls noteToolAdded). */
+  /** Header text. Three registers, one per state of the run:
+   *   - SETTLED with real work → the milestone line ("Edited 3 files, ran 2
+   *     commands · 41s"): the turn is over, so the header answers what came of
+   *     it rather than inventorying it.
+   *   - OPEN with real work → the live inventory ("18 tools · 5 files edited").
+   *   - no tool ever ran → the old "N steps" (a thinking-only burst never
+   *     calls noteToolAdded). */
   private refreshLabel(): void {
+    if (this.toolCount === 0) {
+      this.labelEl.setText(stepsLabel(this.steps));
+      return;
+    }
+    const stats = { tools: this.toolCount, files: this.fileEdits.size, commands: this.commands };
     this.labelEl.setText(
-      this.toolCount > 0
-        ? summarizeSteps(this.toolCount, this.fileEdits.size, this.commands)
-        : stepsLabel(this.steps)
+      this.closed
+        ? milestoneLine(stats, this.frozenElapsed)
+        : summarizeSteps(stats.tools, stats.files, stats.commands)
     );
   }
 
@@ -113,6 +130,7 @@ export class StepsRun {
    *  time it wasn't actually running. */
   tick(fmt: (ms: number) => string): void {
     if (this.closed) return;
+    this.fmt = fmt;
     this.elapsedEl.setText(fmt(Date.now() - this.startedAt));
   }
 
@@ -131,7 +149,7 @@ export class StepsRun {
     this.refreshLabel();
   }
 
-  /** Fold the run: "N steps ⌄" header, body hidden, live states neutralized.
+  /** Fold the run to its milestone line, body hidden, live states neutralized.
    *  Empty runs remove themselves. Sets a status glyph on the header — a
    *  check on a clean finish, an x when `interrupted` (stopped/errored).
    *  `scroller` (the conversation list element) gets its scrollTop compensated
@@ -152,6 +170,11 @@ export class StepsRun {
     setIcon(this.statusEl, interrupted ? "x" : "check");
     this.statusEl.addClass(interrupted ? "is-error" : "is-ok");
     const before = this.rootEl.offsetHeight;
+    // The duration moves INTO the milestone line and out of its own span: one
+    // line is the whole point of the fold, and a header that says "41s" twice
+    // in two places is two lines wearing a trench coat.
+    this.frozenElapsed = this.fmt ? this.fmt(Date.now() - this.startedAt) : "";
+    this.elapsedEl.setText("");
     this.refreshLabel();
     this.rootEl.addClass("is-collapsed");
     if (scroller) {

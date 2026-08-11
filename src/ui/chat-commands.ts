@@ -31,6 +31,35 @@ export function registerChatCommands(plugin: ExoPlugin): void {
     name: "Go to the next chat that needs you",
     callback: () => goToNextNeedsYou(plugin),
   });
+  // Settling is deliberately a command and a menu item, never a turn-end hook:
+  // which conversations become vault notes is an editorial decision, and a
+  // vault that grows a note per chat on its own is a vault nobody trusts.
+  plugin.addCommand({
+    id: "settle-chat-to-note",
+    name: "Settle this chat to a note",
+    callback: () => void settleActive(plugin),
+  });
+}
+
+/** Mirror the conversation the user is standing in. The gate lives in
+ *  `chat-actions.settleToNote`; a refusal comes back as null and is reported
+ *  rather than swallowed.
+ *
+ *  The bridge is imported HERE, not at module scope: a static import would
+ *  pull `view.ts` — and with it the whole Obsidian surface — into this file's
+ *  module graph, which is exactly what keeps the command registrations
+ *  loadable (and testable) on their own. */
+async function settleActive(plugin: ExoPlugin): Promise<void> {
+  const id = plugin.activeConvoId();
+  if (!id) {
+    void plugin.activateView();
+    return;
+  }
+  const { settleToNote } = await import("./convo-bridge");
+  const path = await settleToNote(plugin, id);
+  new Notice(
+    path ? `Settled to ${path}` : "Only a settled chat can become a note — let this turn finish.",
+  );
 }
 
 /**

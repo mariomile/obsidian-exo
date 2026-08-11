@@ -88,6 +88,12 @@ export interface ConvoData {
    *  `aiTitleApplied`, which answers a different question — that one is retry
    *  policy ("did we already generate one"), this one is ownership. */
   titleLocked?: boolean;
+  /** How many messages of this conversation the user has already read — the
+   *  per-conversation READ POSITION (see `core/reentry.ts`). Persisted, and
+   *  the only new persisted state in the re-entry phase: it is what makes
+   *  "since you left" mean anything after a restart. Absent reads as 0
+   *  (never read), so every existing conversations.json stays valid. */
+  readIndex?: number;
   messages: PersistedMessage[];
 }
 
@@ -252,6 +258,13 @@ export interface Convo {
    *  this is ownership, not retry policy — collapsing them would let a failed
    *  generation reopen a user's title. */
   titleLocked?: boolean;
+  /** Messages the user has already read — the read position the "since you
+   *  left" line is drawn at, and the one thing this phase persists. Moved by
+   *  `ui/reentry.ts` `revealReentry` on every reveal, which is also what makes
+   *  the line dissolve and never return for the same position. Absent = never
+   *  read. Deliberately NOT `unread`, a runtime-only boolean about the tab
+   *  strip: this one is a place in a transcript and has to survive a reload. */
+  readIndex?: number;
   /** Proactive recall (design 2026-07-09): ids of store entries already injected
    *  into THIS conversation's outbound turns, so each memory is paid for once and
    *  then lives in cached history. Runtime-only — never persisted (a reloaded

@@ -43,6 +43,10 @@ export interface ExoPaths {
   agents: string;
   /** Append-only run ledger, one file per month. */
   agentRuns: string;
+  /** Settled chats mirrored into the vault, one note per conversation. Beside
+   *  `reports/` and `agents/` because it is the same kind of thing: output Exo
+   *  produced that the vault now owns, indexed, linkable and in the graph. */
+  chats: string;
   /** Unified automations — one readable `<slug>.md` per automation (name,
    *  description, when, mode, scope in frontmatter; prompt as the body). */
   automations: string;
@@ -81,6 +85,7 @@ export function exoPaths(root: string): ExoPaths {
     mentions: `${r}/mentions`,
     agents: `${r}/agents`,
     agentRuns: `${r}/agents/runs`,
+    chats: `${r}/chats`,
     automations: `${r}/automations`,
     agentMemory: `${memory}/agents`,
     openLoops: `${memory}/open-loops.md`,
