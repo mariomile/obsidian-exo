@@ -445,6 +445,27 @@ describe("settling a conversation to its note", () => {
     expect(vault.files.size).toBe(2);
   });
 
+  it("does not let two settles fired at once collapse into one note", async () => {
+    // Read-then-write with N awaits in between and no lock: two chats both
+    // called "New chat", settled a keystroke apart from the sidebar, both saw
+    // an empty folder and both claimed the same path. One created it, the
+    // other modified it, and one conversation ended up with no note while the
+    // surviving file carried the other chat's stamp.
+    const vault = fakeVault();
+    const both = await Promise.all([
+      settleConversationToNote(vault.adapter, paths, source({ title: "New chat", messages: talk("a", "did A") })),
+      settleConversationToNote(
+        vault.adapter,
+        paths,
+        source({ id: "c8", title: "New chat", messages: talk("b", "did B") }),
+      ),
+    ]);
+    expect(new Set(both).size).toBe(2);
+    expect(vault.files.size).toBe(2);
+    expect(vault.files.get(both[0])).toMatch(/did A/);
+    expect(vault.files.get(both[1])).toMatch(/did B/);
+  });
+
   it("never overwrites a neighbour it could not read", async () => {
     // The file the source title wants is already there and CANNOT BE READ — a
     // note deleted between the list and the read under Sync, a permission

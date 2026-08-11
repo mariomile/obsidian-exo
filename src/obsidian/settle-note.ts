@@ -15,6 +15,7 @@
 import { TFile, type App } from "obsidian";
 import type { ExoPaths } from "../core/paths";
 import { buildRecap } from "../core/recap";
+import { WriteQueue } from "../core/write-queue";
 import type { Message } from "../core/model";
 import {
   distillConversation,
@@ -75,11 +76,34 @@ export function adaptAppToSettleVault(app: App): SettleVaultAdapter {
  * The caller owns the settled-only gate (`canSettle`): this function is the
  * write, not the policy.
  */
-export async function settleConversationToNote(
+export function settleConversationToNote(
   vault: SettleVaultAdapter,
   paths: ExoPaths,
   src: SettleSource,
   normalize: (p: string) => string = (p) => p,
+): Promise<string> {
+  return settleWrites.enqueue(() => settleOnce(vault, paths, src, normalize));
+}
+
+/**
+ * ONE SETTLE AT A TIME. The decision below is a read of the whole folder
+ * followed by a write, with N awaits in between: two conversations both called
+ * "New chat", settled a keystroke apart from the sidebar, both saw a folder
+ * without the other's note, both claimed the same path, and the second one
+ * modified the file the first had just created. One chat ended up with no
+ * note, and the surviving file carried the other chat's stamp.
+ *
+ * The queue is this module's own rather than the plugin's `tasksWriteQueue`,
+ * which serializes writes to `tasks.md`: the two never touch the same file, and
+ * a lock a caller has to remember to take is a lock that will be forgotten.
+ */
+const settleWrites = new WriteQueue();
+
+async function settleOnce(
+  vault: SettleVaultAdapter,
+  paths: ExoPaths,
+  src: SettleSource,
+  normalize: (p: string) => string,
 ): Promise<string> {
   const folder = settleFolder(paths);
   await vault.ensureFolder(folder);
