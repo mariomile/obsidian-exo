@@ -25,12 +25,21 @@ import type { Message } from "./model";
 import { fileEditKey } from "./steps";
 
 /**
- * The three slots of the "since you left" line, in the ONE order they are ever
+ * The slots of the "since you left" line, in the ONE order they are ever
  * painted in. Fixed by position is the whole design: the line is read at a
  * glance on re-entry, and a line whose second number means "files" on Monday
- * and "questions" on Tuesday has to be read word by word instead.
+ * and something else on Tuesday has to be read word by word instead.
+ *
+ * There is no "questions waiting" slot, and there deliberately cannot be one.
+ * An `ask` or `plan` card reaches `messages` only when its TURN ends, and that
+ * teardown cancels whatever card was still open. So every unanswered card in a
+ * transcript is a cancelled one, and the slot could only ever point at a dead
+ * surface. While a card is genuinely open the conversation is streaming and the
+ * band refuses to paint at all (the streaming invariant); a pending permission
+ * is not a segment in the first place. A slot that can only count what the user
+ * cannot answer is a slot that lies.
  */
-export const REENTRY_SLOTS = ["steps", "files", "questions"] as const;
+export const REENTRY_SLOTS = ["steps", "files"] as const;
 
 export type ReentrySlotKey = (typeof REENTRY_SLOTS)[number];
 
@@ -41,9 +50,6 @@ export interface ReentryWork {
   /** Distinct files the unread stretch WROTE (via `fileEditKey`, the same
    *  write-classification the steps header counts with). */
   files: number;
-  /** Answers still owed: an `ask` card nobody answered and a plan nobody
-   *  approved both count — each is a turn that cannot continue without you. */
-  questions: number;
   /** The written paths, first-seen order. The files slot's click target: a
    *  number you cannot open is a number you have to go looking for. */
   paths: string[];
@@ -54,12 +60,12 @@ export interface ReentryWork {
 export interface ReentrySlot {
   key: ReentrySlotKey;
   count: number;
-  /** "12 steps" / "3 files changed" / "1 question waiting". */
+  /** "12 steps" / "3 files changed". */
   label: string;
   populated: boolean;
 }
 
-const EMPTY_WORK: ReentryWork = { steps: 0, files: 0, questions: 0, paths: [] };
+const EMPTY_WORK: ReentryWork = { steps: 0, files: 0, paths: [] };
 
 /**
  * What happened in `messages` after the first `readIndex` of them. A
@@ -70,44 +76,36 @@ export function workSince(messages: readonly Message[], readIndex: number): Reen
   const from = Math.max(0, Math.min(readIndex, messages.length));
   if (from >= messages.length) return { ...EMPTY_WORK };
   let steps = 0;
-  let questions = 0;
   const paths: string[] = [];
   for (const m of messages.slice(from)) {
     if (m.role !== "assistant") continue;
     for (const seg of m.segments) {
-      if (seg.t === "tool") {
-        steps++;
-        const key = fileEditKey(seg.name, seg.input);
-        if (key && !paths.includes(key)) paths.push(key);
-      } else if (seg.t === "ask") {
-        if (Object.keys(seg.answers ?? {}).length === 0) questions++;
-      } else if (seg.t === "plan") {
-        if (seg.approved === null) questions++;
-      }
+      if (seg.t !== "tool") continue;
+      steps++;
+      const key = fileEditKey(seg.name, seg.input);
+      if (key && !paths.includes(key)) paths.push(key);
     }
   }
-  return { steps, files: paths.length, questions, paths };
+  return { steps, files: paths.length, paths };
 }
 
 /** Is there anything to report at all? An unread stretch of pure prose — the
  *  agent answered and did no work — is news the transcript already carries. */
 export function hasReentryNews(work: ReentryWork): boolean {
-  return work.steps > 0 || work.files > 0 || work.questions > 0;
+  return work.steps > 0 || work.files > 0;
 }
 
 const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-/** The three slots, always three, always in `REENTRY_SLOTS` order. */
+/** Every slot, always all of them, always in `REENTRY_SLOTS` order. */
 export function reentrySlots(work: ReentryWork): ReentrySlot[] {
   const counts: Record<ReentrySlotKey, number> = {
     steps: work.steps,
     files: work.files,
-    questions: work.questions,
   };
   const labels: Record<ReentrySlotKey, string> = {
     steps: plural(work.steps, "step"),
     files: `${plural(work.files, "file")} changed`,
-    questions: `${plural(work.questions, "question")} waiting`,
   };
   return REENTRY_SLOTS.map((key) => ({
     key,
@@ -117,8 +115,8 @@ export function reentrySlots(work: ReentryWork): ReentrySlot[] {
   }));
 }
 
-/** The whole line as one string: "since you left · 12 steps · 3 files changed
- *  · 1 question waiting". Empty slots are omitted from the TEXT (they still
+/** The whole line as one string: "since you left · 12 steps · 3 files
+ *  changed". Empty slots are omitted from the TEXT (they still
  *  hold their position in the rendered row — see `reentrySlots`). */
 export function reentryLine(work: ReentryWork): string {
   const parts = reentrySlots(work)
@@ -158,6 +156,54 @@ export function shouldRenderReentry(o: {
  *  position — the next reveal computes its work over an empty stretch. */
 export function advanceReadIndex(total: number): number {
   return Math.max(0, total);
+}
+
+/**
+ * The read position after a turn ENDED in front of you. Watching a turn land
+ * reads THAT turn, and only that turn.
+ *
+ * `turnFrom` is where the ended turn's own messages start. Anything before it
+ * is a stretch this moment says nothing about: the ordinary way back into Exo
+ * is opening the sidebar mid-run, and a reveal mid-stream deliberately leaves
+ * the position alone so the news survives. Jumping to the end 30 seconds later,
+ * because the turn happened to finish while you were looking, would mark as
+ * read a stretch no reveal ever rendered: the one way this number can move
+ * over messages nobody ever saw.
+ *
+ * An unread stretch of pure prose is not held onto: the band would never
+ * mention it, so waiting for a line that cannot come only strands the number.
+ */
+export function readIndexAfterTurn(o: {
+  messages: readonly Message[];
+  readIndex: number | undefined;
+  turnFrom: number;
+}): number {
+  const total = o.messages.length;
+  const stored = clampReadIndex(o.readIndex, total);
+  if (stored === undefined || stored >= o.turnFrom) return advanceReadIndex(total);
+  const owed = workSince(o.messages.slice(0, Math.max(0, o.turnFrom)), stored);
+  return hasReentryNews(owed) ? stored : advanceReadIndex(total);
+}
+
+/**
+ * Is a band already on screen still the whole truth?
+ *
+ * It is painted AT a position and takes the position to the end with it, so
+ * `readIndex < total` can only mean messages landed AFTER it was painted: work
+ * the line the user is looking at never mentioned. Mere presence is not a
+ * reason to stay silent: the band is read far more often than it is clicked,
+ * and nothing else ever removes it.
+ */
+export function bandIsStale(o: {
+  readIndex: number | undefined;
+  total: number;
+  streaming: boolean;
+}): boolean {
+  // Nothing may repaint over a live turn, and an old band still says something
+  // true, and destroying it to paint nothing is the worst of both.
+  if (o.streaming) return false;
+  const stored = clampReadIndex(o.readIndex, o.total);
+  return stored !== undefined && stored < o.total;
 }
 
 /**

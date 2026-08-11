@@ -24,8 +24,10 @@ import { clickable } from "./dom";
 import type { Convo } from "./convo-types";
 import type { ComposerDraft } from "./composer";
 import {
-  advanceReadIndex,
+  bandIsStale,
+  clampReadIndex,
   planReveal,
+  readIndexAfterTurn,
   reentrySlots,
   resumeVerbs,
   type ReentrySlotKey,
@@ -49,10 +51,40 @@ const VERBS = "mva-resume-verbs";
  *  - `visible`: the pane itself is on screen. A turn that finished while the
  *    Exo pane was behind another Obsidian tab is exactly the work the band
  *    exists to report, so it must NOT count as read.
+ *  - `turnFrom`: where the ended turn's own messages start. Watching a turn end
+ *    reads that turn and nothing behind it. See `readIndexAfterTurn`, and note
+ *    that this is the only writer that could ever move the position over
+ *    messages no reveal has rendered.
  */
-export function noteTurnEnd(c: Convo, seen: { active: boolean; visible: boolean }): void {
+export function noteTurnEnd(
+  c: Convo,
+  seen: { active: boolean; visible: boolean; turnFrom: number },
+): void {
   if (!seen.active) c.unread = true;
-  else if (seen.visible) c.readIndex = advanceReadIndex(c.messages.length);
+  else if (seen.visible) {
+    c.readIndex = readIndexAfterTurn({
+      messages: c.messages,
+      readIndex: c.readIndex,
+      turnFrom: seen.turnFrom,
+    });
+  }
+}
+
+/**
+ * The transcript itself was cut down in front of the user: a rewind, or "New
+ * session in this tab" clearing it outright.
+ *
+ * The read position counts messages, so it has to move with them. Leaving a
+ * stored 10 over a transcript truncated to 3 is not harmless: every later
+ * reveal clamps it to whatever the transcript has grown back to, which is
+ * always "caught up", and the chat you created, prompted and walked away from
+ * never says a word about what it did.
+ *
+ * `undefined` stays `undefined`: a conversation nobody ever opened is still one
+ * nobody ever opened.
+ */
+export function noteTranscriptReset(c: Convo): void {
+  c.readIndex = clampReadIndex(c.readIndex, c.messages.length);
 }
 
 /**
@@ -82,12 +114,24 @@ export function revealReentry(
     readIndex: c.readIndex,
     streaming: c.streaming,
   });
-  if (decision.readIndex !== null && decision.readIndex !== c.readIndex) {
+  const markRead = (): void => {
+    if (decision.readIndex === null || decision.readIndex === c.readIndex) return;
     c.readIndex = decision.readIndex;
     onRead?.();
+  };
+  if (!decision.band) {
+    markRead();
+    return;
   }
-  if (!decision.band) return;
   const { work, anchor: anchorIndex } = decision.band;
+
+  // Resolved BEFORE anything is painted or marked read. A line that says "since
+  // you left" has to sit where you left; a miss used to fall back to appending,
+  // which prints the line BELOW every message it describes: a confidently
+  // wrong answer to the one question the band exists to answer. The position
+  // stays put too: news that was never rendered is still owed.
+  const anchor = anchorTurn(c.listEl, anchorIndex);
+  if (!anchor) return;
 
   const band = createDiv({ cls: `${BAND} mva-type-eyebrow` });
   band.createSpan({ cls: "mva-reentry-lede", text: "since you left" });
@@ -112,9 +156,8 @@ export function revealReentry(
 
   // At the last-read position: immediately before the first turn the user has
   // not seen.
-  const anchor = anchorTurn(c.listEl, anchorIndex);
-  if (anchor) c.listEl.insertBefore(band, anchor);
-  else c.listEl.appendChild(band);
+  c.listEl.insertBefore(band, anchor);
+  markRead();
 }
 
 /**
@@ -138,6 +181,45 @@ export function anchorTurn(listEl: HTMLElement, index: number): HTMLElement | nu
 }
 
 /**
+ * The same stamp read the other way: which message a turn element renders, or
+ * `null` for one that renders none.
+ *
+ * The rewind actions hang off a turn element and slice `c.messages` with it, so
+ * they need exactly this number. `turns.indexOf(turnEl)` is not it: for the
+ * reason above, a phantom turn makes DOM position and message index two
+ * different numbers, and slicing with the wrong one truncates the wrong end of
+ * the transcript and deletes the element carrying a live `data-msg`.
+ */
+export function turnMessageIndex(turnEl: HTMLElement | null): number | null {
+  const raw = turnEl?.dataset.msg;
+  if (raw === undefined) return null;
+  const i = Number(raw);
+  return Number.isInteger(i) && i >= 0 ? i : null;
+}
+
+/**
+ * Cut the transcript back at a turn: every LATER turn element goes, and the
+ * read position moves onto the messages the caller has just sliced.
+ *
+ * Only `.mva-turn` elements are removed. `listEl` also hosts the queue node
+ * (`pendingEl`, held by field), the compact divider and the band, and sweeping
+ * siblings would detach a node the view still points at.
+ */
+export function cutTranscriptAfter(c: Convo, turnEl: HTMLElement): void {
+  const turns = Array.from(c.listEl.querySelectorAll(".mva-turn"));
+  const at = turns.indexOf(turnEl);
+  if (at >= 0) for (const el of turns.slice(at + 1)) el.remove();
+  noteTranscriptReset(c);
+}
+
+/** The same cut, taking the clicked turn with it: the code+conversation rewind
+ *  undoes THIS turn's edits too, so its element goes as well. */
+export function cutTranscriptFrom(c: Convo, turnEl: HTMLElement): void {
+  cutTranscriptAfter(c, turnEl);
+  turnEl.remove();
+}
+
+/**
  * Re-entry through the PANE, rather than through a change of conversation.
  *
  * `revealReentry`'s other two callers are boot and `switchTo` — and `switchTo`
@@ -151,11 +233,16 @@ export function anchorTurn(listEl: HTMLElement, index: number): HTMLElement | nu
  *
  * Two gates, both load-bearing:
  *  - `isShown()`: these are workspace-wide events, and a pane that is still
- *    collapsed has not been re-entered.
- *  - a band already on screen is left alone. `revealReentry` clears the old
- *    band before painting, and the position has already moved by then, so
- *    re-running it over a painted band would silently delete the line the user
- *    is in the middle of reading.
+ *    collapsed has not been re-entered. Boot goes through here for the same
+ *    reason: `convo-bridge` materialises the view with `loadIfDeferred()` for
+ *    background work, so `restore()` can run against a sidebar nobody opened.
+ *  - a band already on screen is left alone WHILE IT IS STILL CURRENT, so
+ *    re-running this over a line the user is in the middle of reading does not
+ *    silently delete it. Presence alone was the wrong test: nothing else ever
+ *    removes the band, so a line that was read but never clicked stayed in the
+ *    DOM forever and made every later re-entry a no-op, so the next twelve steps
+ *    went unannounced. `bandIsStale` asks the only question that matters: did
+ *    anything land after this line was painted?
  */
 export function reenterActive(
   c: Convo | null | undefined,
@@ -164,13 +251,18 @@ export function reenterActive(
   onRead: () => void,
 ): void {
   if (!c || !containerEl.isShown()) return;
-  if (c.listEl?.querySelector(`.${BAND}`)) return;
+  const painted = c.listEl?.querySelector(`.${BAND}`);
+  const stale = bandIsStale({
+    readIndex: c.readIndex,
+    total: c.messages.length,
+    streaming: c.streaming,
+  });
+  if (painted && !stale) return;
   revealReentry(c, onOpenNote, onRead);
 }
 
-/** Where a populated slot goes. Steps and questions are places in the
- *  transcript below the line; files are a note, which is not in the transcript
- *  at all. */
+/** Where a populated slot goes. Steps are a place in the transcript below the
+ *  line; files are a note, which is not in the transcript at all. */
 function goToSlot(
   c: Convo,
   band: HTMLElement,
@@ -182,12 +274,11 @@ function goToSlot(
     if (paths.length) onOpenNote(paths[0]);
     return;
   }
-  const selector = key === "steps" ? ".mva-steps" : ".mva-ask, .mva-plan-card";
-  const target = findAfter(c.listEl, band, selector);
+  const target = findAfter(c.listEl, band, ".mva-steps");
   if (!target) return;
   // A folded run that you were sent to should be open: the click asked to see
   // the steps, not to see where they are.
-  if (key === "steps") target.removeClass("is-collapsed");
+  target.removeClass("is-collapsed");
   target.scrollIntoView({ block: "center" });
 }
 

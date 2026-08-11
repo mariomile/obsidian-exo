@@ -70,7 +70,7 @@ import {
 } from "./core/live-tasks";
 import { LiveTaskRegistry } from "./ui/live-task-registry";
 import { Composer } from "./ui/composer";
-import { noteTurnEnd, reenterActive, renderResumeVerbs, revealReentry } from "./ui/reentry";
+import { cutTranscriptAfter, cutTranscriptFrom, noteTranscriptReset, noteTurnEnd, reenterActive, renderResumeVerbs, turnMessageIndex } from "./ui/reentry";
 import type {
   AssistantCtx,
   Convo,
@@ -1194,7 +1194,7 @@ export class ChatView extends ItemView {
     this.refreshProviderUI();
     this.refreshTabs(); // the strip AND the resume verbs: boot IS a re-entry moment
     this.scrollToBottom();
-    revealReentry(this.active, (p) => this.openNote(p), () => this.persist()); // worked overnight
+    reenterActive(this.active, this.containerEl, (p) => this.openNote(p), () => this.persist()); // worked overnight; gated, because `loadIfDeferred` boots this view into a collapsed sidebar
     this.renderTailSurfacing(this.active);
     this.rebuildOutline();
   }
@@ -1511,7 +1511,7 @@ export class ChatView extends ItemView {
     this.listHost.empty();
     this.listHost.appendChild(c.listEl);
     if (c.listEl.childElementCount === 0) this.renderEmptyState();
-    revealReentry(c, (p) => this.openNote(p)); // "since you left", then move the read position
+    reenterActive(c, this.containerEl, (p) => this.openNote(p), () => this.persist()); // "since you left", same gate: the chats sidebar switches chat with this pane collapsed
     this.syncActiveSurfaces(c);
     this.renderTabs();
     this.applyWorkingSet();
@@ -1976,6 +1976,7 @@ export class ChatView extends ItemView {
     const c = this.active;
     this.dropSession(c, "new-session-in-tab");
     c.messages = [];
+    noteTranscriptReset(c); // it counted messages that are gone; left alone this tab reads "caught up" forever
     c.sessionId = undefined;
     c.allow.clear();
     c.queue = [];
@@ -3760,11 +3761,10 @@ export class ChatView extends ItemView {
       new Notice("Stop the current turn before rewinding.");
       return;
     }
-    const turns = Array.from(c.listEl.querySelectorAll(".mva-turn"));
-    const idx = turns.indexOf(turnEl);
-    if (idx < 0) return;
+    const idx = turnMessageIndex(turnEl); // the MESSAGE, never the DOM position (ui/reentry)
+    if (idx === null) return;
     c.messages = c.messages.slice(0, idx + 1);
-    for (let i = turns.length - 1; i > idx; i--) turns[i].remove();
+    cutTranscriptAfter(c, turnEl); // later turns, and the read position, go with them
     this.dropSession(c, "rewind"); // next message starts a fresh session from this point
     c.sessionId = undefined;
     c.queue = [];
@@ -3823,9 +3823,8 @@ export class ChatView extends ItemView {
       new Notice("Stop the current turn before rewinding.");
       return;
     }
-    const turns = Array.from(c.listEl.querySelectorAll(".mva-turn"));
-    const idx = turns.indexOf(turnEl);
-    if (idx < 0) return;
+    const idx = turnMessageIndex(turnEl); // by message, not by DOM position (see rewindTo)
+    if (idx === null) return;
 
     // Undo THIS turn's edits and everything after — restore files to before this
     // turn ran. Iterate oldest→newest, first write per path wins (it holds the
@@ -3871,7 +3870,7 @@ export class ChatView extends ItemView {
 
     // Then the conversation rewind — drop this turn and everything after.
     c.messages = c.messages.slice(0, idx);
-    for (let i = turns.length - 1; i >= idx; i--) turns[i].remove();
+    cutTranscriptFrom(c, turnEl); // this turn and everything after, position included
     this.dropSession(c, "rewind-code");
     c.sessionId = undefined;
     c.queue = [];
@@ -5602,6 +5601,7 @@ export class ChatView extends ItemView {
     // A recovery retry reuses the user bubble the poisoned turn already rendered —
     // don't render (or re-persist) a duplicate. The original message is still the
     // only "user" entry in c.messages for this turn.
+    const turnFrom = c.messages.length; // where THIS turn starts; the stretch before it is not its to mark read
     if (!opts?.isRecoveryRetry && !opts?.reuseUserTurn) {
       const userEl = this.addUserTurn(c, text, imgs);
       // Quiet "N memories recalled" affordance under the bubble — the trust
@@ -6293,7 +6293,7 @@ export class ChatView extends ItemView {
       // Where this turn landed, in the two facts that depend on it: the unread
       // dot on a chat you were not looking at, and the read position on the one
       // you were — work watched live can never come back as "since you left".
-      noteTurnEnd(c, { active: c === this.active, visible: this.containerEl.isShown() });
+      noteTurnEnd(c, { active: c === this.active, visible: this.containerEl.isShown(), turnFrom });
       this.refreshTabs();
       // Two-stage session recovery (Claude-Code-style resume). The pure reducer
       // decides the session action + flags from the turn's state so this ladder,

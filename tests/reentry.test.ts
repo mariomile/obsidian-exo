@@ -5,9 +5,11 @@ import {
   REENTRY_SLOTS,
   advanceReadIndex,
   bandAnchor,
+  bandIsStale,
   clampReadIndex,
   hasReentryNews,
   planReveal,
+  readIndexAfterTurn,
   reentryLine,
   reentrySlots,
   resumeVerbs,
@@ -15,14 +17,24 @@ import {
   workSince,
   type ResumeState,
 } from "../src/core/reentry";
-import { anchorTurn, noteTurnEnd } from "../src/ui/reentry";
+import {
+  anchorTurn,
+  cutTranscriptAfter,
+  cutTranscriptFrom,
+  noteTranscriptReset,
+  noteTurnEnd,
+  reenterActive,
+  revealReentry,
+  turnMessageIndex,
+} from "../src/ui/reentry";
 import type { Convo } from "../src/ui/convo-types";
 import type { Message } from "../src/core/model";
 
 /**
- * Phase 6 — the re-entry system. Three behaviours are under test here: the
+ * Phase 6, the re-entry system. Four behaviours are under test here: the
  * read-position lifecycle (the one new persisted fact), what the fixed-slot
- * line says, and the verbs offered above an empty composer.
+ * line says, where the band lands in a transcript, and the verbs offered above
+ * an empty composer.
  */
 
 const user = (text: string): Message => ({ role: "user", text });
@@ -67,7 +79,7 @@ describe("the read position", () => {
     // Reading advances the position; the same position asked again is empty.
     const after = workSince(messages, advanceReadIndex(messages.length));
     expect(hasReentryNews(after)).toBe(false);
-    expect(after).toEqual({ steps: 0, files: 0, questions: 0, paths: [] });
+    expect(after).toEqual({ steps: 0, files: 0, paths: [] });
   });
 });
 
@@ -80,14 +92,12 @@ describe("what the unread stretch contains", () => {
     tool("Edit", { file_path: "/v/a.md" }),
     tool("Bash", { command: "ls" }),
     tool("Write", { file_path: "/v/b.md" }),
-    unanswered(),
   ];
 
   it("counts only what happened after the read position", () => {
     const work = workSince(messages, 2);
     expect(work.steps).toBe(4); // the four tool calls after the position, none before
     expect(work.files).toBe(2); // a.md written twice counts once, b.md once
-    expect(work.questions).toBe(1);
     expect(work.paths).toEqual(["/v/a.md", "/v/b.md"]);
   });
 
@@ -97,48 +107,48 @@ describe("what the unread stretch contains", () => {
     expect(work.files).toBe(0);
   });
 
-  it("counts an answered ask as settled, an unanswered one as waiting", () => {
-    expect(workSince([user("x"), answered()], 1).questions).toBe(0);
-    expect(workSince([user("x"), unanswered()], 1).questions).toBe(1);
-  });
-
-  it("counts an unapproved plan as a question waiting", () => {
+  it("never reports a card as a question waiting: a persisted card is a dead one", () => {
+    // A `plan` or `ask` segment only reaches `messages` when its TURN ends, and
+    // that teardown cancels whatever card was still open. So an unanswered ask
+    // in a transcript is a cancelled ask and an `approved: null` plan is a
+    // cancelled plan: neither can be answered any more. While one is genuinely
+    // open the conversation is streaming, and the band refuses to paint at all.
     const plan: Message = {
       role: "assistant",
       segments: [{ t: "plan", md: "do this", approved: null }],
     };
-    expect(workSince([user("x"), plan], 1).questions).toBe(1);
+    expect(hasReentryNews(workSince([user("x"), unanswered()], 1))).toBe(false);
+    expect(hasReentryNews(workSince([user("x"), answered()], 1))).toBe(false);
+    expect(hasReentryNews(workSince([user("x"), plan], 1))).toBe(false);
   });
 });
 
 describe("the fixed-slot line", () => {
-  it("keeps the three slots in one order, populated or not", () => {
-    expect([...REENTRY_SLOTS]).toEqual(["steps", "files", "questions"]);
-    const slots = reentrySlots({ steps: 0, files: 3, questions: 0, paths: ["a", "b", "c"] });
-    expect(slots.map((s) => s.key)).toEqual(["steps", "files", "questions"]);
-    expect(slots.map((s) => s.populated)).toEqual([false, true, false]);
+  it("keeps the two slots in one order, populated or not", () => {
+    expect([...REENTRY_SLOTS]).toEqual(["steps", "files"]);
+    const slots = reentrySlots({ steps: 0, files: 3, paths: ["a", "b", "c"] });
+    expect(slots.map((s) => s.key)).toEqual(["steps", "files"]);
+    expect(slots.map((s) => s.populated)).toEqual([false, true]);
   });
 
   it("says what the plan says it says", () => {
-    const line = reentryLine({ steps: 12, files: 3, questions: 1, paths: ["a", "b", "c"] });
-    expect(line).toBe("since you left · 12 steps · 3 files changed · 1 question waiting");
+    const line = reentryLine({ steps: 12, files: 3, paths: ["a", "b", "c"] });
+    expect(line).toBe("since you left · 12 steps · 3 files changed");
   });
 
   it("singularizes each slot on its own", () => {
-    const line = reentryLine({ steps: 1, files: 1, questions: 2, paths: ["a"] });
-    expect(line).toBe("since you left · 1 step · 1 file changed · 2 questions waiting");
+    const line = reentryLine({ steps: 1, files: 1, paths: ["a"] });
+    expect(line).toBe("since you left · 1 step · 1 file changed");
   });
 
   it("omits an empty slot from the text and says nothing at all when empty", () => {
-    expect(reentryLine({ steps: 4, files: 0, questions: 0, paths: [] })).toBe(
-      "since you left · 4 steps",
-    );
-    expect(reentryLine({ steps: 0, files: 0, questions: 0, paths: [] })).toBe("");
+    expect(reentryLine({ steps: 4, files: 0, paths: [] })).toBe("since you left · 4 steps");
+    expect(reentryLine({ steps: 0, files: 0, paths: [] })).toBe("");
   });
 });
 
 describe("when the band may appear", () => {
-  const work = { steps: 4, files: 1, questions: 0, paths: ["a.md"] };
+  const work = { steps: 4, files: 1, paths: ["a.md"] };
 
   it("appears when a chat worked without you", () => {
     expect(shouldRenderReentry({ streaming: false, readIndex: 2, total: 6, work })).toBe(true);
@@ -153,10 +163,23 @@ describe("when the band may appear", () => {
   });
 
   it("never appears over an unread stretch that did no work", () => {
-    const none = { steps: 0, files: 0, questions: 0, paths: [] };
+    const none = { steps: 0, files: 0, paths: [] };
     expect(shouldRenderReentry({ streaming: false, readIndex: 2, total: 6, work: none })).toBe(
       false,
     );
+  });
+});
+
+describe("a band already on screen", () => {
+  it("is stale as soon as messages land behind it", () => {
+    // It is painted AT a position and takes the position to the end with it, so
+    // `readIndex < total` can only mean "work arrived after this band was made".
+    expect(bandIsStale({ readIndex: 4, total: 6, streaming: false })).toBe(true);
+    expect(bandIsStale({ readIndex: 6, total: 6, streaming: false })).toBe(false);
+  });
+
+  it("is never stale mid-stream: nothing may repaint over a live turn", () => {
+    expect(bandIsStale({ readIndex: 4, total: 6, streaming: true })).toBe(false);
   });
 });
 
@@ -214,9 +237,9 @@ describe("resume verbs", () => {
 
 /* ---------------------------------------------------------------------------
  * The lifecycle of the one persisted number, as a SEQUENCE. Every bug this
- * phase had was a moment the position failed to move — never a wrong count —
- * and no test of `advanceReadIndex` on its own can see that. So these drive
- * the two functions the view actually calls, in the order the view calls them.
+ * phase had was a moment the position failed to move, or moved too far, and no
+ * test of `advanceReadIndex` on its own can see that. So these drive the
+ * functions the view actually calls, in the order the view calls them.
  * ------------------------------------------------------------------------ */
 
 const convo = (messages: Message[], readIndex?: number): Convo =>
@@ -264,8 +287,9 @@ describe("the read position, over a session", () => {
     // back: the band has nothing to say, because you watched it happen.
     const c = convo([user("a"), tool("Read", { file_path: "/v/a.md" })]);
     reveal(c);
+    const turnFrom = c.messages.length;
     c.messages.push(user("do X"), ...work12());
-    noteTurnEnd(c, { active: true, visible: true });
+    noteTurnEnd(c, { active: true, visible: true, turnFrom });
     expect(c.readIndex).toBe(c.messages.length);
     expect(c.unread).toBe(false);
     expect(reveal(c)).toBeNull();
@@ -273,19 +297,64 @@ describe("the read position, over a session", () => {
 
   it("still reports a turn that finished while the pane was not on screen", () => {
     const c = convo([user("a")], 1);
+    const turnFrom = c.messages.length;
     c.messages.push(...work12());
-    noteTurnEnd(c, { active: true, visible: false });
+    noteTurnEnd(c, { active: true, visible: false, turnFrom });
     expect(c.readIndex).toBe(1); // the active chat, but nobody was looking
     expect(reveal(c)?.work.steps).toBe(2);
   });
 
   it("marks a turn that landed in another chat unread and leaves its position", () => {
     const c = convo([user("a")], 1);
+    const turnFrom = c.messages.length;
     c.messages.push(...work12());
-    noteTurnEnd(c, { active: false, visible: true });
+    noteTurnEnd(c, { active: false, visible: true, turnFrom });
     expect(c.unread).toBe(true);
     expect(c.readIndex).toBe(1);
     expect(reveal(c)?.work.files).toBe(2);
+  });
+
+  it("keeps a stretch no reveal ever reported, even when the next turn ends in front of you", () => {
+    // The normal way this happens: a run finishes while the sidebar is
+    // collapsed, a second turn starts, you open the pane MID-stream (so the
+    // reveal deliberately leaves the position alone), and 30s later that second
+    // turn ends with you watching. Only the second turn was watched.
+    const c = convo([user("a")], 1);
+    c.messages.push(...work12()); // turn 1, finished behind a collapsed sidebar
+    noteTurnEnd(c, { active: true, visible: false, turnFrom: 1 });
+    expect(reveal(c, true)).toBeNull(); // walked in mid-stream: position held
+    const turnFrom = c.messages.length;
+    c.messages.push(user("and now this"), tool("Bash", { command: "ls" }));
+    noteTurnEnd(c, { active: true, visible: true, turnFrom });
+    expect(c.readIndex).toBe(1); // turn 1 is still owed a line
+    expect(reveal(c)?.work.steps).toBe(3);
+  });
+
+  it("reads the turn you watched land when nothing was owed behind it", () => {
+    const c = convo([user("a"), ...work12()], 3);
+    const turnFrom = c.messages.length;
+    c.messages.push(user("more"), tool("Bash", { command: "ls" }));
+    noteTurnEnd(c, { active: true, visible: true, turnFrom });
+    expect(c.readIndex).toBe(5);
+  });
+
+  it("reads a watched turn over an unread stretch that did no work", () => {
+    // Prose is news the transcript already carries; the band would never
+    // mention it, so holding the position for it would strand the number.
+    const prose: Message = { role: "assistant", segments: [{ t: "text", md: "here you go" }] };
+    const c = convo([user("a"), prose], 1);
+    const turnFrom = c.messages.length;
+    c.messages.push(user("more"), tool("Bash", { command: "ls" }));
+    noteTurnEnd(c, { active: true, visible: true, turnFrom });
+    expect(c.readIndex).toBe(4);
+  });
+
+  it("computes the same answer from the transcript alone", () => {
+    const messages = [user("a"), ...work12(), user("b"), tool("Bash", { command: "ls" })];
+    expect(readIndexAfterTurn({ messages, readIndex: 1, turnFrom: 3 })).toBe(1);
+    expect(readIndexAfterTurn({ messages, readIndex: 3, turnFrom: 3 })).toBe(5);
+    // Never opened: nothing is owed, so it catches up.
+    expect(readIndexAfterTurn({ messages, readIndex: undefined, turnFrom: 3 })).toBe(5);
   });
 
   it("dissolves once read and does not return for the same position", () => {
@@ -303,35 +372,327 @@ describe("the read position, over a session", () => {
     expect(c.readIndex).toBe(1);
     expect(reveal(c)?.work.steps).toBe(2);
   });
+
+  it("moves the position with a transcript that was rewound", () => {
+    // A stored 10 over a transcript truncated to 3 keeps clamping to whatever
+    // the transcript grows back to, which reads as "caught up" forever.
+    const c = convo([user("a"), ...work12(), user("b"), ...work12()], 10);
+    c.messages = c.messages.slice(0, 3);
+    noteTranscriptReset(c);
+    expect(c.readIndex).toBe(3);
+    c.messages.push(...work12()); // a turn runs while you are away
+    expect(reveal(c)?.work.steps).toBe(2);
+  });
+
+  it("starts the position over when the tab is cleared to a new session", () => {
+    const c = convo([user("a"), ...work12()], 3);
+    c.messages = [];
+    noteTranscriptReset(c);
+    expect(c.readIndex).toBe(0); // opened, and empty: a position, not an absence
+    c.messages.push(user("do X"), ...work12());
+    expect(reveal(c)?.work.steps).toBe(2);
+  });
 });
 
 /* ---------------------------------------------------------------------------
- * Where the line lands. `anchorTurn` is the one piece of DOM lookup in the
- * band's path, and it is the piece that was wrong: a `.mva-turn` element does
- * NOT always have a message behind it, so the index of a message and the
- * position of its element are two different numbers.
+ * The band as an element. `revealReentry` and `reenterActive` are the two
+ * functions the view calls, and neither was driven by a test, so the stub
+ * below is a DOM stand-in rich enough to host the real thing: insertion,
+ * removal, the read position moving with it, and what a click goes to.
  * ------------------------------------------------------------------------ */
 
-/** A `listEl` stand-in. `turns[i]` is the message index that turn renders, or
- *  `null` for an element with no message behind it — the shape the DOM takes
- *  after a turn is stopped before its first token. */
-const fakeList = (turns: (number | null)[]) => {
-  const els = turns.map((msg, pos) => ({ msg, pos }));
-  return {
-    querySelector(selector: string) {
-      const m = /^\.mva-turn\[data-msg="(\d+)"\]$/.exec(selector);
-      return m ? (els.find((el) => el.msg === Number(m[1])) ?? null) : null;
-    },
-  } as unknown as HTMLElement;
+/** Only the surface `ui/reentry.ts` actually touches. */
+class El {
+  children: El[] = [];
+  parent: El | null = null;
+  readonly classes = new Set<string>();
+  readonly dataset: Record<string, string> = {};
+  text = "";
+  tabIndex = 0;
+  scrolled = false;
+  private readonly handlers = new Map<string, ((e: unknown) => void)[]>();
+
+  constructor(cls = "", text = "") {
+    for (const c of cls.split(/\s+/).filter(Boolean)) this.classes.add(c);
+    this.text = text;
+  }
+
+  private child(o: { cls?: string; text?: string }): El {
+    return this.appendChild(new El(o.cls ?? "", o.text ?? ""));
+  }
+  createDiv(o: { cls?: string; text?: string } = {}): El {
+    return this.child(o);
+  }
+  createSpan(o: { cls?: string; text?: string } = {}): El {
+    return this.child(o);
+  }
+  appendChild(el: El): El {
+    el.parent = this;
+    this.children.push(el);
+    return el;
+  }
+  insertBefore(el: El, ref: El): El {
+    el.parent = this;
+    this.children.splice(this.children.indexOf(ref), 0, el);
+    return el;
+  }
+  remove(): void {
+    const at = this.parent?.children.indexOf(this) ?? -1;
+    if (this.parent && at >= 0) this.parent.children.splice(at, 1);
+    this.parent = null;
+  }
+  addClass(c: string): void {
+    this.classes.add(c);
+  }
+  removeClass(c: string): void {
+    this.classes.delete(c);
+  }
+  setText(t: string): void {
+    this.text = t;
+  }
+  setAttribute(): void {
+    /* `clickable` sets role="button"; nothing here reads it back. */
+  }
+  addEventListener(type: string, h: (e: unknown) => void): void {
+    this.handlers.set(type, [...(this.handlers.get(type) ?? []), h]);
+  }
+  click(): void {
+    for (const h of this.handlers.get("click") ?? []) h({});
+  }
+  scrollIntoView(): void {
+    this.scrolled = true;
+  }
+  matches(selector: string): boolean {
+    return selector.split(",").some((raw) => {
+      const m = /^\.([\w-]+)(?:\[data-msg="(\d+)"\])?$/.exec(raw.trim());
+      if (!m || !this.classes.has(m[1])) return false;
+      return m[2] === undefined || this.dataset.msg === m[2];
+    });
+  }
+  descendants(): El[] {
+    return this.children.flatMap((c) => [c, ...c.descendants()]);
+  }
+  querySelector(selector: string): El | null {
+    return this.descendants().find((el) => el.matches(selector)) ?? null;
+  }
+  querySelectorAll(selector: string): El[] {
+    return this.descendants().filter((el) => el.matches(selector));
+  }
+  compareDocumentPosition(other: El): number {
+    let root: El = this;
+    while (root.parent) root = root.parent;
+    const order = [root, ...root.descendants()];
+    return order.indexOf(other) > order.indexOf(this) ? 4 : 2;
+  }
+}
+
+// `createDiv` is Obsidian's global DOM helper, and `Node` carries the one
+// bitmask `findAfter` compares against.
+(globalThis as unknown as { createDiv: (o?: { cls?: string }) => El }).createDiv = (o) =>
+  new El(o?.cls ?? "");
+(globalThis as unknown as { Node: { DOCUMENT_POSITION_FOLLOWING: number } }).Node = {
+  DOCUMENT_POSITION_FOLLOWING: 4,
 };
+
+const BAND = ".mva-reentry";
+const shown = { isShown: () => true } as unknown as HTMLElement;
+const collapsed = { isShown: () => false } as unknown as HTMLElement;
+const noop = () => {};
+
+/**
+ * A conversation with a transcript on screen. `turns[i]` is the message index
+ * that DOM turn renders, or `null` for an element with no message behind it:
+ * the shape the DOM takes after a turn is stopped before its first token.
+ */
+const domConvo = (messages: Message[], readIndex: number | undefined, turns: (number | null)[]) => {
+  const listEl = new El("mva-list");
+  for (const msg of turns) {
+    const turn = listEl.createDiv({ cls: "mva-turn" });
+    if (msg === null) continue;
+    turn.dataset.msg = String(msg);
+    if (messages[msg]?.role === "assistant") turn.createDiv({ cls: "mva-steps is-collapsed" });
+  }
+  const c = { messages, readIndex, unread: false, streaming: false, listEl } as unknown as Convo;
+  return { c, listEl };
+};
+
+/** Every message index in the transcript: a DOM with no phantom turns. */
+const allTurns = (messages: Message[]): number[] => messages.map((_, i) => i);
+
+describe("the band, as an element", () => {
+  it("goes in immediately above the first turn you have not seen", () => {
+    const messages = [user("a"), ...work12()];
+    const { c, listEl } = domConvo(messages, 1, allTurns(messages));
+    revealReentry(c, noop);
+    const band = listEl.querySelector(BAND);
+    expect(band).not.toBeNull();
+    expect(listEl.children.indexOf(band as El)).toBe(1); // before the turn for message 1
+    expect(band?.children.map((s) => s.text)).toEqual([
+      "since you left",
+      "2 steps",
+      "2 files changed",
+    ]);
+    expect(c.readIndex).toBe(3);
+  });
+
+  it("refuses to paint when the anchor turn is missing, and keeps the news", () => {
+    // A miss used to `appendChild`, which prints "since you left · 2 steps"
+    // BELOW every message it describes. There is no honest position left, so
+    // the read position does not move either: the news is still owed.
+    const messages = [user("a"), ...work12()];
+    const { c, listEl } = domConvo(messages, 1, [0]); // the replies never made it into the DOM
+    let persisted = 0;
+    revealReentry(c, noop, () => persisted++);
+    expect(listEl.querySelector(BAND)).toBeNull();
+    expect(c.readIndex).toBe(1);
+    expect(persisted).toBe(0);
+  });
+
+  it("reports work that landed behind a band nobody clicked", () => {
+    // Read the line, leave it on screen, collapse the sidebar, let the agent
+    // work, come back: the stale band used to make re-entry a no-op forever.
+    const messages = [user("a"), ...work12()];
+    const { c, listEl } = domConvo(messages, 1, allTurns(messages));
+    revealReentry(c, noop);
+    const first = listEl.querySelector(BAND);
+    c.messages.push(tool("Bash", { command: "ls" }));
+    listEl.createDiv({ cls: "mva-turn" }).dataset.msg = "3";
+    reenterActive(c, shown, noop, noop);
+    const second = listEl.querySelector(BAND);
+    expect(second).not.toBe(first);
+    expect(second?.children.map((s) => s.text)).toEqual(["since you left", "1 step", ""]);
+    expect(c.readIndex).toBe(4);
+  });
+
+  it("leaves a band alone while it is still the whole truth", () => {
+    const messages = [user("a"), ...work12()];
+    const { c, listEl } = domConvo(messages, 1, allTurns(messages));
+    revealReentry(c, noop);
+    const painted = listEl.querySelector(BAND);
+    let persisted = 0;
+    reenterActive(c, shown, noop, () => persisted++);
+    expect(listEl.querySelector(BAND)).toBe(painted); // the same element, untouched
+    expect(persisted).toBe(0);
+  });
+
+  it("leaves a band alone while a turn is streaming", () => {
+    const messages = [user("a"), ...work12()];
+    const { c, listEl } = domConvo(messages, 1, allTurns(messages));
+    revealReentry(c, noop);
+    const painted = listEl.querySelector(BAND);
+    c.messages.push(user("one more thing"));
+    (c as { streaming: boolean }).streaming = true;
+    reenterActive(c, shown, noop, noop);
+    expect(listEl.querySelector(BAND)).toBe(painted);
+  });
+
+  it("never re-enters a pane that is still collapsed", () => {
+    const messages = [user("a"), ...work12()];
+    const { c, listEl } = domConvo(messages, 1, allTurns(messages));
+    reenterActive(c, collapsed, noop, noop);
+    expect(listEl.querySelector(BAND)).toBeNull();
+    expect(c.readIndex).toBe(1);
+  });
+
+  it("opens the first written note from the files slot, then dissolves", () => {
+    const messages = [user("a"), ...work12()];
+    const { c, listEl } = domConvo(messages, 1, allTurns(messages));
+    const opened: string[] = [];
+    revealReentry(c, (p) => opened.push(p));
+    const band = listEl.querySelector(BAND) as El;
+    band.children.find((s) => s.dataset.slot === "files")?.click();
+    expect(opened).toEqual(["/v/a.md"]);
+    expect(listEl.querySelector(BAND)).toBeNull(); // acted on, the line is done
+  });
+
+  it("sends the steps slot to a run BELOW the line, never to one above it", () => {
+    const messages = [user("a"), tool("Read", { file_path: "/v/seen.md" }), ...work12()];
+    const { c, listEl } = domConvo(messages, 2, allTurns(messages));
+    revealReentry(c, noop);
+    const band = listEl.querySelector(BAND) as El;
+    band.children.find((s) => s.dataset.slot === "steps")?.click();
+    const runs = listEl.querySelectorAll(".mva-steps");
+    expect(runs.map((r) => r.scrolled)).toEqual([false, true, false]);
+    expect(runs[1].classes.has("is-collapsed")).toBe(false); // opened, not just located
+  });
+});
+
+describe("cutting a transcript back at a turn", () => {
+  /** A rewind, as the view performs it: the turn the user clicked, by message. */
+  const rewound = (drop: "after" | "from") => {
+    const messages = [user("a"), ...work12(), user("b"), ...work12()];
+    const { c, listEl } = domConvo(messages, 6, [0, 1, null, 2, 3, 4, 5]);
+    const queue = listEl.createDiv({ cls: "mva-queue" }); // held by field, not by the DOM
+    const turnEl = listEl.querySelector('.mva-turn[data-msg="3"]') as unknown as HTMLElement;
+    const idx = turnMessageIndex(turnEl) as number;
+    c.messages = c.messages.slice(0, drop === "after" ? idx + 1 : idx);
+    if (drop === "after") cutTranscriptAfter(c, turnEl);
+    else cutTranscriptFrom(c, turnEl);
+    return { c, listEl, queue };
+  };
+
+  it("keeps the turns up to the clicked one, phantom turns included", () => {
+    const { listEl } = rewound("after");
+    expect(listEl.querySelectorAll(".mva-turn").map((t) => t.dataset.msg ?? null)).toEqual([
+      "0",
+      "1",
+      null,
+      "2",
+      "3",
+    ]);
+  });
+
+  it("takes the clicked turn too when the code rewind undoes it", () => {
+    const { listEl } = rewound("from");
+    expect(listEl.querySelectorAll(".mva-turn").map((t) => t.dataset.msg ?? null)).toEqual([
+      "0",
+      "1",
+      null,
+      "2",
+    ]);
+  });
+
+  it("leaves the read position somewhere the transcript can still speak from", () => {
+    // Stored 6 over a transcript now 4 long: left alone it clamps to every
+    // later length and the chat never reports another thing it did.
+    const { c } = rewound("after");
+    expect(c.readIndex).toBe(4);
+    c.messages.push(...work12());
+    expect(reveal(c)?.work.steps).toBe(2);
+  });
+
+  it("removes only turns: the queue node is held by field, not by the DOM", () => {
+    const { listEl, queue } = rewound("after");
+    expect(listEl.children.includes(queue)).toBe(true);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Where the line lands. `data-msg` is the only bridge between a message and its
+ * element, and it is the piece that was wrong: a `.mva-turn` element does NOT
+ * always have a message behind it, so the index of a message and the position
+ * of its element are two different numbers.
+ * ------------------------------------------------------------------------ */
+
+const fakeList = (turns: (number | null)[]): HTMLElement => {
+  const listEl = new El("mva-list");
+  for (const msg of turns) {
+    const turn = listEl.createDiv({ cls: "mva-turn" });
+    if (msg !== null) turn.dataset.msg = String(msg);
+  }
+  return listEl as unknown as HTMLElement;
+};
+
+const domPos = (listEl: HTMLElement, el: HTMLElement | null): number =>
+  (listEl as unknown as El).children.indexOf(el as unknown as El);
 
 describe("the band's anchor element", () => {
   it("is the turn RENDERING the message, not the nth turn in the DOM", () => {
     // Prompt, Esc before the first token (an assistant element with nothing
     // behind it), prompt again, walk away. Message 2 is the second prompt's
     // reply and lives at DOM position 3.
-    const el = anchorTurn(fakeList([0, null, 1, 2]), 2) as unknown as { pos: number } | null;
-    expect(el?.pos).toBe(3);
+    const dom = fakeList([0, null, 1, 2]);
+    expect(domPos(dom, anchorTurn(dom, 2))).toBe(3);
   });
 
   it("keeps the line under the user's own prompt in that same DOM", () => {
@@ -340,18 +701,35 @@ describe("the band's anchor element", () => {
     // there is "since you left · 12 steps" printed above your own words.
     const dom = fakeList([0, null, 1, 2]);
     expect(bandAnchor([user("a"), user("b"), tool("Write", { file_path: "/v/a.md" })], 1)).toBe(2);
-    expect((anchorTurn(dom, 2) as unknown as { msg: number }).msg).toBe(2); // the reply, not the prompt
+    expect(turnMessageIndex(anchorTurn(dom, 2))).toBe(2); // the reply, not the prompt
   });
 
-  it("falls back to nothing (append) when the anchor has no element", () => {
+  it("finds no element for a message the DOM does not carry", () => {
     expect(anchorTurn(fakeList([0, 1]), 5)).toBeNull();
   });
 });
 
+describe("a turn element's message index", () => {
+  it("reads the stamp, never the DOM position: the two differ after a phantom turn", () => {
+    // What `rewindTo` / `rewindCodeTo` slice `messages` with. At DOM position 3
+    // sits message 2, and truncating at 3 would delete a message that is still
+    // on screen, taking its `data-msg` (and the band's anchor) with it.
+    const turns = (fakeList([0, null, 1, 2]) as unknown as El).children;
+    expect(turnMessageIndex(turns[3] as unknown as HTMLElement)).toBe(2);
+    expect(turnMessageIndex(turns[0] as unknown as HTMLElement)).toBe(0);
+  });
+
+  it("reports nothing for a turn with no message behind it", () => {
+    const turns = (fakeList([0, null]) as unknown as El).children;
+    expect(turnMessageIndex(turns[1] as unknown as HTMLElement)).toBeNull();
+    expect(turnMessageIndex(null)).toBeNull();
+  });
+});
+
 /* ---------------------------------------------------------------------------
- * The wiring, read off the source. The band is DOM, and this suite runs in
- * `node` — so what is pinned here is the set of decisions that would otherwise
- * only be visible by mounting Obsidian.
+ * The wiring in `view.ts`, read off the source: that file needs a mounted
+ * Obsidian to run, so the CALL SITES are pinned here and the behaviour they
+ * reach is pinned by the suites above.
  * ------------------------------------------------------------------------ */
 
 const read = (rel: string): string => readFileSync(join(__dirname, "..", rel), "utf8");
@@ -369,15 +747,7 @@ describe("the re-entry band's wiring", () => {
     expect(ui).not.toMatch(/isWide|clientWidth|matchMedia/);
   });
 
-  it("renders at the last-read position, not at the top or the bottom", () => {
-    expect(ui).toMatch(/insertBefore/);
-    expect(ui).toMatch(/\.mva-turn/);
-  });
-
-  it("looks its anchor up by message index, never by DOM position", () => {
-    expect(ui).toMatch(/\[data-msg="/);
-    expect(ui).not.toMatch(/turns\.item\(/);
-    // Both sites that add a message stamp the element with its index.
+  it("stamps every element that has a message with its index", () => {
     expect(view).toMatch(/"data-msg": i/);
     expect(view).toMatch(/"data-msg": c\.messages\.length - 1/);
     expect(view).toMatch(/ctx\.el\.dataset\.msg = String\(c\.messages\.length - 1\)/);
@@ -389,15 +759,15 @@ describe("the re-entry band's wiring", () => {
     // chat, and nothing on that path used to reveal anything.
     expect(view).toMatch(/reenterActive\(this\.active/);
     expect(view).toMatch(/"layout-change", \(\) => reenterActive/);
-    expect(ui).toMatch(/containerEl\.isShown\(\)/); // still collapsed is not re-entered
   });
 
-  it("refuses to paint while a turn is streaming", () => {
-    expect(ui).toMatch(/streaming/);
-  });
-
-  it("is reached from the conversation-reveal path", () => {
-    expect(view).toMatch(/revealReentry\(/);
+  it("re-enters every path through the same visibility gate", () => {
+    // `restore()` runs from `onOpen`, and `convo-bridge` materialises the view
+    // with `loadIfDeferred()` while the sidebar is still collapsed, so a bare
+    // reveal there consumes the band into a pane nobody ever opened.
+    expect(view).not.toMatch(/revealReentry\(/);
+    expect(view).toMatch(/reenterActive\(this\.active, this\.containerEl.{0,90}worked overnight/);
+    expect(view).toMatch(/reenterActive\(c, this\.containerEl/);
     expect(view).toMatch(/renderResumeVerbs\(/);
   });
 
@@ -409,15 +779,25 @@ describe("the re-entry band's wiring", () => {
     expect(read("src/ui/convo-types.ts")).toMatch(/readIndex\?: number/);
   });
 
-  it("moves the position at turn end, not only on a tab switch", () => {
-    // The behaviour is tested above against `noteTurnEnd` itself; what can only
-    // be read off the source is that the turn-end path calls it at all.
-    expect(view).toMatch(/noteTurnEnd\(c, \{ active: c === this\.active/);
+  it("tells the turn end where the turn it just watched began", () => {
+    expect(view).toMatch(/const turnFrom = c\.messages\.length;/);
+    expect(view).toMatch(/noteTurnEnd\(c, \{ active: c === this\.active,.{0,80}turnFrom \}\)/);
   });
 
-  it("writes the moved position when a band is read at launch", () => {
-    // restore()'s reveal has no other reason to persist, so a session that
-    // opened, read the band and quit would show the same band next launch.
-    expect(view).toMatch(/revealReentry\(this\.active,.{0,60}\(\) => this\.persist\(\)\)/);
+  it("moves the read position with every transcript it cuts down", () => {
+    // The three sites that replace or truncate `messages`: a stored position
+    // that outlives the messages it counted reads as "caught up" over work
+    // nobody saw. `newSessionInTab` resets it; the two rewinds go through the
+    // cut helpers, which carry the position with the elements.
+    expect(view).toMatch(/noteTranscriptReset\(c\);/);
+    expect(view).toMatch(/cutTranscriptAfter\(c, turnEl\);/);
+    expect(view).toMatch(/cutTranscriptFrom\(c, turnEl\);/);
+  });
+
+  it("slices the transcript by message index, never by DOM position", () => {
+    expect(view.match(/const idx = turnMessageIndex\(turnEl\);/g)?.length).toBe(2);
+    expect(view).toMatch(/c\.messages = c\.messages\.slice\(0, idx \+ 1\);/);
+    expect(view).toMatch(/c\.messages = c\.messages\.slice\(0, idx\);/);
+    expect(view).not.toMatch(/const idx = turns\.indexOf\(turnEl\)/);
   });
 });
