@@ -71,7 +71,17 @@ const CEILINGS: Record<string, number> = {
   // sono il margine dichiarato per la prossima preferenza persistita, non un
   // permesso di ricrescita: la prossima feature che chiede più spazio qui
   // estrae lo schema (`MVASettings` + `DEFAULT_SETTINGS`) dal tab di settings.
-  "src/settings.ts": 1340,
+  //
+  // Abbassato il 2026-08-11: quell'estrazione è stata fatta. `MVASettings`,
+  // `DEFAULT_SETTINGS` e `LEGACY_QUEUE_FOLDER` vivono ora in
+  // `src/settings-schema.ts`; `settings.ts` li ri-esporta, così i ~6 importer
+  // esterni non cambiano path. Il tab renderizza le impostazioni, lo schema È
+  // le impostazioni: erano due file in uno. 1338 -> 1024 righe reali.
+  // Il tetto resta a 1032, non a 1024: 8 righe sono il margine dichiarato per
+  // il toggle che segue (agent browser), non un permesso di ricrescita — ogni
+  // nuova CHIAVE di `MVASettings` ora costa righe in settings-schema.ts, non
+  // qui.
+  "src/settings.ts": 1032,
 };
 
 /** Righe come le conta `wc -l`: i newline, non i segmenti — così il numero nel
