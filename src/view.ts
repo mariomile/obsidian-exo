@@ -52,6 +52,7 @@ import { assembleContext, formatContextDebug } from "./core/context-assembly";
 import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
+import { swapTailChild } from "./ui/tail-child";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { hoistSlashCommand } from "./core/slash";
@@ -3345,6 +3346,7 @@ export class ChatView extends ItemView {
       curTextEl: null,
       stableLen: 0,
       tailEl: null,
+      tailChild: null,
       caretEl: null,
       finalized: false,
       scanPos: 0,
@@ -3610,11 +3612,12 @@ export class ChatView extends ItemView {
       ctx.fenceOpen = false;
       ctx.lastBoundary = 0;
       el.empty();
+      const child = swapTailChild(this, ctx);
       let md = raw;
       if (this.plugin.settings.featureWikilinkify) {
         md = wikilinkify(md, [...ctx.sources, ...ctx.touched.map((t) => t.path)]);
       }
-      void MarkdownRenderer.render(this.app, md, el, "", this).then(() => {
+      void MarkdownRenderer.render(this.app, md, el, "", child).then(() => {
         this.clearCaret(ctx);
       });
       return;
@@ -3632,8 +3635,9 @@ export class ChatView extends ItemView {
     }
     if (!ctx.tailEl) ctx.tailEl = ctx.curTextEl.createDiv({ cls: "mva-md-tail markdown-rendered" });
     const tail = ctx.tailEl;
+    const child = swapTailChild(this, ctx);
     tail.empty();
-    void MarkdownRenderer.render(this.app, raw.slice(ctx.stableLen), tail, "", this).then(() => {
+    void MarkdownRenderer.render(this.app, raw.slice(ctx.stableLen), tail, "", child).then(() => {
       // Keep at most one caret — on the tail that's currently streaming. Skip if
       // the segment was interrupted while this render was in flight (tailEl was
       // reset), so an in-flight tick can't resurrect an orphaned caret.
@@ -3675,6 +3679,10 @@ export class ChatView extends ItemView {
     ctx.curTextEl = null;
     ctx.stableLen = 0;
     ctx.tailEl = null;
+    if (ctx.tailChild) {
+      this.removeChild(ctx.tailChild);
+      ctx.tailChild = null;
+    }
     ctx.scanPos = 0;
     ctx.fenceOpen = false;
     ctx.lastBoundary = 0;

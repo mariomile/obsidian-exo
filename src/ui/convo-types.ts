@@ -17,6 +17,7 @@
  * in view.ts) because the extractions this file exists to enable will need them.
  */
 
+import type { Component } from "obsidian";
 import type { AgentSession, ContextUsage, ImageAttachment, ProviderId } from "../providers/types";
 import type { Message, PersistedMessage, Segment } from "../core/model";
 import type { ResearchModeState } from "../core/research";
@@ -260,6 +261,13 @@ export interface AssistantCtx {
   stableLen: number;
   /** Live tail element re-rendered each tick (holds the not-yet-stable suffix). */
   tailEl: HTMLElement | null;
+  /** Owns the tail's current `MarkdownRenderer.render()` call. Scoped per tick
+   *  (not the view itself) so the previous tick's render children — e.g. a
+   *  post-processor's card mount with a pending async fetch — get a real
+   *  `onunload()` before their DOM is wiped, instead of leaking as zombie
+   *  subscribers for the life of the view. Unload-then-replace on every tick;
+   *  never read outside `renderText`/`resetTextStream`. */
+  tailChild: Component | null;
   /** The live streaming caret (at most one per turn), tracked so cleanup is O(1). */
   caretEl: HTMLElement | null;
   /** Turn finalized (flushRender ran). A render tick's caret placement resolves on
