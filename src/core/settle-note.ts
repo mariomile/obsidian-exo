@@ -218,11 +218,43 @@ export function settleFolder(paths: ExoPaths): string {
   return paths.chats;
 }
 
-/** Filename-safe title. The characters Obsidian refuses in a filename, plus
- *  the wikilink brackets, which would make the note's own name unlinkable. */
+/** Room for the ".md" and for the " 12" a collision may add, inside the
+ *  255-byte filename limit every filesystem Obsidian runs on enforces. */
+const MAX_NAME_BYTES = 180;
+
+/** Filename-safe title. Three things a title can carry that a filename cannot:
+ *
+ *  - the characters Obsidian refuses, plus the wikilink brackets, which would
+ *    make the note's own name unlinkable;
+ *  - a LEADING DOT: Obsidian does not index dot-prefixed files, so the note
+ *    would never be a TFile, the writer would take its `create` branch on every
+ *    settle, and the second one would fail with "File already exists";
+ *  - LENGTH: a manual rename can run past the 255-byte filename limit, and
+ *    `vault.create` rejects the path outright. Capped in bytes rather than
+ *    characters, and on whole code points, so a title in emoji or CJK is
+ *    shortened instead of corrupted.
+ */
 export function settleFileName(title: string): string {
-  const safe = title.replace(/[\\/:#^[\]|?*"<>]/g, "").trim();
-  return safe || "Chat";
+  const safe = title
+    .replace(/[\\/:#^[\]|?*"<>]/g, "")
+    .replace(/^[.\s]+/, "")
+    .trim();
+  return capBytes(safe, MAX_NAME_BYTES).trimEnd() || "Chat";
+}
+
+const utf8 = new TextEncoder();
+
+function capBytes(s: string, max: number): string {
+  if (utf8.encode(s).length <= max) return s;
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const size = utf8.encode(ch).length;
+    if (used + size > max) break;
+    out += ch;
+    used += size;
+  }
+  return out;
 }
 
 /** The path a chat's note wants, before collisions are considered. */

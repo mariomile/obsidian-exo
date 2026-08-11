@@ -217,6 +217,28 @@ describe("where the note goes", () => {
     expect(settleNotePath("_exo/chats", "Ship it")).toBe("_exo/chats/Ship it.md");
   });
 
+  it("caps the name so a long manual rename still produces a writable file", () => {
+    // A filename over the 255-byte limit is rejected by `vault.create`, and the
+    // suffix uniqueSettlePath may add has to fit too.
+    const name = settleFileName("Ship the onboarding rewrite ".repeat(40));
+    expect(Buffer.byteLength(`${name} 12.md`, "utf8")).toBeLessThanOrEqual(255);
+    expect(name.startsWith("Ship the onboarding rewrite")).toBe(true);
+  });
+
+  it("caps by bytes and never mid-character", () => {
+    const name = settleFileName("🚀".repeat(200));
+    expect(Buffer.byteLength(`${name}.md`, "utf8")).toBeLessThanOrEqual(255);
+    expect([...name].every((c) => c === "🚀")).toBe(true);
+  });
+
+  it("does not produce a dotfile Obsidian refuses to index", () => {
+    // Obsidian does not index dot-prefixed files, so `getAbstractFileByPath`
+    // never returns a TFile for one: the writer would take the `create` branch
+    // every time and the second settle would fail with "File already exists".
+    expect(settleFileName(".env config")).toBe("env config");
+    expect(settleFileName("...")).toBe("Chat");
+  });
+
   it("does not let two chats with the same title overwrite each other", () => {
     const taken = ["_exo/chats/New chat.md"];
     expect(uniqueSettlePath("_exo/chats", "New chat", taken)).toBe("_exo/chats/New chat 2.md");
