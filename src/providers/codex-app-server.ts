@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "child_process";
-import { writeFile, unlink } from "fs/promises";
+import { writeFile, unlink, readdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import type {
@@ -100,6 +100,20 @@ const DEFAULT_RUNTIME: CodexSessionRuntime = {
   requestTimeoutMs: REQUEST_TIMEOUT_MS,
   turnStartTimeoutMs: TURN_START_TIMEOUT_MS,
 };
+
+/** Basenames of the files in `dir` carrying `ext`. Codex has no `system/init`
+ *  snapshot the way Claude does, so the vault's own `.claude/` rosters are read
+ *  from disk — the same files Exo's command expansion and agent store resolve
+ *  against, which is what makes the reported inventory true rather than empty.
+ *  A missing directory is an empty roster, never an error. */
+async function listNames(dir: string, ext: string): Promise<string[]> {
+  try {
+    const entries = await readdir(dir);
+    return entries.filter((f) => f.endsWith(ext)).map((f) => f.slice(0, -ext.length)).sort();
+  } catch {
+    return [];
+  }
+}
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -391,6 +405,17 @@ export class CodexSession implements AgentSession {
     }
   }
 
+  /** The tools this session actually turned on, derived from the same flags
+   *  `start()` passes to the app-server — so the inventory can't drift from the
+   *  config the way a hardcoded list does. MCP tools are not listed here: they
+   *  arrive through `mcpServer/startupStatus/updated` and own the MCP tab. */
+  private enabledTools(): string[] {
+    if (!this.opts.toolsEnabled) return [];
+    const tools = ["Bash", "Edit", "WebSearch", "Agent", "TodoWrite"];
+    if (this.opts.codexBridge) tools.push("mcp__obsidian__*");
+    return tools;
+  }
+
   private async discoverCapabilities(): Promise<void> {
     try {
       const [skillsResponse, modelsResponse] = await Promise.all([
@@ -412,11 +437,15 @@ export class CodexSession implements AgentSession {
         const label = typeof value.displayName === "string" ? value.displayName : value.id;
         return [{ id: value.id, label: value.upgrade ? `${label} (deprecated)` : label }];
       });
+      const [commands, agents] = await Promise.all([
+        listNames(`${this.opts.cwd}/.claude/commands`, ".md"),
+        listNames(`${this.opts.cwd}/.claude/agents`, ".md"),
+      ]);
       this.caps = {
         skills: [...new Set(skills)],
-        commands: [],
-        agents: [],
-        tools: [],
+        commands,
+        agents,
+        tools: this.enabledTools(),
         mcpServers: [...this.mcpStatuses].map(([name, status]) => ({ name, status })),
         models,
       };

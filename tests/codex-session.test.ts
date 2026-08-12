@@ -1,8 +1,11 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CodexSession, type CodexSessionRuntime } from "../src/providers/codex";
-import type { AgentEvent, SessionOpts } from "../src/providers/types";
+import type { AgentEvent, SessionCaps, SessionOpts } from "../src/providers/types";
 
 type RpcMessage = {
   id?: number;
@@ -795,6 +798,35 @@ describe("CodexSession app-server lifecycle", () => {
     await turn;
 
     expect(events.filter((e) => e.kind === "tool-call-start")).toHaveLength(0);
+    session.dispose();
+  });
+
+  // Codex has no `system/init` snapshot, so these rosters were hardcoded to []
+  // — which read downstream as "no commands exist" and silently disabled
+  // slash-command hoisting on every Codex turn. They are now read from the same
+  // vault files the expansion and the agent store resolve against.
+  it("reports the vault's real command and agent rosters", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "exo-caps-"));
+    await mkdir(join(dir, ".claude/commands"), { recursive: true });
+    await mkdir(join(dir, ".claude/agents"), { recursive: true });
+    await writeFile(join(dir, ".claude/commands/brief.md"), "body");
+    await writeFile(join(dir, ".claude/commands/search.md"), "body");
+    await writeFile(join(dir, ".claude/commands/notes.txt"), "not a command");
+    await writeFile(join(dir, ".claude/agents/ghostwriter.md"), "body");
+
+    const { session, child } = await readySession({ cwd: dir });
+    const caps = await new Promise<SessionCaps>((resolve) => {
+      session.onCaps = resolve;
+      void (async () => {
+        child.reply(await child.next("skills/list"), { data: [] });
+        child.reply(await child.next("model/list"), { data: [] });
+      })();
+    });
+
+    expect(caps.commands).toEqual(["brief", "search"]);
+    expect(caps.agents).toEqual(["ghostwriter"]);
+    expect(caps.tools).toContain("Bash");
+    await rm(dir, { recursive: true, force: true });
     session.dispose();
   });
 });
