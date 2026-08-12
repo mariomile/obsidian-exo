@@ -24,7 +24,6 @@ import { clickable } from "./dom";
 import type { Convo } from "./convo-types";
 import type { ComposerDraft } from "./composer";
 import {
-  bandIsStale,
   clampReadIndex,
   planReveal,
   readIndexAfterTurn,
@@ -108,7 +107,6 @@ export function revealReentry(
   onOpenNote: (path: string) => void,
   onRead?: () => void,
 ): void {
-  c.listEl.querySelector(`.${BAND}`)?.remove();
   const decision = planReveal({
     messages: c.messages,
     readIndex: c.readIndex,
@@ -154,6 +152,12 @@ export function revealReentry(
     });
   }
 
+  // The old line goes only now, with its replacement built and its anchor
+  // resolved. Removing it up front cost the reader the line they were in the
+  // middle of, twice over: a turn that produced only prose grows the transcript
+  // without giving the band anything to say, and a missing anchor refuses to
+  // paint on purpose. Both used to end with nothing on screen.
+  c.listEl.querySelector(`.${BAND}`)?.remove();
   // At the last-read position: immediately before the first turn the user has
   // not seen.
   c.listEl.insertBefore(band, anchor);
@@ -236,13 +240,11 @@ export function cutTranscriptFrom(c: Convo, turnEl: HTMLElement): void {
  *    collapsed has not been re-entered. Boot goes through here for the same
  *    reason: `convo-bridge` materialises the view with `loadIfDeferred()` for
  *    background work, so `restore()` can run against a sidebar nobody opened.
- *  - a band already on screen is left alone WHILE IT IS STILL CURRENT, so
- *    re-running this over a line the user is in the middle of reading does not
- *    silently delete it. Presence alone was the wrong test: nothing else ever
- *    removes the band, so a line that was read but never clicked stayed in the
- *    DOM forever and made every later re-entry a no-op, so the next twelve steps
- *    went unannounced. `bandIsStale` asks the only question that matters: did
- *    anything land after this line was painted?
+ *  - a band already on screen needs no test of its own. `revealReentry` is
+ *    idempotent: with nothing new to say it paints nothing and touches nothing,
+ *    and it destroys the old line only once its replacement is built. Asking a
+ *    second, cheaper question here is how the two answers came to disagree —
+ *    "messages landed" is not "there is news", and a turn of pure prose is both.
  */
 export function reenterActive(
   c: Convo | null | undefined,
@@ -251,13 +253,6 @@ export function reenterActive(
   onRead: () => void,
 ): void {
   if (!c || !containerEl.isShown()) return;
-  const painted = c.listEl?.querySelector(`.${BAND}`);
-  const stale = bandIsStale({
-    readIndex: c.readIndex,
-    total: c.messages.length,
-    streaming: c.streaming,
-  });
-  if (painted && !stale) return;
   revealReentry(c, onOpenNote, onRead);
 }
 

@@ -6,7 +6,6 @@ import {
   RESUME_STALE_MS,
   advanceReadIndex,
   bandAnchor,
-  bandIsStale,
   clampReadIndex,
   hasReentryNews,
   planReveal,
@@ -168,19 +167,6 @@ describe("when the band may appear", () => {
     expect(shouldRenderReentry({ streaming: false, readIndex: 2, total: 6, work: none })).toBe(
       false,
     );
-  });
-});
-
-describe("a band already on screen", () => {
-  it("is stale as soon as messages land behind it", () => {
-    // It is painted AT a position and takes the position to the end with it, so
-    // `readIndex < total` can only mean "work arrived after this band was made".
-    expect(bandIsStale({ readIndex: 4, total: 6, streaming: false })).toBe(true);
-    expect(bandIsStale({ readIndex: 6, total: 6, streaming: false })).toBe(false);
-  });
-
-  it("is never stale mid-stream: nothing may repaint over a live turn", () => {
-    expect(bandIsStale({ readIndex: 4, total: 6, streaming: true })).toBe(false);
   });
 });
 
@@ -603,6 +589,41 @@ describe("the band, as an element", () => {
     reenterActive(c, shown, noop, () => persisted++);
     expect(listEl.querySelector(BAND)).toBe(painted); // the same element, untouched
     expect(persisted).toBe(0);
+  });
+
+  it("keeps a band when the work that landed behind it has nothing to report", () => {
+    // The line is deleted and the news marked read, both, for a turn that
+    // produced only prose: the transcript grew, so the band read as stale, and
+    // the removal happened BEFORE anything decided there was a line to paint.
+    // Prose is news the transcript already carries, so there is nothing to
+    // repaint with, and the right answer is to leave the reader alone.
+    const messages = [user("a"), ...work12()];
+    const { c, listEl } = domConvo(messages, 1, allTurns(messages));
+    revealReentry(c, noop);
+    const painted = listEl.querySelector(BAND);
+
+    c.messages.push(user("more"), { role: "assistant", segments: [{ t: "text", md: "done" }] });
+    listEl.createDiv({ cls: "mva-turn" }).dataset.msg = "3";
+    listEl.createDiv({ cls: "mva-turn" }).dataset.msg = "4";
+    reenterActive(c, shown, noop, noop);
+
+    expect(listEl.querySelector(BAND)).toBe(painted); // the same element, still readable
+    // The position DOES catch up, and that is the same rule prose follows
+    // everywhere else: the band can never mention it, so holding the number
+    // back for it would strand it. What must not happen is losing the line.
+    expect(c.readIndex).toBe(c.messages.length);
+  });
+
+  it("keeps a band when the anchor for the new work is missing", () => {
+    // Same removal-before-decision hazard, reached through the other early
+    // return: refusing to paint must not cost the line already on screen.
+    const messages = [user("a"), ...work12()];
+    const { c, listEl } = domConvo(messages, 1, allTurns(messages));
+    revealReentry(c, noop);
+    const painted = listEl.querySelector(BAND);
+    c.messages.push(tool("Bash", { command: "ls" })); // no element for it
+    reenterActive(c, shown, noop, noop);
+    expect(listEl.querySelector(BAND)).toBe(painted);
   });
 
   it("leaves a band alone while a turn is streaming", () => {

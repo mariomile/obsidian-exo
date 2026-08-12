@@ -185,26 +185,6 @@ export function readIndexAfterTurn(o: {
   return hasReentryNews(owed) ? stored : advanceReadIndex(total);
 }
 
-/**
- * Is a band already on screen still the whole truth?
- *
- * It is painted AT a position and takes the position to the end with it, so
- * `readIndex < total` can only mean messages landed AFTER it was painted: work
- * the line the user is looking at never mentioned. Mere presence is not a
- * reason to stay silent: the band is read far more often than it is clicked,
- * and nothing else ever removes it.
- */
-export function bandIsStale(o: {
-  readIndex: number | undefined;
-  total: number;
-  streaming: boolean;
-}): boolean {
-  // Nothing may repaint over a live turn, and an old band still says something
-  // true, and destroying it to paint nothing is the worst of both.
-  if (o.streaming) return false;
-  const stored = clampReadIndex(o.readIndex, o.total);
-  return stored !== undefined && stored < o.total;
-}
 
 /**
  * Where the line goes: the last-read position, moved past any messages the
