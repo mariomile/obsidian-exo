@@ -270,3 +270,32 @@ describe("canHostConversation keeps its three states", () => {
     expect(src()).toContain("canSpawn: () => canHostConversation(plugin)");
   });
 });
+
+/**
+ * Fan-out is the ONLY substitute Codex has for a subagent: it has no primitive
+ * tied to `.claude/agents/*.md`, so parallel work has to become parallel
+ * conversations, each with its own session. That already works, because
+ * `askInNewConversation` reads `settings.provider` rather than assuming Claude.
+ *
+ * But it works through a completely separate call site. Claude receives the
+ * Obsidian tools as an in-process MCP server; Codex receives the same registry
+ * through its loopback bridge, built from its own options object. Nothing makes
+ * the two lists agree — `spawn_task` gates on `orchestrationEnabled` AND on a
+ * `parentConvoId` being present, and either one missing from the bridge's
+ * options is a legal, silent "fan-out is Claude-only".
+ */
+describe("fan-out wiring — Codex reaches the same spawn path", () => {
+  const bridge = near(view, "c.provider === \"codex\" &&", 1600);
+
+  it("gives the Codex bridge the orchestration tools", () => {
+    expect(bridge).toContain("orchestrationEnabled");
+  });
+
+  it("gives the Codex bridge a parent, without which spawn_task is withheld", () => {
+    expect(bridge).toContain("parentConvoId: c.id");
+  });
+
+  it("spawns the child on the session provider rather than assuming Claude", () => {
+    expect(near(view, "askInNewConversation(")).toContain("this.plugin.settings.provider");
+  });
+});
