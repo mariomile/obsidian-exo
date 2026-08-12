@@ -1,5 +1,20 @@
 # mv-kit audit — Exo (coherence wave)
 
+> [!info] Snapshot of 2026-07. Line numbers below are as of that wave and no
+> longer resolve.
+> `styles.css` was 5168 lines here and is ~7000 now. `src/style-contract.test.ts`
+> still cites this note for every waiver it carries, so read the verdicts, not
+> the coordinates. What changed since, in the 2026-08-11/12 Cosmos Bridge wave:
+> every kit reference moved into one seam block at the top of the file; the raw
+> hex count went 50 → 4 (the three status colours are declared once, plus the
+> artifact iframe's `#fff`), which retired hex groups 4 and 5 below **including
+> the `#e0a458` drift this audit flagged**; the nine pulse rhythms collapsed onto
+> one `--mva-heartbeat`; the three type registers became `--mva-type-*` tokens
+> and the six open `.mva-bubble` proposals were resolved (their verdicts are
+> recorded in this file); and 29 kit references that named tokens the theme never
+> published were deleted. The ratchet that enforces all of it is
+> `design-contract.json` + `scripts/contract.sh`.
+
 Audit of `styles.css` (5168 lines), `src/ui/` (22 files) and `src/settings.ts`
 (1394 lines) against `obsidian-cosmos-theme/docs/mv-kit.md` — the golden rule
 plus all 5 sections, **desktop and phone columns both**. Program context:
