@@ -33,6 +33,18 @@ settings:
    aliases and nothing else: that rule is enforced by src/style-contract.test.ts,
    which fails if any selector outside this block reads a theme token directly.
 
+   Every kit name below is one the kit ACTUALLY publishes. It was not always so:
+   29 of the 54 references here named tokens that exist nowhere in the theme, so
+   the chain looked three deep and was decorative, always landing on the
+   Obsidian value. `--mv-accent`, `--mv-surface-*`, `--mv-title-*`, `--mv-body-*`
+   and their `--cosmos-` twins were all invented on the naming convention rather
+   than read off the kit. Deleted 2026-08-12; a shorter honest chain beats a
+   long one that lies about what is wired. Only the eyebrow register resolves
+   through the kit (`--mv-label-*`), which is what docs/design.md §3 already
+   said. To re-check after a theme release, diff these names against
+   `grep -ho -- '--\(mv\|cosmos\)-[a-z0-9-]*\s*:' ../obsidian-cosmos-theme/*.css`
+   and add a link only when the token is on that list.
+
    The seam is declared on `body`. That is not a detail, it is the only
    scope where the bridge actually bridges. Verified 2026-08-11 in a browser,
    not assumed: Obsidian declares its own palette on `body` (inside its
@@ -49,33 +61,34 @@ settings:
    modal case is covered either way. What must never happen is scoping these to
    `.mva-root`. */
 body {
-  /* ---- surfaces: a 4-step luminosity ladder --------------------------------
+  /* ---- surfaces: the canvas, the theme's raised surface, and one step between
      Only the two ENDS are picked: 0 is the canvas, 3 the theme's own raised
      surface, and under Cosmos both alias the flavour's own luminosity ladder,
      so Exo sits on the same steps as every other panel instead of inventing
-     near-misses of them. Rungs 1 and 2 are BUILT between those two ends with
-     color-mix (design.md §4's card recipe), which is what keeps them monotonic
-     under every flavour.
-     They are deliberately NOT aliased to --cosmos-surface-1/-2: Cosmos's rung 1
-     is chrome, not elevation. Under `realcraft` it equals rung 0 (#1b1b1b both)
+     near-misses of them. Rung 1 is BUILT between those two ends with color-mix
+     (design.md §4's card recipe), which is what keeps it monotonic under every
+     flavour.
+     It is deliberately NOT aliased to --cosmos-surface-1: Cosmos's rung 1 is
+     chrome, not elevation. Under `realcraft` it equals rung 0 (#1b1b1b both)
      and under `linear` it is DARKER than rung 0 (#09090a vs #121213), because
      Cosmos spends it on the sidebar frame. Exo spends its rung 1 on .mva-quote
      and .mva-rethink-proposal, whose whole point is a subtle raise: aliasing it
      would have flattened them onto the canvas under one flavour and recessed
      them under another. Mixing between Cosmos's own 0 and 3 keeps the raise a
      raise, in the flavour's own colours.
-     Rung 2 is the hover step and is currently unclaimed on purpose: every
-     hover in this file spends Obsidian's own --background-modifier-hover,
-     which is translucent and therefore correct over any parent. Swapping a
-     solid mix under it would change how a row reads in the sidebar, where the
-     parent is not the canvas. The rung is published; nothing is forced onto it. */
-  --mva-surface-0: var(--mv-surface-0, var(--cosmos-surface-0, var(--background-primary)));
-  --mva-surface-3: var(--mv-surface-3, var(--cosmos-surface-3, var(--background-secondary)));
-  --mva-surface-1: var(--mv-surface-1, color-mix(in srgb, var(--mva-surface-0) 92%, var(--mva-surface-3)));
-  --mva-surface-2: var(--mv-surface-2, color-mix(in srgb, var(--mva-surface-0) 82%, var(--mva-surface-3)));
+     There is no rung 2. It was published as "the hover step" and nothing ever
+     spent it: every hover in this file uses Obsidian's own
+     --background-modifier-hover, which is translucent and therefore correct
+     over any parent, and a solid mix under it would change how a row reads in
+     the sidebar. A rung nothing stands on is not a ladder step, it is a
+     declaration with a test holding it up. Publish it again when a surface
+     needs it. */
+  --mva-surface-0: var(--cosmos-surface-0, var(--background-primary));
+  --mva-surface-3: var(--cosmos-surface-3, var(--background-secondary));
+  --mva-surface-1: color-mix(in srgb, var(--mva-surface-0) 92%, var(--mva-surface-3));
   --mva-card-bg-hover: var(--mv-card-bg-hover, var(--cosmos-surface-card-hover, var(--background-modifier-hover)));
-  --mva-hairline: var(--mv-hairline, var(--cosmos-hairline, var(--background-modifier-border)));
-  --mva-ring: var(--mv-ring, var(--cosmos-ring, transparent));
+  --mva-hairline: var(--mv-hairline, var(--background-modifier-border));
+  --mva-ring: var(--mv-ring, transparent);
 
   /* ---- elevation: exactly two steps ---------------------------------------
      Rest is what a card wears when it is simply there; lift is what a floating
@@ -107,10 +120,10 @@ body {
      arrotondavano a 9px mentre Masonry, Horizon e Bases stavano su un altro
      valore. Nessun equivalente al livello tema, quindi la catena ha due anelli. */
   --mva-card-radius: var(--mv-r-card, var(--mva-r2));
-  --mva-r-chip: var(--mv-r-chip, var(--cosmos-r-chip, var(--mva-r1)));
-  --mva-r-floating: var(--mv-r-floating, var(--cosmos-r-floating-surface, 8px));
-  --mva-control-h: var(--mv-control-h, var(--cosmos-control-h, 26px));
-  --mva-control-pad: var(--mv-control-pad, var(--cosmos-control-pad, 9px));
+  --mva-r-chip: var(--mv-r-chip, var(--mva-r1));
+  --mva-r-floating: var(--cosmos-r-floating-surface, 8px);
+  --mva-control-h: var(--mv-control-h, 26px);
+  --mva-control-pad: var(--mv-control-pad, 9px);
 
   /* ---- timing --------------------------------------------------------------
      --mva-t carries duration AND easing, because that is how every transition
@@ -123,7 +136,7 @@ body {
      once per pass. A sweep is not a pulse: putting it on the heartbeat would
      make the placeholder race the thing it is standing in for. */
   --mva-t: var(--mv-t, var(--cosmos-t-fast, 0.14s)) ease;
-  --mva-t-base: var(--mv-t-base, var(--cosmos-t-base, 0.18s));
+  --mva-t-base: var(--cosmos-t-base, 0.18s);
   --mva-heartbeat: 1.6s;
   --mva-ease-out: var(--mv-lift, cubic-bezier(0.22, 1, 0.36, 1));
 
@@ -134,25 +147,25 @@ body {
      form-field labels. Cosmos publishes the eyebrow recipe as its label
      family, so a flavour that drops the uppercase reaches the whole suite at
      once instead of leaving this pane shouting on its own. */
-  --mva-type-eyebrow-size: var(--mv-label-size, var(--cosmos-label-size, 11px));
-  --mva-type-eyebrow-weight: var(--mv-label-weight, var(--cosmos-label-weight, 600));
-  --mva-type-eyebrow-track: var(--mv-label-track, var(--cosmos-label-track, 0.05em));
-  --mva-type-eyebrow-case: var(--mv-label-transform, var(--cosmos-label-transform, uppercase));
-  --mva-type-eyebrow-color: var(--mv-label-color, var(--cosmos-label-color, var(--text-muted)));
-  --mva-type-title-size: var(--mv-title-size, var(--cosmos-title-size, var(--font-ui-small)));
-  --mva-type-title-weight: var(--mv-title-weight, var(--cosmos-title-weight, 650));
-  --mva-type-title-track: var(--mv-title-track, var(--cosmos-title-track, -0.015em));
-  --mva-type-body-size: var(--mv-body-size, var(--cosmos-body-size, var(--font-ui-small)));
+  --mva-type-eyebrow-size: var(--mv-label-size, 11px);
+  --mva-type-eyebrow-weight: var(--mv-label-weight, 600);
+  --mva-type-eyebrow-track: var(--mv-label-track, 0.05em);
+  --mva-type-eyebrow-case: var(--mv-label-transform, uppercase);
+  --mva-type-eyebrow-color: var(--mv-label-color, var(--text-muted));
+  --mva-type-title-size: var(--font-ui-small);
+  --mva-type-title-weight: 650;
+  --mva-type-title-track: -0.015em;
+  --mva-type-body-size: var(--font-ui-small);
   --mva-type-body-size-sm: var(--font-ui-smaller);
-  --mva-type-body-weight: var(--mv-body-weight, var(--cosmos-body-weight, var(--font-normal, 400)));
-  --mva-type-body-track: var(--mv-body-track, var(--cosmos-body-track, normal));
+  --mva-type-body-weight: var(--font-normal, 400);
+  --mva-type-body-track: normal;
 
   /* ---- accent -------------------------------------------------------------
      One accent, spent only where a decision is being made: the primary action,
      the ring on the thing the keyboard will act on, a permission waiting for
      an answer. --mva-glow is the same accent as light: it belongs to the
      running turn and to nothing else (see §"identity moment" below). */
-  --mva-accent: var(--mv-accent, var(--cosmos-accent, var(--interactive-accent)));
+  --mva-accent: var(--interactive-accent);
   --mva-glow: color-mix(in srgb, var(--interactive-accent) 45%, transparent);
 
   /* ---- semantic status ----------------------------------------------------
@@ -3887,10 +3900,10 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   margin-left: auto;
 }
 .mva-ctx-pop-value.is-caution .mva-ctx-pop-pct {
-  color: var(--color-orange, var(--text-muted));
+  color: var(--mva-caution);
 }
 .mva-ctx-pop-value.is-danger .mva-ctx-pop-pct {
-  color: var(--color-red, var(--text-muted));
+  color: var(--mva-danger);
 }
 .mva-ctx-pop-track {
   height: 5px;
