@@ -222,8 +222,19 @@ type ActivityKey = (typeof ACTIVITY_SECTIONS)[number][0];
  * `lane` and `badge` are mutually exclusive by construction (`deriveLane`
  * only attaches a badge on the idle branch), so 1 and 2 cannot both apply.
  */
+/**
+ * The one definition of "this row wants a human": blocked on a permission or a
+ * question right now (`lane`), or ended badly and still unacknowledged
+ * (`badge`). Exported because the list is not the only reader — the rows paint
+ * an attention state from it too, and when the view restated the rule it
+ * restated it twice and got one of them wrong: the rich row asked for both
+ * arms, the compact row asked only for `badge`, guarded by a comment asserting
+ * the other arm could not reach it.
+ */
+export const needsYou = (r: ChatRow): boolean => r.lane === "needs-input" || !!r.badge;
+
 const activityKey = (r: ChatRow): ActivityKey => {
-  if (r.lane === "needs-input" || r.badge) return "needsYou";
+  if (needsYou(r)) return "needsYou";
   if (r.lane === "running") return "running";
   if (r.open) return "open";
   if (r.pinned) return "pinned";

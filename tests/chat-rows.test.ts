@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildChatList,
+  needsYou,
   relativeTime,
   modelLabel,
   nextNeedsInput,
@@ -1127,5 +1128,27 @@ describe("nextNeedsInput", () => {
 
   it("stays put when the only blocked chat is the one you are in", () => {
     expect(nextNeedsInput([{ id: "a" }], "a")).toBe("a");
+  });
+});
+
+describe("needsYou", () => {
+  const row = (over: Partial<ChatRow> = {}): ChatRow =>
+    ({ id: "a", lane: null, badge: null, ...over }) as ChatRow;
+
+  it("is true on both arms: blocked right now, or ended badly and unacknowledged", () => {
+    expect(needsYou(row({ lane: "needs-input" }))).toBe(true);
+    expect(needsYou(row({ badge: "error" }))).toBe(true);
+  });
+
+  it("is false for a running or idle row", () => {
+    expect(needsYou(row({ lane: "running" }))).toBe(false);
+    expect(needsYou(row())).toBe(false);
+  });
+
+  it("returns a boolean, so a caller can hand it straight to a class toggle", () => {
+    // `badge` is a string; the rich row read it as truthy and the compact row
+    // read it too, but only one of them also read `lane`. One predicate, one
+    // shape, no second copy to drift.
+    expect(needsYou(row({ badge: "error" }))).toBe(true);
   });
 });

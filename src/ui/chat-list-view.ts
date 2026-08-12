@@ -28,6 +28,7 @@ import { App, ItemView, Menu, Modal, Notice, setIcon, type WorkspaceLeaf } from 
 import type ExoPlugin from "../main";
 import {
   buildChatList,
+  needsYou,
   relativeTime,
   modelLabel,
   type ChatRow,
@@ -686,7 +687,7 @@ export class ChatListView extends ItemView {
     // definition (core/chat-rows `activityKey`) — blocked, or finished badly —
     // so the brightest rows on screen are exactly the section's rows, wherever
     // grouping happens to have put them.
-    if (r.lane === "needs-input" || r.badge) row.addClass("is-attention");
+    if (needsYou(r)) row.addClass("is-attention");
     if (r.open) row.addClass("is-active");
 
     this.dotInto(row, r);
@@ -804,11 +805,11 @@ export class ChatListView extends ItemView {
   private buildCompactRow(r: ChatRow, now: number): HTMLElement {
     const row = createDiv({ cls: "mva-chats-row is-compact" });
     if (r.depth === 1) row.addClass("is-child");
-    // Same rung as the rich rows: a turn that ended badly wants a human, and
-    // filing it in history does not make it less true. A blocked row can never
-    // reach this density (a lane always earns a rich row), so this is the whole
-    // of the attention rule down here.
-    if (r.badge) row.addClass("is-attention");
+    // Same rung, and the same predicate as the rich row. This used to read
+    // `r.badge` alone, with a comment arguing a blocked row could not reach
+    // this density: an invariant asserted in prose, holding up a second copy
+    // of a rule that lives in core.
+    if (needsYou(r)) row.addClass("is-attention");
     if (r.open) row.addClass("is-active");
     this.dotInto(row, r);
     row.createSpan({ cls: "mva-chats-name mva-type-body", text: r.title });
