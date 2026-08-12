@@ -55,13 +55,21 @@ A CLI process inside a sidebar can die in creative ways. Exo assumes it will:
 
 ## Who remembers what
 
-Three distinct memories, deliberately separated:
+Four distinct memories, deliberately separated:
 
 | Store | Owner | Contents | Survives |
 |---|---|---|---|
 | `~/.claude/projects/*.jsonl` | CLI | the model's real context (every message, tool call, result) | everything — this is what `resume` reattaches |
 | `conversations.json` | Exo | the UI transcript (rendered messages, tool cards, checkpoints); kept whole — a byte budget only *proposes* the oldest unpinned conversations for cleanup, and the user confirms | plugin reloads |
 | `data.json` | Exo | settings, open tabs, active tab | plugin reloads |
+| `<memory root>/chats/*.md` | Exo, then the user | a **settled** chat distilled into a real vault note: frontmatter (`exo_convo` stamp, provider, model, outcome, files touched), the `exo/chat` tag, and a summary body with wikilinks to what it changed | the plugin — it is a note like any other |
+
+The fourth is the only one that lives in the user's own vault, and the only one
+they can edit. Two rules follow from that and are enforced in `core/settle-note.ts`:
+the body is REGENERATED on every re-settle (the note says so in its own first
+line), while frontmatter keys and tags the user added are merged and kept; and a
+note is claimed by its `exo_convo` stamp rather than its filename, so renaming or
+moving it does not orphan it.
 
 The context ring in the toolbar reads real `usage` events from the stream; clicking it sends a guided `/compact`. Token pressure is managed where it actually lives — in the CLI session — not simulated in the UI.
 
