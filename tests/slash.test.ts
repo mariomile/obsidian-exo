@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hoistSlashCommand } from "../src/core/slash";
+import { hoistSlashCommand, parseLeadingCommand, expandCommandBody, expandVaultCommand } from "../src/core/slash";
 
 const KNOWN = new Set(["goal", "loop", "superpowers:brainstorming", "deep-research"]);
 
@@ -57,5 +57,80 @@ describe("hoistSlashCommand", () => {
 
   it("tolerates hyphenated command names", () => {
     expect(hoistSlashCommand("ricerca su X\n/deep-research", KNOWN)).toBe("/deep-research ricerca su X");
+  });
+});
+
+describe("parseLeadingCommand", () => {
+  it("splits a command that opens the message from its arguments", () => {
+    expect(parseLeadingCommand("/search prompt universe")).toEqual({ name: "search", args: "prompt universe" });
+    expect(parseLeadingCommand("  /brief")).toEqual({ name: "brief", args: "" });
+  });
+
+  it("folds the lines below the command into the arguments", () => {
+    expect(parseLeadingCommand("/export q3\nand include the appendix")).toEqual({
+      name: "export",
+      args: "q3\nand include the appendix",
+    });
+  });
+
+  it("ignores prose, paths and mid-message commands", () => {
+    expect(parseLeadingCommand("please run /brief")).toBeNull();
+    expect(parseLeadingCommand("/Users/mario/notes")).toBeNull();
+    expect(parseLeadingCommand("")).toBeNull();
+  });
+});
+
+describe("expandCommandBody", () => {
+  const BODY = ['---', 'description: Search', '---', 'Use "$ARGUMENTS" as the query.'].join("\n");
+
+  it("strips frontmatter and substitutes $ARGUMENTS", () => {
+    expect(expandCommandBody(BODY, "prompt universe")).toBe('Use "prompt universe" as the query.');
+  });
+
+  it("substitutes positional arguments", () => {
+    expect(expandCommandBody("Move $1 into $2.", "a.md Archive")).toBe("Move a.md into Archive.");
+  });
+
+  it("leaves an unmatched positional token alone rather than emptying it", () => {
+    expect(expandCommandBody("Move $1 into $2.", "a.md")).toBe("Move a.md into $2.");
+  });
+
+  // Silently dropping the arguments would make "/brief for Q3" behave exactly
+  // like a bare "/brief", with nothing to show the difference.
+  it("appends arguments when the command has no placeholder", () => {
+    expect(expandCommandBody("Run the morning brief.", "for Q3")).toBe("Run the morning brief.\n\nfor Q3");
+  });
+
+  it("adds nothing when there are no arguments", () => {
+    expect(expandCommandBody("Run the morning brief.", "")).toBe("Run the morning brief.");
+  });
+
+  // Half-emulating these would be worse than not expanding them: `!` runs a
+  // shell command and `@` inlines a file, both BEFORE the model sees the text.
+  it("leaves shell and file directives verbatim", () => {
+    const raw = "Context: !`git status`\nRead @notes/a.md";
+    expect(expandCommandBody(raw, "")).toBe(raw);
+  });
+});
+
+describe("expandVaultCommand", () => {
+  const read = async (path: string) => {
+    if (path === ".claude/commands/search.md") return 'Use "$ARGUMENTS" as the query.';
+    throw new Error("ENOENT");
+  };
+
+  it("expands a vault command when the engine cannot", async () => {
+    expect(await expandVaultCommand("/search prompt universe", read)).toBe('Use "prompt universe" as the query.');
+  });
+
+  // Claude Code resolves these itself: expanding here too would send the body
+  // AND leave the command in place.
+  it("is a no-op when the engine expands natively", async () => {
+    expect(await expandVaultCommand("/search prompt universe", null)).toBe("/search prompt universe");
+  });
+
+  it("leaves an unknown command exactly as the model saw it before", async () => {
+    expect(await expandVaultCommand("/nope arg", read)).toBe("/nope arg");
+    expect(await expandVaultCommand("just prose", read)).toBe("just prose");
   });
 });

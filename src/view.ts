@@ -57,7 +57,7 @@ import { swapTailChild } from "./ui/tail-child";
 import { StepsRun } from "./ui/steps";
 import { firstErrorLine, stepPlacement, isSubagentTool, shouldFoldStepsRun } from "./core/steps";
 import { agentTaskRow } from "./core/agent-task";
-import { hoistSlashCommand } from "./core/slash";
+import { hoistSlashCommand, expandVaultCommand } from "./core/slash";
 import { codexSessionToolset, mapUserInputAnswers } from "./core/codex-toolset";
 import { setGoal, clearGoal, advance, resumeGoal, buildContinuationPrompt } from "./core/goal-loop";
 import { applyWorkflowProgress, createWorkflowRun, summarizeWorkflowRun, type WorkflowRun } from "./core/workflow-progress";
@@ -5547,7 +5547,7 @@ export class ChatView extends ItemView {
       boundAgent && c.provider === "codex"
         ? buildAgentSystemPrompt(boundAgent.brain, await readAgentBrainBody(this.app, boundAgent.brain))
         : undefined;
-    const sendText = this.hoistOutbound(text);
+    const sendText = await expandVaultCommand(this.hoistOutbound(text), c.provider === "codex" ? (p) => this.app.vault.adapter.read(p) : null);
     // Active-context assembly (2026-07-30): attached-note paths AND the ambient
     // selection the chip is showing — both read from the same composer state the
     // UI renders from, so what the user sees is exactly what the model receives.

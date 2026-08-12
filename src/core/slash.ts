@@ -76,6 +76,87 @@ export function hoistSlashCommand(text: string, known: ReadonlySet<string>): str
   return text;
 }
 
+/** A `/command` that OPENS the message, split into its name and arguments.
+ *  Null for anything else — prose, a mid-message command (hoist first), or a
+ *  bare "/". */
+export function parseLeadingCommand(text: string): { name: string; args: string } | null {
+  const trimmed = text.trimStart();
+  const nl = trimmed.indexOf("\n");
+  const firstLine = nl === -1 ? trimmed : trimmed.slice(0, nl);
+  const rest = nl === -1 ? "" : trimmed.slice(nl + 1);
+  const m = COMMAND_LINE.exec(firstLine.trim());
+  if (!m) return null;
+  const args = [m[2]?.trim(), rest.trim()].filter(Boolean).join("\n");
+  return { name: m[1], args };
+}
+
+/**
+ * Expand a `.claude/commands/<name>.md` body the way the Claude CLI would, for
+ * engines that don't read `.claude/` at all.
+ *
+ * Claude Code resolves these natively, so Exo never touched them. Codex does
+ * not: it received "/brief" as literal text while the composer's autocomplete
+ * happily offered the command — an affordance that looked identical on both
+ * providers and worked on one. This is that expansion, done client-side.
+ *
+ * Supported, because the vault's own commands use them: frontmatter is
+ * stripped, `$ARGUMENTS` and `$1`…`$9` are substituted, and a command with no
+ * placeholder gets its arguments appended so they are never silently dropped.
+ *
+ * NOT supported: `!`-prefixed shell execution and `@`-prefixed file inlining.
+ * Those run BEFORE the prompt reaches the model and would need Exo to execute
+ * on the CLI's behalf — a different and much larger contract. They are left
+ * verbatim rather than half-emulated, so a command that uses them reads as
+ * unexpanded instead of quietly wrong.
+ */
+export function expandCommandBody(body: string, args: string): string {
+  const withoutFm = body.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
+  const positional = args.split(/\s+/).filter(Boolean);
+  let out = withoutFm;
+  let substituted = false;
+  if (out.includes("$ARGUMENTS")) {
+    out = out.split("$ARGUMENTS").join(args);
+    substituted = true;
+  }
+  out = out.replace(/\$([1-9])\b/g, (whole, digit: string) => {
+    substituted = true;
+    return positional[Number(digit) - 1] ?? whole;
+  });
+  const text = out.trim();
+  if (substituted || !args) return text;
+  // No placeholder but the user passed arguments: appending is the only way
+  // they reach the model at all. Dropping them would make "/brief for Q3"
+  // behave exactly like a bare "/brief" with no sign anything was lost.
+  return `${text}\n\n${args}`;
+}
+
+/**
+ * Resolve a leading `/command` against `.claude/commands/` and return the
+ * expanded prompt, for an engine that doesn't do it itself.
+ *
+ * `read` carries the provider gate as well as the I/O: pass the vault adapter
+ * for Codex, `null` for Claude (whose CLI expands these natively — expanding
+ * here too would send the body AND the command). Injecting it also keeps this
+ * free of Obsidian, so it tests as a pure function.
+ *
+ * A miss — no such file, unreadable, not a command at all — returns the text
+ * untouched: exactly the behaviour that existed before expansion, so this can
+ * only add resolution, never take it away.
+ */
+export async function expandVaultCommand(
+  text: string,
+  read: ((path: string) => Promise<string>) | null
+): Promise<string> {
+  if (!read) return text;
+  const parsed = parseLeadingCommand(text);
+  if (!parsed) return text;
+  try {
+    return expandCommandBody(await read(`.claude/commands/${parsed.name}.md`), parsed.args);
+  } catch {
+    return text;
+  }
+}
+
 export interface SlashEntry {
   name: string;
   /** What the thing IS, not which roster it came from. Drives the label + icon. */
