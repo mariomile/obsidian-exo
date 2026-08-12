@@ -81,6 +81,73 @@ describe("assembleContext", () => {
     expect(r.block).toContain("body A");
     expect(r.block).toContain("- B.md");
   });
+
+  // 2026-08-12 calibration: an inlined body was unbounded, so a 40k-char open
+  // note rode every single turn in full. Bounded injection, unbounded access:
+  // the model reads the rest with its own file tools.
+  it("caps an inlined body at maxCharsPerNote with a marker naming the note", () => {
+    const body = "x".repeat(300);
+    const r = assembleContext({
+      paths: ["Notes/Big.md"],
+      selection: null,
+      injectContent: true,
+      contents: { "Notes/Big.md": body },
+      maxCharsPerNote: 100,
+    });
+    expect(r.block).toContain("x".repeat(100));
+    expect(r.block).not.toContain("x".repeat(101));
+    expect(r.block).toContain('…[truncated, read "Notes/Big.md" for the rest]');
+    expect(r.injectedContentPaths).toEqual(["Notes/Big.md"]);
+    expect(r.truncatedPaths).toEqual(["Notes/Big.md"]);
+  });
+
+  it("a body at exactly the cap is not truncated", () => {
+    const r = assembleContext({
+      paths: ["a.md"],
+      selection: null,
+      injectContent: true,
+      contents: { "a.md": "y".repeat(100) },
+      maxCharsPerNote: 100,
+    });
+    expect(r.block).not.toContain("truncated");
+    expect(r.truncatedPaths).toEqual([]);
+  });
+
+  it("caps on the TRIMMED body, so surrounding whitespace never eats the budget", () => {
+    const r = assembleContext({
+      paths: ["a.md"],
+      selection: null,
+      injectContent: true,
+      contents: { "a.md": `\n\n   ${"y".repeat(100)}   \n\n` },
+      maxCharsPerNote: 100,
+    });
+    expect(r.block).not.toContain("truncated");
+    expect(r.truncatedPaths).toEqual([]);
+  });
+
+  it("caps each note independently, and only the over-cap one is marked", () => {
+    const r = assembleContext({
+      paths: ["small.md", "big.md"],
+      selection: null,
+      injectContent: true,
+      contents: { "small.md": "tiny", "big.md": "z".repeat(300) },
+      maxCharsPerNote: 100,
+    });
+    expect(r.block).toContain("tiny");
+    expect(r.truncatedPaths).toEqual(["big.md"]);
+    expect(r.injectedContentPaths).toEqual(["small.md", "big.md"]);
+  });
+
+  it("without maxCharsPerNote behavior is unchanged and truncatedPaths is empty", () => {
+    const r = assembleContext({
+      paths: ["a.md"],
+      selection: null,
+      injectContent: true,
+      contents: { "a.md": "z".repeat(5000) },
+    });
+    expect(r.block).toContain("z".repeat(5000));
+    expect(r.truncatedPaths).toEqual([]);
+  });
 });
 
 describe("formatContextDebug", () => {

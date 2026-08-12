@@ -172,6 +172,10 @@ export const VIEW_TYPE = "exo-view";
 export const EXO_ICON = "exo-star";
 
 const MAX_PERSIST_OUTPUT = 2000;
+/** Per-note ceiling when `injectContextContent` inlines bodies: bounded injection,
+ *  the model reads the rest on demand with its own file tools. Aligned with the
+ *  6000-char source caps in `core/agent-self.ts`. */
+const MAX_INLINE_NOTE_CHARS = 6000;
 const MAX_CHECKPOINT_FILE = 64_000; // don't persist a rewind snapshot larger than this (bloat guard)
 
 let convoSeed = 0;
@@ -5546,7 +5550,7 @@ export class ChatView extends ItemView {
         }
       }
     }
-    const assembled = assembleContext({ paths, selection, injectContent, contents });
+    const assembled = assembleContext({ paths, selection, injectContent, contents, maxCharsPerNote: MAX_INLINE_NOTE_CHARS });
     const message = assembled.block ? `${assembled.block}\n\n${sendText}` : sendText;
     if (this.plugin.settings.debugContext && isActiveConvo) {
       const chips = this.composer.contextChips();

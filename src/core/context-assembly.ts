@@ -36,6 +36,13 @@ export interface AssembleContextInput {
    * degrades gracefully rather than dropping the note entirely.
    */
   contents?: Record<string, string>;
+  /**
+   * Per-note ceiling on an inlined body (chars). Over-cap bodies are cut with an
+   * explicit marker pointing at the note, because the model can always read the
+   * rest on demand via its file tools: bounded injection, unbounded access.
+   * Absent → unbounded (legacy behaviour, byte-identical).
+   */
+  maxCharsPerNote?: number;
 }
 
 export interface AssembledContext {
@@ -45,6 +52,8 @@ export interface AssembledContext {
   includedPaths: string[];
   /** Subset of `includedPaths` whose body was inlined. */
   injectedContentPaths: string[];
+  /** Subset of `injectedContentPaths` whose body was cut at `maxCharsPerNote`. */
+  truncatedPaths: string[];
   /** Whether the ambient selection was serialized. */
   includedSelection: boolean;
   /** Character count of the serialized selection (0 when none). */
@@ -70,6 +79,7 @@ function blockquote(text: string): string {
 export function assembleContext(input: AssembleContextInput): AssembledContext {
   const includedPaths: string[] = [];
   const injectedContentPaths: string[] = [];
+  const truncatedPaths: string[] = [];
   const sections: string[] = [];
 
   if (input.paths.length) {
@@ -83,7 +93,13 @@ export function assembleContext(input: AssembleContextInput): AssembledContext {
         const body = input.contents?.[p];
         if (typeof body === "string") {
           injectedContentPaths.push(p);
-          inlined.push(`Context note "${p}":\n${body.trim()}`);
+          let text = body.trim();
+          const cap = input.maxCharsPerNote;
+          if (cap !== undefined && text.length > cap) {
+            text = `${text.slice(0, cap)}\n…[truncated, read "${p}" for the rest]`;
+            truncatedPaths.push(p);
+          }
+          inlined.push(`Context note "${p}":\n${text}`);
         } else {
           bare.push(`- ${p}`);
         }
@@ -110,6 +126,7 @@ export function assembleContext(input: AssembleContextInput): AssembledContext {
     block: sections.join("\n\n"),
     includedPaths,
     injectedContentPaths,
+    truncatedPaths,
     includedSelection,
     selectionChars,
   };
