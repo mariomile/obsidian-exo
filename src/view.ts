@@ -2423,7 +2423,7 @@ export class ChatView extends ItemView {
     void this.plugin.saveSettings();
     this.composer.refreshPerm();
     this.active.session?.setPermissionMode?.(next);
-    new Notice(next === "plan" ? "Plan mode on — the agent will propose before acting." : "Plan mode off.");
+    new Notice(next === "plan" ? `Plan mode on${this.active.provider === "codex" ? " from the next turn" : ""} — the agent will propose before acting.` : "Plan mode off.");
   }
 
   /** Research Mode is isolated to the active conversation and persists with it. */
@@ -2451,16 +2451,16 @@ export class ChatView extends ItemView {
       new Notice("Send a message first — nothing to compact yet.");
       return;
     }
-    const effectiveInstructions = c.provider === "codex" ? undefined : instructions;
-    c.session.compact(effectiveInstructions);
+    // Codex's thread/compact/start takes no instructions. Rather than refuse
+    // them, carry the focus into the next turn (pendingSendPrefix, consumed once):
+    // the summary is written by then, but steering what survives it is the point.
+    const codex = c.provider === "codex";
+    if (codex && instructions) c.pendingSendPrefix = `The conversation was just compacted. Keep this in focus: ${instructions}`;
+    c.session.compact(codex ? undefined : instructions);
     // Any compaction retires the proactive nudge for good.
     c.compactNudged = true;
     this.composer.hideCompactNudge();
-    new Notice(
-      instructions && c.provider === "codex"
-        ? "Compacting the conversation… Codex does not support custom compact instructions."
-        : instructions ? "Compacting with your instructions…" : "Compacting the conversation…",
-    );
+    new Notice(instructions ? "Compacting with your instructions…" : "Compacting the conversation…");
   }
 
   /** Reflect the active conversation's streaming state on the send button. */
