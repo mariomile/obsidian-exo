@@ -124,6 +124,7 @@ import type { SessionFileProbe } from "./core/resume-status";
 import { reconcileList } from "./ui/keyed-reconcile";
 import type { CardModel } from "./ui/keyed-reconcile";
 import { DEFAULT_SETTINGS } from "./settings";
+import { persistViewState } from "./settings-schema";
 import {
   buildRecap,
   isRecoverableSessionError,
@@ -1087,7 +1088,7 @@ export class ChatView extends ItemView {
     // First pass: seed the id counter from the highest numeric id suffix present,
     // NOT the conversation count — ids climb past the count after deletions and
     // history trimming, so a count-based seed produces colliding ids.
-    convoSeed = Math.max(convoSeed, maxIdSuffix(Array.isArray(raw) ? raw.map((d) => d?.id) : []));
+    convoSeed = Math.max(convoSeed, this.plugin.settings.convoSeed ?? 0, maxIdSuffix(Array.isArray(raw) ? raw.map((d) => d?.id) : []));
     // Second pass: build convos, reassigning any duplicate id to a fresh unique one
     // so distinct conversations never collide in id-keyed lookups. First occurrence
     // keeps the original id (so openTabIds/activeTabId still resolve to it). The
@@ -1982,8 +1983,7 @@ export class ChatView extends ItemView {
   }
 
   persistTabs(): void {
-    this.plugin.settings.openTabIds = [...this.openTabs];
-    this.plugin.settings.activeTabId = this.active?.id ?? "";
+    persistViewState(this.plugin.settings, { openTabIds: [...this.openTabs], activeTabId: this.active?.id ?? "", convoSeed });
     void this.plugin.saveSettings();
   }
 

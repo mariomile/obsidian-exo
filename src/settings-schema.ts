@@ -117,6 +117,11 @@ export interface MVASettings {
   // Tab bar runtime state (not user-facing settings).
   openTabIds: string[];
   activeTabId: string;
+  /** High-water mark of the conversation id counter. Persisted because the
+   *  counter used to be re-derived from the ids that SURVIVED a reload, so
+   *  deleting the highest-numbered chat handed its number back out. See
+   *  `persistViewState`. */
+  convoSeed: number;
   /** Memory dream pass automation: off | daily | weekly. */
   dreamPassSchedule: "off" | "daily" | "weekly";
   /** Timestamp of the last dream pass (scheduler bookkeeping). */
@@ -288,6 +293,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   debugContext: false,
   openTabIds: [],
   activeTabId: "",
+  convoSeed: 0,
   dreamPassSchedule: "off",
   lastDreamPass: 0,
   dreamLlmEnabled: false,
@@ -330,3 +336,27 @@ export const DEFAULT_SETTINGS: MVASettings = {
   connectionsInlineUnderline: true,
   connectionsStemming: true,
 };
+
+/**
+ * Write the view's runtime state, with the one rule that cannot be left to the
+ * caller: `convoSeed` is a HIGH-WATER MARK and only ever climbs.
+ *
+ * Conversation ids are minted `c<N>` from a counter that used to be re-seeded
+ * on every load from the ids still on disk. Deleting the highest-numbered chat
+ * therefore freed its number, and the next new chat was minted with a dead
+ * chat's id — which four durable stores then resolved against: the settled
+ * note's `exo_convo` stamp, the orchestration board's `- convo:` line,
+ * `proposals.json`, and `workflow-signals.json`. The worst of them was silent:
+ * a task driven by an unrelated conversation.
+ *
+ * Keeping the max here rather than at the call site means a caller that reads a
+ * stale seed, or writes out of order, still cannot lower it.
+ */
+export function persistViewState(
+  s: MVASettings,
+  v: { openTabIds: string[]; activeTabId: string; convoSeed: number },
+): void {
+  s.openTabIds = v.openTabIds;
+  s.activeTabId = v.activeTabId;
+  s.convoSeed = Math.max(s.convoSeed ?? 0, v.convoSeed);
+}

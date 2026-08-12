@@ -6,6 +6,7 @@ import {
   parseConversationsSource,
   partitionConvos,
 } from "../src/core/persistence";
+import { DEFAULT_SETTINGS, persistViewState, type MVASettings } from "../src/settings-schema";
 
 type C = { id: string; messages: unknown[]; updatedAt?: number };
 
@@ -293,5 +294,46 @@ describe("child reports survive a reload (view.ts persistence seam)", () => {
   it("the queue is capped where it is filled, so it cannot grow without bound on disk", () => {
     const core = readFileSync(join(__dirname, "..", "src", "core", "child-reports.ts"), "utf8");
     expect(core).toContain("MAX_PENDING_CHILD_REPORTS");
+  });
+});
+
+describe("the conversation id high-water mark", () => {
+  const settings = (over: Partial<MVASettings> = {}): MVASettings =>
+    ({ ...DEFAULT_SETTINGS, ...over }) as MVASettings;
+
+  it("climbs with the counter", () => {
+    const s = settings({ convoSeed: 7 });
+    persistViewState(s, { openTabIds: ["c8"], activeTabId: "c8", convoSeed: 8 });
+    expect(s.convoSeed).toBe(8);
+  });
+
+  it("never goes back down, however stale the caller's number is", () => {
+    // The bug this closes: the counter used to be re-derived on every load from
+    // the ids that SURVIVED, so deleting the highest-numbered chat handed its
+    // number back out, and the next new chat wore a dead chat's id. Four
+    // durable stores resolve against those ids.
+    const s = settings({ convoSeed: 12 });
+    persistViewState(s, { openTabIds: [], activeTabId: "", convoSeed: 3 });
+    expect(s.convoSeed).toBe(12);
+  });
+
+  it("treats a settings file written before this key as zero, not as a reset", () => {
+    const s = settings();
+    delete (s as Partial<MVASettings>).convoSeed;
+    persistViewState(s, { openTabIds: [], activeTabId: "", convoSeed: 5 });
+    expect(s.convoSeed).toBe(5);
+  });
+
+  it("still writes the tab state it always wrote", () => {
+    const s = settings();
+    persistViewState(s, { openTabIds: ["c1", "c2"], activeTabId: "c2", convoSeed: 2 });
+    expect(s.openTabIds).toEqual(["c1", "c2"]);
+    expect(s.activeTabId).toBe("c2");
+  });
+
+  it("is seeded from the persisted mark as well as the surviving ids", () => {
+    // The read side of the same rule, in view.ts's restore().
+    const view = readFileSync(join(__dirname, "../src/view.ts"), "utf8");
+    expect(view).toMatch(/convoSeed = Math\.max\(convoSeed, this\.plugin\.settings\.convoSeed \?\? 0, maxIdSuffix\(/);
   });
 });
