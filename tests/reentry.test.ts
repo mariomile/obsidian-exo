@@ -25,6 +25,8 @@ import {
   noteTurnEnd,
   reenterActive,
   type ReentryHost,
+  type ResumeComposer,
+  renderResumeVerbs,
   revealReentry,
   turnMessageIndex,
 } from "../src/ui/reentry";
@@ -182,7 +184,6 @@ describe("resume verbs", () => {
     stopped: false,
     poisoned: false,
     idleMs: 60_000,
-    draftEmpty: true,
     ...over,
   });
 
@@ -233,10 +234,6 @@ describe("resume verbs", () => {
     // No last message means no idle span to measure, not an infinite one.
     expect(resumeVerbs(state({ idleMs: undefined }))).toEqual([]);
     expect(resumeVerbs(state({ idleMs: undefined, stopped: true }))).toEqual([]);
-  });
-
-  it("stands down as soon as the user writes their own message", () => {
-    expect(resumeVerbs(state({ draftEmpty: false, stopped: true }))).toEqual([]);
   });
 
   it("words Resume differently after a stop or an error", () => {
@@ -426,6 +423,7 @@ class El {
   readonly classes = new Set<string>();
   readonly dataset: Record<string, string> = {};
   text = "";
+  value = "";
   tabIndex = 0;
   scrolled = false;
   private readonly handlers = new Map<string, ((e: unknown) => void)[]>();
@@ -465,6 +463,10 @@ class El {
   removeClass(c: string): void {
     this.classes.delete(c);
   }
+  toggleClass(c: string, on: boolean): void {
+    if (on) this.classes.add(c);
+    else this.classes.delete(c);
+  }
   setText(t: string): void {
     this.text = t;
   }
@@ -475,7 +477,10 @@ class El {
     this.handlers.set(type, [...(this.handlers.get(type) ?? []), h]);
   }
   click(): void {
-    for (const h of this.handlers.get("click") ?? []) h({});
+    this.dispatch("click");
+  }
+  dispatch(type: string): void {
+    for (const h of this.handlers.get(type) ?? []) h({});
   }
   scrollIntoView(): void {
     this.scrolled = true;
@@ -677,6 +682,61 @@ describe("the band, as an element", () => {
     const runs = listEl.querySelectorAll(".mva-steps");
     expect(runs.map((r) => r.scrolled)).toEqual([false, true, false]);
     expect(runs[1].classes.has("is-collapsed")).toBe(false); // opened, not just located
+  });
+});
+
+describe("the resume verbs, as elements", () => {
+  /** A composer host: the textarea the verbs stand down for, and the composer
+   *  they are inserted above. */
+  const verbHost = (draft: string) => {
+    const host = new El("");
+    const input = host.createDiv({ cls: "mva-input" });
+    input.value = draft;
+    host.createDiv({ cls: "mva-composer" });
+    const composer: ResumeComposer = {
+      getDraft: () => ({ text: input.value }) as ComposerDraft,
+      insertText: noop,
+      focusInput: noop,
+    };
+    // A stopped chat, which is the state that always offers verbs.
+    const c = {
+      messages: [{ role: "user", text: "go", at: Date.now() }],
+      streaming: false,
+      stopped: true,
+      pendingPerm: null,
+      pendingAsk: null,
+    } as unknown as Convo;
+    return { host, input, composer, c };
+  };
+  const bar = (host: El): El | null => host.querySelector(".mva-resume-verbs");
+
+  it("offers the verbs of the state on an empty composer", () => {
+    const { host, composer, c } = verbHost("");
+    renderResumeVerbs(host as unknown as HTMLElement, c, composer);
+    expect(bar(host)?.classes.has("is-hidden")).toBe(false);
+  });
+
+  it("keeps the bar, hidden, while the user is writing, and brings it back when they stop", () => {
+    // It used to be removed outright: `draftEmpty` was part of the state, so a
+    // non-empty draft returned no verbs at all and the bar was deleted. The
+    // keystroke listener then looked up a bar that no longer existed, so
+    // clearing the textarea never brought it back — the fast path was gone
+    // until some unrelated repaint happened to rebuild it.
+    const { host, input, composer, c } = verbHost("half a thought");
+    renderResumeVerbs(host as unknown as HTMLElement, c, composer);
+    expect(bar(host)).not.toBeNull();
+    expect(bar(host)?.classes.has("is-hidden")).toBe(true);
+
+    input.value = "";
+    input.dispatch("input");
+    expect(bar(host)?.classes.has("is-hidden")).toBe(false);
+  });
+
+  it("paints no bar at all when the state offers no verbs", () => {
+    const { host, composer, c } = verbHost("");
+    (c as { stopped: boolean }).stopped = false;
+    renderResumeVerbs(host as unknown as HTMLElement, c, composer);
+    expect(bar(host)).toBeNull();
   });
 });
 

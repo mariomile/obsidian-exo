@@ -266,9 +266,6 @@ export interface ResumeState {
    *  last message, or it carries no timestamp: an empty chat has nothing to
    *  resume, which is a different fact from having been idle forever. */
   idleMs: number | undefined;
-  /** The composer is empty. The verbs are a fast path INTO the composer, so
-   *  they stand down the moment the user starts writing their own. */
-  draftEmpty: boolean;
 }
 
 /** How long a settled chat has to sit untouched before a way back in beats no
@@ -312,7 +309,6 @@ const APPROVE: ResumeVerb = { key: "approve", label: "Approve" };
  *    still in your head, the composer is already the fast path.
  */
 export function resumeVerbs(s: ResumeState): ResumeVerb[] {
-  if (!s.draftEmpty) return [];
   if (s.pendingPerm) return [APPROVE];
   if (s.streaming || s.pendingAsk) return [];
   if (s.idleMs === undefined) return [];

@@ -31,3 +31,10 @@ export class Notice {
   }
   hide(): void {}
 }
+
+/** Paints a lucide glyph into an element. Nothing here reads the icon back;
+ *  the stub exists so a surface that labels its chips can be rendered in a
+ *  test at all. */
+export function setIcon(el: { dataset?: Record<string, string> }, icon: string): void {
+  if (el.dataset) el.dataset.icon = icon;
+}

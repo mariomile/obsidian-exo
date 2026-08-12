@@ -346,7 +346,6 @@ export function renderResumeVerbs(host: HTMLElement, c: Convo, composer: ResumeC
     stopped: c.stopped,
     poisoned: !!c.resumeRisky,
     idleMs: idleSince(c),
-    draftEmpty: composer.getDraft().text.trim().length === 0,
   });
   if (!verbs.length) return;
 
@@ -362,9 +361,11 @@ export function renderResumeVerbs(host: HTMLElement, c: Convo, composer: ResumeC
   else host.appendChild(bar);
 
   // The verbs are a fast path INTO an empty composer, so they stand down the
-  // moment the user starts writing one of their own. Listening on the textarea
-  // rather than repainting from the view keeps a keystroke off the view's
-  // repaint path entirely — this is one class toggle, not a rebuild.
+  // moment the user starts writing one of their own. That rule lives HERE and
+  // nowhere else: it used to be a `draftEmpty` field in the state too, so a
+  // repaint with a half-written draft returned no verbs and deleted the bar,
+  // and the keystroke listener then had nothing left to unhide. Standing down
+  // is a visibility question, and visibility is a class.
   const input = host.querySelector(".mva-input") as HTMLTextAreaElement | null;
   if (!input) return;
   syncVerbVisibility(host, input);
