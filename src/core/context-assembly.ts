@@ -43,6 +43,14 @@ export interface AssembleContextInput {
    * Absent → unbounded (legacy behaviour, byte-identical).
    */
   maxCharsPerNote?: number;
+  /**
+   * Paths whose body was already inlined earlier in THIS conversation and whose
+   * file is unchanged since (the caller checks mtime, see `selectUnchangedPaths`).
+   * They degrade to an annotated pointer line: the content already lives in the
+   * transcript, so re-inlining pays for the same bytes every turn. An edited note
+   * must NOT be in this set: staleness beats savings.
+   */
+  unchangedPaths?: ReadonlySet<string>;
 }
 
 export interface AssembledContext {
@@ -54,6 +62,8 @@ export interface AssembledContext {
   injectedContentPaths: string[];
   /** Subset of `injectedContentPaths` whose body was cut at `maxCharsPerNote`. */
   truncatedPaths: string[];
+  /** Paths that degraded to a pointer because their unchanged body was already sent. */
+  reusedPaths: string[];
   /** Whether the ambient selection was serialized. */
   includedSelection: boolean;
   /** Character count of the serialized selection (0 when none). */
@@ -80,6 +90,7 @@ export function assembleContext(input: AssembleContextInput): AssembledContext {
   const includedPaths: string[] = [];
   const injectedContentPaths: string[] = [];
   const truncatedPaths: string[] = [];
+  const reusedPaths: string[] = [];
   const sections: string[] = [];
 
   if (input.paths.length) {
@@ -90,6 +101,11 @@ export function assembleContext(input: AssembleContextInput): AssembledContext {
       const bare: string[] = [];
       for (const p of input.paths) {
         includedPaths.push(p);
+        if (input.unchangedPaths?.has(p)) {
+          reusedPaths.push(p);
+          bare.push(`- ${p} (content already provided earlier in this conversation)`);
+          continue;
+        }
         const body = input.contents?.[p];
         if (typeof body === "string") {
           injectedContentPaths.push(p);
@@ -127,9 +143,34 @@ export function assembleContext(input: AssembleContextInput): AssembledContext {
     includedPaths,
     injectedContentPaths,
     truncatedPaths,
+    reusedPaths,
     includedSelection,
     selectionChars,
   };
+}
+
+/**
+ * Which of this turn's attached notes can degrade to a pointer: the ones whose
+ * body was already inlined into an earlier outbound turn of this conversation AND
+ * whose file has not been modified since.
+ *
+ * Every unusable mtime (0, NaN, absent) degrades to "changed", so the fallback is
+ * always to re-inline. The alternative failure mode would be serving the model a
+ * body it never received, or a stale one, to save bytes: not a trade worth making.
+ * This is not hypothetical: the repo's own Obsidian mock hands back
+ * `stat = { mtime: 0 }`, and equality alone would call that pair unchanged.
+ */
+export function selectUnchangedPaths(
+  noteMtimes: Record<string, number | undefined>,
+  stamped: ReadonlyMap<string, number> | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!stamped) return out;
+  for (const [p, mtime] of Object.entries(noteMtimes)) {
+    if (typeof mtime !== "number" || !Number.isFinite(mtime) || mtime <= 0) continue;
+    if (stamped.get(p) === mtime) out.add(p);
+  }
+  return out;
 }
 
 export interface ContextDebugInput {

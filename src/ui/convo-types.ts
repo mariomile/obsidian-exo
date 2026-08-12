@@ -271,6 +271,14 @@ export interface Convo {
    *  conversation re-injects from scratch, which is correct: the cached history is
    *  gone too). Mirrors the runtime-only pattern of `aiTitleAttempts` above. */
   injectedMemoryIds?: Set<string>;
+  /** Context inlining (2026-08-12 calibration): path → the file's mtime at the
+   *  moment its body was last inlined into an outbound turn of THIS conversation.
+   *  A path here whose file still carries the same mtime rides the next turn as a
+   *  pointer, not as bytes: the body is already in the cached history. Same
+   *  lifecycle and same stamp-after-send rule as `injectedMemoryIds` above, and
+   *  runtime-only for the same reason: a reload loses the cached history too, so
+   *  re-inlining once is the correct restart. */
+  inlinedNoteMtimes?: Map<string, number>;
   /** Controller for the in-flight AI-title call, so disposing the conversation
    *  (close/delete/reset) aborts it. Runtime-only. */
   titleAbort?: AbortController | null;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assembleContext, formatContextDebug } from "./context-assembly";
+import { assembleContext, formatContextDebug, selectUnchangedPaths } from "./context-assembly";
 
 describe("assembleContext", () => {
   it("returns an empty block when there is no context", () => {
@@ -147,6 +147,75 @@ describe("assembleContext", () => {
     });
     expect(r.block).toContain("z".repeat(5000));
     expect(r.truncatedPaths).toEqual([]);
+  });
+
+  // 2026-08-12 calibration: the same body was re-inlined on EVERY turn, so a 3k
+  // note cost 3k per turn forever. `injectedMemoryIds` already solves exactly
+  // this for recalled memories; note content was simply not covered.
+  it("an unchanged already-sent note degrades to a pointer line instead of re-inlining", () => {
+    const r = assembleContext({
+      paths: ["a.md", "b.md"],
+      selection: null,
+      injectContent: true,
+      contents: { "a.md": "body A", "b.md": "body B" },
+      unchangedPaths: new Set(["a.md"]),
+    });
+    expect(r.block).not.toContain("body A");
+    expect(r.block).toContain("- a.md (content already provided earlier in this conversation)");
+    expect(r.block).toContain("body B");
+    expect(r.reusedPaths).toEqual(["a.md"]);
+    expect(r.injectedContentPaths).toEqual(["b.md"]);
+    expect(r.includedPaths).toEqual(["a.md", "b.md"]);
+  });
+
+  it("without unchangedPaths every body inlines and reusedPaths is empty", () => {
+    const r = assembleContext({
+      paths: ["a.md"],
+      selection: null,
+      injectContent: true,
+      contents: { "a.md": "body A" },
+    });
+    expect(r.block).toContain("body A");
+    expect(r.reusedPaths).toEqual([]);
+  });
+
+  it("ignores unchangedPaths entirely when injectContent is off", () => {
+    const r = assembleContext({
+      paths: ["a.md"],
+      selection: null,
+      injectContent: false,
+      unchangedPaths: new Set(["a.md"]),
+    });
+    expect(r.block).toBe("Context notes:\n- a.md");
+    expect(r.reusedPaths).toEqual([]);
+  });
+});
+
+describe("selectUnchangedPaths", () => {
+  it("marks a path unchanged when this turn's mtime equals the stamped one", () => {
+    const out = selectUnchangedPaths({ "a.md": 1700 }, new Map([["a.md", 1700]]));
+    expect([...out]).toEqual(["a.md"]);
+  });
+
+  it("an edited note (new mtime) is NOT unchanged: staleness beats savings", () => {
+    const out = selectUnchangedPaths({ "a.md": 1800 }, new Map([["a.md", 1700]]));
+    expect([...out]).toEqual([]);
+  });
+
+  it("a never-sent note is not unchanged, and no stamps at all means nothing is", () => {
+    expect([...selectUnchangedPaths({ "a.md": 1700 }, new Map([["b.md", 1700]]))]).toEqual([]);
+    expect([...selectUnchangedPaths({ "a.md": 1700 }, undefined)]).toEqual([]);
+  });
+
+  // The repo's own obsidian mock hands back `stat = { mtime: 0 }`, and a vault
+  // adapter can do the same for a file it cannot stat. An unusable mtime must
+  // degrade to "changed" (re-inline), never to "unchanged" (serve a stale body).
+  it("an unusable mtime degrades to changed, even when the stamp matches it", () => {
+    expect([...selectUnchangedPaths({ "a.md": 0 }, new Map([["a.md", 0]]))]).toEqual([]);
+    expect([...selectUnchangedPaths({ "a.md": NaN }, new Map([["a.md", NaN]]))]).toEqual([]);
+    expect(
+      [...selectUnchangedPaths({ "a.md": undefined }, new Map([["a.md", undefined as unknown as number]]))],
+    ).toEqual([]);
   });
 });
 

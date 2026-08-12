@@ -49,7 +49,7 @@ import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
 import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
-import { assembleContext, formatContextDebug } from "./core/context-assembly";
+import { assembleContext, formatContextDebug, selectUnchangedPaths } from "./core/context-assembly";
 import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { describeActivity } from "./core/activity";
 import { clickable } from "./ui/dom";
@@ -5537,6 +5537,7 @@ export class ChatView extends ItemView {
     const selection = isActiveConvo ? this.composer.contextSelection() : null;
     const injectContent = this.plugin.settings.injectContextContent;
     let contents: Record<string, string> | undefined;
+    const noteMtimes: Record<string, number> = {};
     if (injectContent && paths.length) {
       contents = {};
       for (const p of paths) {
@@ -5544,13 +5545,15 @@ export class ChatView extends ItemView {
         if (f instanceof TFile) {
           try {
             contents[p] = await this.app.vault.cachedRead(f);
+            noteMtimes[p] = f.stat.mtime;
           } catch {
             /* missing → assembleContext degrades this path to a bare-path line */
           }
         }
       }
     }
-    const assembled = assembleContext({ paths, selection, injectContent, contents, maxCharsPerNote: MAX_INLINE_NOTE_CHARS });
+    const unchangedPaths = selectUnchangedPaths(noteMtimes, c.inlinedNoteMtimes);
+    const assembled = assembleContext({ paths, selection, injectContent, contents, maxCharsPerNote: MAX_INLINE_NOTE_CHARS, unchangedPaths });
     const message = assembled.block ? `${assembled.block}\n\n${sendText}` : sendText;
     if (this.plugin.settings.debugContext && isActiveConvo) {
       const chips = this.composer.contextChips();
@@ -6122,6 +6125,12 @@ export class ChatView extends ItemView {
       // `selectTurnRecall`, which deliberately does NOT stamp at selection time.
       if (recalled.length && c.injectedMemoryIds) {
         for (const e of recalled) c.injectedMemoryIds.add(e.id);
+      }
+      // Same commit-point rule, for the same reason: a note body counts as
+      // "already provided" only once the send that carried it is real.
+      if (assembled.injectedContentPaths.length) {
+        if (!c.inlinedNoteMtimes) c.inlinedNoteMtimes = new Map();
+        for (const p of assembled.injectedContentPaths) c.inlinedNoteMtimes.set(p, noteMtimes[p]);
       }
       await session.send(outbound, onEvent, imgs, codexAgentSystemPrompt);
       // `session.send` can resolve cleanly even after a user Stop/Esc — the
