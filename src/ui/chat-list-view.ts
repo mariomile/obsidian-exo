@@ -42,6 +42,7 @@ import {
   chatRowSig,
   collapseChildren,
   isParentCollapsed,
+  blockedReason,
   isSectionCollapsed,
   needsStripSig,
   rowPreview,
@@ -380,16 +381,11 @@ export class ChatListView extends ItemView {
     for (const r of blocked) {
       const chip = host.createDiv({ cls: "mva-chats-needs-chip" });
       chip.createSpan({ cls: "mva-chats-needs-name", text: r.title });
-      chip.createSpan({
-        cls: "mva-chats-needs-why",
-        text: r.reason === "perm" ? "permission" : "answer",
-      });
+      const why = blockedReason(r.reason);
+      chip.createSpan({ cls: "mva-chats-needs-why", text: why.short });
       // The chip says what it wants; a screen reader gets the whole sentence,
       // because "Alpha permission" out of context is not one.
-      chip.setAttribute(
-        "aria-label",
-        `${r.title} — needs ${r.reason === "perm" ? "permission" : "an answer"}`,
-      );
+      chip.setAttribute("aria-label", `${r.title} — needs ${why.long}`);
       clickable(chip, () => void this.plugin.revealConversation(r.id));
     }
   }

@@ -45,6 +45,24 @@ export function chatDot(row: { lane?: "running" | "needs-input"; unseen: boolean
 }
 
 /**
+ * What a blocked row is waiting for, in the two lengths the UI needs: a bare
+ * noun for a chip that already sits under the chat's name, and the full noun
+ * phrase for anything that has to read as a sentence (a status line, a screen
+ * reader label).
+ *
+ * One function because the mapping was written three times - here, and twice
+ * more in the needs-you strip, where the chip said "answer" and the aria-label
+ * said "an answer". Same two-branch decision, three copies, in the module pair
+ * whose whole contract is that what a row SAYS is decided in core.
+ */
+export function blockedReason(reason: ChatRow["reason"]): { short: string; long: string } {
+  return reason === "perm"
+    ? { short: "permission", long: "permission" }
+    : { short: "answer", long: "an answer" };
+}
+
+
+/**
  * The status chip of a running or blocked row, or `null` when the row says it
  * some other way.
  *
@@ -60,7 +78,7 @@ export function chatDot(row: { lane?: "running" | "needs-input"; unseen: boolean
  *    line of a 216px column saying the same thing twice.
  */
 export function rowStatusText(r: Pick<ChatRow, "lane" | "reason" | "activity">): string | null {
-  if (r.lane === "needs-input") return `Needs ${r.reason === "perm" ? "permission" : "an answer"}`;
+  if (r.lane === "needs-input") return `Needs ${blockedReason(r.reason).long}`;
   if (r.lane !== "running") return null;
   return r.activity ? null : "Working";
 }

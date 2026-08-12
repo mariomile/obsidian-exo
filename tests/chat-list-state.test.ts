@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  blockedReason,
   chatDot,
   chatRowSig,
   collapseChildren,
@@ -389,5 +390,17 @@ describe("the live phrase moves per tool call, never per token", () => {
     // its last tool ever resolving, and a phrase left behind would sit on a
     // settled row claiming live work.
     expect([...view.matchAll(/delete c\.activity;/g)]).toHaveLength(2);
+  });
+});
+
+describe("blockedReason", () => {
+  it("gives a bare noun for a chip and a noun phrase for a sentence", () => {
+    expect(blockedReason("perm")).toEqual({ short: "permission", long: "permission" });
+    expect(blockedReason("ask")).toEqual({ short: "answer", long: "an answer" });
+  });
+
+  it("is what the status line spends, so the two cannot drift", () => {
+    const line = rowStatusText({ lane: "needs-input", reason: "ask", activity: null });
+    expect(line).toBe(`Needs ${blockedReason("ask").long}`);
   });
 });
