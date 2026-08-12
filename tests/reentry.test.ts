@@ -24,11 +24,13 @@ import {
   noteTranscriptReset,
   noteTurnEnd,
   reenterActive,
+  type ReentryHost,
   revealReentry,
   turnMessageIndex,
 } from "../src/ui/reentry";
 import type { Convo } from "../src/ui/convo-types";
 import type { Message } from "../src/core/model";
+import type { ComposerDraft } from "../src/ui/composer";
 
 /**
  * Phase 6, the re-entry system. Four behaviours are under test here: the
@@ -511,9 +513,19 @@ class El {
 };
 
 const BAND = ".mva-reentry";
-const shown = { isShown: () => true } as unknown as HTMLElement;
-const collapsed = { isShown: () => false } as unknown as HTMLElement;
 const noop = () => {};
+
+/** A re-entry host whose composer never offers verbs: these tests are about
+ *  the band, and the verbs have their own suite. */
+const host = (isShown: boolean, onRead: () => void = noop): ReentryHost => ({
+  containerEl: { isShown: () => isShown } as unknown as HTMLElement,
+  listWrap: new El() as unknown as HTMLElement,
+  composer: { getDraft: () => ({ text: "x" }) as ComposerDraft, insertText: noop, focusInput: noop },
+  openNote: noop,
+  persist: onRead,
+});
+const shown = host(true);
+const collapsed = host(false);
 
 /**
  * A conversation with a transcript on screen. `turns[i]` is the message index
@@ -573,7 +585,7 @@ describe("the band, as an element", () => {
     const first = listEl.querySelector(BAND);
     c.messages.push(tool("Bash", { command: "ls" }));
     listEl.createDiv({ cls: "mva-turn" }).dataset.msg = "3";
-    reenterActive(c, shown, noop, noop);
+    reenterActive(c, shown);
     const second = listEl.querySelector(BAND);
     expect(second).not.toBe(first);
     expect(second?.children.map((s) => s.text)).toEqual(["since you left", "1 step", ""]);
@@ -586,7 +598,7 @@ describe("the band, as an element", () => {
     revealReentry(c, noop);
     const painted = listEl.querySelector(BAND);
     let persisted = 0;
-    reenterActive(c, shown, noop, () => persisted++);
+    reenterActive(c, host(true, () => persisted++));
     expect(listEl.querySelector(BAND)).toBe(painted); // the same element, untouched
     expect(persisted).toBe(0);
   });
@@ -605,7 +617,7 @@ describe("the band, as an element", () => {
     c.messages.push(user("more"), { role: "assistant", segments: [{ t: "text", md: "done" }] });
     listEl.createDiv({ cls: "mva-turn" }).dataset.msg = "3";
     listEl.createDiv({ cls: "mva-turn" }).dataset.msg = "4";
-    reenterActive(c, shown, noop, noop);
+    reenterActive(c, shown);
 
     expect(listEl.querySelector(BAND)).toBe(painted); // the same element, still readable
     // The position DOES catch up, and that is the same rule prose follows
@@ -622,7 +634,7 @@ describe("the band, as an element", () => {
     revealReentry(c, noop);
     const painted = listEl.querySelector(BAND);
     c.messages.push(tool("Bash", { command: "ls" })); // no element for it
-    reenterActive(c, shown, noop, noop);
+    reenterActive(c, shown);
     expect(listEl.querySelector(BAND)).toBe(painted);
   });
 
@@ -633,14 +645,14 @@ describe("the band, as an element", () => {
     const painted = listEl.querySelector(BAND);
     c.messages.push(user("one more thing"));
     (c as { streaming: boolean }).streaming = true;
-    reenterActive(c, shown, noop, noop);
+    reenterActive(c, shown);
     expect(listEl.querySelector(BAND)).toBe(painted);
   });
 
   it("never re-enters a pane that is still collapsed", () => {
     const messages = [user("a"), ...work12()];
     const { c, listEl } = domConvo(messages, 1, allTurns(messages));
-    reenterActive(c, collapsed, noop, noop);
+    reenterActive(c, collapsed);
     expect(listEl.querySelector(BAND)).toBeNull();
     expect(c.readIndex).toBe(1);
   });
@@ -817,9 +829,10 @@ describe("the re-entry band's wiring", () => {
     // with `loadIfDeferred()` while the sidebar is still collapsed, so a bare
     // reveal there consumes the band into a pane nobody ever opened.
     expect(view).not.toMatch(/revealReentry\(/);
-    expect(view).toMatch(/reenterActive\(this\.active, this\.containerEl.{0,90}worked overnight/);
-    expect(view).toMatch(/reenterActive\(c, this\.containerEl/);
-    expect(view).toMatch(/renderResumeVerbs\(/);
+    // Every re-entry goes through the one host, so the band and the verbs
+    // cannot end up answering different events again.
+    expect(view.match(/reenterActive\(\w+(?:\.\w+)*, this\.reentryHost\)/g)).toHaveLength(5);
+    expect(view).not.toMatch(/reenterActive\([^)]*containerEl/);
   });
 
   it("persists the read position with the conversation", () => {

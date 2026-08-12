@@ -70,7 +70,7 @@ import {
 } from "./core/live-tasks";
 import { LiveTaskRegistry } from "./ui/live-task-registry";
 import { Composer } from "./ui/composer";
-import { cutTranscriptAfter, cutTranscriptFrom, noteTranscriptReset, noteTurnEnd, reenterActive, renderResumeVerbs, turnMessageIndex } from "./ui/reentry";
+import { cutTranscriptAfter, cutTranscriptFrom, noteTranscriptReset, noteTurnEnd, reenterActive, renderResumeVerbs, turnMessageIndex, type ReentryHost } from "./ui/reentry";
 import type {
   AssistantCtx,
   Convo,
@@ -467,10 +467,10 @@ export class ChatView extends ItemView {
     const refreshForLeafChange = debounce(() => {
       this.composer.refreshContext();
       this.refreshSurfacing();
-      reenterActive(this.active, this.containerEl, (p) => this.openNote(p), () => this.persist());
+      reenterActive(this.active, this.reentryHost);
     }, 120, true);
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => refreshForLeafChange()));
-    this.registerEvent(this.app.workspace.on("layout-change", () => reenterActive(this.active, this.containerEl, (p) => this.openNote(p), () => this.persist()))); // sidebar riaperta: un rientro che non cambia chat attiva
+    this.registerEvent(this.app.workspace.on("layout-change", () => reenterActive(this.active, this.reentryHost))); // sidebar riaperta: un rientro che non cambia chat attiva
     this.register(() => refreshForLeafChange.cancel());
     // Resizing the pane can flip a short transcript into overflow (or back) without
     // any content change — keep the tail "Related" section in sync with that too.
@@ -1194,7 +1194,7 @@ export class ChatView extends ItemView {
     this.refreshProviderUI();
     this.refreshTabs(); // the strip AND the resume verbs: boot IS a re-entry moment
     this.scrollToBottom();
-    reenterActive(this.active, this.containerEl, (p) => this.openNote(p), () => this.persist()); // worked overnight; gated, because `loadIfDeferred` boots this view into a collapsed sidebar
+    reenterActive(this.active, this.reentryHost); // worked overnight; gated, because `loadIfDeferred` boots this view into a collapsed sidebar
     this.renderTailSurfacing(this.active);
     this.rebuildOutline();
   }
@@ -1327,6 +1327,7 @@ export class ChatView extends ItemView {
     return bytes;
   }
 
+  private get reentryHost(): ReentryHost { return { containerEl: this.containerEl, listWrap: this.listWrap, composer: this.composer, openNote: (p) => this.openNote(p), persist: () => this.persist() }; }
   /** Schedule a debounced write. Callers fire this freely; the actual
    *  serialize+write is coalesced in flushPersist(). */
   persist(): void {
@@ -1511,7 +1512,7 @@ export class ChatView extends ItemView {
     this.listHost.empty();
     this.listHost.appendChild(c.listEl);
     if (c.listEl.childElementCount === 0) this.renderEmptyState();
-    reenterActive(c, this.containerEl, (p) => this.openNote(p), () => this.persist()); // "since you left", same gate: the chats sidebar switches chat with this pane collapsed
+    reenterActive(c, this.reentryHost); // "since you left", same gate: the chats sidebar switches chat with this pane collapsed
     this.syncActiveSurfaces(c);
     this.renderTabs();
     this.applyWorkingSet();
@@ -1556,7 +1557,6 @@ export class ChatView extends ItemView {
     // transition it has to observe; the popover re-renders or closes with it.
     this.refreshAgentIndicators();
     this.renderAgentPopover();
-    renderResumeVerbs(this.listWrap, c, this.composer); // state-contextual re-entry verbs
   }
 
   /* ----------------------------- tab bar ---------------------------- */
@@ -2401,7 +2401,7 @@ export class ChatView extends ItemView {
    */
   revealConversation(convoId: string): boolean {
     if (this.active?.id === convoId) {
-      reenterActive(this.active, this.containerEl, (p) => this.openNote(p), () => this.persist()); // same chat, back in view
+      reenterActive(this.active, this.reentryHost); // same chat, back in view
       this.focusComposer();
       return true;
     }

@@ -36,6 +36,18 @@ import {
 const BAND = "mva-reentry";
 const VERBS = "mva-resume-verbs";
 
+/** What re-entering needs from the view: where to paint, and the two services
+ *  a painted surface calls back into. One object because the band and the
+ *  verbs are one moment, and splitting the arguments is how they came to be
+ *  wired to two different sets of events. */
+export interface ReentryHost {
+  containerEl: HTMLElement;
+  listWrap: HTMLElement;
+  composer: ResumeComposer;
+  openNote(path: string): void;
+  persist(): void;
+}
+
 /**
  * The read position after a turn ENDS, which is the other half of the
  * lifecycle and the one that is easy to forget: a reveal reads the chat you
@@ -246,14 +258,16 @@ export function cutTranscriptFrom(c: Convo, turnEl: HTMLElement): void {
  *    second, cheaper question here is how the two answers came to disagree —
  *    "messages landed" is not "there is news", and a turn of pure prose is both.
  */
-export function reenterActive(
-  c: Convo | null | undefined,
-  containerEl: HTMLElement,
-  onOpenNote: (path: string) => void,
-  onRead: () => void,
-): void {
-  if (!c || !containerEl.isShown()) return;
-  revealReentry(c, onOpenNote, onRead);
+export function reenterActive(c: Convo | null | undefined, host: ReentryHost): void {
+  if (!c || !host.containerEl.isShown()) return;
+  revealReentry(c, host.openNote, host.persist);
+  // Both halves of the same moment, from one call. They used to be wired to
+  // two different event sets: the band answered layout-change, the verbs did
+  // not, so the flagship path — collapse the sidebar, come back the next
+  // morning — painted the line and no way back in. The verbs are also
+  // clock-dependent now, so a chat going cold with the pane open has no other
+  // event to wait for.
+  renderResumeVerbs(host.listWrap, c, host.composer);
 }
 
 /** Where a populated slot goes. Steps are a place in the transcript below the
