@@ -738,4 +738,63 @@ describe("CodexSession app-server lifecycle", () => {
     session.dispose();
     expect(stop).toHaveBeenCalledOnce();
   });
+
+  // The enumeration in routeItem covers the item types Codex had when it was
+  // written. These two tests pin the behaviour for everything else: unknown
+  // WORK becomes visible, known non-work stays silent. Without the first, a
+  // Codex release that adds or renames an item type turns real work into a
+  // turn that looks like it did nothing.
+  it("renders an unmapped item type as a generic tool card instead of dropping it", async () => {
+    const { session, child } = await readySession();
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    child.push({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        item: { id: "item-9", type: "fileRead", arguments: { path: "note.md" }, status: "inProgress" },
+      },
+    });
+    child.push({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        item: { id: "item-9", type: "fileRead", status: "completed", output: "# Note" },
+      },
+    });
+    child.push({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+    });
+    await turn;
+
+    expect(events).toContainEqual({
+      kind: "tool-call-start",
+      id: "item-9",
+      name: "fileRead",
+      input: { path: "note.md" },
+    });
+    expect(events).toContainEqual({ kind: "tool-call-result", id: "item-9", ok: true, output: "# Note" });
+    session.dispose();
+  });
+
+  it("keeps conversation-carrying items out of the tool stream", async () => {
+    const { session, child } = await readySession();
+    const events: AgentEvent[] = [];
+    const { turn } = await startTurn(session, child, events);
+    for (const type of ["reasoning", "userMessage", "todoList", "error"]) {
+      child.push({
+        method: "item/started",
+        params: { threadId: "thread-1", item: { id: `item-${type}`, type, status: "inProgress" } },
+      });
+    }
+    child.push({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+    });
+    await turn;
+
+    expect(events.filter((e) => e.kind === "tool-call-start")).toHaveLength(0);
+    session.dispose();
+  });
 });

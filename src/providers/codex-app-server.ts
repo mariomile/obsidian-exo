@@ -73,6 +73,14 @@ function collaborationMode(opts: SessionOpts, systemPromptOverride?: string): Re
   };
 }
 
+/** Item types that carry conversation content or are already surfaced through
+ *  another channel (reasoning deltas, `turn/plan/updated`, the `error`
+ *  notification). Everything NOT listed here — including types that do not
+ *  exist yet — falls through to a generic tool card in `routeItem`. Keeping the
+ *  exclusions explicit is what lets the fallback be safe: the default renders
+ *  work, and only known non-work is dropped. */
+const NON_TOOL_ITEMS = new Set(["agentMessage", "userMessage", "reasoning", "todoList", "plan", "error"]);
+
 const EXO_HOUSE_RULES =
   'Exo renders every file you read, create, or edit as chips below your message. ' +
   'Do NOT restate them as a prose list, a "Files touched"/"File toccati" section, ' +
@@ -286,6 +294,10 @@ export class CodexSession implements AgentSession {
   private turnInFlight = false;
   private interruptRequested = false;
   private streamedAgentItems = new Set<string>();
+  /** Item types already reported to the console by the `routeItem` fallback —
+   *  logged once each, so an unmapped type is diagnosable without spamming a
+   *  line per item. */
+  private unknownItemTypes = new Set<string>();
   private imagePaths: string[] = [];
   private usage: ContextUsage | null = null;
   private turnTokens: number | null = null;
@@ -772,7 +784,27 @@ export class CodexSession implements AgentSession {
       this.onEvent?.(done
         ? { kind: "tool-call-result", id, ok: item.success !== false && item.status !== "failed", output: outputText(item.output ?? item.result ?? item.error) }
         : { kind: "tool-call-start", id, name, input: item.arguments });
+      return;
     }
+    // Anything Codex adds after this switch was written. The cases above are
+    // shape-specific renderings of well-known items, NOT an allowlist of what
+    // the UI may show: without this fallback a new item type is silent work —
+    // it happens, and the turn looks like it did nothing. Rendering it as a
+    // plain tool card under its own type name is worse than a tailored card
+    // and far better than invisibility.
+    if (!item.type || NON_TOOL_ITEMS.has(item.type)) return;
+    if (!this.unknownItemTypes.has(item.type)) {
+      this.unknownItemTypes.add(item.type);
+      console.info(`[Exo] codex: unmapped item type "${item.type}" — rendered as a generic tool card.`);
+    }
+    this.onEvent?.(done
+      ? {
+          kind: "tool-call-result",
+          id,
+          ok: item.status !== "failed",
+          output: outputText(item.output ?? item.result ?? item.error ?? item.text),
+        }
+      : { kind: "tool-call-start", id, name: item.type, input: item.arguments ?? {} });
   }
 
   private publishCaps(): void {
