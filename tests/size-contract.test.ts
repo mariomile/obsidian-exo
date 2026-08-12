@@ -39,7 +39,18 @@ const CEILINGS: Record<string, number> = {
   // wiring che segue (strip/sidebar), non un permesso di ricrescita: alzare il
   // numero per qualsiasi ALTRO motivo resta vietato, e il prossimo candidato
   // all'estrazione è il blocco dei tab (renderTabs + working set).
-  "src/view.ts": 6600,
+  //
+  // Abbassato il 2026-08-12: le tre note di prompt della memoria
+  // (`memoryStoreNote`, `memoryStoreNoteProactive`, `agentFolderNote`) vivono ora
+  // in `core/memory-prompts.ts`. Erano template di stringa puri, senza `this` e
+  // senza Obsidian, con un solo call site a testa: stavano qui solo perche' qui
+  // c'e' il call site. 6600 -> 6575 righe reali.
+  // Il tetto scende a 6590, non a 6575: 15 righe sono il budget dichiarato per il
+  // wiring della calibrazione della memoria che segue (cap per nota inlinata e
+  // dedup per conversazione), non un permesso di ricrescita. Al conteggio esatto
+  // il file era a ZERO margine, ed e' esattamente il caso in cui ogni riga nuova
+  // costa un'estrazione nello stesso commit.
+  "src/view.ts": 6590,
   // Abbassato il 2026-08-07 dopo l'estrazione della registrazione e
   // attivazione delle view in `ui/view-registry.ts`, e di nuovo il 2026-08-08
   // dopo l'estrazione degli SVG di addIcon in `ui/icons.ts` (3492 -> 3460
