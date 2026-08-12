@@ -13,6 +13,8 @@ import {
   matchesGlobs,
   canWritePath,
   parseAgentBrain,
+  parseCodexAgentToml,
+  codexTomlValue,
   reconcileInvocable,
   parseAgentSidecar,
   serializeAgentSidecar,
@@ -605,6 +607,59 @@ describe("replaceTriggerAt / removeTriggerAt / addTrigger", () => {
     // Add a tag trigger.
     triggers = addTrigger(triggers, t("tag #x"));
     expect(unattendedTriggerEntries(triggers).map((e) => e.trigger.on)).toEqual(["vault-event", "tag"]);
+  });
+});
+
+describe("parseCodexAgentToml", () => {
+  // Shapes taken verbatim from ~/.codex/agents: a single-line double-quoted
+  // description, a ''' literal block for the instructions, and `name` placed
+  // AFTER the long block (it sits at line 349 in gsd-code-reviewer.toml).
+  const REAL_SHAPE = [
+    'description = "Reviews source files for bugs, security issues, and code quality problems."',
+    "developer_instructions = '''",
+    "You are an elite reviewer.",
+    "",
+    "## Rules",
+    "- Be specific.",
+    "'''",
+    'model = "gpt-5.6-sol"',
+    'name = "gsd-code-reviewer"',
+  ].join("\n");
+
+  it("maps a real Codex agent onto the same brain shape as a .md agent", () => {
+    const brain = parseCodexAgentToml(REAL_SHAPE, "gsd-code-reviewer", "codex", "/a/gsd-code-reviewer.toml");
+    expect(brain.name).toBe("gsd-code-reviewer");
+    expect(brain.invocable).toBe("gsd-code-reviewer");
+    expect(brain.model).toBe("gpt-5.6-sol");
+    expect(brain.description).toContain("Reviews source files");
+    expect(brain.prompt).toBe("You are an elite reviewer.\n\n## Rules\n- Be specific.");
+  });
+
+  it("falls back to the filename when the agent declares no name", () => {
+    const brain = parseCodexAgentToml('description = "x"', "backend-architect", "codex");
+    expect(brain.name).toBe("backend-architect");
+    expect(brain.invocable).toBe("backend-architect");
+  });
+
+  it("reads a \"\"\" block and unescapes a single-line value", () => {
+    const raw = ['description = "line one\\nline two"', 'developer_instructions = """', "body", '"""'].join("\n");
+    expect(codexTomlValue(raw, "description")).toBe("line one\nline two");
+    expect(codexTomlValue(raw, "developer_instructions")).toBe("body");
+  });
+
+  it("returns undefined for absent keys rather than throwing", () => {
+    expect(codexTomlValue('name = "x"', "developer_instructions")).toBeUndefined();
+    expect(parseCodexAgentToml("", "solo", "codex").prompt).toBeUndefined();
+  });
+
+  it("does not let a key mentioned inside a block value hijack the parse", () => {
+    const raw = [
+      "developer_instructions = '''",
+      "Never write name = \"impostor\" in your output.",
+      "'''",
+      'name = "real-agent"',
+    ].join("\n");
+    expect(codexTomlValue(raw, "name")).toBe("real-agent");
   });
 });
 

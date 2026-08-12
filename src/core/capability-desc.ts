@@ -192,14 +192,22 @@ export async function listAgentBrains(app: App): Promise<{ slug: string; path: s
     const pre = scope.prefix ?? "";
     await Promise.all(
       files
-        .filter((f) => f.endsWith(".md"))
+        // Claude and plugins write agents as markdown-with-frontmatter; Codex
+        // writes its own as TOML. Both are brains — `parseAgentBrain` and
+        // `parseCodexAgentToml` split on the extension in the agent store.
+        .filter((f) => f.endsWith(".md") || f.endsWith(".toml"))
         .map(async (path) => {
           try {
-            // Frontmatter lives at the top; agent bodies can be long prompts.
-            const raw = (await scope.read(path)).slice(0, 8000);
+            const isToml = path.endsWith(".toml");
+            // Markdown frontmatter lives at the top, so a prefix is enough and
+            // bodies can be long. TOML keys are UNORDERED — `name` sits at line
+            // 349 in some of Codex's own agents — so a prefix would silently
+            // drop metadata. Read those whole.
+            const full = await scope.read(path);
+            const raw = isToml ? full : full.slice(0, 8000);
             // Plugins ship agents as `<name>.agent.md`; the `.agent` is a file
             // convention, not part of the id.
-            const slug = pre + baseName(path).replace(/\.agent$/, "");
+            const slug = pre + baseName(path).replace(/\.toml$/, "").replace(/\.agent$/, "");
             out.push({ slug, path, raw, source });
           } catch {
             /* unreadable file — skip */

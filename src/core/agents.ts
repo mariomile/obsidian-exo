@@ -249,6 +249,65 @@ export function parseAgentBrain(raw: string, slug: string, source: AgentSource, 
   };
 }
 
+/**
+ * Read one top-level key out of a Codex agent `.toml`.
+ *
+ * Purpose-built for the shape Codex actually writes (verified across all 45
+ * agents in `~/.codex/agents`): every file is a flat list of `key = value` at
+ * the root, with values in one of three forms — `"single line"`, `'''literal
+ * block'''`, or `"""basic block"""`. No tables, no arrays of tables, no
+ * date/number coercion. A general TOML parser would be a dependency and a
+ * bundle cost for a grammar we never see.
+ *
+ * Returns undefined when the key is absent or its value is empty.
+ */
+export function codexTomlValue(raw: string, key: string): string | undefined {
+  // Anchored at line start so `developer_instructions` can't match a mention of
+  // itself inside another key's block value.
+  const open = raw.match(new RegExp(`^${key}[ \\t]*=[ \\t]*('''|"""|"|')`, "m"));
+  if (!open || open.index === undefined) return undefined;
+  const delim = open[1];
+  const from = open.index + open[0].length;
+  const end = raw.indexOf(delim, from);
+  const value = end === -1 ? raw.slice(from) : raw.slice(from, end);
+  // A multi-line delimiter swallows the newline immediately after it (TOML spec);
+  // single-line values need their escapes resolved.
+  const text =
+    delim.length === 3
+      ? value.replace(/^\r?\n/, "")
+      : value.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  return text.trim() || undefined;
+}
+
+/**
+ * Parse a Codex-native `~/.codex/agents/<slug>.toml` into the same brain shape
+ * as a Claude `.md` agent, so one registry holds both engines' agents.
+ *
+ * Codex writes agents in TOML, not markdown-with-frontmatter. `listAgentBrains`
+ * has always declared `~/.codex` as a scope but filtered for `.md`, so all 45
+ * installed Codex agents resolved to nothing — a declared capability that
+ * always returned empty. The mapping is direct: `developer_instructions` is the
+ * body a `.md` brain keeps after its frontmatter, `name`/`description`/`model`
+ * are the frontmatter scalars.
+ */
+export function parseCodexAgentToml(raw: string, slug: string, source: AgentSource, path?: string): AgentBrain {
+  const cut = slug.lastIndexOf(":");
+  const prefix = cut === -1 ? "" : slug.slice(0, cut + 1);
+  const base = cut === -1 ? slug : slug.slice(cut + 1);
+  const name = codexTomlValue(raw, "name") ?? base;
+  const prompt = codexTomlValue(raw, "developer_instructions");
+  return {
+    slug,
+    name,
+    invocable: `${prefix}${name}`,
+    description: codexTomlValue(raw, "description"),
+    model: codexTomlValue(raw, "model"),
+    source,
+    path,
+    ...(prompt ? { prompt } : {}),
+  };
+}
+
 /** True when a file in the agents folder is an Exo contract rather than an
  *  unrelated note that happens to live there. Vaults predating this feature can
  *  have `_system/agents/*.md` notes with other purposes — treating those as

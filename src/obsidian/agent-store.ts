@@ -19,6 +19,8 @@ import {
   mergeAgents,
   orphanContracts,
   parseAgentBrain,
+  parseCodexAgentToml,
+  codexTomlValue,
   parseAgentSidecar,
   reconcileInvocable,
   resolveAgent,
@@ -167,7 +169,11 @@ export class AgentStore {
     const { vault, paths } = this.deps;
 
     const rawBrains = await this.deps.brains().catch((): RawBrain[] => []);
-    const brains: AgentBrain[] = rawBrains.map((b) => parseAgentBrain(b.raw, b.slug, b.source, b.path));
+    const brains: AgentBrain[] = rawBrains.map((b) =>
+      b.path.endsWith(".toml")
+        ? parseCodexAgentToml(b.raw, b.slug, b.source, b.path)
+        : parseAgentBrain(b.raw, b.slug, b.source, b.path)
+    );
 
     const contracts: AgentContract[] = [];
     const warnings = new Map<string, string[]>();
@@ -402,6 +408,10 @@ export async function readAgentBrainBody(app: App, brain: AgentBrain): Promise<s
   try {
     const raw =
       brain.source === "vault" ? await app.vault.adapter.read(brain.path) : await readFile(brain.path, "utf8");
+    // A Codex agent is TOML: its instructions are one key, not "everything
+    // after the frontmatter". Stripping frontmatter here would hand the model
+    // the raw TOML — the file's own syntax as its persona.
+    if (brain.path.endsWith(".toml")) return codexTomlValue(raw, "developer_instructions") ?? "";
     return stripFrontmatter(raw).trim();
   } catch (err) {
     console.warn(`[Exo] could not read agent brain body for "${brain.slug}":`, err);
