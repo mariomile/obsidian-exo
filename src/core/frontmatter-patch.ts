@@ -46,7 +46,11 @@ function replaceKeyBlock(block: string, key: string, line: string | null, newlin
   return lines.join(newline);
 }
 
-function frontmatterBounds(content: string): { start: number; end: number } | null {
+/** Where the frontmatter block sits: the offsets of its first byte and of the
+ *  newline before its closing fence. Exported because it is the only correct
+ *  reader of that shape in the repo, and anything that re-derives it inline
+ *  ends up re-deriving the line endings too. */
+export function frontmatterBounds(content: string): { start: number; end: number } | null {
   if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return null;
   const match = /\r?\n---(?:\r?\n|$)/g;
   match.lastIndex = content.indexOf("\n") + 1;
@@ -54,6 +58,11 @@ function frontmatterBounds(content: string): { start: number; end: number } | nu
   if (!closing) return null;
   return { start: content.indexOf("\n") + 1, end: closing.index };
 }
+
+/** The line ending a document already uses. A file written by an editor that
+ *  uses CRLF must come back CRLF, fences included. */
+export const documentNewline = (content: string): string =>
+  content.includes("\r\n") ? "\r\n" : "\n";
 
 /** Merge/remove top-level keys while preserving every unrelated frontmatter byte. */
 export function patchFrontmatter(
@@ -71,7 +80,7 @@ export function patchFrontmatter(
     return `---\n${lines}\n---\n${content}`;
   }
 
-  const newline = content.includes("\r\n") ? "\r\n" : "\n";
+  const newline = documentNewline(content);
   let block = content.slice(bounds.start, bounds.end);
   for (const key of removeKeys) {
     block = replaceKeyBlock(block, key, null, newline);

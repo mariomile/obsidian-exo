@@ -23,7 +23,7 @@
 import type { Message } from "./model";
 import type { ExoPaths } from "./paths";
 import type { Recap } from "./recap";
-import { patchFrontmatter } from "./frontmatter-patch";
+import { documentNewline, frontmatterBounds, patchFrontmatter } from "./frontmatter-patch";
 import { terminalConvoState } from "./convo-state";
 
 /** The frontmatter key that ties a note back to the conversation it mirrors.
@@ -416,10 +416,12 @@ export function renderSettleNote(existing: string | null, note: SettleNote): str
   if (existing === null) return patchFrontmatter(note.body, note.frontmatter);
   const merged = { ...note.frontmatter, tags: mergeTags(existing, note.frontmatter.tags) };
   const patched = patchFrontmatter(existing, merged);
-  const block = frontmatterBlock(patched);
-  if (!block && !/^---\r?\n/.test(patched)) return patchFrontmatter(note.body, note.frontmatter);
-  const start = patched.indexOf("\n") + 1;
-  const closeAt = patched.slice(start).search(/^---(\r?\n|$)/m);
-  const head = patched.slice(0, start + closeAt);
-  return `${head}---\n${note.body}`;
+  // The bounds come from `frontmatter-patch`, which is the only correct reader
+  // of that shape here. This used to compute them a third time inline and then
+  // hard-code `---\n` for the fence it re-emits, so a note written with CRLF
+  // came back with one LF fence in the middle of it.
+  const bounds = frontmatterBounds(patched);
+  if (!bounds) return patchFrontmatter(note.body, note.frontmatter);
+  const nl = documentNewline(patched);
+  return `${patched.slice(0, bounds.end)}${nl}---${nl}${note.body}`;
 }

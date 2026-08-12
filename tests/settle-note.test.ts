@@ -132,6 +132,33 @@ describe("the frontmatter schema", () => {
   });
 });
 
+describe("re-settling a note the vault wrote", () => {
+  it("keeps the note's own line endings on the fence it re-emits", () => {
+    // renderSettleNote computed the frontmatter bounds a third time, inline,
+    // and hard-coded `---\n` for the closing fence — while patchFrontmatter
+    // deliberately detects and preserves CRLF. A file written by an editor
+    // that uses CRLF came back with one LF fence in the middle of it.
+    const existing = '---\r\nexo_convo: "c7"\r\nproject: "[[Onboarding]]"\r\n---\r\nold body\r\n';
+    const out = renderSettleNote(existing, {
+      frontmatter: { exo_convo: "c7" },
+      body: "new body\n",
+    });
+    const fence = out.slice(out.indexOf("project"));
+    expect(fence).toContain("\r\n---\r\n");
+    expect(fence).not.toContain("\r\n---\nnew body");
+  });
+
+  it("still writes LF for a note that uses LF", () => {
+    const existing = '---\nexo_convo: "c7"\n---\nold body\n';
+    const out = renderSettleNote(existing, {
+      frontmatter: { exo_convo: "c7" },
+      body: "new body\n",
+    });
+    expect(out).not.toContain("\r");
+    expect(out).toContain("---\nnew body");
+  });
+});
+
 describe("the distillation", () => {
   const messages: Message[] = [
     { role: "user", text: "Make the onboarding copy shorter" },
