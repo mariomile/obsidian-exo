@@ -16,7 +16,6 @@ import { TFile, type App } from "obsidian";
 import type { ExoPaths } from "../core/paths";
 import { buildRecap } from "../core/recap";
 import { WriteQueue } from "../core/write-queue";
-import type { Message } from "../core/model";
 import {
   distillConversation,
   findSettledNote,
@@ -127,7 +126,7 @@ async function settleOnce(
   const target = owned ?? uniqueSettlePath(folder, src.title, takenByOthers);
   const existing = owned ? (files.find((f) => f.path === owned)?.raw ?? null) : null;
 
-  const note = distillConversation(src, buildRecap(src.messages as Message[], normalize));
+  const note = distillConversation(src, buildRecap(src.messages, normalize));
   await vault.write(target, renderSettleNote(existing, note));
   return target;
 }

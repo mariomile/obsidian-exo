@@ -49,7 +49,10 @@ function asStr(v: unknown): string | undefined {
  *  tools and `{t:"artifact"}` segments carry vault-relative paths, so without it a
  *  created note and its backing Write would list twice (or inflate an edit count).
  *  Callers pass a relPath-style normalizer; the default identity keeps it pure. */
-export function buildRecap(messages: Message[], normalize: (p: string) => string = (p) => p): Recap {
+export function buildRecap(
+  messages: readonly Message[],
+  normalize: (p: string) => string = (p) => p,
+): Recap {
   const web: RecapWeb[] = [];
   const webSeen = new Set<string>();
   const skills: string[] = [];
