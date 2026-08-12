@@ -24,7 +24,7 @@
  * a row SAYS by `core/chat-list-state` — both pure; this file owns the DOM, the
  * clock read, and the gestures.
  */
-import { App, ItemView, Menu, Modal, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type ExoPlugin from "../main";
 import {
   buildChatList,
@@ -36,6 +36,7 @@ import {
   type ChatListMode,
 } from "../core/chat-rows";
 import type { ChatSectionKey } from "../core/chat-rows";
+import { openChatRowMenu } from "./chat-row-menu";
 import {
   chatDot,
   chatRowSig,
@@ -53,8 +54,6 @@ import {
 import { reconcileList, type CardModel } from "./keyed-reconcile";
 import { clickable, isolateActivation } from "./dom";
 import { recallChats, reindexChats, recallHost, isRecallUnavailable } from "./chat-recall";
-import { canSettleRow } from "../core/settle-note";
-import { settleToNote } from "./convo-bridge";
 
 export const CHATS_VIEW_TYPE = "exo-chats";
 export const CHATS_ICON = "hi-messages";
@@ -860,161 +859,7 @@ export class ChatListView extends ItemView {
 
   private wireRow(row: HTMLElement, r: ChatRow): void {
     clickable(row, () => void this.plugin.revealConversation(r.id));
-    row.oncontextmenu = (e) => this.rowMenu(e, r);
-  }
-
-  /**
-   * Rename / Archive / Delete. Delete is two-step: the first click re-opens this
-   * menu with the item relabelled "Confirm delete", the second one deletes.
-   *
-   * Obsidian closes a Menu on any item click, so the gallery's timer-based
-   * arm/disarm (gallery-cards.ts:131-164) can't be transplanted as-is; the armed
-   * state instead lives in the re-opened menu and dies with it. Dismissing the
-   * menu — Escape, a click anywhere else — disarms, which is what the gallery's
-   * 3s timer and outside-click listener were buying.
-   */
-  private rowMenu(e: MouseEvent, r: ChatRow, armed = false): void {
-    e.preventDefault();
-    const menu = new Menu();
-    menu.addItem((i) =>
-      i.setTitle("Rename").setIcon("pencil").onClick(() => this.promptRename(r)),
-    );
-    menu.addItem((i) =>
-      i.setTitle("Retitle with AI").setIcon("sparkles").onClick(() => {
-        // Cold-spawning a CLI session takes seconds, so say something first —
-        // an item that appears to do nothing for ten seconds reads as broken.
-        const pending = new Notice("Retitling…", 0);
-        void this.plugin
-          .retitleConversation(r.id)
-          .then((ok) => {
-            pending.hide();
-            if (!ok) new Notice("Couldn't retitle — this chat has no complete exchange yet.");
-            this.paint();
-          })
-          .catch(() => {
-            pending.hide();
-            new Notice("Retitling failed.");
-          });
-      }),
-    );
-    menu.addItem((i) =>
-      i
-        .setTitle(r.pinned ? "Unpin" : "Pin")
-        .setIcon(r.pinned ? "pin-off" : "pin")
-        .onClick(() => {
-          this.plugin.setConvoPinned(r.id, !r.pinned);
-          this.paint();
-        }),
-    );
-    // Settled chats only. Not greyed out but ABSENT on a running or blocked
-    // row: a chat mid-turn has no outcome to write down yet, and an item that
-    // is permanently there and permanently dead teaches the user to ignore it.
-    if (canSettleRow(r)) {
-      menu.addItem((i) =>
-        i.setTitle("Settle to note").setIcon("file-plus-2").onClick(() => {
-          const pending = new Notice("Settling…", 0);
-          void settleToNote(this.plugin, r.id)
-            .then((path) => {
-              pending.hide();
-              new Notice(
-                path
-                  ? `Settled to ${path}`
-                  : "Couldn't settle this chat. Open Exo, and let any running turn finish.",
-              );
-            })
-            .catch(() => {
-              pending.hide();
-              new Notice("Couldn't write the note.");
-            });
-        }),
-      );
-    }
-    menu.addItem((i) =>
-      i.setTitle("Archive").setIcon("archive").onClick(() => {
-        // Three causes reach this false — a streaming turn, no mounted ChatView,
-        // an id the store no longer holds — and the row cannot tell them apart,
-        // so the message names the state rather than guessing the cause.
-        if (!this.plugin.setConvoArchived(r.id, true)) {
-          new Notice("Couldn't archive this chat. Open Exo and let any running turn finish.");
-          return;
-        }
-        this.paint();
-      }),
-    );
-    menu.addItem((i) =>
-      i
-        .setTitle(armed ? "Confirm delete" : "Delete")
-        .setIcon("trash-2")
-        // The armed item re-opens under the cursor, so a double-click on Delete
-        // would land on Confirm without the user ever reading it. The warning
-        // styling is what makes the second menu look different from the first.
-        .setWarning(armed)
-        .onClick(() => {
-          if (!armed) {
-            window.setTimeout(() => this.rowMenu(e, r, true), 0);
-            return;
-          }
-          // The only destructive action here, and the only one that can no-op:
-          // an unknown id returns false. Say so rather than repainting an
-          // unchanged row and letting it read as a dead click.
-          if (!this.plugin.deleteConversation(r.id)) {
-            new Notice("Couldn't delete this chat — it is no longer in the store.");
-            return;
-          }
-          this.paint();
-        }),
-    );
-    menu.showAtMouseEvent(e);
-  }
-
-  private promptRename(r: ChatRow): void {
-    new RenameChatModal(this.app, r.title, (title) => {
-      // The mutation rejects a blank title and an unknown id (core/title-ownership
-      // applyRename) — both surface here, because neither is visible from the row.
-      if (!this.plugin.renameConversation(r.id, title)) {
-        new Notice("Couldn't rename this chat. The title can't be empty, and Exo has to be open.");
-        return;
-      }
-      this.paint();
-    }).open();
-  }
-}
-
-/** Prefilled single-field rename. Enter submits; Escape (Modal's own scope)
- *  cancels without touching the conversation. */
-class RenameChatModal extends Modal {
-  constructor(
-    app: App,
-    private readonly current: string,
-    private readonly onSubmit: (title: string) => void,
-  ) {
-    super(app);
-  }
-
-  onOpen(): void {
-    this.titleEl.setText("Rename chat");
-    const input = this.contentEl.createEl("input", {
-      cls: "mva-chats-rename-input",
-      attr: { type: "text", placeholder: "Chat title" },
-    });
-    input.value = this.current;
-    input.focus();
-    input.select();
-    const actions = this.contentEl.createDiv({ cls: "mva-chats-rename-actions" });
-    const save = actions.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Rename" });
-    const submit = () => {
-      this.onSubmit(input.value);
-      this.close();
-    };
-    save.onclick = submit;
-    input.addEventListener("keydown", (ev) => {
-      if (ev.key !== "Enter") return;
-      ev.preventDefault();
-      submit();
-    });
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
+    row.oncontextmenu = (e) =>
+      openChatRowMenu(e, r, { app: this.app, plugin: this.plugin, repaint: () => this.paint() });
   }
 }

@@ -90,6 +90,20 @@ const CEILINGS: Record<string, number> = {
   // nuova CHIAVE di `MVASettings` ora costa righe in settings-schema.ts, non
   // qui.
   "src/settings.ts": 1032,
+  // Aggiunto il 2026-08-12. Questo file era l'UNICO pannello del repo senza
+  // tetto, e nell'ondata chat+cosmos e' passato da 859 a 1020 righe senza che
+  // niente lo fermasse — mentre lo stesso commit ABBASSAVA quello di main.ts.
+  // Il ratchet stava decidendo dove il codice non si scrive, non dove dovrebbe
+  // andare.
+  // Il tetto e' 870, non 865: 5 righe di margine dichiarato, come su view.ts e
+  // main.ts. Il blocco estratto e' il menu della riga (`rowMenu`,
+  // `promptRename`, `RenameChatModal`) -> `ui/chat-row-menu.ts`, scelto perche'
+  // non legge NESSUNO stato mutabile del pannello: e' una funzione di una riga
+  // piu' tre servizi. Il prossimo candidato, con lo stesso criterio, e' il
+  // renderer della riga (`rowModel`, `buildRichRow`, `buildCompactRow` e i loro
+  // helper): stessa proprieta', ~215 righe, e lascerebbe un guscio che possiede
+  // solo lo stato vero (query, cursore, ordine, collapse).
+  "src/ui/chat-list-view.ts": 870,
 };
 
 /** Righe come le conta `wc -l`: i newline, non i segmenti — così il numero nel

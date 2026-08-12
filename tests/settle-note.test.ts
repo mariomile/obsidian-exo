@@ -510,8 +510,10 @@ describe("the Settle to note action", () => {
   const bridge = read("src/ui/convo-bridge.ts");
 
   it("is offered from the row menu, gated on the row being settled", () => {
-    expect(list).toMatch(/Settle to note/);
-    expect(list).toMatch(/canSettleRow\(/);
+    // The menu moved out of the pane when chat-list-view.ts crossed 1000 lines.
+    const menu = readFileSync(join(__dirname, "../src/ui/chat-row-menu.ts"), "utf8");
+    expect(menu).toMatch(/Settle to note/);
+    expect(menu).toMatch(/canSettleRow\(/);
   });
 
   it("is manual: nothing settles a chat on turn end", () => {
