@@ -115,6 +115,20 @@ const CEILINGS: Record<string, number> = {
   // helper): stessa proprieta', ~215 righe, e lascerebbe un guscio che possiede
   // solo lo stato vero (query, cursore, ordine, collapse).
   "src/ui/chat-list-view.ts": 870,
+  // Aggiunto il 2026-08-12. `styles.css` e' il file piu' grande del repo (6994
+  // righe, davanti a view.ts) ed era l'ultimo grande senza tetto: l'ondata
+  // chat+cosmos gli ha aggiunto 361 righe e niente l'ha notato.
+  // Il tetto e' 7000, non 6994: 6 righe di margine, come sugli altri.
+  // Questo file NON e' stato spezzato, e il ratchet e' esattamente lo strumento
+  // per quel caso — vedi il commento in testa: non riduce niente oggi, rende
+  // impossibile crescere. La differenza rispetto ai file .ts e' che Obsidian
+  // carica solo `styles.css`, quindi la prossima superficie che chiede spazio
+  // non puo' semplicemente nascere in un file nuovo: obbliga a introdurre il
+  // bundle CSS (esbuild lo fa nativamente, un secondo entry point su
+  // `src/styles/index.css` con gli @import in ordine di cascata). E' una
+  // decisione di build, e questo tetto e' cio' che la mette sul tavolo quando
+  // serve davvero invece che come refactor speculativo.
+  "styles.css": 7000,
 };
 
 /** Righe come le conta `wc -l`: i newline, non i segmenti — così il numero nel
