@@ -101,6 +101,23 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
+/** Non-cryptographic hash, shared by every caller that needs an idempotency
+ *  key derived from content rather than the clock: `collabo-commands.ts`
+ *  keys document CREATE on the note's path, `collabo-tools.ts` keys each
+ *  comment/suggestion on its own fields. Both need the same property — the
+ *  same input always produces the same key, so a dropped response followed
+ *  by a retry (human re-running a command, or a model retrying a timed-out
+ *  tool call) lands on the key the service already saw instead of minting a
+ *  duplicate. `Date.now()` cannot do that; a hash of the operation can. */
+export function fnv1a(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 /** One place where a non-2xx becomes a typed throw, so no caller has to
  *  remember to check `status` and none of them silently treats an error page as
  *  a document. */

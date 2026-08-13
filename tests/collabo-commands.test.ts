@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shareNote, docUrl, type ShareDeps } from "../src/obsidian/collabo-commands";
+import { shareNote, shareOrReuse, docUrl, type ShareDeps } from "../src/obsidian/collabo-commands";
 import type { CollaboShare } from "../src/settings-schema";
 import type { HttpFn, HttpRequest } from "../src/core/collab-bridge";
 
@@ -89,6 +89,43 @@ describe("shareNote", () => {
     const { d: d3, seen: seen3 } = deps();
     await shareNote(d3, { path: "Active/Other.md", markdown: "# Plan", title: "Plan", role: "commenter" });
     expect(seen3[0].headers["Idempotency-Key"]).not.toBe(first);
+  });
+});
+
+describe("shareOrReuse", () => {
+  it("never opens the role picker for a note that already has a document", async () => {
+    // Regression: collabo-share-note used to always show the role picker,
+    // even when re-sharing. shareNote's early return then silently ignored
+    // whatever role was picked, so choosing "editor" to upgrade a colleague
+    // did nothing and gave no error.
+    const shares: Record<string, CollaboShare> = {
+      "Active/Plan.md": { slug: "old-slug", ownerSecret: "o", accessToken: "t", role: "commenter" },
+    };
+    const { d, seen } = deps(shares);
+    let pickerOpened = false;
+    const url = await shareOrReuse(
+      d,
+      { path: "Active/Plan.md", markdown: "# Plan", title: "Plan" },
+      async () => {
+        pickerOpened = true;
+        return "editor";
+      },
+    );
+    expect(pickerOpened).toBe(false);
+    expect(seen).toHaveLength(0);
+    expect(url).toBe("https://collabo.test/d/old-slug?token=t");
+  });
+
+  it("opens the role picker and shares when there is a real decision to make", async () => {
+    const { d, seen } = deps();
+    let pickerOpened = false;
+    const url = await shareOrReuse(d, { path: "Active/Plan.md", markdown: "# Plan", title: "Plan" }, async () => {
+      pickerOpened = true;
+      return "editor";
+    });
+    expect(pickerOpened).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(url).toBe("https://collabo.test/d/abc123xy?token=tok-9");
   });
 });
 

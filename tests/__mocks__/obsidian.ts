@@ -39,6 +39,18 @@ export function setIcon(el: { dataset?: Record<string, string> }, icon: string):
   if (el.dataset) el.dataset.icon = icon;
 }
 
+/** Base class for a plain modal dialog. Nothing here needs to render; the
+ *  stub exists so an obsidian/*.ts module that subclasses it (e.g.
+ *  collabo-commands' ImportOverwriteModal) can be imported by a test at
+ *  all — the same reason FuzzySuggestModal is stubbed below. */
+export class Modal {
+  constructor(public app: unknown) {}
+  open(): void {}
+  close(): void {}
+  onOpen(): void {}
+  onClose(): void {}
+}
+
 /** Base class for a fuzzy-matched picker modal. Nothing here needs to match
  *  or render; the stub exists so an obsidian/*.ts module that subclasses it
  *  (e.g. collabo-commands' RolePicker) can be imported by a test at all. */

@@ -13,7 +13,37 @@ import type { SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import type { App } from "obsidian";
 import { ok, err, getExo } from "./tool-kit";
 import { obsidianHttp } from "./collabo-http";
-import { fetchState, postOp, pendingEvents, ackEvents, type CollaboConfig } from "../core/collab-bridge";
+import {
+  fetchState,
+  fnv1a,
+  postOp,
+  pendingEvents,
+  ackEvents,
+  type CollaboConfig,
+} from "../core/collab-bridge";
+
+/** Idempotency keys derived from the operation's own content, not the clock.
+ *  A tool-loop retry (the model times out waiting for a result and calls the
+ *  same tool again) repeats the same arguments, so `Date.now()` minted a
+ *  fresh key every time and the service's own dedup — the guarantee the
+ *  design doc promises ("a network retry cannot duplicate a comment or
+ *  suggestion") — never fired. Hashing the fields that make the operation
+ *  what it is means an identical retry produces the identical key, and a
+ *  genuinely different comment or suggestion (even on the same document)
+ *  produces a different one. ` ` separates fields so `slug="a", text="b|c"`
+ *  cannot collide with `slug="a|b", text="c"`. */
+export function commentIdempotencyKey(slug: string, text: string, quote?: string): string {
+  return `exo-comment-${fnv1a(`${slug} ${text} ${quote ?? ""}`)}`;
+}
+
+export function suggestionIdempotencyKey(
+  slug: string,
+  kind: "insert" | "delete" | "replace",
+  quote: string,
+  content?: string,
+): string {
+  return `exo-suggest-${fnv1a(`${slug} ${kind} ${quote} ${content ?? ""}`)}`;
+}
 
 export interface CollaboShareSummary {
   path: string;
@@ -192,7 +222,7 @@ export function collaboBridgeFrom(app: App): CollaboToolBridge | undefined {
         slug,
         tokenFor(slug),
         { type: "comment.add", by: "ai:exo", text, quote },
-        `exo-${slug}-${Date.now()}`,
+        commentIdempotencyKey(slug, text, quote),
       );
     },
     suggest: async (slug, kind, quote, content) => {
@@ -202,7 +232,7 @@ export function collaboBridgeFrom(app: App): CollaboToolBridge | undefined {
         slug,
         tokenFor(slug),
         { type: "suggestion.add", by: "ai:exo", kind, quote, content },
-        `exo-${slug}-${Date.now()}`,
+        suggestionIdempotencyKey(slug, kind, quote, content),
       );
     },
   };

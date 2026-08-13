@@ -3,6 +3,8 @@ import {
   buildCollaboTools,
   COLLABO_READ_TOOLS,
   isOwnedShare,
+  commentIdempotencyKey,
+  suggestionIdempotencyKey,
   type CollaboToolBridge,
 } from "../src/obsidian/collabo-tools";
 
@@ -95,6 +97,45 @@ describe("collabo_list_shares", () => {
     const out = await handlerOf(bridge, "collabo_list_shares")({}, {});
     expect(out.content[0].text).toContain("received from someone else");
     expect(out.content[0].text).not.toMatch(/\byours\b/);
+  });
+});
+
+describe("commentIdempotencyKey / suggestionIdempotencyKey", () => {
+  // Regression: both used to be `exo-${slug}-${Date.now()}`. A tool-loop
+  // retry after a timeout resends the identical comment or suggestion with a
+  // fresh timestamp, so the server's own Idempotency-Key dedup — the
+  // guarantee in the design doc — never caught the duplicate. Deriving the
+  // key from the operation's own fields makes an identical retry produce the
+  // identical key regardless of when it happens.
+
+  it("gives an identical retry the identical comment key, with no clock involved", () => {
+    const first = commentIdempotencyKey("abc123xy", "Needs a source.", "revenue tripled");
+    const second = commentIdempotencyKey("abc123xy", "Needs a source.", "revenue tripled");
+    expect(first).toBe(second);
+  });
+
+  it("gives a genuinely different comment a different key", () => {
+    const a = commentIdempotencyKey("abc123xy", "Needs a source.", "revenue tripled");
+    const b = commentIdempotencyKey("abc123xy", "Needs a source.", "revenue doubled");
+    expect(a).not.toBe(b);
+  });
+
+  it("gives an identical retry the identical suggestion key", () => {
+    const first = suggestionIdempotencyKey("abc123xy", "replace", "old", "new");
+    const second = suggestionIdempotencyKey("abc123xy", "replace", "old", "new");
+    expect(first).toBe(second);
+  });
+
+  it("gives a genuinely different suggestion a different key", () => {
+    const a = suggestionIdempotencyKey("abc123xy", "replace", "old", "new");
+    const b = suggestionIdempotencyKey("abc123xy", "insert", "old", "new");
+    expect(a).not.toBe(b);
+  });
+
+  it("never collides a comment key with a suggestion key on the same document", () => {
+    const comment = commentIdempotencyKey("abc123xy", "same text", "same quote");
+    const suggestion = suggestionIdempotencyKey("abc123xy", "replace", "same quote", "same text");
+    expect(comment).not.toBe(suggestion);
   });
 });
 
