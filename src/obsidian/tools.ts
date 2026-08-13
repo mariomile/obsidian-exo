@@ -51,6 +51,7 @@ import { automationSlug } from "./automation-store";
 import { ok, err, getExo, type Result } from "./tool-kit";
 import { buildCapabilityTools, CAPABILITY_READ_TOOLS } from "./capability-tools";
 import { buildBrowserTools, BROWSER_READ_TOOLS, type BrowserBridge } from "./browser-tools";
+import { buildCollaboTools, COLLABO_READ_TOOLS, collaboBridgeFrom } from "./collabo-tools";
 
 
 /** Structured question shape for `ask_user`. Duplicated from view.ts to avoid a
@@ -1424,6 +1425,10 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     }
   );
 
+  // Stateless service: resolved from the app here rather than curried per
+  // conversation in view.ts, same as buildCapabilityTools(app) above.
+  const collaboBridge = collaboBridgeFrom(app);
+
   return [
     searchVault, readNote, getBacklinks, getNeighborhood, getConnections, listNotes, listTags, getActiveContext,
     listAnnotations, listSonarActions, askUser, listLoops,
@@ -1440,6 +1445,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     ...(orchestrationEnabled ? [addTask, listTasks] : []),
     ...(orchestrationEnabled && parentConvoId ? [spawnTask] : []),
     ...(browserBridge ? buildBrowserTools(browserBridge) : []),
+    ...(collaboBridge ? buildCollaboTools(collaboBridge) : []),
   ];
 }
 
@@ -1521,6 +1527,10 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   // trail for what the agent did in a shared, visible surface.
   ...BROWSER_READ_TOOLS,
   ...CAPABILITY_READ_TOOLS,
+  // Collabo observers: they read a shared document or its event trail and
+  // write nothing a collaborator can see. collabo_comment and collabo_suggest
+  // stay off this list on purpose — see collabo-tools.ts.
+  ...COLLABO_READ_TOOLS,
 ]);
 
 /** Memory-write tool names (gated separately by the memoryWrite setting). */

@@ -36,8 +36,27 @@ const fakeBrowserBridge = {
   scroll: async () => fakeStatus,
 };
 
+/** Collabo tools register only behind a configured service (resolved from the
+ *  app via getExo, not a curried bridge), so the fullest surface needs a fake
+ *  exo plugin instance with collaboUrl set — the same reason browser needs a
+ *  fake bridge above. */
+const fakeExoPlugin = {
+  settings: {
+    collaboUrl: "https://exo-collabo.example",
+    collaboApiKey: "",
+    collaboShares: {},
+  },
+  loadAutomationRuns: async () => [],
+  runPlaybook: async () => true,
+};
+
 function registeredBareNames(): Set<string> {
-  const app = { vault: {}, workspace: {}, metadataCache: {} } as unknown as App;
+  const app = {
+    vault: {},
+    workspace: {},
+    metadataCache: {},
+    plugins: { plugins: { exo: fakeExoPlugin } },
+  } as unknown as App;
   const server = createObsidianToolServer(
     app,
     /* alwaysLoad     */ true,

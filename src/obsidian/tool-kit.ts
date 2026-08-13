@@ -19,6 +19,12 @@ export interface ExoToolHost {
     customPrompts: { name: string; prompt: string }[];
     scheduledLastRun: Record<string, number>;
     claudeBin: string;
+    /** Exo Collabo service coordinates and the note-to-document registry.
+     *  Read here rather than threaded from view.ts: the Collabo bridge is
+     *  stateless, so there is nothing to curry per conversation. */
+    collaboUrl: string;
+    collaboApiKey: string;
+    collaboShares: Record<string, { slug: string; ownerSecret: string; accessToken: string; role: string }>;
   };
   saveSettings(): Promise<void>;
   loadAutomationRuns(): Promise<AutomationRunRecord[]>;
