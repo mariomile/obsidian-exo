@@ -148,6 +148,19 @@ export async function importDocument(
   return { markdown: state.markdown, targetPath: target.targetPath, slug: target.slug };
 }
 
+/** Where a document new to this vault lands, and whether the vault already
+ *  has a file there. Pure so the fix is testable without mounting Obsidian:
+ *  the path is deterministic per slug, so importing the same never-before-
+ *  seen document a second time must resolve to "modify", never to a
+ *  `vault.create` on a path the first import already made. The caller
+ *  supplies `pathExists` because checking it needs the live app. */
+export function planInboxImport(
+  slug: string,
+  pathExists: boolean,
+): { path: string; mode: "modify" | "create" } {
+  return { path: `_inbox/Collabo ${slug}.md`, mode: pathExists ? "modify" : "create" };
+}
+
 export function registerCollaboCommands(plugin: ExoPlugin): void {
   plugin.addCommand({
     id: "collabo-share-note",
@@ -196,6 +209,7 @@ export function registerCollaboCommands(plugin: ExoPlugin): void {
           const pasted = (await navigator.clipboard.readText().catch(() => "")).trim();
           try {
             const deps = depsFor(plugin, cfg);
+            const resolved = resolveImport(deps, pasted);
             const out = await importDocument(deps, pasted);
             if (out.targetPath) {
               const file = plugin.app.vault.getAbstractFileByPath(out.targetPath);
@@ -205,10 +219,36 @@ export function registerCollaboCommands(plugin: ExoPlugin): void {
                 return;
               }
             }
-            // New to this vault: land it in the inbox rather than guessing a home.
-            const path = `_inbox/Collabo ${out.slug}.md`;
-            await plugin.app.vault.create(path, out.markdown);
-            new Notice(`Exo Collabo: imported to ${path}`);
+            // New to this vault, or its registered note is gone: land it in the
+            // inbox rather than guessing a home. The path is deterministic per
+            // slug, so a second import of the same never-before-seen document
+            // must modify what the first import created, not collide with it.
+            const existing = plugin.app.vault.getAbstractFileByPath(`_inbox/Collabo ${out.slug}.md`);
+            const plan = planInboxImport(out.slug, existing instanceof TFile);
+            if (plan.mode === "modify" && existing instanceof TFile) {
+              await plugin.app.vault.modify(existing, out.markdown);
+              new Notice(`Exo Collabo: updated ${plan.path}`);
+            } else {
+              await plugin.app.vault.create(plan.path, out.markdown);
+              new Notice(`Exo Collabo: imported to ${plan.path}`);
+              if (!out.targetPath && resolved) {
+                // Remember it under the note that now holds it, so a later
+                // re-import (even from a bare slug) resolves to this note
+                // instead of "never seen", the same one-note-per-document
+                // invariant `shareNote` keeps for notes shared FROM this vault.
+                // There is no ownerSecret to store: this vault did not create
+                // the document, it only received a link to it. `ownerSecret`
+                // stays empty, and "open as owner" below refuses to offer
+                // itself for a share that has no real one.
+                deps.shares[plan.path] = {
+                  slug: out.slug,
+                  ownerSecret: "",
+                  accessToken: resolved.token,
+                  role: "viewer",
+                };
+                await deps.save();
+              }
+            }
           } catch (e) {
             new Notice(
               e instanceof CollaboError
@@ -232,7 +272,10 @@ export function registerCollaboCommands(plugin: ExoPlugin): void {
       const cfg = collaboConfig(plugin);
       const file = plugin.app.workspace.getActiveFile();
       const share = file ? plugin.settings.collaboShares[file.path] : undefined;
-      if (!cfg || !share) return false;
+      // A share recorded from an import has no owner secret: this vault
+      // received the document, it did not create it, so it must not offer
+      // owner access it does not have.
+      if (!cfg || !share || !share.ownerSecret) return false;
       if (!checking) window.open(docUrl(cfg, share.slug, share.ownerSecret), "_blank");
       return true;
     },

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { resolveImport, importDocument, type ShareDeps } from "../src/obsidian/collabo-commands";
+import {
+  resolveImport,
+  importDocument,
+  planInboxImport,
+  type ShareDeps,
+} from "../src/obsidian/collabo-commands";
 import type { CollaboShare } from "../src/settings-schema";
 import type { HttpFn } from "../src/core/collab-bridge";
 
@@ -64,5 +69,24 @@ describe("importDocument", () => {
 
   it("throws on a paste it cannot resolve rather than writing an empty note", async () => {
     await expect(importDocument(deps(), "garbage")).rejects.toThrow();
+  });
+});
+
+describe("planInboxImport", () => {
+  it("creates when nothing sits at the deterministic inbox path yet", () => {
+    expect(planInboxImport("newdoc", false)).toEqual({
+      path: "_inbox/Collabo newdoc.md",
+      mode: "create",
+    });
+  });
+
+  it("modifies, not creates, on a second import of the same never-before-seen document", () => {
+    // Regression: the inbox path is deterministic per slug, so a document
+    // imported once as "new" landed at the same path a second import would
+    // try to `vault.create` again, which throws on an existing path.
+    expect(planInboxImport("newdoc", true)).toEqual({
+      path: "_inbox/Collabo newdoc.md",
+      mode: "modify",
+    });
   });
 });
