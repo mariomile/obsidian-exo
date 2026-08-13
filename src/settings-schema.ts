@@ -9,10 +9,21 @@ import type { AutomationConfig } from "./core/automations";
 import { initialDailyPulseReviewState, type DailyPulseReviewState } from "./core/daily-pulse";
 import type { MemorySetup } from "./core/vault-setup";
 import { exoPaths, LEGACY_MEMORY_ROOT } from "./core/paths";
+import type { ShareRole } from "./core/collab-bridge";
 
 /** Legacy default for the request-queue folder (kept for existing installs).
  *  Exported because the settings tab uses it as the field placeholder. */
 export const LEGACY_QUEUE_FOLDER = exoPaths(LEGACY_MEMORY_ROOT).queue;
+
+/** What Exo remembers about a note it has shared to Exo Collabo. `ownerSecret`
+ *  is the promote/revoke credential and never leaves plugin data; `accessToken`
+ *  is the scoped one used for ordinary reads and agent proposals. */
+export interface CollaboShare {
+  slug: string;
+  ownerSecret: string;
+  accessToken: string;
+  role: ShareRole;
+}
 
 export interface MVASettings {
   provider: ProviderId;
@@ -241,6 +252,18 @@ export interface MVASettings {
    *  `browser_*` tools and the exo-browser leaf's live mode. When false the
    *  session tool list is byte-identical to before the feature existed. */
   browserEnabled: boolean;
+  /** Exo Collabo service base URL. Empty means the feature is off: the share
+   *  and import commands hide themselves and the `collabo_*` tools are not
+   *  registered, so the session tool list is byte-identical to before the
+   *  feature existed. */
+  collaboUrl: string;
+  /** Key for document CREATION on that service (its
+   *  PROOF_SHARE_MARKDOWN_API_KEY). Per-document calls use the document's own
+   *  token instead, never this. */
+  collaboApiKey: string;
+  /** Vault-relative note path to the document it was shared as, so re-sharing
+   *  the same note reconnects instead of creating a second document. */
+  collaboShares: Record<string, CollaboShare>;
 }
 
 export const DEFAULT_SETTINGS: MVASettings = {
@@ -335,6 +358,9 @@ export const DEFAULT_SETTINGS: MVASettings = {
   browserEnabled: false,
   connectionsInlineUnderline: true,
   connectionsStemming: true,
+  collaboUrl: "",
+  collaboApiKey: "",
+  collaboShares: {},
 };
 
 /**

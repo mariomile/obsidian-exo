@@ -885,6 +885,21 @@ export class MVASettingTab extends PluginSettingTab {
           });
       });
 
+    new Setting(el).setName("Exo Collabo service")
+      .setDesc("Base URL of your Exo Collabo deployment. Empty turns sharing off entirely.")
+      .addText((t) => t.setPlaceholder("https://exo-collabo.up.railway.app").setValue(this.plugin.settings.collaboUrl)
+        .onChange(async (v) => {
+          this.plugin.settings.collaboUrl = v.trim();
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(el).setName("Exo Collabo API key")
+      .setDesc("Authenticates document creation on that service. Per-document calls use the document's own token.")
+      .addText((t) => t.setPlaceholder("hex secret").setValue(this.plugin.settings.collaboApiKey)
+        .onChange(async (v) => {
+          this.plugin.settings.collaboApiKey = v.trim();
+          await this.plugin.saveSettings();
+        }));
     void this.renderMcpSection(el);
   }
 
