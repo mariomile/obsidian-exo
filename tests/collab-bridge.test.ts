@@ -96,6 +96,29 @@ describe("createDocument", () => {
     ).rejects.toBeInstanceOf(CollaboError);
   });
 
+  // Regression: a 2xx with a valid slug but a blank ownerSecret used to pass
+  // through silently. `ownerSecret === ""` is the exact sentinel isOwnedShare
+  // uses elsewhere to mean "this vault only imported the document" — so a
+  // schema-drifted or bugged response here would misrecord a document this
+  // vault genuinely just created as not-owned, forever.
+  it("throws rather than returning a document this vault created with a blank owner secret", async () => {
+    const { http } = recorder({
+      json: { success: true, slug: "abc123xy", shareUrl: "u", ownerSecret: "", accessToken: "t", accessRole: "editor" },
+    });
+    await expect(
+      createDocument(http, cfg, { markdown: "x", title: "t", role: "editor" }, "idem-create-6"),
+    ).rejects.toBeInstanceOf(CollaboError);
+  });
+
+  it("throws when the service omits ownerSecret entirely", async () => {
+    const { http } = recorder({
+      json: { success: true, slug: "abc123xy", shareUrl: "u", accessToken: "t", accessRole: "editor" },
+    });
+    await expect(
+      createDocument(http, cfg, { markdown: "x", title: "t", role: "editor" }, "idem-create-7"),
+    ).rejects.toBeInstanceOf(CollaboError);
+  });
+
   it("trims a trailing slash on the base url instead of doubling it", async () => {
     const { http, seen } = recorder({
       json: { success: true, slug: "s", shareUrl: "u", ownerSecret: "o", accessToken: "t", accessRole: "viewer" },

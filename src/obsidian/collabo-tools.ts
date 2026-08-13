@@ -30,10 +30,16 @@ import {
  *  suggestion") — never fired. Hashing the fields that make the operation
  *  what it is means an identical retry produces the identical key, and a
  *  genuinely different comment or suggestion (even on the same document)
- *  produces a different one. ` ` separates fields so `slug="a", text="b|c"`
- *  cannot collide with `slug="a|b", text="c"`. */
+ *  produces a different one.
+ *
+ *  Fields go through `JSON.stringify` as an array, not a plain-space join:
+ *  a join has no field-boundary marker, so `text="Fix typo", quote="in the
+ *  intro"` and `text="Fix typo in the", quote="intro"` joined to the
+ *  identical string and hashed to the identical key, silently dropping the
+ *  second, genuinely different comment. `JSON.stringify` escapes each
+ *  field's own quotes, so no value can forge a fake field boundary. */
 export function commentIdempotencyKey(slug: string, text: string, quote?: string): string {
-  return `exo-comment-${fnv1a(`${slug} ${text} ${quote ?? ""}`)}`;
+  return `exo-comment-${fnv1a(JSON.stringify([slug, text, quote ?? ""]))}`;
 }
 
 export function suggestionIdempotencyKey(
@@ -42,7 +48,7 @@ export function suggestionIdempotencyKey(
   quote: string,
   content?: string,
 ): string {
-  return `exo-suggest-${fnv1a(`${slug} ${kind} ${quote} ${content ?? ""}`)}`;
+  return `exo-suggest-${fnv1a(JSON.stringify([slug, kind, quote, content ?? ""]))}`;
 }
 
 export interface CollaboShareSummary {

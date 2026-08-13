@@ -137,6 +137,23 @@ describe("commentIdempotencyKey / suggestionIdempotencyKey", () => {
     const suggestion = suggestionIdempotencyKey("abc123xy", "replace", "same quote", "same text");
     expect(comment).not.toBe(suggestion);
   });
+
+  // Regression: joining fields with a plain space had no field-boundary
+  // marker, so two DIFFERENT comments could hash to the identical joined
+  // string: "Fix typo" + "in the intro" and "Fix typo in the" + "intro" both
+  // joined to "abc123xy Fix typo in the intro". The server would then treat
+  // the second, genuinely different comment as a duplicate of the first.
+  it("does not collide when text/quote boundaries shift but the concatenation matches", () => {
+    const a = commentIdempotencyKey("abc123xy", "Fix typo", "in the intro");
+    const b = commentIdempotencyKey("abc123xy", "Fix typo in the", "intro");
+    expect(a).not.toBe(b);
+  });
+
+  it("does not collide when suggestion field boundaries shift the same way", () => {
+    const a = suggestionIdempotencyKey("abc123xy", "replace", "old text", "here");
+    const b = suggestionIdempotencyKey("abc123xy", "replace", "old text here", "");
+    expect(a).not.toBe(b);
+  });
 });
 
 describe("isOwnedShare", () => {

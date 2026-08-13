@@ -53,6 +53,23 @@ class RolePicker extends FuzzySuggestModal<{ role: ShareRole; label: string }> {
 /** The one place a document URL is built. The token decides what the opener
  *  can do: the scoped accessToken gives the recipient's role, the ownerSecret
  *  gives owner rights, which is how Mario accepts a suggestion. */
+/** Moves a share registry entry from `oldPath` to `newPath`, matching how
+ *  contracts and automations elsewhere in this plugin re-key on rename.
+ *  Without this, renaming a shared note orphans its entry: the owner command
+ *  and `collabo_list_shares` keep looking it up under the path that no
+ *  longer exists. Returns the input unchanged (same reference) when the
+ *  renamed file was never shared, so callers can skip a save. */
+export function renameShare(
+  shares: Record<string, CollaboShare>,
+  oldPath: string,
+  newPath: string,
+): Record<string, CollaboShare> {
+  const entry = shares[oldPath];
+  if (!entry) return shares;
+  const { [oldPath]: _dropped, ...rest } = shares;
+  return { ...rest, [newPath]: entry };
+}
+
 export function docUrl(cfg: CollaboConfig, slug: string, token: string): string {
   return `${cfg.baseUrl.replace(/\/+$/, "")}/d/${slug}?token=${encodeURIComponent(token)}`;
 }
@@ -263,6 +280,20 @@ export async function performImport(
 }
 
 export function registerCollaboCommands(plugin: ExoPlugin): void {
+  // Keeps collaboShares keyed by the note's CURRENT path, the same
+  // registerEvent("rename") shape main.ts already uses for contracts and
+  // automations. No-ops (and skips the save) for a rename that touches no
+  // shared note.
+  plugin.registerEvent(
+    plugin.app.vault.on("rename", (file, oldPath) => {
+      if (!(file instanceof TFile)) return;
+      const moved = renameShare(plugin.settings.collaboShares, oldPath, file.path);
+      if (moved === plugin.settings.collaboShares) return;
+      plugin.settings.collaboShares = moved;
+      void plugin.saveSettings();
+    }),
+  );
+
   plugin.addCommand({
     id: "collabo-share-note",
     name: "Share this note to Exo Collabo",

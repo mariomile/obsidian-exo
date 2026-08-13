@@ -152,12 +152,20 @@ export async function createDocument(
   const b = isRecord(json) ? json : {};
   const slug = str(b.slug);
   if (!slug) throw new CollaboError("The service created no document.", 502);
+  const ownerSecret = str(b.ownerSecret);
+  // A blank ownerSecret here is indistinguishable from the sentinel
+  // isOwnedShare uses elsewhere to mean "this vault only imported the
+  // document" — this vault just CREATED it, so a blank secret can only mean
+  // a malformed or schema-drifted response, never a legitimate owner-less
+  // document. Passing it through would misrecord a document this vault owns
+  // as not-owned, permanently.
+  if (!ownerSecret) throw new CollaboError("The service created the document but returned no owner secret.", 502);
   return {
     slug,
     // tokenUrl is the one a recipient can actually open; shareUrl alone may
     // require an account on hosted deployments.
     shareUrl: str(b.tokenUrl) || str(b.shareUrl),
-    ownerSecret: str(b.ownerSecret),
+    ownerSecret,
     accessToken: str(b.accessToken),
     accessRole: (str(b.accessRole) || "commenter") as ShareRole,
   };

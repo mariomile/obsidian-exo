@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shareNote, shareOrReuse, docUrl, type ShareDeps } from "../src/obsidian/collabo-commands";
+import { shareNote, shareOrReuse, docUrl, renameShare, type ShareDeps } from "../src/obsidian/collabo-commands";
 import type { CollaboShare } from "../src/settings-schema";
 import type { HttpFn, HttpRequest } from "../src/core/collab-bridge";
 
@@ -146,5 +146,34 @@ describe("docUrl", () => {
     expect(docUrl({ baseUrl: "https://collabo.test/", apiKey: "k" }, "s", "t")).toBe(
       "https://collabo.test/d/s?token=t",
     );
+  });
+});
+
+describe("renameShare", () => {
+  // Regression: collaboShares is keyed by note path with no rename handling,
+  // unlike every other path-keyed registry in this codebase (contracts,
+  // automations). Renaming a shared note orphaned its registry entry: "Open
+  // this note's shared document as owner" silently vanished from the palette
+  // because the lookup missed under the new path, and collabo_list_shares
+  // kept reporting the dead old path to the agent.
+  const entry: CollaboShare = { slug: "abc123xy", ownerSecret: "o", accessToken: "t", role: "editor" };
+
+  it("moves the entry from the old path to the new one", () => {
+    const shares = { "Active/Plan.md": entry };
+    const moved = renameShare(shares, "Active/Plan.md", "Active/Renamed.md");
+    expect(moved).toEqual({ "Active/Renamed.md": entry });
+  });
+
+  it("leaves shares alone when the renamed file was never shared", () => {
+    const shares = { "Active/Plan.md": entry };
+    const moved = renameShare(shares, "Active/Other.md", "Active/Moved.md");
+    expect(moved).toBe(shares);
+  });
+
+  it("leaves every other entry untouched", () => {
+    const other: CollaboShare = { slug: "def456", ownerSecret: "o2", accessToken: "t2", role: "viewer" };
+    const shares = { "Active/Plan.md": entry, "Active/Other.md": other };
+    const moved = renameShare(shares, "Active/Plan.md", "Active/Renamed.md");
+    expect(moved).toEqual({ "Active/Renamed.md": entry, "Active/Other.md": other });
   });
 });
