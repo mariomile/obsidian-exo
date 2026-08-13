@@ -36,11 +36,11 @@ Fork proof-sdk into its own repo and get it serving on a public URL with API-key
 
 ```bash
 gh repo fork EveryInc/proof-sdk --fork-name exo-collabo --clone=false --org "" 
-git clone git@github.com:mariomiletta/exo-collabo.git ~/"Dev Projects"/exo-collabo
+git clone git@github.com:mariomile/exo-collabo.git ~/"Dev Projects"/exo-collabo
 cd ~/"Dev Projects"/exo-collabo && npm install
 ```
 
-If `gh repo fork` refuses (fork already exists, or org flag unsupported in this `gh` version), create the repo manually: `gh repo create mariomiletta/exo-collabo --private --clone` then add proof-sdk as a remote and `git pull upstream main`.
+If `gh repo fork` refuses (fork already exists, or org flag unsupported in this `gh` version), create the repo manually: `gh repo create mariomile/exo-collabo --private --clone` then add proof-sdk as a remote and `git pull upstream main`.
 
 - [ ] **Step 2: Verify it boots locally before touching anything**
 
