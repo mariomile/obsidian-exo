@@ -1,12 +1,11 @@
-import { App, DropdownComponent, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, DropdownComponent, PluginSettingTab, Setting } from "obsidian";
 import type ExoPlugin from "./main";
 import type { PermissionMode, ProviderId } from "./providers/types";
-import { cliDiagnostics, updateClaudeCli } from "./cli";
-import { compareSemver } from "./core/semver";
 import { ADAPTERS } from "./providers/registry";
 import { modelOptions, BACKGROUND_MODEL_OPTIONS } from "./core/model-options";
 import { parseMcpJson } from "./core/mcp-config";
 import { DEFAULT_MEMORY_ROOT, LEGACY_MEMORY_ROOT } from "./core/paths";
+import { renderCliDiagnostics } from "./ui/settings-cli";
 
 import { DEFAULT_SETTINGS, LEGACY_QUEUE_FOLDER, type MVASettings } from "./settings-schema";
 
@@ -151,7 +150,7 @@ export class MVASettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    this.renderCliDiagnostics(el, "claude", s.claudeBin);
+    renderCliDiagnostics(this.plugin, el, "claude", s.claudeBin);
 
     new Setting(el)
       .setName("Codex binary path")
@@ -165,7 +164,7 @@ export class MVASettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    this.renderCliDiagnostics(el, "codex", s.codexBin);
+    renderCliDiagnostics(this.plugin, el, "codex", s.codexBin);
 
     new Setting(el)
       .setName("Custom Claude models")
@@ -981,52 +980,4 @@ export class MVASettingTab extends PluginSettingTab {
     });
   }
 
-  /** Muted line under a binary-path field showing the RESOLVED path + CLI
-   *  version (async, never blocks render). Turns future binary-drift debugging
-   *  into a 5-second glance. */
-  private renderCliDiagnostics(containerEl: HTMLElement, name: string, configured: string): void {
-    const el = containerEl.createDiv({ cls: "setting-item-description mva-cli-diag" });
-    el.setText("Resolving…");
-    // Lazily run (or reuse) the daily update check for Claude, so the button
-    // below can appear once both the resolved version and the latest are known.
-    if (name === "claude") void this.plugin.maybeCheckCliUpdate();
-    void cliDiagnostics(name, configured)
-      .then((d) => {
-        el.setText(
-          d.found
-            ? `Resolved: ${d.bin}${d.version ? ` — ${d.version}` : ""}`
-            : "Not found — set the path explicitly"
-        );
-        if (name === "claude" && d.found && d.version) this.maybeRenderCliUpdate(containerEl, d.version);
-      })
-      .catch(() => el.setText("Not found — set the path explicitly"));
-  }
-
-  /** When the resolved Claude CLI is older than the latest known published
-   *  version, offer a one-click `npm i -g …@latest` update (never auto-run). */
-  private maybeRenderCliUpdate(containerEl: HTMLElement, currentVersion: string): void {
-    const latest = this.plugin.settings.cliLatestKnown;
-    if (!latest || compareSemver(currentVersion, latest) >= 0) return; // unknown or up to date
-    const row = new Setting(containerEl)
-      .setName(`Update available: ${latest}`)
-      .setDesc("A newer Claude CLI has been published. Updating installs it into your global npm prefix.");
-    row.addButton((b) =>
-      b
-        .setButtonText("Update")
-        .setCta()
-        .onClick(async () => {
-          b.setButtonText("Updating…").setDisabled(true);
-          new Notice("Updating Claude CLI…");
-          const { ok, output } = await updateClaudeCli();
-          if (ok) {
-            new Notice(`Updated to ${latest} — restart sessions to pick it up.`);
-            b.buttonEl.remove();
-          } else {
-            const tail = output.split("\n").filter(Boolean).slice(-4).join("\n");
-            new Notice(`Claude CLI update failed:\n${tail || "unknown error"}`);
-            b.setButtonText("Update").setDisabled(false);
-          }
-        })
-    );
-  }
 }

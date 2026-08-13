@@ -1,4 +1,4 @@
-import { Editor, FileSystemAdapter, FuzzySuggestModal, MarkdownView, Notice, Platform, Plugin, TFile, WorkspaceLeaf, requestUrl } from "obsidian";
+import { Editor, FileSystemAdapter, MarkdownView, Notice, Platform, Plugin, TFile, WorkspaceLeaf, requestUrl } from "obsidian";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
@@ -25,6 +25,7 @@ import {
 } from "./ui/view-registry";
 import { registerChatCommands } from "./ui/chat-commands";
 import { registerExoIcons } from "./ui/icons";
+import { AgentPicker, PlaybookPicker } from "./ui/pickers";
 import * as convoBridge from "./ui/convo-bridge";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
@@ -3375,51 +3376,6 @@ export default class ExoPlugin extends Plugin {
     await this.saveAutomationRuns(records);
   }
 
-}
-
-/* --------------------------- playbook picker --------------------------- */
-/** Picker for "Run agent…". Shows the tier and triggers next to each name so the
- *  consequence of picking one is visible before the run starts. */
-class AgentPicker extends FuzzySuggestModal<AgentDef> {
-  constructor(
-    app: import("obsidian").App,
-    private agents: AgentDef[],
-    private onPick: (a: AgentDef) => void
-  ) {
-    super(app);
-    this.setPlaceholder("Run an agent now…");
-  }
-  getItems(): AgentDef[] {
-    return this.agents;
-  }
-  getItemText(a: AgentDef): string {
-    const tier = writeModeFor(a.contract.autonomy) ? "writes" : "read-only";
-    return `${a.brain.name} — ${tier}${a.contract.enabled ? "" : " · disabled"}`;
-  }
-  onChooseItem(a: AgentDef): void {
-    this.onPick(a);
-  }
-}
-
-class PlaybookPicker extends FuzzySuggestModal<{ name: string; prompt: string }> {
-  constructor(
-    app: import("obsidian").App,
-    private prompts: { name: string; prompt: string }[],
-    private onPick: (p: { name: string; prompt: string }) => void,
-    reportsDir: string
-  ) {
-    super(app);
-    this.setPlaceholder(`Run a playbook (read-only, report to ${reportsDir}/)…`);
-  }
-  getItems(): { name: string; prompt: string }[] {
-    return this.prompts;
-  }
-  getItemText(p: { name: string; prompt: string }): string {
-    return p.name;
-  }
-  onChooseItem(p: { name: string; prompt: string }): void {
-    this.onPick(p);
-  }
 }
 
 /* -------------------- git auto-commit — impure shell -------------------- */

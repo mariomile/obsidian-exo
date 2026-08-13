@@ -68,7 +68,13 @@ const CEILINGS: Record<string, number> = {
   // righe reali. Il tetto resta a 3474, senza margine, e stavolta è la scelta
   // giusta e non un azzeramento: il blocco che cresce — i comandi — adesso ha
   // un file dove atterrare, quindi il margine non serve più qui.
-  "src/main.ts": 3474,
+  // Abbassato il 2026-08-13 (Exo Collabo, task 2): `AgentPicker` e
+  // `PlaybookPicker` — due modal `FuzzySuggestModal` senza stato di plugin,
+  // solo `app` + callback nel costruttore — vivono ora in `ui/pickers.ts`.
+  // 3474 -> 3430 righe reali.
+  // Il tetto resta a 3445, non a 3430: 15 righe sono il budget dichiarato per
+  // il wiring di Exo Collabo dei task 4 e 5, non un permesso di ricrescita.
+  "src/main.ts": 3445,
   // Abbassato il 2026-08-11 dopo l'estrazione del merge command+skill del menu
   // `/` in `core/slash.ts` (`mergeSlashEntries`): la lista non è UI, è la
   // riconciliazione di due roster che si sovrappongono, e lì è testabile senza
@@ -100,7 +106,13 @@ const CEILINGS: Record<string, number> = {
   // il toggle che segue (agent browser), non un permesso di ricrescita — ogni
   // nuova CHIAVE di `MVASettings` ora costa righe in settings-schema.ts, non
   // qui.
-  "src/settings.ts": 1032,
+  // Abbassato il 2026-08-13 (Exo Collabo, task 2): `renderCliDiagnostics` e
+  // `maybeRenderCliUpdate` reggevano solo `this.plugin`, senza altro stato del
+  // tab — sono diventate funzioni libere in `ui/settings-cli.ts`. 1032 -> 983
+  // righe reali.
+  // Il tetto resta a 998, non a 983: 15 righe sono il budget dichiarato per
+  // il wiring di Exo Collabo dei task 4 e 5, non un permesso di ricrescita.
+  "src/settings.ts": 998,
   // Aggiunto il 2026-08-12. Questo file era l'UNICO pannello del repo senza
   // tetto, e nell'ondata chat+cosmos e' passato da 859 a 1020 righe senza che
   // niente lo fermasse — mentre lo stesso commit ABBASSAVA quello di main.ts.
