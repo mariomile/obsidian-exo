@@ -9,20 +9,23 @@ import type { AutomationConfig } from "./core/automations";
 import { initialDailyPulseReviewState, type DailyPulseReviewState } from "./core/daily-pulse";
 import type { MemorySetup } from "./core/vault-setup";
 import { exoPaths, LEGACY_MEMORY_ROOT } from "./core/paths";
-import type { ShareRole } from "./core/collab-bridge";
+import type { StoredShareRole } from "./core/collab-bridge";
 
 /** Legacy default for the request-queue folder (kept for existing installs).
  *  Exported because the settings tab uses it as the field placeholder. */
 export const LEGACY_QUEUE_FOLDER = exoPaths(LEGACY_MEMORY_ROOT).queue;
 
-/** What Exo remembers about a note it has shared to Exo Collabo. `ownerSecret`
- *  is the promote/revoke credential and never leaves plugin data; `accessToken`
- *  is the scoped one used for ordinary reads and agent proposals. */
+/** What Exo remembers about a note tied to an Exo Collabo document, shared
+ *  from this vault or imported into it. `ownerSecret` is the promote/revoke
+ *  credential and never leaves plugin data; it is empty for a document this
+ *  vault only imported, since importing hands over a token, never the owner
+ *  secret. `accessToken` is the scoped one used for ordinary reads and agent
+ *  proposals. */
 export interface CollaboShare {
   slug: string;
   ownerSecret: string;
   accessToken: string;
-  role: ShareRole;
+  role: StoredShareRole;
 }
 
 export interface MVASettings {

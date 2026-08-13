@@ -19,6 +19,20 @@ export interface CollaboShareSummary {
   path: string;
   slug: string;
   role: string;
+  /** True when this vault created the document and holds its owner secret.
+   *  False for a document merely imported from someone else's link: a
+   *  comment or suggestion posted on it is visible to that owner and their
+   *  other collaborators, not just to Mario. */
+  owned: boolean;
+}
+
+/** The honest test for "this vault created it": whether it holds the
+ *  document's owner secret. A share recorded from an import never gets one
+ *  (see `collabo-commands.ts`), so it reads as not-owned here without any
+ *  extra bookkeeping. Exported and pure so the derivation is testable
+ *  without the live app that `collaboBridgeFrom` needs. */
+export function isOwnedShare(share: { ownerSecret: string }): boolean {
+  return share.ownerSecret !== "";
 }
 
 /** What the plugin implements. Every method is scoped to one document by slug;
@@ -49,13 +63,20 @@ async function run(fn: () => Promise<ReturnType<typeof ok>>): Promise<ReturnType
 export function buildCollaboTools(bridge: CollaboToolBridge): SdkMcpToolDefinition<any>[] {
   const listShares = tool(
     "collabo_list_shares",
-    "List the notes shared to Exo Collabo, with the slug and role of each. Start here: every other collabo tool needs a slug.",
+    "List the notes connected to Exo Collabo, with the slug, role and whether each one is yours or was received from someone else. Start here: every other collabo tool needs a slug.",
     {},
     async () =>
       run(async () => {
         const rows = bridge.shares();
         if (!rows.length) return ok("No shared documents yet.");
-        return ok(rows.map((r) => `${r.path} (slug ${r.slug}, ${r.role})`).join("\n"));
+        return ok(
+          rows
+            .map(
+              (r) =>
+                `${r.path} (slug ${r.slug}, ${r.role}, ${r.owned ? "yours" : "received from someone else"})`,
+            )
+            .join("\n"),
+        );
       }),
   );
 
@@ -86,7 +107,7 @@ export function buildCollaboTools(bridge: CollaboToolBridge): SdkMcpToolDefiniti
 
   const comment = tool(
     "collabo_comment",
-    "Leave a comment on a shared document. Use this to raise a question or flag something rather than changing the text.",
+    "Leave a comment on a shared document. Use this to raise a question or flag something rather than changing the text. Check collabo_list_shares first: if the document was received from someone else rather than shared by Mario, the comment is visible to that owner and any other collaborators and is posted as Exo, so say which document you are commenting on.",
     {
       slug: z.string().describe("Document slug from collabo_list_shares"),
       text: z.string().describe("The comment body"),
@@ -101,7 +122,7 @@ export function buildCollaboTools(bridge: CollaboToolBridge): SdkMcpToolDefiniti
 
   const suggest = tool(
     "collabo_suggest",
-    "Propose a change to a shared document. It stays a proposal until the owner accepts it: you cannot accept your own suggestion.",
+    "Propose a change to a shared document. It stays a proposal until the owner accepts it: you cannot accept your own suggestion. Check collabo_list_shares first: if the document was received from someone else rather than shared by Mario, the suggestion is visible to that owner and any other collaborators and is posted as Exo, so say which document you are proposing on.",
     {
       slug: z.string().describe("Document slug from collabo_list_shares"),
       kind: z.enum(["insert", "delete", "replace"]).describe("What kind of change this is"),
@@ -145,7 +166,13 @@ export function collaboBridgeFrom(app: App): CollaboToolBridge | undefined {
     return hit.accessToken;
   };
   return {
-    shares: () => Object.entries(shares).map(([path, s]) => ({ path, slug: s.slug, role: s.role })),
+    shares: () =>
+      Object.entries(shares).map(([path, s]) => ({
+        path,
+        slug: s.slug,
+        role: s.role,
+        owned: isOwnedShare(s),
+      })),
     read: (slug) => fetchState(obsidianHttp, cfg, slug, tokenFor(slug)),
     events: async (slug) => {
       const token = tokenFor(slug);

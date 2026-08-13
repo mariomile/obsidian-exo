@@ -13,6 +13,12 @@
 
 export type ShareRole = "viewer" | "commenter" | "editor";
 
+/** A role this vault can actually vouch for, plus "unknown" for a document
+ *  it only imported: a pasted link hands over a token, never the role it
+ *  grants, so there is nothing honest to store but "unknown" until the
+ *  service starts saying otherwise. */
+export type StoredShareRole = ShareRole | "unknown";
+
 /** Service coordinates. `apiKey` authenticates document CREATION only; every
  *  per-document call authenticates with that document's own token instead. */
 export interface CollaboConfig {

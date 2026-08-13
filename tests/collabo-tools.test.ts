@@ -2,12 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   buildCollaboTools,
   COLLABO_READ_TOOLS,
+  isOwnedShare,
   type CollaboToolBridge,
 } from "../src/obsidian/collabo-tools";
 
 function fakeBridge(over: Partial<CollaboToolBridge> = {}): CollaboToolBridge {
   return {
-    shares: () => [{ path: "Active/Plan.md", slug: "abc123xy", role: "commenter" }],
+    shares: () => [{ path: "Active/Plan.md", slug: "abc123xy", role: "commenter", owned: true }],
     read: async () => ({ markdown: "# Shared\n\nbody", updatedAt: "2026-08-12T10:00:00.000Z" }),
     events: async () => [
       { id: 7, type: "suggestion.accept", by: "mario", at: "2026-08-12T11:00:00.000Z" },
@@ -54,6 +55,15 @@ describe("registration surface", () => {
     expect(names).not.toContain("collabo_reject");
     expect(names).not.toContain("collabo_rewrite");
   });
+
+  it("tells the model, in both proposing tools, to name the document when it is not Mario's", () => {
+    const tools = buildCollaboTools(fakeBridge());
+    for (const name of ["collabo_comment", "collabo_suggest"]) {
+      const description = tools.find((t) => t.name === name)!.description;
+      expect(description).toMatch(/received from someone else/);
+      expect(description).toMatch(/say which document/);
+    }
+  });
 });
 
 describe("collabo_list_shares", () => {
@@ -67,6 +77,37 @@ describe("collabo_list_shares", () => {
   it("says so plainly when nothing is shared", async () => {
     const out = await handlerOf(fakeBridge({ shares: () => [] }), "collabo_list_shares")({}, {});
     expect(out.content[0].text).toMatch(/no shared/i);
+  });
+
+  it("marks a document this vault created as yours", async () => {
+    const bridge = fakeBridge({
+      shares: () => [{ path: "Active/Plan.md", slug: "abc123xy", role: "commenter", owned: true }],
+    });
+    const out = await handlerOf(bridge, "collabo_list_shares")({}, {});
+    expect(out.content[0].text).toContain("yours");
+    expect(out.content[0].text).not.toContain("received from someone else");
+  });
+
+  it("marks a document merely imported as received from someone else, not yours", async () => {
+    const bridge = fakeBridge({
+      shares: () => [{ path: "_inbox/Collabo newdoc.md", slug: "newdoc", role: "unknown", owned: false }],
+    });
+    const out = await handlerOf(bridge, "collabo_list_shares")({}, {});
+    expect(out.content[0].text).toContain("received from someone else");
+    expect(out.content[0].text).not.toMatch(/\byours\b/);
+  });
+});
+
+describe("isOwnedShare", () => {
+  it("is owned when this vault holds a real owner secret", () => {
+    expect(isOwnedShare({ ownerSecret: "owner-secret" })).toBe(true);
+  });
+
+  it("is not owned when the owner secret is empty, as it is for an imported document", () => {
+    // This is the exact case that regressed: importing a colleague's
+    // document used to register it with no ownership signal at all, so the
+    // agent's tool surface could not tell it apart from Mario's own shares.
+    expect(isOwnedShare({ ownerSecret: "" })).toBe(false);
   });
 });
 

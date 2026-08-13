@@ -240,11 +240,14 @@ export function registerCollaboCommands(plugin: ExoPlugin): void {
                 // the document, it only received a link to it. `ownerSecret`
                 // stays empty, and "open as owner" below refuses to offer
                 // itself for a share that has no real one.
+                // The role a link's token grants is never told to us: only
+                // the service knows it, so "unknown" is what we actually
+                // know, not a guess dressed up as one of the three real roles.
                 deps.shares[plan.path] = {
                   slug: out.slug,
                   ownerSecret: "",
                   accessToken: resolved.token,
-                  role: "viewer",
+                  role: "unknown",
                 };
                 await deps.save();
               }
