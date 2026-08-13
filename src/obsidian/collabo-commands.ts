@@ -6,12 +6,14 @@
  * `shareNote` is separated from the command wiring so the interesting behaviour
  * (create once, reuse forever, persist the mapping) is testable without an app.
  */
-import { FuzzySuggestModal, Notice, type App } from "obsidian";
+import { FuzzySuggestModal, Notice, TFile, type App } from "obsidian";
 import type ExoPlugin from "../main";
 import type { CollaboShare } from "../settings-schema";
 import {
   CollaboError,
   createDocument,
+  fetchState,
+  parseShareRef,
   type CollaboConfig,
   type HttpFn,
   type ShareRole,
@@ -118,6 +120,34 @@ export function depsFor(plugin: ExoPlugin, cfg: CollaboConfig): ShareDeps {
   };
 }
 
+/** Work out which document a paste refers to and which token opens it.
+ *  A link carries its own token; a bare slug only works for a document this
+ *  vault already knows, because nothing else supplies a credential. */
+export function resolveImport(
+  deps: ShareDeps,
+  input: string,
+): { slug: string; token: string; targetPath: string | null } | null {
+  const ref = parseShareRef(input);
+  if (!ref) return null;
+  const owned = Object.entries(deps.shares).find(([, s]) => s.slug === ref.slug);
+  const token = ref.token ?? owned?.[1].accessToken ?? null;
+  if (!token) return null;
+  return { slug: ref.slug, token, targetPath: owned?.[0] ?? null };
+}
+
+/** Read the accepted document. Pending suggestions are not part of state, so
+ *  what comes back is exactly what the owner has promoted, never someone
+ *  else's draft. */
+export async function importDocument(
+  deps: ShareDeps,
+  input: string,
+): Promise<{ markdown: string; targetPath: string | null; slug: string }> {
+  const target = resolveImport(deps, input);
+  if (!target) throw new Error("That is not an Exo Collabo link this vault can open.");
+  const state = await fetchState(deps.http, deps.cfg, target.slug, target.token);
+  return { markdown: state.markdown, targetPath: target.targetPath, slug: target.slug };
+}
+
 export function registerCollaboCommands(plugin: ExoPlugin): void {
   plugin.addCommand({
     id: "collabo-share-note",
@@ -150,6 +180,43 @@ export function registerCollaboCommands(plugin: ExoPlugin): void {
             }
           })();
         }).open();
+      }
+      return true;
+    },
+  });
+
+  plugin.addCommand({
+    id: "collabo-import",
+    name: "Import a document from Exo Collabo",
+    checkCallback: (checking: boolean) => {
+      const cfg = collaboConfig(plugin);
+      if (!cfg) return false;
+      if (!checking) {
+        void (async () => {
+          const pasted = (await navigator.clipboard.readText().catch(() => "")).trim();
+          try {
+            const deps = depsFor(plugin, cfg);
+            const out = await importDocument(deps, pasted);
+            if (out.targetPath) {
+              const file = plugin.app.vault.getAbstractFileByPath(out.targetPath);
+              if (file instanceof TFile) {
+                await plugin.app.vault.modify(file, out.markdown);
+                new Notice(`Exo Collabo: updated ${out.targetPath}`);
+                return;
+              }
+            }
+            // New to this vault: land it in the inbox rather than guessing a home.
+            const path = `_inbox/Collabo ${out.slug}.md`;
+            await plugin.app.vault.create(path, out.markdown);
+            new Notice(`Exo Collabo: imported to ${path}`);
+          } catch (e) {
+            new Notice(
+              e instanceof CollaboError
+                ? `Exo Collabo refused the read: ${e.message}`
+                : `Could not import: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        })();
       }
       return true;
     },
