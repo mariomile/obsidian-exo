@@ -69,6 +69,7 @@ import { mentionsExtension } from "./mentions/editor";
 import { selectionObserverExtension } from "./editor/selection-observer";
 import { WriteQueue } from "./core/write-queue";
 import { WorkflowSignalStore } from "./obsidian/workflow-signal-store";
+import { registerCollaboCommands } from "./obsidian/collabo-commands";
 import { startCodexBridge, type CodexBridge } from "./obsidian/codex-bridge";
 import { CODEX_BRIDGE_SCRIPT } from "./obsidian/codex-bridge-script";
 import { promoteToTaskCommandVisible } from "./core/tasks";
@@ -743,6 +744,7 @@ export default class ExoPlugin extends Plugin {
       name: "New Exo Queue request",
       callback: () => void this.createQueueRequest(),
     });
+    registerCollaboCommands(this);
 
     // Exo Queue ("Exo in tasca"): evade le note-richiesta arrivate via Sync.
     // Poll leggero ogni 5 min (list di una cartella); drain sequenziale con

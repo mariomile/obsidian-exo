@@ -38,3 +38,19 @@ export class Notice {
 export function setIcon(el: { dataset?: Record<string, string> }, icon: string): void {
   if (el.dataset) el.dataset.icon = icon;
 }
+
+/** Base class for a fuzzy-matched picker modal. Nothing here needs to match
+ *  or render; the stub exists so an obsidian/*.ts module that subclasses it
+ *  (e.g. collabo-commands' RolePicker) can be imported by a test at all. */
+export class FuzzySuggestModal<T> {
+  constructor(public app: unknown) {}
+  setPlaceholder(_text: string): void {}
+  open(): void {}
+  getItems(): T[] {
+    return [];
+  }
+  getItemText(_item: T): string {
+    return "";
+  }
+  onChooseItem(_item: T): void {}
+}
