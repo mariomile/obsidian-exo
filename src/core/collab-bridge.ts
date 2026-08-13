@@ -118,11 +118,12 @@ export async function createDocument(
   http: HttpFn,
   cfg: CollaboConfig,
   doc: { markdown: string; title: string; role: ShareRole },
+  idempotencyKey: string,
 ): Promise<CreatedDocument> {
   const json = await send(http, {
     url: `${trimSlash(cfg.baseUrl)}/documents`,
     method: "POST",
-    headers: authHeaders(cfg.apiKey),
+    headers: { ...authHeaders(cfg.apiKey), "Idempotency-Key": idempotencyKey },
     body: JSON.stringify({ markdown: doc.markdown, title: doc.title, role: doc.role }),
   });
   const b = isRecord(json) ? json : {};
@@ -150,8 +151,14 @@ export async function fetchState(
     method: "GET",
     headers: authHeaders(token),
   });
-  const b = isRecord(json) ? json : {};
-  return { markdown: str(b.markdown), updatedAt: typeof b.updatedAt === "string" ? b.updatedAt : null };
+  const b = isRecord(json) ? json : null;
+  // A 2xx with no markdown string is a schema drift or a degraded response,
+  // not an empty document: surfacing it as an error keeps a malformed reply
+  // from silently blanking real content when it lands in a vault note.
+  if (!b || typeof b.markdown !== "string") {
+    throw new CollaboError("The service returned a malformed document state.", 502);
+  }
+  return { markdown: b.markdown, updatedAt: typeof b.updatedAt === "string" ? b.updatedAt : null };
 }
 
 export async function postOp(
@@ -184,12 +191,18 @@ export async function pendingEvents(
     headers: authHeaders(token),
   });
   const raw = isRecord(json) && Array.isArray(json.events) ? json.events : [];
-  return raw.filter(isRecord).map((e) => ({
-    id: typeof e.id === "number" ? e.id : 0,
-    type: str(e.type),
-    by: typeof e.by === "string" ? e.by : null,
-    at: typeof e.at === "string" ? e.at : null,
-  }));
+  // An event with no numeric id can never be passed to ackEvents' cursor, so
+  // admitting it with a fake id (e.g. 0) risks stalling a caller that acks
+  // through the max id seen. Drop it instead.
+  return raw
+    .filter(isRecord)
+    .filter((e): e is Record<string, unknown> & { id: number } => typeof e.id === "number")
+    .map((e) => ({
+      id: e.id,
+      type: str(e.type),
+      by: typeof e.by === "string" ? e.by : null,
+      at: typeof e.at === "string" ? e.at : null,
+    }));
 }
 
 export async function ackEvents(
