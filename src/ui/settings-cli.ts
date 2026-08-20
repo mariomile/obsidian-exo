@@ -5,7 +5,8 @@
  */
 import { Notice, Setting } from "obsidian";
 import type ExoPlugin from "../main";
-import { cliDiagnostics, updateClaudeCli } from "../cli";
+import { cliDiagnostics, updateClaudeCli, resolveCli } from "../cli";
+import { maybeCheckCliUpdate } from "../cli-maintenance";
 import { compareSemver } from "../core/semver";
 
 /** When the resolved Claude CLI is older than the latest known published
@@ -19,7 +20,7 @@ export function maybeRenderCliUpdate(
   if (!latest || compareSemver(currentVersion, latest) >= 0) return; // unknown or up to date
   const row = new Setting(containerEl)
     .setName(`Update available: ${latest}`)
-    .setDesc("A newer Claude CLI has been published. Updating installs it into your global npm prefix.");
+    .setDesc("A newer Claude CLI has been published. Updating installs it via the CLI's own updater (native) or your global npm prefix (npm install).");
   row.addButton((b) =>
     b
       .setButtonText("Update")
@@ -27,7 +28,8 @@ export function maybeRenderCliUpdate(
       .onClick(async () => {
         b.setButtonText("Updating…").setDisabled(true);
         new Notice("Updating Claude CLI…");
-        const { ok, output } = await updateClaudeCli();
+        const cli = await resolveCli("claude", plugin.settings.claudeBin);
+        const { ok, output } = await updateClaudeCli(cli);
         if (ok) {
           new Notice(`Updated to ${latest} — restart sessions to pick it up.`);
           b.buttonEl.remove();
@@ -53,7 +55,7 @@ export function renderCliDiagnostics(
   el.setText("Resolving…");
   // Lazily run (or reuse) the daily update check for Claude, so the button
   // below can appear once both the resolved version and the latest are known.
-  if (name === "claude") void plugin.maybeCheckCliUpdate();
+  if (name === "claude") void maybeCheckCliUpdate(plugin);
   void cliDiagnostics(name, configured)
     .then((d) => {
       el.setText(
@@ -64,4 +66,19 @@ export function renderCliDiagnostics(
       if (name === "claude" && d.found && d.version) maybeRenderCliUpdate(plugin, containerEl, d.version);
     })
     .catch(() => el.setText("Not found — set the path explicitly"));
+
+  // Auto-update toggle — CLI drift is the recurring cause of Exo "not working",
+  // so keeping the binary current is on by default (native installs self-heal
+  // daily via `claude update`, only while idle).
+  if (name === "claude") {
+    new Setting(containerEl)
+      .setName("Keep Claude CLI up to date")
+      .setDesc("Automatically update the CLI in the background (daily, never mid-turn). Prevents a stale binary from silently breaking sessions.")
+      .addToggle((t) =>
+        t.setValue(plugin.settings.autoUpdateCli).onChange(async (v) => {
+          plugin.settings.autoUpdateCli = v;
+          await plugin.saveSettings();
+        })
+      );
+  }
 }
