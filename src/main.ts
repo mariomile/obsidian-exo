@@ -1,4 +1,4 @@
-import { Editor, FileSystemAdapter, MarkdownView, Notice, Platform, Plugin, TFile, WorkspaceLeaf, requestUrl } from "obsidian";
+import { Editor, FileSystemAdapter, MarkdownView, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
@@ -29,8 +29,9 @@ import { AgentPicker, PlaybookPicker } from "./ui/pickers";
 import * as convoBridge from "./ui/convo-bridge";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
 import { ADAPTERS } from "./providers/registry";
-import { resolveCli, cliDiagnostics, updateClaudeCli } from "./cli";
-import { cliVerifyStatus, compareSemver, VERIFIED_CLAUDE_CLI } from "./core/semver";
+import { resolveCli, cliDiagnostics } from "./cli";
+import { runCliUpdate, maybeAutoUpdateCli } from "./cli-maintenance";
+import { cliVerifyStatus, VERIFIED_CLAUDE_CLI } from "./core/semver";
 import { InlineEditModal } from "./ui/inline-edit";
 import type { AgentEvent } from "./providers/types";
 import {
@@ -225,7 +226,8 @@ export default class ExoPlugin extends Plugin {
   /** Handles for idle-scheduled startup chores (requestIdleCallback ids or
    *  setTimeout ids); cancelled on unload. */
   private startupIdleHandles: number[] = [];
-  private unloaded = false;
+  /** Public so the extracted CLI-maintenance functions can bail after unload. */
+  unloaded = false;
 
   /** Latest native plan/account quota snapshot (pushed by the chat view) — the
    *  Cockpit renders it in the System tile. Null until a provider reports. */
@@ -516,7 +518,7 @@ export default class ExoPlugin extends Plugin {
     this.addCommand({
       id: "update-claude-cli",
       name: "Update Claude CLI",
-      callback: () => void this.runCliUpdate(),
+      callback: () => void runCliUpdate(this),
     });
 
     const withView = (fn: (v: ChatView) => void) => () => {
@@ -761,6 +763,13 @@ export default class ExoPlugin extends Plugin {
       window.setInterval(() => void this.maybeAutoCommit(), ExoPlugin.AUTO_COMMIT_CHECK_INTERVAL_MS)
     );
 
+    // Re-check CLI currency daily, not only at boot: a long-lived Obsidian
+    // session (days/weeks without a restart) would otherwise never re-run the
+    // startup check and silently drift onto a stale, session-poisoning binary.
+    this.registerInterval(
+      window.setInterval(() => void maybeAutoUpdateCli(this), 24 * 60 * 60 * 1000)
+    );
+
     this.addSettingTab(new MVASettingTab(this.app, this));
 
   }
@@ -775,10 +784,7 @@ export default class ExoPlugin extends Plugin {
   private scheduleStartupMaintenance(): void {
     if (this.unloaded) return;
     this.runWhenIdle(() => void this.checkCliVerified(), 5_000);
-    this.runWhenIdle(
-      () => void this.maybeCheckCliUpdate().then(() => this.maybeOfferCliUpdate()),
-      30_000
-    );
+    this.runWhenIdle(() => void maybeAutoUpdateCli(this), 30_000);
   }
 
   /** Run `cb` on the next idle slot (or after `timeout` ms, whichever first),
@@ -798,62 +804,6 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
-  /** One-click Claude-CLI update, shared by the command and the boot notice.
-   *  Wraps the existing updateClaudeCli() (npm install -g, 3-min cap) with
-   *  progress + result notices and a diag entry. New sessions pick the new
-   *  binary up automatically (the resolve caches are cleared on success). */
-  private async runCliUpdate(): Promise<void> {
-    this.diag.push("cli", "one-click update started");
-    new Notice("Exo — updating Claude CLI…");
-    const { ok, output } = await updateClaudeCli();
-    if (ok) {
-      this.diag.push("cli", "one-click update ok");
-      new Notice("Exo — Claude CLI updated. New sessions use it automatically.", 8000);
-    } else {
-      const tail = output.split("\n").filter(Boolean).slice(-4).join("\n");
-      this.diag.push("cli", "one-click update FAILED");
-      new Notice(`Exo — CLI update failed:\n${tail || "unknown error"}`, 10000);
-    }
-  }
-
-  /** If the daily check found a newer published CLI, surface a persistent
-   *  notice with an Update button — once per published version (localStorage
-   *  marker), so Mario never has to dig into Settings to stay current. */
-  private async maybeOfferCliUpdate(): Promise<void> {
-    try {
-      const latest = this.settings.cliLatestKnown;
-      if (!latest) return;
-      const d = await cliDiagnostics("claude", this.settings.claudeBin); // cached — shared with checkCliVerified
-      if (!d.version || compareSemver(d.version, latest) >= 0) return; // unknown or already current
-      const KEY = "exo-cli-update-offered";
-      if (this.app.loadLocalStorage(KEY) === latest) return; // offered once already
-      this.app.saveLocalStorage(KEY, latest);
-      this.diag.push("cli", `update available ${d.version} → ${latest}`);
-      const frag = document.createDocumentFragment();
-      const span = document.createElement("span");
-      span.textContent = `Exo — Claude CLI ${latest} available (installed ${d.version}). `;
-      const btn = document.createElement("button");
-      btn.textContent = "Update now";
-      frag.append(span, btn);
-      const n = new Notice(frag, 0); // sticky until clicked/dismissed
-      btn.onclick = async () => {
-        btn.disabled = true;
-        btn.textContent = "Updating…";
-        await this.runCliUpdate();
-        n.hide();
-      };
-    } catch {
-      /* best-effort — never noise the boot */
-    }
-  }
-
-  /**
-   * Check npm for a newer Claude CLI, at most once per day. Caches the result in
-   * settings (`cliLatestKnown` + `cliUpdateCheckAt`) so the settings tab can show
-   * an update button without a network round-trip on every render. Uses
-   * Obsidian's `requestUrl` (not node fetch — desktop CSP/proxy safe). Never
-   * throws; a failed check just records the attempt so we don't hammer the API.
-   */
   /** One-shot (per CLI version) drift notice: probe `claude --version` and warn
    *  when it falls outside {@link VERIFIED_CLAUDE_CLI}. The "already noticed"
    *  marker lives in Obsidian localStorage (not settings/data.json) so it never
@@ -876,24 +826,6 @@ export default class ExoPlugin extends Plugin {
       );
     } catch {
       /* best-effort — never block or noise the boot */
-    }
-  }
-
-  async maybeCheckCliUpdate(force = false): Promise<void> {
-    const DAY = 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    if (!force && this.settings.cliUpdateCheckAt && now - this.settings.cliUpdateCheckAt < DAY) return;
-    try {
-      const res = await requestUrl({
-        url: "https://registry.npmjs.org/@anthropic-ai/claude-code/latest",
-      });
-      const version = (res.json as { version?: unknown } | undefined)?.version;
-      if (typeof version === "string" && version) this.settings.cliLatestKnown = version;
-    } catch {
-      /* offline / registry down — silent */
-    } finally {
-      this.settings.cliUpdateCheckAt = now;
-      await this.saveSettings();
     }
   }
 

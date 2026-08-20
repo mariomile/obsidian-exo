@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fixedPathCandidates, versionManagerCandidates, firstExisting } from "../src/cli";
+import { fixedPathCandidates, versionManagerCandidates, firstExisting, claudeInstallChannel } from "../src/cli";
 
 const HOME = "/home/u";
 
@@ -82,6 +82,28 @@ describe("firstExisting", () => {
 
   it("returns null when nothing exists", () => {
     expect(firstExisting(["/a", "/b"], () => false)).toBeNull();
+  });
+
+  describe("claudeInstallChannel", () => {
+    it("classifies the native installer (~/.local/share/claude) as native", () => {
+      // The launcher ~/.local/bin/claude symlinks into the versions store.
+      const realpath = () => "/home/u/.local/share/claude/versions/2.1.237";
+      expect(claudeInstallChannel("/home/u/.local/bin/claude", realpath)).toBe("native");
+    });
+
+    it("follows the launcher symlink into node_modules → npm", () => {
+      // A global npm install: <prefix>/bin/claude → <prefix>/lib/node_modules/…
+      const realpath = () => "/opt/npm/lib/node_modules/@anthropic-ai/claude-code/cli.js";
+      expect(claudeInstallChannel("/opt/npm/bin/claude", realpath)).toBe("npm");
+    });
+
+    it("defaults to native when realpath reveals no node_modules (homebrew, bare path)", () => {
+      expect(claudeInstallChannel("/opt/homebrew/bin/claude", (p) => p)).toBe("native");
+    });
+
+    it("treats a broken symlink (realpath returns the path as-is) as native", () => {
+      expect(claudeInstallChannel("/home/u/.local/bin/claude", (p) => p)).toBe("native");
+    });
   });
 
   it("pins the incident: a canonical fixed path beats a stale nvm hit", () => {

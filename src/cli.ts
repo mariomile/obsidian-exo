@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 import { homedir } from "os";
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync, realpathSync } from "fs";
 import { dirname } from "path";
 
 /** A resolved CLI invocation: the binary plus an enriched PATH for the spawn. */
@@ -276,14 +276,58 @@ function probeVersion(bin: string, pathEnv: string): Promise<string | null> {
   });
 }
 
+/* ------------------------- install channel ---------------------------- */
+
+export type InstallChannel = "native" | "npm";
+
+function safeRealpath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p; // broken symlink / missing — treat the path as-is
+  }
+}
+
+/** How the resolved `claude` binary was installed — which decides the updater.
+ *  The launcher path alone can't tell us (an npm-global bin lives at
+ *  `<prefix>/bin/claude`, same shape as any other bin), so we follow the symlink:
+ *  an npm install resolves to a file under `node_modules`, the native installer
+ *  resolves into `~/.local/share/claude/…`. Anything else (homebrew, a bare
+ *  path) defaults to native, because `claude update` is the CLI's own,
+ *  install-method-aware self-updater and the safe general answer. `realpath` is
+ *  injectable for tests. */
+export function claudeInstallChannel(
+  bin: string,
+  realpath: (p: string) => string = safeRealpath
+): InstallChannel {
+  const target = realpath(bin).replace(/\\/g, "/");
+  return /\/node_modules\//.test(target) ? "npm" : "native";
+}
+
 /* ------------------------------ update -------------------------------- */
 
-/** Install the latest Claude CLI via `npm i -g` in the user's *login* shell, so
- *  it lands in the same real npm prefix our resolution probes read (not some
- *  GUI-inherited PATH). Never rejects. On success clears the resolution + diag
- *  caches so the next probe re-resolves the freshly-installed binary. Output is
- *  a bounded tail of combined stdout/stderr for surfacing in a Notice. */
-export function updateClaudeCli(): Promise<{ ok: boolean; output: string }> {
+/** Update the Claude CLI in place, using the updater that matches how it was
+ *  installed. Native installs (the default installer) self-update via the CLI's
+ *  own `claude update`; npm-global installs use `npm i -g …@latest` in the login
+ *  shell (so it lands in the real npm prefix our probes read, not a GUI-inherited
+ *  PATH). The npm path used to run unconditionally — a no-op or a *downgrade* for
+ *  native installs, the common case, because npm's `latest` dist-tag trails the
+ *  native channel and installs into a lower-priority path than `~/.local/bin`.
+ *  Never rejects. On success clears the resolve + diag caches so the next probe
+ *  re-resolves the fresh binary. `output` is a bounded tail of stdout+stderr. */
+export function updateClaudeCli(cli: ResolvedCli): Promise<{ ok: boolean; output: string }> {
+  const channel = claudeInstallChannel(cli.bin);
+  const shell = process.env.SHELL || "/bin/zsh";
+  return runUpdater(() =>
+    channel === "npm"
+      ? spawn(shell, ["-ilc", "npm install -g @anthropic-ai/claude-code@latest"], { env: process.env })
+      : spawn(cli.bin, ["update"], { env: { ...process.env, PATH: cli.pathEnv } })
+  );
+}
+
+/** Shared update runner: bounded output ring, 3-minute cap, and a resolve/diag
+ *  cache-clear on success so the next probe sees the freshly-installed binary. */
+function runUpdater(spawnProc: () => ReturnType<typeof spawn>): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
     let out = "";
     let settled = false;
@@ -299,12 +343,9 @@ export function updateClaudeCli(): Promise<{ ok: boolean; output: string }> {
       if (out.length > 8000) out = out.slice(-8000); // bounded ring
     };
     try {
-      const shell = process.env.SHELL || "/bin/zsh";
-      const c = spawn(shell, ["-ilc", "npm install -g @anthropic-ai/claude-code@latest"], {
-        env: process.env,
-      });
-      c.stdout.on("data", append);
-      c.stderr.on("data", append);
+      const c = spawnProc();
+      c.stdout?.on("data", append);
+      c.stderr?.on("data", append);
       c.on("error", (e: Error) => finish({ ok: false, output: e.message }));
       c.on("close", (code: number | null) => {
         const ok = code === 0;
@@ -315,7 +356,7 @@ export function updateClaudeCli(): Promise<{ ok: boolean; output: string }> {
         }
         finish({ ok, output: out.trim() });
       });
-      // npm installs can be slow; give it up to 3 minutes before giving up.
+      // Both npm installs and `claude update` can be slow; cap at 3 minutes.
       timer = setTimeout(() => {
         try {
           c.kill("SIGKILL");

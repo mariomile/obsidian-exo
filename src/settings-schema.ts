@@ -223,6 +223,12 @@ export interface MVASettings {
   cliUpdateCheckAt: number;
   /** Latest published Claude CLI version seen by the update check ("" = unknown). */
   cliLatestKnown: string;
+  /** Keep the Claude CLI current automatically. CLI drift is the recurring root
+   *  cause of Exo "not working" (a stale binary throws error_during_execution and
+   *  poisons sessions), so ON by default. Native installs self-heal via `claude
+   *  update` on a daily throttle, only while no turn is streaming; npm installs
+   *  fall back to a non-intrusive "update available" notice. */
+  autoUpdateCli: boolean;
   /** Git auto-commit safety net: silently commit vault writes so every
    *  agent-driven mutation is recoverable via git. OFF by default — an opt-in
    *  net, not a surprise. No-op when the vault isn't a git repo. */
@@ -351,6 +357,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   scheduledLastRun: {},
   cliUpdateCheckAt: 0,
   cliLatestKnown: "",
+  autoUpdateCli: true,
   vaultAutoCommit: false,
   vaultAutoCommitIntervalMinutes: 15,
   orchestrationEnabled: false,
