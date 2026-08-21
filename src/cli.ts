@@ -371,6 +371,50 @@ function runUpdater(spawnProc: () => ReturnType<typeof spawn>): Promise<{ ok: bo
   });
 }
 
+/* ------------------------------ account auth -------------------------- */
+
+/** Sign in to the Anthropic account via `claude auth login`. The CLI opens the
+ *  system browser for the OAuth round-trip and stores the refreshed credentials
+ *  in its own store; this resolves when that process exits (so a caller can then
+ *  retry the failed turn). Same enriched-PATH reasoning as the session spawn
+ *  (Obsidian doesn't inherit the login-shell PATH). Never rejects — resolves
+ *  `{ ok, output }` with a bounded tail of stdout+stderr. */
+export function authLogin(cli: ResolvedCli): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    let out = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (result: { ok: boolean; output: string }): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      resolve(result);
+    };
+    const append = (d: Buffer | string) => {
+      out += d.toString();
+      if (out.length > 8000) out = out.slice(-8000); // bounded ring
+    };
+    try {
+      const c = spawn(cli.bin, ["auth", "login"], { env: { ...process.env, PATH: cli.pathEnv } });
+      c.stdout?.on("data", append);
+      c.stderr?.on("data", append);
+      c.on("error", (e: Error) => finish({ ok: false, output: e.message }));
+      c.on("close", (code: number | null) => finish({ ok: code === 0, output: out.trim() }));
+      // OAuth is user-paced (browser round-trip) — give it 3 minutes before giving up.
+      timer = setTimeout(() => {
+        try {
+          c.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+        finish({ ok: false, output: out.trim() || "Login timed out." });
+      }, 180_000);
+    } catch (e) {
+      finish({ ok: false, output: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
 /* ------------------------------- mcp auth ----------------------------- */
 
 /** (Re)authenticate an OAuth / remote MCP server via `claude mcp login <name>`.

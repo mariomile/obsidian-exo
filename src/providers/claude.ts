@@ -15,6 +15,7 @@ import type {
   SessionOpts,
 } from "./types";
 import { normalizeUtilization } from "../core/rate-limit";
+import { isAuthFailure } from "../core/errors";
 
 /** Built-in file tools disabled in "native-first" mode (use Obsidian tools). */
 const NATIVE_FIRST_DISALLOW = ["Read", "Grep", "Glob", "LS", "Edit", "MultiEdit", "Write", "NotebookEdit"];
@@ -145,6 +146,13 @@ class ClaudeSession implements AgentSession {
    *  which is an async control round-trip that can race a short-lived
    *  utility session's `dispose()`. `null` until a `result` with `usage` arrives. */
   private lastResultUsage: { inputTokens: number; outputTokens: number } | null = null;
+  /** Assistant text seen this turn that matches an auth-failure signature. The
+   *  CLI reports an expired session as an ordinary assistant message ("Failed to
+   *  authenticate: OAuth session expired…") and then exits WITHOUT a `result`, so
+   *  the stream-ended settle error would otherwise read as a generic recoverable
+   *  crash and get retried forever. Capturing it lets pump() settle with the real
+   *  auth message, which the view diverts into a re-login card. Cleared per send(). */
+  private authFailureText: string | null = null;
 
   constructor(opts: SessionOpts) {
     this.sessionId = opts.resumeSessionId;
@@ -312,7 +320,10 @@ class ClaudeSession implements AgentSession {
       // the view would wait forever with the composer stuck on "streaming".
       // No-op when the turn already settled or on dispose (handles are null).
       this.denyPending?.();
-      this.settleTurn(new Error("Claude session ended unexpectedly."));
+      // An expired session exits exactly this way (auth text, then no result).
+      // Settle with the captured auth message so the view shows a re-login card
+      // instead of routing a dead-credential turn into endless resume retries.
+      this.settleTurn(new Error(this.authFailureText ?? "Claude session ended unexpectedly."));
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
       this.denyPending?.();
@@ -453,6 +464,7 @@ class ClaudeSession implements AgentSession {
       const ev = msg.event;
       if (ev?.type === "content_block_delta") {
         if (ev.delta?.type === "text_delta" && ev.delta.text) {
+          this.noteAuthText(ev.delta.text);
           emit({ kind: "text-delta", text: ev.delta.text });
         } else if (ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
           emit({ kind: "thinking-delta", text: ev.delta.thinking });
@@ -465,6 +477,10 @@ class ClaudeSession implements AgentSession {
       for (const b of msg.message?.content ?? []) {
         if (b.type === "tool_use") {
           emit({ kind: "tool-call-start", id: b.id ?? "", name: b.name ?? "", input: b.input, parentId: pid });
+        } else if (b.type === "text" && typeof b.text === "string") {
+          // The CLI delivers an expired-session notice as a plain assistant text
+          // block (not a stream_event delta), so scan these too.
+          this.noteAuthText(b.text);
         }
       }
     } else if (msg.type === "user") {
@@ -513,6 +529,14 @@ class ClaudeSession implements AgentSession {
     }
   }
 
+  /** Remember assistant text that looks like an auth failure (first match wins),
+   *  so a stream that ends without a `result` can settle with the auth message
+   *  instead of a generic "session ended" that the recovery ladder would retry. */
+  private noteAuthText(text: string): void {
+    if (this.authFailureText || !isAuthFailure(text)) return;
+    this.authFailureText = text.trim();
+  }
+
   /** Resolve (or reject) the in-flight turn exactly once and clear its handles. */
   private settleTurn(err?: unknown): void {
     const resolve = this.resolveTurn;
@@ -542,6 +566,7 @@ class ClaudeSession implements AgentSession {
     // orphan the first promise (its resolve/reject would be overwritten).
     if (this.resolveTurn) return Promise.reject(new Error("A turn is already in flight."));
     this.stderrTail = []; // per-turn tail — drop any lines from a prior turn
+    this.authFailureText = null; // per-turn — a prior auth error must not taint this one
     this.interruptRequested = false; // an old interrupt must not excuse this turn's errors
     this.onEvent = onEvent;
     const content: UserContent =
@@ -815,6 +840,7 @@ interface ClaudeMsg {
       id?: string;
       name?: string;
       input?: unknown;
+      text?: string;
       tool_use_id?: string;
       is_error?: boolean;
       content?: unknown;

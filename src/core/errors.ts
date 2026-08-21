@@ -9,10 +9,19 @@
 export function describeCliFailure(raw: string): { message: string; hint?: string } | null {
   const m = (raw || "").toLowerCase();
 
-  // Auth first: an auth failure can also mention "error"/"exited", so it must win
-  // over the generic crash patterns below.
-  if (/not logged in|invalid api key|please run \/login|\/login\b|unauthorized|not authenticated/.test(m)) {
-    return { message: "The CLI isn't authenticated — run `claude` once in a terminal to log in." };
+  // Auth first: an auth failure can also mention "error"/"exited"/"session
+  // ended", so it must win over the generic crash + recovery patterns below.
+  // Split into two shapes because they call for different UI: an EXPIRED session
+  // (was logged in, token lapsed) just needs a re-login, whereas never-logged-in
+  // needs first-time setup. `isAuthFailure` unifies detection for the caller.
+  if (isAuthExpired(m)) {
+    return {
+      message: "Your Claude session expired — log back in to continue.",
+      hint: "Retrying won't help until you re-authenticate; use the Log in button.",
+    };
+  }
+  if (isAuthMissing(m)) {
+    return { message: "The CLI isn't authenticated — log in to continue." };
   }
 
   // Claude-plan usage limit (claude.ai subscription). Distinct from an API-key
@@ -78,4 +87,29 @@ export function describeCliFailure(raw: string): { message: string; hint?: strin
 /** Exact provider-stream failures that the session recovery ladder can heal. */
 export function isEndedSessionFailure(raw: string): boolean {
   return /claude session ended|session stream ended/.test((raw || "").toLowerCase());
+}
+
+/** An OAuth/token credential that lapsed while previously authenticated. The CLI
+ *  phrases this as "Failed to authenticate: OAuth session expired and could not
+ *  be refreshed", "token expired", or "credentials expired". Requires an AUTH
+ *  signal (oauth / token / credential / authenticate / refresh) alongside the
+ *  expiry — a bare "session expired, start a new one" is a recoverable CLI
+ *  session, NOT an auth failure, and must fall through to the recovery ladder. */
+export function isAuthExpired(raw: string): boolean {
+  const m = (raw || "").toLowerCase();
+  const authSignal = /oauth|token|credential|authenticate|authentication|refresh/.test(m);
+  return authSignal && /expired|could not be refreshed|couldn't be refreshed|refresh failed/.test(m);
+}
+
+/** No usable credentials at all — never logged in, or they were cleared. */
+export function isAuthMissing(raw: string): boolean {
+  const m = (raw || "").toLowerCase();
+  return /not logged in|invalid api key|please run \/login|\/login\b|unauthorized|not authenticated/.test(m);
+}
+
+/** Any authentication problem — expired OR missing. The turn runner uses this to
+ *  divert an auth failure OUT of the retry/recovery ladder (retrying with dead
+ *  credentials just re-fails) and into an actionable re-login card. */
+export function isAuthFailure(raw: string): boolean {
+  return isAuthExpired(raw) || isAuthMissing(raw);
 }

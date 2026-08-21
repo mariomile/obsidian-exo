@@ -47,6 +47,7 @@ import { readBootContext } from "./obsidian/memory";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
+import { renderErrorBody as renderErrorBodyCard } from "./ui/error-card";
 import { RecapPanel } from "./ui/recap";
 import { buildRecap as buildConvoRecap } from "./core/recap";
 import { assembleContext, formatContextDebug, selectUnchangedPaths } from "./core/context-assembly";
@@ -138,7 +139,7 @@ import { advanceBoundary } from "./core/stream-scan";
 import { mergeTouched, WRITE_TOOLS } from "./core/touched";
 import { terminalConvoState } from "./core/convo-state";
 import { allowKey, permArgText, permRuleLine, decidePermission } from "./core/permissions";
-import { describeCliFailure } from "./core/errors";
+import { isAuthFailure } from "./core/errors";
 import { isReadOnlyExternalTool } from "./core/headless-tools";
 import {
   createWorkflowSignal,
@@ -6061,6 +6062,12 @@ export class ChatView extends ItemView {
             if (!ctx.fullText && ctx.cards.size === 0) {
               ctx.bodyEl.createSpan({ cls: "mva-faint", text: "Stopped." });
             }
+          } else if (c.provider === "claude" && isAuthFailure(e.message)) {
+            // Auth failure — NOT a session crash: resuming re-fails with the same
+            // dead credentials. Render the re-login card and leave the session
+            // alone (no poison, no recovery footer, no retry ladder).
+            this.renderError(ctx, e.message, c, text);
+            this.notifyOnce(ctx, "error", "Exo — sign-in required", "Your Claude session expired.");
           } else {
             // An execution error crashes the CLI process — reusing the live
             // session re-errors forever, so the turn end (below) drops it. But the
@@ -6208,9 +6215,16 @@ export class ChatView extends ItemView {
           }
           this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
         } else {
+          const authFail = c.provider === "claude" && isAuthFailure(msg);
           this.renderError(ctx, msg, c, text);
-          new Notice(msg);
-          this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
+          // The re-login card carries the full explanation; a raw auth-string
+          // toast on top of it is just noise, so give auth a friendly one instead.
+          if (authFail) {
+            this.notifyOnce(ctx, "error", "Exo — sign-in required", "Your Claude session expired.");
+          } else {
+            new Notice(msg);
+            this.notifyOnce(ctx, "error", "Exo — error", msg.slice(0, 80));
+          }
           // Don't replay queued messages into a broken session — they'd just re-fail.
           if (c.queue.length) {
             c.queue = [];
@@ -6430,53 +6444,21 @@ export class ChatView extends ItemView {
     this.renderErrorBody(body, message, c, retryText);
   }
 
-  /** Inline error, upgraded to a setup card when the CLI isn't ready. */
+  /** Inline error, upgraded to an auth/setup card when the CLI needs attention.
+   *  Body lives in ui/error-card.ts; this binds it to the view's turn machinery. */
   private renderErrorBody(body: HTMLElement, message: string, c: Convo, retryText: string): void {
-    let actionHost: HTMLElement;
-    if (/not found|not logged in|sign in|run it once/i.test(message)) {
-      const card = body.createDiv({ cls: "mva-onboard" });
-      setIcon(card.createDiv({ cls: "mva-onboard-icon" }), "plug-zap");
-      card.createDiv({ cls: "mva-onboard-title", text: `${ADAPTERS[c.provider].displayName} isn't ready` });
-      card.createDiv({ cls: "mva-onboard-msg", text: message });
-      const steps = card.createEl("ol", { cls: "mva-onboard-steps" });
-      steps.createEl("li", { text: `Open a terminal and run \`${c.provider}\` once to sign in.` });
-      steps.createEl("li", { text: "If it's installed elsewhere, set the binary path in settings." });
-      const btn = card.createEl("button", { cls: "mva-btn mva-btn-primary", text: "Open settings" });
-      btn.onclick = () => this.openSettings();
-      actionHost = card;
-    } else {
-      // Keep failures visible without turning them into a dominant red card. The
-      // compact row carries the human-readable state + retry; raw diagnostics stay
-      // available behind a disclosure for the rare case they are needed.
-      const friendly = describeCliFailure(message);
-      const box = body.createDiv({ cls: "mva-inline-error" });
-      const row = box.createDiv({ cls: "mva-error-row" });
-      setIcon(row.createSpan({ cls: "mva-error-icon" }), "triangle-alert");
-      const copy = row.createDiv({ cls: "mva-error-copy" });
-      copy.createDiv({ cls: "mva-error-title", text: "Response interrupted" });
-      copy.createDiv({
-        cls: "mva-error-summary",
-        text: friendly?.message ?? (message.length > 120 ? `${message.slice(0, 120)}…` : message),
-      });
-      actionHost = row;
-
-      const detailText = [friendly?.hint, message].filter(Boolean).join("\n\n");
-      const details = box.createEl("details", { cls: "mva-error-details" });
-      details.createEl("summary", { text: "Details" });
-      details.createDiv({ text: detailText });
-    }
-
-    if (!retryText) return;
-    const retry = actionHost.createEl("button", { cls: "mva-error-retry", attr: { "aria-label": "Retry response" } });
-    setIcon(retry.createSpan(), "refresh-cw");
-    retry.createSpan({ text: "Retry" });
-    let retrying = false;
-    retry.onclick = () => {
-      if (retrying || c.streaming) return;
-      retrying = true;
-      retry.disabled = true;
-      void this.runTurn(c, retryText, undefined, { reuseUserTurn: true });
-    };
+    renderErrorBodyCard({
+      body,
+      message,
+      provider: c.provider,
+      displayName: ADAPTERS[c.provider].displayName,
+      claudeBin: this.plugin.settings.claudeBin,
+      retryText,
+      isStreaming: () => c.streaming,
+      retry: (t) => void this.runTurn(c, t, undefined, { reuseUserTurn: true }),
+      diag: (area, m) => this.diag.push(area, m),
+      openSettings: () => this.openSettings(),
+    });
   }
 
   private openSettings(): void {
