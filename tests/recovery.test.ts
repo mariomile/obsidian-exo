@@ -132,6 +132,14 @@ describe("isRecoverableSessionError", () => {
     expect(isRecoverableSessionError("invalid model name")).toBe(false);
     expect(isRecoverableSessionError("invalid session")).toBe(true);
   });
+
+  it("an expired auth session is NOT recoverable — it must lose to the re-login card", () => {
+    // "OAuth session expired" contains "session expired", which would otherwise
+    // match; the auth guard must win so a dead-credential turn is never retried.
+    expect(
+      isRecoverableSessionError("Failed to authenticate: OAuth session expired and could not be refreshed")
+    ).toBe(false);
+  });
 });
 
 describe("recordTurnError", () => {

@@ -3,7 +3,7 @@
  */
 import type { Message, Segment } from "./model";
 import { planRecapLabel } from "./plan";
-import { isEndedSessionFailure } from "./errors";
+import { isEndedSessionFailure, isAuthFailure } from "./errors";
 
 /**
  * True when an error message signals a *recoverable* session death — the kind
@@ -20,6 +20,10 @@ import { isEndedSessionFailure } from "./errors";
  */
 export function isRecoverableSessionError(msg: string): boolean {
   const m = (msg || "").toLowerCase();
+  // An auth failure is NOT resume-healable — retrying with dead credentials just
+  // re-fails. It must lose to the re-login card even though "OAuth session
+  // expired" would otherwise match the /session expired/ pattern below.
+  if (isAuthFailure(m)) return false;
   if (/session expired|session not found|invalid session|session invalid|process exited with code/.test(m)) {
     return true;
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeCliFailure } from "../src/core/errors";
+import { describeCliFailure, isAuthFailure, isAuthExpired, isAuthMissing } from "../src/core/errors";
 
 describe("describeCliFailure", () => {
   it("maps error_during_execution / EDE diagnostics to a transient-crash message + hint", () => {
@@ -64,6 +64,42 @@ describe("describeCliFailure", () => {
     // "not logged in" must win over "process exited".
     const r = describeCliFailure("process exited with code 1: not logged in");
     expect(r?.message).toMatch(/isn't authenticated/i);
+  });
+
+  it("maps an expired OAuth session to a re-login message (distinct from missing auth)", () => {
+    const r = describeCliFailure("Failed to authenticate: OAuth session expired and could not be refreshed");
+    expect(r?.message).toMatch(/session expired/i);
+    expect(r?.hint).toMatch(/retry.*won't help|log in/i);
+  });
+});
+
+describe("auth predicates", () => {
+  const EXPIRED = [
+    "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "your OAuth credentials have expired",
+    "token expired",
+    "authentication failed: token could not be refreshed",
+  ];
+  const MISSING = ["You are not logged in", "Invalid API key", "Please run /login", "unauthorized"];
+
+  it("isAuthExpired matches lapsed-session phrasings, not missing-credential ones", () => {
+    for (const s of EXPIRED) expect(isAuthExpired(s)).toBe(true);
+    expect(isAuthExpired("You are not logged in")).toBe(false);
+  });
+
+  it("isAuthMissing matches never-authenticated phrasings, not expiry", () => {
+    for (const s of MISSING) expect(isAuthMissing(s)).toBe(true);
+    expect(isAuthMissing("OAuth session expired and could not be refreshed")).toBe(false);
+  });
+
+  it("isAuthFailure covers both expired and missing", () => {
+    for (const s of [...EXPIRED, ...MISSING]) expect(isAuthFailure(s)).toBe(true);
+  });
+
+  it("isAuthFailure ignores unrelated errors", () => {
+    for (const s of ["process exited with code 1", "error_during_execution", "API error 400"]) {
+      expect(isAuthFailure(s)).toBe(false);
+    }
   });
 
   it("is case-insensitive", () => {
