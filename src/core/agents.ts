@@ -1,18 +1,14 @@
 /**
  * Agents — pure registry core (no Obsidian imports).
  *
- * A named agent is two files with two different owners:
+ * A canonical vault agent is a human-readable bundle:
  *
- *   .claude/agents/<slug>.md    THE BRAIN    — CLI-native, portable across
- *                                              Claude Code / Cowork / Codex.
- *                                              Exo reads it, never writes it.
- *   _system/agents/<slug>.md    THE CONTRACT — Exo-owned: triggers, autonomy
- *                                              tier, scope globs, allowlist.
+ *   _system/agents/<slug>/SOUL.md   identity and judgment
+ *   _system/agents/<slug>/AGENT.md  prompt plus runtime contract frontmatter
+ *   _system/memory/agents/<slug>.md curated role memory
  *
- * The split is not taste. `.claude/` is gitignored and does not sync to mobile,
- * so trigger config kept there would be neither versioned nor visible on a
- * phone; and the brain has a different audience (every harness) than the
- * trigger config (this plugin's runtime). The join key is the slug.
+ * `.claude/agents` and `.codex/agents` may expose thin runtime adapters, but the
+ * vault bundle is the source of truth. The join key is the slug.
  *
  * This module owns parsing, validation and decisions. The store (impure) owns
  * scanning and vault IO. Architecture rule: the engine is the product — the
@@ -57,7 +53,7 @@ export type AgentSource = "vault" | "user" | "codex" | "plugin";
 
 export const AGENT_SOURCE_ORDER: readonly AgentSource[] = ["vault", "user", "codex", "plugin"];
 
-/** The CLI-native half: `.claude/agents/<slug>.md` frontmatter. Read-only. */
+/** A runnable agent prompt, preferably from `_system/agents/<slug>/AGENT.md`. */
 export interface AgentBrain {
   /** Scope-prefixed filename base — the join key with the contract sidecar. */
   slug: string;
@@ -92,7 +88,7 @@ export type AgentTrigger =
   | { on: "note-mention" }
   | { on: "tag"; tag: string };
 
-/** The Exo-owned half: `_system/agents/<slug>.md` frontmatter. */
+/** Exo runtime policy stored in the canonical bundle's AGENT.md frontmatter. */
 export interface AgentContract {
   slug: string;
   enabled: boolean;
@@ -533,7 +529,7 @@ export interface SidecarParse {
   warnings: string[];
 }
 
-/** Parse `_system/agents/<slug>.md`. Unknown keys are ignored so the file can
+/** Parse a canonical `_system/agents/<slug>/AGENT.md`. Unknown keys are ignored so the file can
  *  carry vault frontmatter (tags, created_by, …) alongside the contract. */
 export function parseAgentSidecar(raw: string, slug: string): SidecarParse {
   const warnings: string[] = [];
@@ -633,8 +629,8 @@ export function serializeAgentSidecar(contract: AgentContract, brain?: AgentBrai
       ? `> ${brain.description}`
       : "> Exo contract for this agent — triggers, autonomy and scope.",
     "",
-    `The prompt lives in \`.claude/agents/${contract.slug}.md\`; this file only says *when* the`,
-    "agent runs and *what* it may touch. Notes below are for humans — they are not sent to the model.",
+    `This is the runtime contract for \`${contract.slug}\`. In a canonical vault bundle,`,
+    "the Markdown body is the agent prompt and the frontmatter controls when it runs and what it may touch.",
     "",
     "## Notes",
     "",

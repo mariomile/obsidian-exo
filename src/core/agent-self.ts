@@ -2,7 +2,7 @@
  * The Agent Is the Folder — pure identity core (NO `obsidian` imports).
  *
  * The agent folder (`paths.agentDir`) is the vault's tool-agnostic identity layer: a manifest plus
- * three char-limited Markdown blocks (`persona.md`, `human.md`, `now.md`). Exo is
+ * three char-limited Markdown blocks (`SOUL.md`, `USER.md`, `NOW.md`). Exo is
  * the single owner — it hydrates them at boot and maintains them through the
  * governed `rethink_memory` tool and observer proposals; external tools (Claude
  * Code, Codex, Cowork) read them at boot but never write. Single-writer,
@@ -14,28 +14,28 @@
  *   - the block registry (names, advisory char limits, ownership tiers);
  *   - `parseManifest` — tolerant, hardcoded-default on corruption;
  *   - `compileIdentity(blocks, opts)` — assembles the identity SECTION prepended
- *     to the boot preamble: order persona → human → now, each headed and stamped
+ *     to the boot preamble: order SOUL → USER → NOW, each headed and stamped
  *     with an "(updated N days ago)" staleness marker when its mtime is known,
  *     over-limit blocks included WHOLE with an over-budget warning (advisory
  *     limits never truncate a block), missing/blank blocks skipped silently, and
  *     an arbitration line appended so the blocks win any later conflict.
  *
  * The Obsidian-side wiring (reading the block files + mtimes, the boot overlay,
- * the `rethink_memory` tool, observer `now.md` proposals) lives in
+ * the `rethink_memory` tool, observer `NOW.md` proposals) lives in
  * `src/obsidian/memory.ts` / `src/obsidian/tools.ts` / `src/view.ts`.
  */
 
 import { exoPaths, LEGACY_MEMORY_ROOT } from "./paths";
 
-/** The three identity blocks, in the fixed compile order persona → human → now. */
-export type BlockName = "persona" | "human" | "now";
+/** The three identity blocks, in the fixed compile order SOUL → USER → NOW. */
+export type BlockName = "SOUL" | "USER" | "NOW";
 
 /**
  * Ownership tier for a block's autonomous rewrite policy (design §3):
- *  - `rewrite`                — agent rewrites freely (low risk, high turnover). `now.md`.
- *  - `rewrite-with-rationale` — agent rewrites; the feed diff must surface the rationale. `human.md`.
+ *  - `rewrite`                — agent rewrites freely (low risk, high turnover). `NOW.md`.
+ *  - `rewrite-with-rationale` — agent rewrites; the feed diff must surface the rationale. `USER.md`.
  *  - `propose-only`           — v1: the tool records a pending proposal; the write
- *                               happens only on the user's Apply click. `persona.md`.
+ *                               happens only on the user's Apply click. `SOUL.md`.
  */
 export type BlockOwner = "rewrite" | "rewrite-with-rationale" | "propose-only";
 
@@ -54,12 +54,12 @@ export interface BlockSpec {
  * char limits, ownership tiers, and headings. Order here IS the compile order.
  */
 export const AGENT_BLOCKS: readonly BlockSpec[] = [
-  { name: "persona", limit: 1500, owner: "propose-only", heading: "Persona — how you behave" },
-  { name: "human", limit: 2000, owner: "rewrite-with-rationale", heading: "Human — who you work with" },
-  { name: "now", limit: 1500, owner: "rewrite", heading: "Now — what matters right now" },
+  { name: "SOUL", limit: 1500, owner: "propose-only", heading: "Soul — how you behave" },
+  { name: "USER", limit: 2000, owner: "rewrite-with-rationale", heading: "User — who you work with" },
+  { name: "NOW", limit: 1500, owner: "rewrite", heading: "Now — what matters right now" },
 ] as const;
 
-/** Block names in compile order — `["persona", "human", "now"]`. */
+/** Block names in compile order — `["SOUL", "USER", "NOW"]`. */
 export const AGENT_BLOCK_NAMES: readonly BlockName[] = AGENT_BLOCKS.map((b) => b.name);
 
 /** Legacy default identity-layer folder — tests/fallback only;
@@ -67,7 +67,7 @@ export const AGENT_BLOCK_NAMES: readonly BlockName[] = AGENT_BLOCKS.map((b) => b
 export const AGENT_DIR = exoPaths(LEGACY_MEMORY_ROOT).agentDir;
 
 /** Current on-disk format version the manifest documents. */
-export const AGENT_FORMAT_VERSION = 1;
+export const AGENT_FORMAT_VERSION = 2;
 
 /** The arbitration line appended to the identity section: the blocks win any
  *  conflict with a later boot section. Exported so the compiler and its tests
@@ -83,13 +83,13 @@ export const IDENTITY_ARBITRATION_LINE =
 export const AGENT_TEMPLATE_MARKER = "<!-- exo:template — fill this in, or run “Seed agent folder” to have Exo draft it -->";
 
 const BLOCK_TEMPLATE_GUIDE: Record<BlockName, string> = {
-  persona:
+  SOUL:
     "How the agent should behave when it works for you: voice, principles, what to " +
     "do by default, what to avoid. Keep it to what changes the agent's behavior.",
-  human:
+  USER:
     "Who the agent works with: your role, how you like to work, communication " +
     "preferences, recurring context it should never get wrong.",
-  now: "What matters right now: current projects, active goals, near-term focus. Expect this one to change often.",
+  NOW: "What matters right now: current projects, active goals, near-term focus. Expect this one to change often.",
 };
 
 /** The starter template for a block (heading + marker + one-line guidance). */
@@ -130,9 +130,9 @@ export function rethinkPolicy(name: BlockName): BlockOwner {
  * The action `rethink_memory` should take for a block, decided purely from its
  * ownership tier (design §3). The Obsidian tool enacts the plan; this keeps the
  * tier policy fully unit-testable and impossible to drift per call-site:
- *  - `write`        — rewrite `now.md` freely; render a feed diff + undo.
- *  - `write`+rationale — rewrite `human.md`; the feed diff must surface the rationale.
- *  - `propose`      — record a pending `persona.md` proposal card; write only on Apply.
+ *  - `write`        — rewrite `NOW.md` freely; render a feed diff + undo.
+ *  - `write`+rationale — rewrite `USER.md`; the feed diff must surface the rationale.
+ *  - `propose`      — record a pending `SOUL.md` proposal card; write only on Apply.
  */
 export type RethinkAction =
   | { verb: "write"; block: BlockName; requireRationale: false }
@@ -172,7 +172,7 @@ export function defaultManifest(): Manifest {
 function parseManifestRow(line: string): Partial<BlockSpec> & { name: BlockName } | null {
   const cells = line.split("|").map((c) => c.trim()).filter((_, i, arr) => i > 0 && i < arr.length - 1);
   if (cells.length < 1) return null;
-  const name = cells[0].toLowerCase();
+  const name = cells[0].trim();
   if (!isAgentBlock(name)) return null;
   const out: Partial<BlockSpec> & { name: BlockName } = { name };
   const limit = Number.parseInt(cells[1] ?? "", 10);
@@ -244,22 +244,22 @@ export interface SeedSources {
  */
 export function buildSeedPrompt(sources: SeedSources): string {
   const cap = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
-  const persona = blockSpec("persona").limit;
-  const human = blockSpec("human").limit;
-  const now = blockSpec("now").limit;
+  const soul = blockSpec("SOUL").limit;
+  const user = blockSpec("USER").limit;
+  const now = blockSpec("NOW").limit;
   return [
     "You are seeding a tool-agnostic identity layer for an AI knowledge partner named Exo, embedded",
     "in the user's Obsidian vault. Distill THREE short Markdown blocks from the source material below.",
     "Distill — do NOT copy: each block is a tight, self-contained brief, not an excerpt dump.",
     "",
-    `1. persona — how Exo behaves (tone, style, non-negotiables). Max ${persona} chars.`,
-    `2. human — a distilled working model of the USER (who they are, what they do, how they work). Max ${human} chars.`,
-    `3. now — what matters right now (hot projects, current focus, live context). Max ${now} chars.`,
+    `1. SOUL — how Exo behaves (tone, style, non-negotiables). Max ${soul} chars.`,
+    `2. USER — a distilled working model of the user (who they are, what they do, how they work). Max ${user} chars.`,
+    `3. NOW — what matters right now (hot projects, current focus, live context). Max ${now} chars.`,
     "",
     "Return EACH block wrapped in its own fence, exactly:",
-    `${SEED_OPEN("persona")}\n…persona markdown…\n${SEED_CLOSE("persona")}`,
-    `${SEED_OPEN("human")}\n…human markdown…\n${SEED_CLOSE("human")}`,
-    `${SEED_OPEN("now")}\n…now markdown…\n${SEED_CLOSE("now")}`,
+    `${SEED_OPEN("SOUL")}\n…SOUL markdown…\n${SEED_CLOSE("SOUL")}`,
+    `${SEED_OPEN("USER")}\n…USER markdown…\n${SEED_CLOSE("USER")}`,
+    `${SEED_OPEN("NOW")}\n…NOW markdown…\n${SEED_CLOSE("NOW")}`,
     "No prose outside the fences. Keep each block within its char limit.",
     "",
     "=== SOURCE: mental model of the user ===",
@@ -274,7 +274,7 @@ export function buildSeedPrompt(sources: SeedSources): string {
 }
 
 /**
- * Parse the seeder's fenced output into `{ persona, human, now }`. Tolerant: a
+ * Parse the seeder's fenced output into `{ SOUL, USER, NOW }`. Tolerant: a
  * missing block is simply absent from the map (the caller writes only what came
  * back); each captured body is trimmed. Never throws.
  */
@@ -320,9 +320,9 @@ export function manifestContent(): string {
     "|---|---|---|",
     rows,
     "",
-    "- `persona.md` — how the agent behaves (tone, style, non-negotiables).",
-    "- `human.md` — a distilled working model of the user (not a copy of source notes).",
-    "- `now.md` — what matters right now (hot projects, focus, live context).",
+    "- `SOUL.md` — how the agent behaves (tone, style, non-negotiables).",
+    "- `USER.md` — a distilled working model of the user (not a copy of source notes).",
+    "- `NOW.md` — what matters right now (hot projects, focus, live context).",
     "",
     "## Contract",
     "",
@@ -370,7 +370,7 @@ function stalenessMarker(mtime: number | undefined, now: number): string {
 /**
  * Compile the three identity blocks into the section prepended to the boot
  * preamble (design §2). Contract:
- *  - Order is ALWAYS persona → human → now (the registry order), independent of
+ *  - Order is ALWAYS SOUL → USER → NOW (the registry order), independent of
  *    the input array's order.
  *  - Each present block is rendered under its heading, stamped with an "(updated
  *    N days ago)" marker when its mtime is known.

@@ -113,7 +113,7 @@ export interface MVASettings {
   seededPrompts: boolean;
   /** Refine the first-message tab title with a Haiku-generated 3-6 word title. */
   aiTitles: boolean;
-  /** In-note AI: floating toolbar over a selection (Edit / Continue / Ask Exo). */
+  /** In-note AI: floating toolbar over a selection (format + Edit / Continue / Ask Exo). */
   inlineAi: boolean;
   /** Show the current editor selection as a click-to-attach chip in the composer. */
   showSelectionChip: boolean;

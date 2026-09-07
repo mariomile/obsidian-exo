@@ -15,6 +15,7 @@
 import type { App, TFile } from "obsidian";
 import { readFile } from "fs/promises";
 import {
+  formatDuration,
   isAgentSidecar,
   mergeAgents,
   orphanContracts,
@@ -25,12 +26,14 @@ import {
   reconcileInvocable,
   resolveAgent,
   serializeAgentSidecar,
+  serializeTrigger,
   stripFrontmatter,
   type AgentBrain,
   type AgentContract,
   type AgentDef,
   type AgentSource,
 } from "../core/agents";
+import { patchFrontmatter } from "../core/frontmatter-patch";
 import {
   agentMemoryExcerpt,
   agentMemoryPath,
@@ -180,9 +183,22 @@ export class AgentStore {
     const conflicts: AgentConflict[] = [];
     const sidecars = new Set<string>();
 
+    // A canonical bundle's AGENT.md carries the human contract and the prompt
+    // in one file. Register its frontmatter before scanning any legacy flat
+    // entries so the bundle is the single source of truth.
+    for (const brain of rawBrains) {
+      if (brain.source !== "vault" || !brain.path.endsWith("/AGENT.md")) continue;
+      if (!isAgentSidecar(brain.raw)) continue;
+      sidecars.add(brain.slug);
+      const { contract, warnings: w } = parseAgentSidecar(brain.raw, brain.slug);
+      contracts.push(contract);
+      if (w.length) warnings.set(brain.slug, w);
+    }
+
     for (const file of await vault.listFiles(paths.agents)) {
       if (!file.endsWith(".md")) continue;
       const slug = file.split("/").pop()!.replace(/\.md$/, "");
+      if (sidecars.has(slug)) continue; // canonical bundle wins over a stale flat sidecar
       let raw: string;
       try {
         raw = await vault.read(file);
@@ -250,14 +266,32 @@ export class AgentStore {
     });
   }
 
-  /** Persist a contract, preserving unrelated frontmatter is not attempted —
-   *  the sidecar is fully Exo-owned, so it is rewritten wholesale. */
+  /** Persist a contract. Canonical bundles keep their Markdown body intact;
+   *  only the AGENT.md frontmatter is replaced. */
   async saveContract(contract: AgentContract, today = ""): Promise<void> {
     const { vault, paths, queue } = this.deps;
     const brain = this.get(contract.slug)?.brain;
     await queue.enqueue(async () => {
       await vault.ensureFolder(paths.agents);
-      await vault.write(this.sidecarPath(contract.slug), serializeAgentSidecar(contract, brain, today));
+      const path = this.sidecarPath(contract.slug);
+      const serialized = serializeAgentSidecar(contract, brain, today);
+      if (path.endsWith("/AGENT.md") && await vault.exists(path)) {
+        const existing = await vault.read(path);
+        await vault.write(path, patchFrontmatter(existing, {
+          enabled: contract.enabled,
+          icon: contract.icon,
+          autonomy: contract.autonomy,
+          output: contract.output,
+          cooldown: formatDuration(contract.cooldownMs),
+          read: contract.scope.read,
+          write: contract.scope.write,
+          can_call: contract.canCall,
+          triggers: contract.triggers.map(serializeTrigger),
+          ...(today ? { last_updated: today } : {}),
+        }));
+      } else {
+        await vault.write(path, serialized);
+      }
     });
     await this.refresh();
   }
@@ -270,6 +304,8 @@ export class AgentStore {
   }
 
   sidecarPath(slug: string): string {
+    const brain = this.get(slug)?.brain;
+    if (brain?.source === "vault" && brain.path?.endsWith(`/${slug}/AGENT.md`)) return brain.path;
     return `${this.deps.paths.agents}/${slug}.md`;
   }
 
@@ -412,7 +448,12 @@ export async function readAgentBrainBody(app: App, brain: AgentBrain): Promise<s
     // after the frontmatter". Stripping frontmatter here would hand the model
     // the raw TOML — the file's own syntax as its persona.
     if (brain.path.endsWith(".toml")) return codexTomlValue(raw, "developer_instructions") ?? "";
-    return stripFrontmatter(raw).trim();
+    const contract = stripFrontmatter(raw).trim();
+    if (!brain.path.endsWith("/AGENT.md")) return contract;
+    const soulPath = brain.path.replace(/\/AGENT\.md$/, "/SOUL.md");
+    let soul = "";
+    try { soul = stripFrontmatter(await app.vault.adapter.read(soulPath)).trim(); } catch { /* optional */ }
+    return [soul ? `<agent-soul>\n${soul}\n</agent-soul>` : "", contract].filter(Boolean).join("\n\n");
   } catch (err) {
     console.warn(`[Exo] could not read agent brain body for "${brain.slug}":`, err);
     return "";
@@ -431,7 +472,7 @@ export function createAgentStore(
     vault: adaptAppToAgentVault(app),
     paths,
     queue,
-    brains: () => listAgentBrains(app),
+    brains: () => listAgentBrains(app, paths.agents),
     caps,
   });
 }

@@ -21,23 +21,23 @@ import {
 /* ------------------------------ registry -------------------------------- */
 
 describe("AGENT_BLOCKS registry", () => {
-  it("declares persona/human/now in that order with the spec limits", () => {
-    expect(AGENT_BLOCK_NAMES).toEqual<BlockName[]>(["persona", "human", "now"]);
-    expect(blockSpec("persona").limit).toBe(1500);
-    expect(blockSpec("human").limit).toBe(2000);
-    expect(blockSpec("now").limit).toBe(1500);
+  it("declares SOUL/USER/NOW in that order with the spec limits", () => {
+    expect(AGENT_BLOCK_NAMES).toEqual<BlockName[]>(["SOUL", "USER", "NOW"]);
+    expect(blockSpec("SOUL").limit).toBe(1500);
+    expect(blockSpec("USER").limit).toBe(2000);
+    expect(blockSpec("NOW").limit).toBe(1500);
   });
 
   it("assigns the spec ownership tiers", () => {
-    expect(blockSpec("now").owner).toBe("rewrite");
-    expect(blockSpec("human").owner).toBe("rewrite-with-rationale");
-    expect(blockSpec("persona").owner).toBe("propose-only");
+    expect(blockSpec("NOW").owner).toBe("rewrite");
+    expect(blockSpec("USER").owner).toBe("rewrite-with-rationale");
+    expect(blockSpec("SOUL").owner).toBe("propose-only");
   });
 
   it("recognizes only the three block names", () => {
-    expect(isAgentBlock("persona")).toBe(true);
-    expect(isAgentBlock("human")).toBe(true);
-    expect(isAgentBlock("now")).toBe(true);
+    expect(isAgentBlock("SOUL")).toBe(true);
+    expect(isAgentBlock("USER")).toBe(true);
+    expect(isAgentBlock("NOW")).toBe(true);
     expect(isAgentBlock("nope")).toBe(false);
     expect(isAgentBlock("")).toBe(false);
   });
@@ -45,23 +45,23 @@ describe("AGENT_BLOCKS registry", () => {
 
 describe("rethinkPolicy", () => {
   it("maps each block to its write policy", () => {
-    expect(rethinkPolicy("now")).toBe("rewrite");
-    expect(rethinkPolicy("human")).toBe("rewrite-with-rationale");
-    expect(rethinkPolicy("persona")).toBe("propose-only");
+    expect(rethinkPolicy("NOW")).toBe("rewrite");
+    expect(rethinkPolicy("USER")).toBe("rewrite-with-rationale");
+    expect(rethinkPolicy("SOUL")).toBe("propose-only");
   });
 });
 
 describe("planRethink", () => {
-  it("now.md → free write, no rationale required", () => {
-    expect(planRethink("now")).toEqual({ verb: "write", block: "now", requireRationale: false });
+  it("NOW.md → free write, no rationale required", () => {
+    expect(planRethink("NOW")).toEqual({ verb: "write", block: "NOW", requireRationale: false });
   });
 
-  it("human.md → write that requires the rationale surfaced", () => {
-    expect(planRethink("human")).toEqual({ verb: "write", block: "human", requireRationale: true });
+  it("USER.md → write that requires the rationale surfaced", () => {
+    expect(planRethink("USER")).toEqual({ verb: "write", block: "USER", requireRationale: true });
   });
 
-  it("persona.md → propose-only (no direct write)", () => {
-    expect(planRethink("persona")).toEqual({ verb: "propose", block: "persona" });
+  it("SOUL.md → propose-only (no direct write)", () => {
+    expect(planRethink("SOUL")).toEqual({ verb: "propose", block: "SOUL" });
   });
 });
 
@@ -72,28 +72,28 @@ describe("parseManifest", () => {
     const a = parseManifest("");
     const b = parseManifest("%%% not a manifest %%%");
     expect(a.version).toBe(b.version);
-    expect(a.blocks.map((x) => x.name)).toEqual(["persona", "human", "now"]);
+    expect(a.blocks.map((x) => x.name)).toEqual(["SOUL", "USER", "NOW"]);
     // Defaults carry the canonical limits.
-    expect(a.blocks.find((x) => x.name === "human")?.limit).toBe(2000);
+    expect(a.blocks.find((x) => x.name === "USER")?.limit).toBe(2000);
   });
 
   it("parses a well-formed manifest table without throwing", () => {
     const md = [
       "# Agent manifest",
-      "version: 1",
+      "version: 2",
       "",
       "| block | limit | owner |",
-      "| persona | 1500 | propose-only |",
-      "| human | 2000 | rewrite-with-rationale |",
-      "| now | 1500 | rewrite |",
+      "| SOUL | 1500 | propose-only |",
+      "| USER | 2000 | rewrite-with-rationale |",
+      "| NOW | 1500 | rewrite |",
     ].join("\n");
     const m = parseManifest(md);
-    expect(m.blocks.map((b) => b.name)).toEqual(["persona", "human", "now"]);
+    expect(m.blocks.map((b) => b.name)).toEqual(["SOUL", "USER", "NOW"]);
   });
 
   it("falls back to the canonical block set when the table is corrupt", () => {
     const m = parseManifest("version: 9\n| block | limit |\n| garbage row without cols");
-    expect(m.blocks.map((b) => b.name)).toEqual(["persona", "human", "now"]);
+    expect(m.blocks.map((b) => b.name)).toEqual(["SOUL", "USER", "NOW"]);
   });
 
   it("never throws on any input", () => {
@@ -117,16 +117,16 @@ function block(name: BlockName, content: string, ageDays?: number): IdentityBloc
 describe("compileIdentity", () => {
   it("returns an empty string when every block is missing", () => {
     expect(compileIdentity([], { now: NOW_MS })).toBe("");
-    expect(compileIdentity([block("persona", "   ")], { now: NOW_MS })).toBe("");
+    expect(compileIdentity([block("SOUL", "   ")], { now: NOW_MS })).toBe("");
   });
 
-  it("orders persona → human → now regardless of input order", () => {
+  it("orders SOUL → USER → NOW regardless of input order", () => {
     const out = compileIdentity(
-      [block("now", "now text"), block("persona", "persona text"), block("human", "human text")],
+      [block("NOW", "now text"), block("SOUL", "soul text"), block("USER", "user text")],
       { now: NOW_MS }
     );
-    const pi = out.indexOf("persona text");
-    const hi = out.indexOf("human text");
+    const pi = out.indexOf("soul text");
+    const hi = out.indexOf("user text");
     const ni = out.indexOf("now text");
     expect(pi).toBeGreaterThan(-1);
     expect(pi).toBeLessThan(hi);
@@ -134,50 +134,50 @@ describe("compileIdentity", () => {
   });
 
   it("heads each block and appends the arbitration line", () => {
-    const out = compileIdentity([block("persona", "be terse")], { now: NOW_MS });
-    expect(out).toContain("Persona");
+    const out = compileIdentity([block("SOUL", "be terse")], { now: NOW_MS });
+    expect(out).toContain("Soul");
     expect(out).toContain("be terse");
     expect(out).toContain(IDENTITY_ARBITRATION_LINE);
   });
 
   it("adds a staleness marker from the mtime", () => {
-    const out = compileIdentity([block("now", "hot project X", 5)], { now: NOW_MS });
+    const out = compileIdentity([block("NOW", "hot project X", 5)], { now: NOW_MS });
     expect(out).toMatch(/updated 5 days ago/);
   });
 
   it("says 'today' for a same-day mtime", () => {
-    const out = compileIdentity([block("now", "hot project X", 0)], { now: NOW_MS });
+    const out = compileIdentity([block("NOW", "hot project X", 0)], { now: NOW_MS });
     expect(out).toMatch(/updated today/);
   });
 
   it("omits the staleness marker when the mtime is unknown", () => {
-    const out = compileIdentity([block("now", "hot project X")], { now: NOW_MS });
+    const out = compileIdentity([block("NOW", "hot project X")], { now: NOW_MS });
     expect(out).not.toMatch(/updated .* days ago/);
     expect(out).not.toMatch(/updated today/);
   });
 
   it("includes an over-limit block WHOLE and marks it over budget (never truncates)", () => {
     const big = "x".repeat(1600); // persona limit is 1500
-    const out = compileIdentity([block("persona", big)], { now: NOW_MS });
+    const out = compileIdentity([block("SOUL", big)], { now: NOW_MS });
     expect(out).toContain(big); // the whole block survives verbatim
     expect(out).toMatch(/over budget/i);
   });
 
   it("does not mark an at-limit block as over budget", () => {
     const exact = "y".repeat(1500);
-    const out = compileIdentity([block("persona", exact)], { now: NOW_MS });
+    const out = compileIdentity([block("SOUL", exact)], { now: NOW_MS });
     expect(out).not.toMatch(/over budget/i);
   });
 
   it("skips missing/blank blocks silently while keeping the present ones", () => {
     const out = compileIdentity(
-      [block("persona", "p"), block("human", "  "), block("now", "n")],
+      [block("SOUL", "p"), block("USER", "  "), block("NOW", "n")],
       { now: NOW_MS }
     );
     expect(out).toContain("p");
     expect(out).toContain("n");
-    // no empty 'Human' heading with nothing under it — human was blank so it's skipped
-    const hMatches = out.match(/Human/g) ?? [];
+    // no empty 'User' heading with nothing under it — USER was blank so it's skipped
+    const hMatches = out.match(/User/g) ?? [];
     expect(hMatches.length).toBe(0);
   });
 });
@@ -208,23 +208,23 @@ describe("buildSeedPrompt", () => {
 describe("parseSeedBlocks", () => {
   it("parses all three fenced blocks", () => {
     const raw = [
-      "<<<persona>>>", "Be terse.", "<<<end-persona>>>",
-      "<<<human>>>", "Mario, PM.", "<<<end-human>>>",
-      "<<<now>>>", "Shipping identity.", "<<<end-now>>>",
+      "<<<SOUL>>>", "Be terse.", "<<<end-SOUL>>>",
+      "<<<USER>>>", "Mario, PM.", "<<<end-USER>>>",
+      "<<<NOW>>>", "Shipping identity.", "<<<end-NOW>>>",
     ].join("\n");
     expect(parseSeedBlocks(raw)).toEqual({
-      persona: "Be terse.",
-      human: "Mario, PM.",
-      now: "Shipping identity.",
+      SOUL: "Be terse.",
+      USER: "Mario, PM.",
+      NOW: "Shipping identity.",
     });
   });
 
   it("omits a missing block rather than inventing it", () => {
-    const raw = "<<<persona>>>\nBe terse.\n<<<end-persona>>>";
+    const raw = "<<<SOUL>>>\nBe terse.\n<<<end-SOUL>>>";
     const out = parseSeedBlocks(raw);
-    expect(out.persona).toBe("Be terse.");
-    expect(out.human).toBeUndefined();
-    expect(out.now).toBeUndefined();
+    expect(out.SOUL).toBe("Be terse.");
+    expect(out.USER).toBeUndefined();
+    expect(out.NOW).toBeUndefined();
   });
 
   it("returns an empty map on garbage and never throws", () => {
@@ -236,9 +236,9 @@ describe("parseSeedBlocks", () => {
 describe("manifestContent", () => {
   it("documents the block registry and the read-don't-write contract", () => {
     const m = manifestContent();
-    expect(m).toContain("persona.md");
-    expect(m).toContain("human.md");
-    expect(m).toContain("now.md");
+    expect(m).toContain("SOUL.md");
+    expect(m).toContain("USER.md");
+    expect(m).toContain("NOW.md");
     expect(m).toMatch(/read.*don'?t write/i);
     expect(m).toContain("Exo owns maintenance");
   });

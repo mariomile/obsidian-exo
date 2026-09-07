@@ -1,8 +1,10 @@
 /**
  * In-note AI ("Inline AI") — a CodeMirror 6 extension that brings Exo into the
  * markdown editor. Selecting text raises a floating toolbar over the selection
- * with three actions:
+ * with formatting actions (ported from Selection Sidekick) plus three AI
+ * actions:
  *
+ *   • format   — bold/italic/headings/lists/links, icon-only, keep-selection.
  *   • Edit     — rewrite the selection, reviewed as an INLINE diff in the
  *                document (old text dimmed/struck in place, new text green
  *                inline) with per-hunk ✓/✗ + keyboard; committed as one
@@ -35,6 +37,9 @@ import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import { MarkdownView, setIcon } from "obsidian";
 import type ExoPlugin from "../main";
 import { computeHunks, hunkCount, type DiffPart } from "../core/inline-ai";
+import { COMMANDS } from "./format/registry";
+import { applyFormatCommand } from "./format-commands";
+import { editorForView } from "./format/resolve-editor";
 import {
   activeDiff,
   clearDiff,
@@ -62,6 +67,8 @@ class InlineAiController {
   /** The selection the toolbar is anchored to (doc offsets); drives repositioning
    *  while the bar is up. Actions read the LIVE selection at click time, not this. */
   private barRange: { from: number; to: number } | null = null;
+  /** Format buttons currently in the bar, so we can refresh `.is-active` without rebuild. */
+  private formatButtons = new Map<string, HTMLElement>();
   /** The target range the current op operates on (doc offsets). Soft-locked while
    *  streaming/reviewing; mapped through edits made elsewhere. */
   private range: { from: number; to: number } | null = null;
@@ -76,14 +83,15 @@ class InlineAiController {
     window.addEventListener("resize", this.onScroll, { passive: true });
   }
 
-  private get enabled(): boolean {
+  /** Format buttons always ship (they replace Selection Sidekick). AI actions
+   *  stay behind the existing `inlineAi` toggle. */
+  private get aiEnabled(): boolean {
     return this.plugin.settings.inlineAi;
   }
 
   update(u: ViewUpdate): void {
-    if (!this.enabled) {
-      this.teardownAll();
-      return;
+    if (!this.aiEnabled && (this.panel || this.streamChip || this.phase === "reviewing")) {
+      this.cancel();
     }
     // Review mode: the decoration field owns range-mapping and self-clears when
     // the target range is edited. We only follow it: reposition the action bar,
@@ -135,6 +143,7 @@ class InlineAiController {
     // Reuse the existing bar (just reposition) so a drag-select doesn't rebuild
     // and re-flash the entrance on every tick. Actions read the live selection.
     if (this.bar) {
+      this.refreshFormatActive();
       this.placeAbove(this.bar, sel.from);
       return;
     }
@@ -143,19 +152,29 @@ class InlineAiController {
 
   private showToolbar(anchor: number): void {
     const bar = document.body.createDiv({ cls: "mva-inai-bar" });
-    const mk = (label: string, icon: string, run: () => void) => {
-      const btn = bar.createEl("button", { cls: "mva-inai-btn", attr: { "aria-label": label } });
-      setIcon(btn.createSpan({ cls: "mva-inai-ico" }), icon);
-      btn.createSpan({ text: label });
-      btn.onclick = (e) => {
-        e.preventDefault();
-        run();
-      };
-      return btn;
-    };
-    mk("Edit", "wand-2", () => this.startEdit());
-    mk("Continue", "pen-line", () => this.startContinue());
-    mk("Ask Exo", "message-square", () => this.askExo());
+    this.formatButtons.clear();
+    const editor = editorForView(this.plugin.app, this.view);
+    if (editor) {
+      let prevGroup: string | null = null;
+      for (const cmd of COMMANDS) {
+        if (prevGroup && cmd.group !== prevGroup) this.addSep(bar);
+        prevGroup = cmd.group;
+        const btn = this.mkBtn(bar, cmd.label, cmd.icon, () => {
+          const live = editorForView(this.plugin.app, this.view);
+          if (!live) return;
+          applyFormatCommand(this.plugin, cmd, live);
+          this.refreshFormatActive();
+        }, true);
+        this.formatButtons.set(cmd.id, btn);
+      }
+      this.refreshFormatActive();
+    }
+    if (this.aiEnabled) {
+      if (editor) this.addSep(bar);
+      this.mkBtn(bar, "Edit", "wand-2", () => this.startEdit());
+      this.mkBtn(bar, "Continue", "pen-line", () => this.startContinue());
+      this.mkBtn(bar, "Ask Exo", "message-square", () => this.askExo());
+    }
     bar.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -168,10 +187,50 @@ class InlineAiController {
     requestAnimationFrame(() => bar.addClass("is-shown"));
   }
 
+  /** preventDefault on mousedown so the click does not steal focus and collapse
+   *  the selection before the action runs. */
+  private mkBtn(
+    parent: HTMLElement,
+    label: string,
+    icon: string,
+    run: () => void,
+    iconOnly = false,
+  ): HTMLElement {
+    const btn = parent.createEl("button", {
+      cls: iconOnly ? "mva-inai-btn is-icon" : "mva-inai-btn",
+      attr: { "aria-label": label, title: label },
+    });
+    setIcon(btn.createSpan({ cls: "mva-inai-ico" }), icon);
+    if (!iconOnly) btn.createSpan({ text: label });
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      run();
+    });
+    return btn;
+  }
+
+  private addSep(parent: HTMLElement): void {
+    parent.createDiv({ cls: "mva-inai-sep" });
+  }
+
+  private refreshFormatActive(): void {
+    const editor = editorForView(this.plugin.app, this.view);
+    if (!editor) return;
+    for (const cmd of COMMANDS) {
+      const btn = this.formatButtons.get(cmd.id);
+      if (btn) btn.toggleClass("is-active", !!cmd.isActive?.(editor));
+    }
+  }
+
   private removeBar(): void {
     this.bar?.remove();
     this.bar = null;
     this.barRange = null;
+    this.formatButtons.clear();
   }
 
   /** Live selection at action time, or null if it collapsed. */
@@ -514,8 +573,7 @@ class InlineAiController {
 
 /** The registerable CodeMirror 6 extension: the controller's ViewPlugin bundled
  *  with the inline-diff decoration layer (field + keymap). Gated live behind
- *  `settings.inlineAi` (checked inside the controller), so it's inert when the
- *  setting is off. */
+ *  `settings.inlineAi` for the AI actions only; formatting always shows. */
 export function inlineAiExtension(plugin: ExoPlugin) {
   return [
     ViewPlugin.fromClass(

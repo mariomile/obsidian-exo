@@ -285,7 +285,7 @@ describe("shared WriteQueue serialization (observer vs remember)", () => {
   });
 });
 
-/* -------------------- now.md observer proposal (§5) --------------------- */
+/* -------------------- NOW.md observer proposal (§5) --------------------- */
 
 describe("buildObserverPrompt — now-proposal addition", () => {
   it("is byte-identical to the memory-only form when no nowContext is given", () => {
@@ -293,7 +293,7 @@ describe("buildObserverPrompt — now-proposal addition", () => {
     expect(buildObserverPrompt(digest)).toBe(buildObserverPrompt(digest, {}));
   });
 
-  it("adds the now-update instruction and the current now.md when nowContext is given", () => {
+  it("adds the now-update instruction and the current NOW.md when nowContext is given", () => {
     const p = buildObserverPrompt(
       { user: "we pivoted to the identity layer", assistant: "noted" },
       { nowContext: "Focus: proactive recall." }
@@ -303,15 +303,15 @@ describe("buildObserverPrompt — now-proposal addition", () => {
     expect(p).toContain("Focus: proactive recall.");
   });
 
-  it("does not mention now.md at all without nowContext", () => {
+  it("does not mention NOW.md at all without nowContext", () => {
     const p = buildObserverPrompt({ user: "hi there friend", assistant: "hello" });
     expect(p).not.toContain(NOW_UPDATE_OPEN);
-    expect(p).not.toContain("now.md");
+    expect(p).not.toContain("NOW.md");
   });
 });
 
 describe("parseNowProposal", () => {
-  it("extracts a fenced now.md rewrite", () => {
+  it("extracts a fenced NOW.md rewrite", () => {
     const raw = "[]\n" + NOW_UPDATE_OPEN + "\nFocus: shipping the identity layer.\n" + NOW_UPDATE_CLOSE;
     expect(parseNowProposal(raw)).toEqual({ text: "Focus: shipping the identity layer." });
   });

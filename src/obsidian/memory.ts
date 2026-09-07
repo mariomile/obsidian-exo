@@ -77,7 +77,7 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
       try {
         const content = await app.vault.cachedRead(f);
         blocks.push({ name: spec.name, content, mtime: f.stat?.mtime });
-        if (spec.name === "now" && content.trim().length > 0) nowHasSignal = true;
+        if (spec.name === "NOW" && content.trim().length > 0) nowHasSignal = true;
       } catch {
         /* unreadable block — skip silently (§8) */
       }

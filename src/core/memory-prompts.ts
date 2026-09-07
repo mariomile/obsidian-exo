@@ -33,6 +33,6 @@ export const memoryStoreNoteProactive = (storeDir: string): string =>
  *  change) vs `remember` (episodic), and the propose-only persona tier. */
 export const agentFolderNote = (agentDir: string): string =>
   "### Identity — `rethink_memory`\n" +
-  `Your identity lives in \`${agentDir}/\` (persona, human, now) and is already in your boot context above. ` +
-  "Call `rethink_memory` only when your MODEL OF THE WORLD changes — a shifted priority (now.md), a durable update to how you understand the user (human.md, pass a rationale). NOT for episodic notes — those go to `remember`. " +
-  "`persona.md` is propose-only: a `rethink_memory` on it records a proposal for the user to approve, it does not write.";
+  `Your shared kernel lives in \`${agentDir}/\` (SOUL, USER, NOW) and is already in your boot context above. ` +
+  "Call `rethink_memory` only when your MODEL OF THE WORLD changes — a shifted priority (NOW.md), a durable update to how you understand the user (USER.md, pass a rationale). NOT for episodic notes — those go to `remember`. " +
+  "`SOUL.md` is propose-only: a `rethink_memory` on it records a proposal for the user to approve, it does not write.";

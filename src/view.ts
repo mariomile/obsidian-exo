@@ -2830,9 +2830,9 @@ export class ChatView extends ItemView {
   /**
    * Enact a `rethink_memory` tool call for conversation `c` (design §3). The
    * tier is resolved purely by {@link planRethink}:
-   *  - `now.md`   → write freely, render the diff + undo row into the turn.
-   *  - `human.md` → write, render the diff + undo row WITH the rationale surfaced.
-   *  - `persona.md` → record a pending proposal card (diff + Apply/Dismiss); the
+   *  - `NOW.md`   → write freely, render the diff + undo row into the turn.
+   *  - `USER.md` → write, render the diff + undo row WITH the rationale surfaced.
+   *  - `SOUL.md` → record a pending proposal card (diff + Apply/Dismiss); the
    *    write happens only on the Apply click. Nothing is written here.
    * Returns the short status line the tool reports back to the model.
    */
@@ -2845,12 +2845,12 @@ export class ChatView extends ItemView {
     const current = (await agent.readBlock(block))?.content ?? "";
 
     if (plan.verb === "propose") {
-      // persona.md — propose-only: render an Apply/Dismiss card, write on Apply.
+      // SOUL.md — propose-only: render an Apply/Dismiss card, write on Apply.
       this.renderBlockProposalCard(ctx.bodyEl, block, current, req.content, req.rationale);
       return `Proposed a change to ${block}.md — waiting for the user to Apply or Dismiss it. Not written yet.`;
     }
 
-    // now.md / human.md — governed direct write with feed diff + undo.
+    // NOW.md / USER.md — governed direct write with feed diff + undo.
     const write = await agent.writeBlock(block, req.content);
     // Identity edits nudge the git-autocommit debounce like any other vault
     // write (integration audit 2026-07-10): without this, a rethink followed by
@@ -3084,9 +3084,9 @@ export class ChatView extends ItemView {
         if (write && write.entries.length > 0) this.renderMemoryVeto(el, write);
         // Observer now.md proposal (§5): propose only — the Apply click writes.
         if (nowProposal) {
-          const current = (await this.agent().readBlock("now"))?.content ?? "";
+          const current = (await this.agent().readBlock("NOW"))?.content ?? "";
           if (this.convos.includes(c) && el.isConnected) {
-            this.renderBlockProposalCard(el, "now", current, nowProposal.text);
+            this.renderBlockProposalCard(el, "NOW", current, nowProposal.text);
           }
         }
       })
