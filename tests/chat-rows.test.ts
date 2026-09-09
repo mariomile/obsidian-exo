@@ -25,10 +25,12 @@ describe("modelLabel", () => {
   it("handles the whole real Claude family", () => {
     expect(modelLabel("Claude", "claude-sonnet-5")).toBe("Sonnet 5");
     expect(modelLabel("Claude", "claude-fable-5")).toBe("Fable 5");
+    expect(modelLabel("Claude", "claude-fable-5-1")).toBe("Fable 5.1");
   });
 
   it("uppercases known acronyms and keeps word tokens as words", () => {
     expect(modelLabel("Codex", "gpt-5.6-luna")).toBe("GPT 5.6 Luna");
+    expect(modelLabel("Codex", "gpt-6-astra")).toBe("GPT 6 Astra");
   });
 
   it("leaves an id alone when it does not repeat the provider", () => {

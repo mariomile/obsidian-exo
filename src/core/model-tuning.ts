@@ -3,12 +3,12 @@
  * The composer's Effort control derives from the chosen model (it hides for
  * models with no effort support, and offers only that model's tiers).
  *
- * Source of truth: the claude-api reference (checked 2026-07-05) and
- * `codex debug models` on codex-cli 0.144.1 (checked 2026-07-10):
- * - `xhigh` exists on Opus 4.7+, Opus 4.8, Fable 5, Sonnet 5.
+ * Source of truth: the Claude Platform reference and live Codex app-server
+ * `model/list` on codex-cli 0.153.3 (checked 2026-09-08):
+ * - `xhigh` exists on Opus 4.7+, Opus 4.8, Fable 5.x, Sonnet 5.
  * - `max` exists on Opus 4.6 and later, Sonnet 4.6 and later.
  * - Haiku 4.5 (and earlier Sonnets) reject `effort` outright.
- * - Codex GPT-5.6 Sol/Terra accept low..ultra; Luna low..max;
+ * - Codex GPT-6 Astra and GPT-5.6 Sol/Terra accept low..ultra; Luna low..max;
  *   GPT-5.5/5.4 and unknown Codex ids stay low..xhigh (Codex rejects
  *   unsupported tiers outright, so unknowns get the conservative set).
  * Unknown/custom Claude ids get the full ladder: a wrong tier degrades to a
@@ -38,7 +38,9 @@ export function effortOptionsFor(
   const id = (modelId || "").toLowerCase();
   if (provider === "codex") {
     if (id.includes("gpt-5.6-luna")) return pick("low", "medium", "high", "xhigh", "max");
-    if (id.includes("gpt-5.6")) return pick("low", "medium", "high", "xhigh", "max", "ultra");
+    if (id.includes("gpt-6-astra") || id.includes("gpt-5.6")) {
+      return pick("low", "medium", "high", "xhigh", "max", "ultra");
+    }
     return pick("low", "medium", "high", "xhigh");
   }
   if (id.includes("haiku")) return null;
