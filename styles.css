@@ -5202,6 +5202,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-inai-bar {
   transform: translateY(calc(-100% - 6px));
   display: flex;
+  flex-wrap: wrap;
+  max-width: min(92vw, 720px);
   gap: 2px;
   padding: 3px;
   background: var(--background-primary);
@@ -5235,6 +5237,9 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   width: 14px;
   height: 14px;
 }
+.mva-inai-sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--background-modifier-border); }
+.mva-inai-btn.is-icon { padding: 5px; width: 28px; justify-content: center; }
+.mva-inai-btn.is-active { color: var(--mva-brand, var(--interactive-accent)); background: var(--background-modifier-hover); }
 
 /* The action panel sits just BELOW the selection (no lift transform). */
 .mva-inai-panel {

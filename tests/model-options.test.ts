@@ -3,6 +3,7 @@ import { parseCustomModels, modelOptions } from "../src/core/model-options";
 import type { ModelOption } from "../src/providers/types";
 
 const BUILTINS: ModelOption[] = [
+  { id: "claude-fable-5-1", label: "Fable 5.1" },
   { id: "claude-fable-5", label: "Fable 5" },
   { id: "claude-opus-4-8", label: "Opus 4.8" },
 ];
@@ -25,6 +26,7 @@ describe("modelOptions", () => {
 
   it("appends custom ids after the built-ins, using the id as the label", () => {
     expect(modelOptions(BUILTINS, "claude-sonnet-5\nmy-model")).toEqual([
+      { id: "claude-fable-5-1", label: "Fable 5.1" },
       { id: "claude-fable-5", label: "Fable 5" },
       { id: "claude-opus-4-8", label: "Opus 4.8" },
       { id: "claude-sonnet-5", label: "claude-sonnet-5" },
@@ -34,6 +36,7 @@ describe("modelOptions", () => {
 
   it("dedupes a custom id that repeats a built-in (built-in label wins)", () => {
     expect(modelOptions(BUILTINS, "claude-fable-5, brand-new")).toEqual([
+      { id: "claude-fable-5-1", label: "Fable 5.1" },
       { id: "claude-fable-5", label: "Fable 5" },
       { id: "claude-opus-4-8", label: "Opus 4.8" },
       { id: "brand-new", label: "brand-new" },

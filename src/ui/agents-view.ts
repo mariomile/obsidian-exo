@@ -106,7 +106,7 @@ export class AgentsView extends ItemView {
     const agents = this.plugin.agentStore.list();
     const own = agents.filter((a) => a.brain.source === "vault" || a.brain.source === "user");
     if (!own.length) {
-      this.renderEmpty(el, "No agents yet.", "An agent's prompt is a file in `.claude/agents/`. Add one and refresh.");
+      this.renderEmpty(el, "No agents yet.", "A canonical vault agent is a bundle in `_system/agents/<slug>/`. Add one and refresh.");
       return;
     }
 

@@ -66,7 +66,7 @@ function collaborationMode(opts: SessionOpts, systemPromptOverride?: string): Re
   return {
     mode: plan ? "plan" : "default",
     settings: {
-      model: opts.model && opts.model !== "default" ? opts.model : "gpt-5.6-sol",
+      model: opts.model && opts.model !== "default" ? opts.model : "gpt-6-astra",
       reasoning_effort: reasoningEffort,
       developer_instructions: developerInstructions || null,
     },

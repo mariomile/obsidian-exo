@@ -34,6 +34,26 @@ const brainFile = (slug: string, fm: string[] = [], source: RawBrain["source"] =
   source,
 });
 
+const bundleBrain = (slug: string, extra: string[] = []): RawBrain => ({
+  slug,
+  path: `_system/agents/${slug}/AGENT.md`,
+  raw: [
+    "---",
+    `name: ${slug}`,
+    "model: test-model",
+    "type: agent",
+    `agent: ${slug}`,
+    "status: active",
+    `memory: _system/memory/agents/${slug}.md`,
+    "enabled: true",
+    ...extra,
+    "---",
+    "# Canonical instructions",
+    "Keep this body intact.",
+  ].join("\n"),
+  source: "vault",
+});
+
 const sidecar = (slug: string, extra: string[] = []) =>
   ["---", "type: agent", `agent: ${slug}`, "enabled: true", ...extra, "---", "notes"].join("\n");
 
@@ -58,6 +78,17 @@ describe("AgentStore.refresh", () => {
     expect(gw.contract.autonomy).toBe("act");
     // A brain with no sidecar stays inert.
     expect(store.get("crm-keeper")!.contract).toEqual(defaultContract("crm-keeper"));
+  });
+
+  it("loads a canonical bundle as both brain and runtime contract", async () => {
+    const { store } = makeStore({}, [bundleBrain("ghostwriter", ["autonomy: act", 'write: ["Posts/**"]'])]);
+    await store.refresh();
+
+    const agent = store.get("ghostwriter")!;
+    expect(agent.brain.path).toBe("_system/agents/ghostwriter/AGENT.md");
+    expect(agent.contract.enabled).toBe(true);
+    expect(agent.contract.autonomy).toBe("act");
+    expect(agent.contract.scope.write).toEqual(["Posts/**"]);
   });
 
   it("only enabled agents are eligible for triggers", async () => {
@@ -225,6 +256,21 @@ describe("AgentStore writes", () => {
     expect(c.enabled).toBe(false);
     expect(c.autonomy).toBe("act");
     expect(c.scope.write).toEqual(["Posts/**"]);
+  });
+
+  it("updates bundle frontmatter without replacing its human-readable prompt", async () => {
+    const brain = bundleBrain("a", ["autonomy: propose"]);
+    const { store, vault } = makeStore({ [brain.path]: brain.raw }, [brain]);
+    await store.refresh();
+
+    await store.setEnabled("a", false, "2026-08-26");
+
+    expect(vault.files[brain.path]).toContain("enabled: false");
+    expect(vault.files[brain.path]).toContain("# Canonical instructions");
+    expect(vault.files[brain.path]).toContain("Keep this body intact.");
+    expect(vault.files[brain.path]).toContain("model: test-model");
+    expect(vault.files[brain.path]).toContain(`memory: _system/memory/agents/a.md`);
+    expect(vault.files["_system/agents/a.md"]).toBeUndefined();
   });
 
   it("setEnabled on an unknown slug is a no-op", async () => {

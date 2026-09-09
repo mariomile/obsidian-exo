@@ -225,7 +225,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "In-note AI toolbar",
-      "Select text in a note to get a floating toolbar: rewrite it with a streaming inline diff (Edit), keep writing from it (Continue), or open the chat with it as context (Ask Exo).",
+      "Select text in a note to get a floating toolbar: markdown formatting, rewrite with an inline diff (Edit), continue writing, or open the chat with it as context (Ask Exo).",
       "inlineAi"
     );
     this.toggleSetting(
@@ -497,7 +497,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "The agent is the folder (identity)",
-      `Hydrate every conversation from ${paths.agentDir}/ — three short blocks (persona = how Exo behaves, human = a distilled model of you, now = what matters right now) that give Exo AND any external tool (Claude Code, Codex) a coherent identity. Adds the rethink_memory tool (now/human rewrite freely, persona is propose-only) and an observer that proposes now.md updates after a turn. Off by default; with it off, boot is unchanged and the folder is never read. Rollout: run "Exo: Seed agent folder", review human.md, then flip this on.`,
+      `Hydrate every conversation from ${paths.agentDir}/ — three human-readable shared-kernel blocks (SOUL = principles, USER = working model of you, NOW = current focus) used by Exo and external agents. Adds the rethink_memory tool (NOW rewrites directly, USER requires a rationale, SOUL is propose-only) and an observer that proposes NOW.md updates after a turn. Off by default; with it off, boot is unchanged and the folder is never read. Rollout: run "Exo: Seed agent folder", review USER.md, then flip this on.`,
       "agentFolderEnabled"
     );
 
@@ -809,7 +809,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Enable named agents",
-      "Turns on the agent registry: `@agent` in the composer binds a turn to a specific subagent, `/as <agent>` binds the whole conversation, and agents with a schedule trigger can run unattended. Definitions come from `.claude/agents/*.md` plus a contract file per agent under your memory root (triggers, autonomy tier, write scope). Off by default; each agent is separately disabled until you turn it on.",
+      "Turns on the agent registry: `@agent` in the composer binds a turn to a specific agent, `/as <agent>` binds the whole conversation, and agents with a schedule trigger can run unattended. Vault agents come from human-readable `_system/agents/<slug>/` bundles; CLI files are runtime adapters. Each agent remains separately disabled until you turn it on.",
       "agentsEnabled",
       // Warm the registry the moment the flag flips. Without this the store
       // stays unloaded until some other consumer happens to ask for it, so

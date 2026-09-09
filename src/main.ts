@@ -24,6 +24,7 @@ import {
   activateChats as activateChatsView,
 } from "./ui/view-registry";
 import { registerChatCommands } from "./ui/chat-commands";
+import { registerFormatCommands } from "./editor/format-commands";
 import { registerExoIcons } from "./ui/icons";
 import { AgentPicker, PlaybookPicker } from "./ui/pickers";
 import * as convoBridge from "./ui/convo-bridge";
@@ -288,8 +289,8 @@ export default class ExoPlugin extends Plugin {
   /** Serialized writes to the agent contract sidecars (`paths.agents`). */
   private readonly agentWriteQueue = new WriteQueue();
   /**
-   * THE ONE agent registry — joins CLI-native brains (`.claude/agents/*.md`)
-   * with Exo contract sidecars. Constructed in `onload()`; refreshed lazily via
+   * THE ONE agent registry — loads canonical vault bundles plus external runtime
+   * agents. Constructed in `onload()`; refreshed lazily via
    * `agentsReady()` so a disabled feature costs nothing at boot.
    */
   agentStore!: AgentStore;
@@ -604,6 +605,7 @@ export default class ExoPlugin extends Plugin {
       callback: () => void this.openCockpit(),
     });
     registerChatCommands(this);
+    registerFormatCommands(this);
     this.addCommand({
       id: "open-proposals",
       name: "Review suggestions",
@@ -660,7 +662,7 @@ export default class ExoPlugin extends Plugin {
       name: "Seed agent folder",
       // Visible whenever vault-memory writes are allowed. Seeding is safe with the
       // agent-folder flag OFF (boot ignores the folder until it's flipped on) — it
-      // IS the natural rollout: seed → review human.md → enable the flag.
+      // IS the natural rollout: seed → review USER.md → enable the flag.
       checkCallback: (checking: boolean) => {
         if (!this.settings.memoryWriteEnabled) return false;
         if (!checking) void this.seedAgentFolder();
@@ -1459,7 +1461,7 @@ export default class ExoPlugin extends Plugin {
    * (frontier) model — NOT the background floor: this is a one-shot, high-stakes
    * distillation — and write ONLY the block files that don't already exist (never
    * overwrite a hand-authored block). Also (re)writes the manifest and opens
-   * `human.md` for review. Runs regardless of the `agentFolderEnabled` flag: with
+   * `USER.md` for review. Runs regardless of the `agentFolderEnabled` flag: with
    * the flag off the folder is simply never read, which is the safe rollout path.
    */
   private async seedAgentFolder(): Promise<void> {
@@ -1538,10 +1540,10 @@ export default class ExoPlugin extends Plugin {
     if (writtenPaths.length > 0) this.noteVaultWrite(writtenPaths);
 
     new Notice(
-      `Agent folder seeded — wrote ${written} block(s)${skipped ? `, kept ${skipped} existing` : ""}. Review human.md, then enable "The agent is the folder" in settings.`
+      `Agent kernel seeded — wrote ${written} block(s)${skipped ? `, kept ${skipped} existing` : ""}. Review USER.md, then enable the shared kernel in settings.`
     );
-    // Open human.md for review (the block most worth a human check).
-    const humanPath = `${agentDir}/human.md`;
+    // Open USER.md for review (the block most worth a human check).
+    const humanPath = `${agentDir}/USER.md`;
     if (this.app.vault.getAbstractFileByPath(humanPath) instanceof TFile) {
       await this.app.workspace.openLinkText(humanPath, "", true);
     }
@@ -3204,7 +3206,7 @@ export default class ExoPlugin extends Plugin {
     }
     const agents = this.agentStore.list();
     if (!agents.length) {
-      new Notice("No agents found. Agent prompts live in `.claude/agents/*.md`.");
+      new Notice("No agents found. Canonical vault agents live in _system/agents/<slug>/ bundles.");
       return;
     }
     new AgentPicker(this.app, agents, (agent) => {

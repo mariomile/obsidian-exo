@@ -68,9 +68,9 @@ describe("readBootContext — flag OFF byte-identity", () => {
   it("a populated agent folder is IGNORED when the flag is OFF", async () => {
     const withFolder = makeApp({
       ...BASE_FILES,
-      "_system/agent/persona.md": { content: "Be terse." },
-      "_system/agent/human.md": { content: "Mario, PM." },
-      "_system/agent/now.md": { content: "Shipping the identity layer." },
+      "_system/agent/SOUL.md": { content: "Be terse." },
+      "_system/agent/USER.md": { content: "Mario, PM." },
+      "_system/agent/NOW.md": { content: "Shipping the identity layer." },
     });
     const withoutFolder = makeApp(BASE_FILES);
     const off = await readBootContext(withFolder, P, { agentFolderEnabled: false });
@@ -95,9 +95,9 @@ describe("readBootContext — flag ON with a populated folder", () => {
   it("prepends the identity section BEFORE the existing sections", async () => {
     const app = makeApp({
       ...BASE_FILES,
-      "_system/agent/persona.md": { content: "Be terse and direct." },
-      "_system/agent/human.md": { content: "Mario — 0-to-1 PM." },
-      "_system/agent/now.md": { content: "Shipping the identity layer." },
+      "_system/agent/SOUL.md": { content: "Be terse and direct." },
+      "_system/agent/USER.md": { content: "Mario — 0-to-1 PM." },
+      "_system/agent/NOW.md": { content: "Shipping the identity layer." },
     });
     const out = await readBootContext(app, P, { agentFolderEnabled: true });
     expect(out).toContain(IDENTITY_ARBITRATION_LINE);
@@ -106,12 +106,12 @@ describe("readBootContext — flag ON with a populated folder", () => {
     expect(out.indexOf(IDENTITY_ARBITRATION_LINE)).toBeLessThan(out.indexOf("### Vault context"));
   });
 
-  it("halves the session-log slice when now.md carries signal", async () => {
+  it("halves the session-log slice when NOW.md carries signal", async () => {
     const longLog = "L".repeat(1000);
     const withNow = makeApp({
       ...BASE_FILES,
       "_system/memory/session-log.md": { content: longLog },
-      "_system/agent/now.md": { content: "hot project" },
+      "_system/agent/NOW.md": { content: "hot project" },
     });
     const noNow = makeApp({
       ...BASE_FILES,
@@ -127,12 +127,12 @@ describe("readBootContext — flag ON with a populated folder", () => {
     expect(offLogRun).toBe(1000);
   });
 
-  it("an empty now.md does NOT halve the session-log slice", async () => {
+  it("an empty NOW.md does NOT halve the session-log slice", async () => {
     const longLog = "L".repeat(1000);
     const app = makeApp({
       ...BASE_FILES,
       "_system/memory/session-log.md": { content: longLog },
-      "_system/agent/now.md": { content: "   " }, // blank → no signal
+      "_system/agent/NOW.md": { content: "   " }, // blank → no signal
     });
     const out = await readBootContext(app, P, { agentFolderEnabled: true });
     expect(out.match(/L+/)?.[0].length ?? 0).toBe(1000);

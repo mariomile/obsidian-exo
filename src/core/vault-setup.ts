@@ -14,8 +14,8 @@
  *
  * The "full" preset also lays down the marioverse knowledge-OS: guided
  * templates for vault-context/preferences/mental-model, README-documented
- * rules/decisions/learnings folders, and hand-fillable `agent/{persona,human,
- * now}.md` identity blocks. The blocks carry a template marker so the "Agent Is
+ * rules/decisions/learnings folders, and hand-fillable `agent/{SOUL,USER,
+ * NOW}.md` kernel blocks. The blocks carry a template marker so the "Agent Is
  * the Folder" seeder regenerates them while untouched (isUnfilledAgentBlock) yet
  * never clobbers hand-written identity — that's why pre-creating them is now
  * safe, where a blank stub would once have looked already-seeded.

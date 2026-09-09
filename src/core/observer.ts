@@ -43,17 +43,17 @@ export interface Candidate {
   tags: string[];
 }
 
-/** Max chars accepted for a proposed `now.md` rewrite (advisory now-block limit). */
+/** Max chars accepted for a proposed `NOW.md` rewrite (advisory NOW-block limit). */
 export const MAX_NOW_PROPOSAL_CHARS = 1500;
 
-/** A proposed `now.md` rewrite the observer emits when the turn shifts what
+/** A proposed `NOW.md` rewrite the observer emits when the turn shifts what
  *  matters right now (design §5). `text` is the WHOLE new `now.md` body — the
  *  proposal is a full-block replacement, applied only on the user's click. */
 export interface NowProposal {
   text: string;
 }
 
-/** Fence delimiters for the optional `now.md` proposal appended to the observer
+/** Fence delimiters for the optional `NOW.md` proposal appended to the observer
  *  output. Kept distinct from the recall fence so the two never collide. */
 export const NOW_UPDATE_OPEN = "[now-update]";
 export const NOW_UPDATE_CLOSE = "[/now-update]";
@@ -137,13 +137,13 @@ export function buildObserverPrompt(digest: TurnDigest, opts: ObserverPromptOpts
     ...(wantsNow
       ? [
           "",
-          "SEPARATELY: `now.md` is the user's short 'what matters right now' note (hot projects, current",
+          "SEPARATELY: `NOW.md` is the user's short 'what matters right now' note (hot projects, current",
           "focus, priorities). If — and ONLY if — this turn clearly shifted what matters right now (a new hot",
-          `project, a closed focus, a changed priority), append AFTER the JSON array a rewritten now.md wrapped`,
+          `project, a closed focus, a changed priority), append AFTER the JSON array a rewritten NOW.md wrapped`,
           `in ${NOW_UPDATE_OPEN} … ${NOW_UPDATE_CLOSE} (the WHOLE new body, ≤${MAX_NOW_PROPOSAL_CHARS} chars). If nothing`,
           "now-worthy changed, DO NOT emit the block at all.",
           "",
-          `Current now.md:\n${cap(opts.nowContext ?? "", MAX_NOW_PROPOSAL_CHARS)}`,
+          `Current NOW.md:\n${cap(opts.nowContext ?? "", MAX_NOW_PROPOSAL_CHARS)}`,
         ]
       : []),
     "",

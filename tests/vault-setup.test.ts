@@ -82,16 +82,16 @@ describe("scaffoldItems presets", () => {
     expect(full).toContain(`${LEGACY.decisions}/README.md`);
     expect(full).toContain(`${LEGACY.learnings}/README.md`);
     // hand-fillable identity blocks
-    expect(full).toContain(`${LEGACY.agentDir}/persona.md`);
-    expect(full).toContain(`${LEGACY.agentDir}/human.md`);
-    expect(full).toContain(`${LEGACY.agentDir}/now.md`);
+    expect(full).toContain(`${LEGACY.agentDir}/SOUL.md`);
+    expect(full).toContain(`${LEGACY.agentDir}/USER.md`);
+    expect(full).toContain(`${LEGACY.agentDir}/NOW.md`);
   });
 
   it("full agent blocks are seeded template content (round-trips through isUnfilledAgentBlock)", () => {
     const blocks = scaffoldItems(LEGACY, "full").filter((i) => i.path.startsWith(`${LEGACY.agentDir}/`));
     expect(blocks).toHaveLength(3);
     for (const b of blocks) {
-      const name = b.path.slice(`${LEGACY.agentDir}/`.length, -".md".length) as "persona" | "human" | "now";
+      const name = b.path.slice(`${LEGACY.agentDir}/`.length, -".md".length) as "SOUL" | "USER" | "NOW";
       // The scaffolded content IS the template → the seeder sees it as unfilled
       // and will regenerate it; a hand-edit makes it filled.
       expect(isUnfilledAgentBlock(name, b.content ?? "")).toBe(true);

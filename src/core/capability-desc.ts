@@ -179,14 +179,39 @@ export async function buildDescIndex(app: App): Promise<DescIndex> {
  *  precedence order (vault > global > codex > plugins). Returns raw file
  *  contents so the caller can parse them once with `parseAgentBrain` instead of
  *  each surface rolling its own frontmatter regex. Never throws. */
-export async function listAgentBrains(app: App): Promise<{ slug: string; path: string; raw: string; source: AgentSource }[]> {
+export async function listAgentBrains(
+  app: App,
+  vaultAgentsDir = "_system/agents"
+): Promise<{ slug: string; path: string; raw: string; source: AgentSource }[]> {
+  const out: { slug: string; path: string; raw: string; source: AgentSource }[] = [];
+
+  // The vault-native format is a human-readable bundle. It is the canonical
+  // source for both the prompt and Exo's runtime contract; CLI files under
+  // `.claude/agents/` are only thin adapters for runtimes that require them.
+  try {
+    const bundles = await app.vault.adapter.list(vaultAgentsDir);
+    await Promise.all(
+      bundles.folders.map(async (folder) => {
+        const slug = baseName(folder);
+        const path = `${folder}/AGENT.md`;
+        try {
+          const raw = await app.vault.adapter.read(path);
+          out.push({ slug, path, raw, source: "vault" });
+        } catch {
+          /* incomplete bundle — not a runnable agent */
+        }
+      })
+    );
+  } catch {
+    /* no canonical agent bundle directory */
+  }
+
   const scopes: { scope: Scope; source: AgentSource }[] = [
     { scope: vaultScope(app), source: "vault" },
     { scope: fsScope(`${homedir()}/.claude`), source: "user" },
     { scope: fsScope(`${homedir()}/.codex`), source: "codex" },
     ...(await pluginScopes()).map((scope) => ({ scope, source: "plugin" as const })),
   ];
-  const out: { slug: string; path: string; raw: string; source: AgentSource }[] = [];
   for (const { scope, source } of scopes) {
     const { files } = await scope.list("agents");
     const pre = scope.prefix ?? "";

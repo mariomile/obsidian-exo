@@ -68,7 +68,7 @@ interface AskQuestion {
  *  (now/human) or records a pending proposal card (persona), and returns a short
  *  status line for the model. Kept minimal to avoid a tools→view import cycle. */
 export interface RethinkRequest {
-  block: "persona" | "human" | "now";
+  block: "SOUL" | "USER" | "NOW";
   content: string;
   rationale?: string;
 }
@@ -911,11 +911,11 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
 
   const rethinkMemory = tool(
     "rethink_memory",
-    "Rewrite one of your identity blocks when your MODEL OF THE WORLD changes — not for episodic notes (those go to `remember`). `now.md` = what matters right now (hot projects, focus); `human.md` = your distilled working model of the user (pass a `rationale` — it's surfaced with the change); `persona.md` = how you behave (this only PROPOSES a change for the user to approve, it does not write). Pass the WHOLE new block content, not a patch.",
+    "Rewrite one shared-kernel block when your MODEL OF THE WORLD changes — not for episodic notes (those go to `remember`). `NOW.md` = what matters right now (hot projects, focus); `USER.md` = your distilled working model of the user (pass a `rationale` — it's surfaced with the change); `SOUL.md` = shared operating principles (this only PROPOSES a change for the user to approve, it does not write). Pass the WHOLE new block content, not a patch.",
     {
-      block: z.enum(["persona", "human", "now"]),
+      block: z.enum(["SOUL", "USER", "NOW"]),
       new_content: z.string().describe("The complete new content for the block (replaces it whole; never truncated)."),
-      rationale: z.string().optional().describe("Why the change — required for human.md, surfaced prominently in the change."),
+      rationale: z.string().optional().describe("Why the change — required for USER.md, surfaced prominently in the change."),
     },
     async (args) => {
       if (!rethinkBridge) return err("The agent identity layer is off.");
@@ -1134,7 +1134,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       if (!exo) return ok("Exo plugin not reachable.");
       if (!(await exo.agentsReady())) return ok("Named agents are disabled in Exo settings.");
       const agents = exo.agentStore.list();
-      if (!agents.length) return ok("No agents found. Agent prompts live in `.claude/agents/*.md`.");
+      if (!agents.length) return ok("No agents found. Canonical vault agents live in `_system/agents/<slug>/` bundles.");
       const autos = exo.automationStore.list();
       const lines = agents.map(({ brain }) => {
         const auto = autos.find((a) => a.agent === brain.slug);

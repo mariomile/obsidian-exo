@@ -41,7 +41,7 @@ export interface BlockState {
 }
 
 /** The vault path of a block file inside the identity-layer folder (e.g.
- *  `<agentDir>/now.md`). `agentDir` defaults to the legacy location. */
+ *  `<agentDir>/NOW.md`). `agentDir` defaults to the configured location. */
 export function blockPath(block: BlockName, agentDir: string = AGENT_DIR): string {
   return `${agentDir}/${block}.md`;
 }
@@ -71,15 +71,15 @@ export class AgentFolder {
     }
   }
 
-  /** The current `now.md` body (""` when absent) — the observer's now-context. */
+  /** The current `NOW.md` body (""` when absent) — the observer's now-context. */
   async nowContext(): Promise<string> {
-    return (await this.readBlock("now"))?.content ?? "";
+    return (await this.readBlock("NOW"))?.content ?? "";
   }
 
   /**
    * Replace a block's WHOLE content through the write-queue, capturing a
-   * before-image. This is the single governed write path for `now.md`/`human.md`
-   * (direct rewrite) and for an APPLIED `persona.md` proposal — the tier check
+   * before-image. This is the single governed write path for `NOW.md`/`USER.md`
+   * (direct rewrite) and for an APPLIED `SOUL.md` proposal — the tier check
    * happens upstream. Missing block file → created (previous = ""); existing →
    * modified. Returns the write descriptor (previous + snapshot) so the caller
    * can render the feed diff and wire undo.
