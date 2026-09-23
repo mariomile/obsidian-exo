@@ -101,7 +101,7 @@ export function taskRows(tasks: TaskEntry[], cap = 6): CockpitRow[] {
   return open.slice(0, cap).map((t) => ({
     label: t.title,
     sub: t.status,
-    action: { kind: "command", arg: "exo:open-orchestration-board" },
+    action: { kind: "command", arg: "exo-agent:open-orchestration-board" },
   }));
 }
 

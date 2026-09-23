@@ -250,7 +250,7 @@ export class CockpitView extends ItemView {
       const tasks = taskRows(parseTasksFile(tasksRaw));
       this.tile(grid, "Tasks", "kanban", tasks, "Board is clear.", {
         label: "open board",
-        onClick: () => this.runCommand("exo:open-orchestration-board"),
+        onClick: () => this.runCommand("exo-agent:open-orchestration-board"),
       });
 
       this.renderAutonomy(grid, queuePending, now);
@@ -370,12 +370,12 @@ export class CockpitView extends ItemView {
       if (!a.enabled) continue;
       const arg =
         a.id === "queue-drain"
-          ? "exo:queue-drain"
+          ? "exo-agent:queue-drain"
           : a.id === "queue-new"
-            ? "exo:queue-new-request"
+            ? "exo-agent:queue-new-request"
             : a.id === "automations"
-              ? "exo:automations"
-              : "exo:run-playbook";
+              ? "exo-agent:automations"
+              : "exo-agent:run-playbook";
       rows.push({ label: a.label, ...(a.badge ? { badge: a.badge } : {}), action: { kind: "command", arg } });
     }
     const card = this.tile(grid, "Autonomy", "bot", rows, "Queue off — enable it in settings.");

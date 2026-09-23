@@ -42,8 +42,8 @@ export async function renderMemoryTab(host: HTMLElement, ctx: HubTabContext): Pr
     "open-review": paths.review,
   };
   const commands: Record<string, string> = {
-    "dream-run": "exo:memory-dream-pass",
-    "dream-undo": "exo:memory-dream-undo",
+    "dream-run": "exo-agent:memory-dream-pass",
+    "dream-undo": "exo-agent:memory-dream-undo",
   };
   host.appendChild(buildGroupHeader("Actions"));
   for (const a of memoryActions({ snapshotPresent, reviewExists, loops, now, dreamLlmEnabled: s.dreamLlmEnabled })) {

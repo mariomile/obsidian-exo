@@ -72,9 +72,9 @@ export async function renderOverviewTab(host: HTMLElement, ctx: HubTabContext): 
   const queueStatus = autonomyStatuses(autonomyInput).find((st) => st.id === "queue");
   if (queueStatus) host.appendChild(buildStatusRow(queueStatus.label, queueStatus.value, queueStatus.enabled));
   const handler: Record<string, () => void> = {
-    "queue-drain": () => runCommand(ctx, "exo:queue-drain"),
-    "queue-new": () => runCommand(ctx, "exo:queue-new-request"),
-    "run-playbook": () => runCommand(ctx, "exo:run-playbook"),
+    "queue-drain": () => runCommand(ctx, "exo-agent:queue-drain"),
+    "queue-new": () => runCommand(ctx, "exo-agent:queue-new-request"),
+    "run-playbook": () => runCommand(ctx, "exo-agent:run-playbook"),
   };
   for (const a of autonomyActions(autonomyInput)) {
     if (a.id === "automations") continue; // its own tab
