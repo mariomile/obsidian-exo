@@ -2,7 +2,7 @@
   <img src="assets/exo-logo.svg" width="96" height="96" alt="Exo logo" />
 </p>
 
-# Exo
+# Exo Agent
 
 An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** or the **Codex CLI**. Your vault is the agent's working directory. Custom-rendered, theme-aware chat UI — no terminal.
 
@@ -82,10 +82,10 @@ In short: Exo is a thin, local UI over CLIs you already trust and are already si
 **Via [BRAT](https://github.com/TfTHacker/obsidian42-brat)** (recommended for now):
 
 1. Install the BRAT community plugin.
-2. *Add beta plugin* → `mariomile/obsidian-exo`.
-3. Enable **Exo** in Community Plugins, then open it from the ribbon or the command palette (*Exo: Open chat*).
+2. *Add beta plugin* → `mariomile/obsidian-exo-agent`.
+3. Enable **Exo Agent** in Community Plugins, then open it from the ribbon or the command palette (*Exo Agent: Open chat*).
 
-**Manual:** download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/mariomile/obsidian-exo/releases/latest) into `<vault>/.obsidian/plugins/exo/`, then enable it.
+**Manual:** download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/mariomile/obsidian-exo-agent/releases/latest) into `<vault>/.obsidian/plugins/exo-agent/`, then enable it.
 
 ## Vault memory setup
 
@@ -93,11 +93,11 @@ Exo's Obsidian-native features (vault memory, the cockpit, open loops, the task 
 
 On a fresh vault, the first new chat offers a **one-time picker** for how much to set up:
 
-- **Full memory** — the operational layer plus a guided knowledge-OS starter: vault-context, preferences, and hand-fillable identity blocks (`persona`/`human`/`now`) you can either fill in yourself or hand to **Exo: Seed agent folder** to draft from what you've already written.
+- **Full memory** — the operational layer plus a guided knowledge-OS starter: vault-context, preferences, and hand-fillable identity blocks (`persona`/`human`/`now`) you can either fill in yourself or hand to **Exo Agent: Seed agent folder** to draft from what you've already written.
 - **Just the essentials** — only what Exo's own features need (task board, open loops, memory store, reports) — no imposed structure or content.
 - **Not now** — creates nothing; Exo runs from your `CLAUDE.md`/`AGENTS.md` alone. Set it up later from Settings whenever you want.
 
-Whichever you pick, it's remembered — you won't see the picker again. Run **Exo: Set up vault memory** from the command palette any time to (re-)apply the full scaffold (idempotent — safe to re-run, fills in only what's missing; nothing that already exists is ever touched).
+Whichever you pick, it's remembered — you won't see the picker again. Run **Exo Agent: Set up vault memory** from the command palette any time to (re-)apply the full scaffold (idempotent — safe to re-run, fills in only what's missing; nothing that already exists is ever touched).
 
 This only creates Exo's own memory-folder files — it doesn't require or impose any particular note-organization scheme (folders like `Active/`, `Atlas/`, etc. are entirely up to you).
 
@@ -110,7 +110,7 @@ pnpm build    # typecheck + production bundle
 ```
 
 Create a `.obsidian-plugin-dir` file containing the absolute path to your vault's
-`.obsidian/plugins/exo` folder to auto-deploy on each build.
+`.obsidian/plugins/exo-agent` folder to auto-deploy on each build.
 
 ## Architecture
 

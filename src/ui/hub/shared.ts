@@ -136,5 +136,5 @@ export function buildSearchBox(ctx: HubTabContext, placeholder: string): HTMLEle
 export function openExoSettings(ctx: HubTabContext): void {
   const setting = (ctx.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
   setting?.open();
-  setting?.openTabById("exo");
+  setting?.openTabById(ctx.plugin.manifest.id);
 }

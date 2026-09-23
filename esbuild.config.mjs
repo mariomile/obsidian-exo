@@ -7,7 +7,7 @@ import { join } from "path";
 const prod = process.argv[2] === "production";
 
 // Deploy target: `.obsidian-plugin-dir` (gitignored) holds the absolute path to
-// `.obsidian/plugins/exo`, and by decision (2026-08-06) that's the LIVE
+// `.obsidian/plugins/exo-agent`, and by decision (2026-08-06) that's the LIVE
 // marioverse.ai vault — single-vault workflow, no separate dev vault. Copying
 // main.js here does NOT reload the running plugin by itself; only an explicit
 // reload (disable/enable, or a full Obsidian restart) does. That reload is
@@ -15,7 +15,7 @@ const prod = process.argv[2] === "production";
 // disposed (view-unload)" (2026-08-05 investigation) — so treat *reloading*,
 // not building, as the one-shot, deliberate step. The env var still overrides
 // the file when a one-off different target is needed:
-//   OBSIDIAN_PLUGIN_DIR=/path/to/other/vault/.obsidian/plugins/exo pnpm build
+//   OBSIDIAN_PLUGIN_DIR=/path/to/other/vault/.obsidian/plugins/exo-agent pnpm build
 const deployDir =
   process.env.OBSIDIAN_PLUGIN_DIR ||
   (existsSync(".obsidian-plugin-dir") ? readFileSync(".obsidian-plugin-dir", "utf8").trim() : null);

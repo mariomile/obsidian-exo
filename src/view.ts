@@ -6482,7 +6482,7 @@ export class ChatView extends ItemView {
   private openSettings(): void {
     const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
     setting?.open();
-    setting?.openTabById("exo");
+    setting?.openTabById(this.plugin.manifest.id);
   }
 
   /* ----------------------- workflow foundry ----------------------- */

@@ -37,7 +37,7 @@ function fakeApp(base: string, mcpJson: string | null) {
     refreshHub: vi.fn(),
   };
   const app = {
-    plugins: { plugins: { exo } },
+    plugins: { plugins: { "exo-agent": exo } },
     vault: {
       adapter: {
         getBasePath: () => base,

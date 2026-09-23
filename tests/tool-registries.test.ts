@@ -55,7 +55,7 @@ function registeredBareNames(): Set<string> {
     vault: {},
     workspace: {},
     metadataCache: {},
-    plugins: { plugins: { exo: fakeExoPlugin } },
+    plugins: { plugins: { "exo-agent": fakeExoPlugin } },
   } as unknown as App;
   const server = createObsidianToolServer(
     app,

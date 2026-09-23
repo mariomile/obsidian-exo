@@ -42,7 +42,7 @@ function fakeApp(autos: Automation[]) {
       filePath: (slug: string) => `_system/automations/${slug}.md`,
     },
   };
-  return { app: { plugins: { plugins: { exo } } }, exo };
+  return { app: { plugins: { plugins: { "exo-agent": exo } } }, exo };
 }
 
 describe("automation tools (v2, file-backed)", () => {

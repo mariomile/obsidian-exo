@@ -23,7 +23,7 @@ function agent(slug: string, triggers: string[], over: Partial<AgentContract> = 
 describe("isIgnoredTriggerPath", () => {
   it("ignores tool-owned trees, including the memory root", () => {
     for (const p of [
-      ".obsidian/plugins/exo/data.json.md",
+      ".obsidian/plugins/exo-agent/data.json.md",
       ".claude/agents/x.md",
       ".trash/old.md",
       "_system/reports/run.md",

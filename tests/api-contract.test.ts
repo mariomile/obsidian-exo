@@ -5,7 +5,7 @@ import { join } from "node:path";
 /**
  * Contratto dell'API cross-plugin — la superficie che ALTRI repo consumano.
  *
- * Sonar chiama `app.plugins.plugins.exo.askExo(query, autoSend, opts)` e ne
+ * Sonar chiama `app.plugins.plugins["exo-agent"].askExo(query, autoSend, opts)` e ne
  * ridichiara la firma a mano (`sonar/src/ui/modal.ts:120`, interfaccia `ExoApi`).
  * È un mirror scritto a mano di una verità che vive qui: niente lo riallinea,
  * e un rename o un cambio di firma compila su entrambi i lati.

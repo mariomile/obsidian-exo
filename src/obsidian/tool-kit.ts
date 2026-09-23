@@ -71,7 +71,7 @@ export interface ExoToolHost {
 
 export function getExo(app: App): ExoToolHost | null {
   const plugins = (app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
-  const p = plugins?.plugins?.["exo"] as Partial<ExoToolHost> | undefined;
+  const p = plugins?.plugins?.["exo-agent"] as Partial<ExoToolHost> | undefined;
   return p && typeof p.loadAutomationRuns === "function" && typeof p.runPlaybook === "function"
     ? (p as ExoToolHost)
     : null;
