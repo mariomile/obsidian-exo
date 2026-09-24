@@ -100,14 +100,14 @@ describe('mv-kit style contract', () => {
         // near-zero-not-zero idiom (a true 0 suppresses `animationend`).
         // Audit verdict: "pass — tokenizing it would be circular."
         // (The scan matches `001ms` because `\b\d+ms\b` starts after the dot.)
-        line: 'animation-duration: 0.001ms !important;',
+        line: 'animation-duration: 0.001ms;',
         value: '001ms',
         why: 'prefers-reduced-motion near-zero idiom; audit: pass, tokenizing would be circular',
       },
       {
         // styles.css:3671 — same block, transitions instead of animations.
         // Audit verdict: "pass — same, for transitions."
-        line: 'transition-duration: 0.001ms !important;',
+        line: 'transition-duration: 0.001ms;',
         value: '001ms',
         why: 'prefers-reduced-motion near-zero idiom (transitions); audit: pass',
       },
@@ -151,36 +151,14 @@ describe('mv-kit style contract', () => {
     expect(violations).toEqual([]);
   });
 
-  it('caps !important declarations at the post-mv-kit-audit count (ratchet down only)', () => {
+  it('has no !important declarations', () => {
     const importantCount = (css.match(/!important;/g) ?? []).length;
-    // Ceiling set EXACTLY at the post-audit count in styles.css
-    // (`grep -c '!important' styles.css` → 5 at the time of writing).
-    // RATCHET DOWN ONLY: any edit that adds an `!important` without removing
-    // one fails this test. Removing one and lowering this number is always
-    // welcome; raising it requires a new audit verdict, not a bump.
-    //
-    // Each of the 5 survivors, with the docs/2026-07-mv-kit-audit.md verdict
-    // (the sixth, `.mva-doc-x:hover` opacity, became a selector rewrite for
-    // the Obsidian plugin review, 2026-09):
-    //  - styles.css:3669 `animation-duration: 0.001ms !important` — pass,
-    //    expected. Inside the blanket `prefers-reduced-motion` block;
-    //    accessibility overrides are the canonical sanctioned use, and without
-    //    it every animation shorthand declared later in the file would win.
-    //  - styles.css:3670 `animation-iteration-count: 1 !important` — pass,
-    //    expected. Same block; caps the in-root share of the file's 16
-    //    `infinite` loops (14 of them) at a single cycle.
-    //  - styles.css:3671 `transition-duration: 0.001ms !important` — pass,
-    //    expected. Same block, transitions instead of animations.
-    //  - styles.css:4064 `outline: 2px solid var(--interactive-accent)
-    //    !important` — waived, justified. Obsidian core and several themes ship
-    //    `outline: none` on buttons/`.clickable-icon` at equal-or-higher
-    //    specificity and later in load order; without `!important` Exo's
-    //    keyboard focus ring silently disappears. Same accessibility class as
-    //    the reduced-motion block.
-    //  - styles.css:4066 `box-shadow: none !important` — waived, justified.
-    //    Companion to 4064: themes that replace the outline with a glow
-    //    box-shadow would otherwise stack a second ring on top of Exo's.
-    expect(importantCount).toBeLessThanOrEqual(5);
+    // Zero since the 2026-09 Obsidian plugin review flagged every remaining
+    // one. The five audit survivors (reduced-motion blanket, keyboard focus
+    // ring) now win on specificity: `:is(<selector>, #mva-never)` lends id-level
+    // weight without matching anything. Keep it at zero: reach for that pattern,
+    // not `!important`.
+    expect(importantCount).toBe(0);
   });
 
   // ---- §6 "Elevation & motion depth" (2026-07 dinamica wave) --------------
