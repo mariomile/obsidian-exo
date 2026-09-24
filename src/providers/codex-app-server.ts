@@ -28,7 +28,7 @@ type PendingRequest = {
   method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: number;
 };
 
 type ThreadItem = {
@@ -240,7 +240,7 @@ function elicitationContent(
   answers: Record<string, string>,
 ): Record<string, unknown> {
   const properties = record(record(params.requestedSchema).properties);
-  return Object.fromEntries(Object.entries(answers).map(([id, answer]) => {
+  return Object.fromEntries(Object.entries(answers).map(([id, answer]): [string, unknown] => {
     const schema = record(properties[id]);
     const type = String(schema.type ?? "string");
     if (type === "boolean") return [id, answer === "Yes"];
@@ -484,7 +484,7 @@ export class CodexSession implements AgentSession {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
-      clearTimeout(pending.timer);
+      window.clearTimeout(pending.timer);
       if (message.error) {
         pending.reject(new Error(`${pending.method}: ${message.error.message || "request failed"}`));
       } else pending.resolve(message.result);
@@ -656,7 +656,7 @@ export class CodexSession implements AgentSession {
       return;
     }
     if (method === "item/started" || method === "item/completed") {
-      this.routeItem(record(params.item) as ThreadItem, method === "item/completed");
+      this.routeItem(record(params.item), method === "item/completed");
       return;
     }
     if (method === "thread/tokenUsage/updated") {
@@ -824,7 +824,7 @@ export class CodexSession implements AgentSession {
     if (!item.type || NON_TOOL_ITEMS.has(item.type)) return;
     if (!this.unknownItemTypes.has(item.type)) {
       this.unknownItemTypes.add(item.type);
-      console.info(`[Exo] codex: unmapped item type "${item.type}" — rendered as a generic tool card.`);
+      console.debug(`[Exo] codex: unmapped item type "${item.type}" — rendered as a generic tool card.`);
     }
     this.onEvent?.(done
       ? {
@@ -861,7 +861,7 @@ export class CodexSession implements AgentSession {
     if (this.ended || !this.child) return Promise.reject(new Error("Codex app-server is not running."));
     const id = ++this.requestId;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = window.setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${method} timed out after ${this.runtime.requestTimeoutMs}ms.`));
       }, this.runtime.requestTimeoutMs);
@@ -920,14 +920,14 @@ export class CodexSession implements AgentSession {
 
       if (!this.activeTurnId) {
         await new Promise<void>((resolve, reject) => {
-          const deadline = setTimeout(() => reject(new Error(
+          const deadline = window.setTimeout(() => reject(new Error(
             `turn/started timed out after ${this.runtime.turnStartTimeoutMs}ms.`,
           )), this.runtime.turnStartTimeoutMs);
           const poll = () => {
             if (this.activeTurnId) {
-              clearTimeout(deadline);
+              window.clearTimeout(deadline);
               resolve();
-            } else if (!this.ended) setTimeout(poll, 10);
+            } else if (!this.ended) window.setTimeout(poll, 10);
           };
           poll();
         });
@@ -1048,7 +1048,7 @@ export class CodexSession implements AgentSession {
 
   private rejectPending(error: Error): void {
     for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
+      window.clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pending.clear();

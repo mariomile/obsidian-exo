@@ -77,7 +77,7 @@ export class TaskModal extends Modal {
     this.titleInput = titleField.createEl("input", {
       cls: "mva-pv-input",
       attr: { type: "text", placeholder: "What should this task achieve?" },
-    }) as HTMLInputElement;
+    });
     this.titleInput.value = this.opts.initial?.title ?? "";
 
     // Prompt — auto-growing textarea with `@` note mentions (composer muscle
@@ -87,7 +87,7 @@ export class TaskModal extends Modal {
     this.promptInput = promptField.createEl("textarea", {
       cls: "mva-pv-input",
       attr: { placeholder: "Instructions for the agent — @ to mention a note", rows: "5" },
-    }) as HTMLTextAreaElement;
+    });
     this.promptInput.value = this.opts.initial?.prompt ?? "";
     this.promptInput.addEventListener("input", () => this.autoGrow());
     new Autocomplete(this.promptInput, promptField, [
@@ -102,7 +102,7 @@ export class TaskModal extends Modal {
     const ctxInput = ctxField.createEl("textarea", {
       cls: "mva-pv-input mva-task-modal-ctx-input",
       attr: { placeholder: "@ to attach a note", rows: "1" },
-    }) as HTMLTextAreaElement;
+    });
     new Autocomplete(ctxInput, ctxField, [
       {
         trigger: "@",
@@ -129,7 +129,7 @@ export class TaskModal extends Modal {
     const footer = contentEl.createDiv({ cls: "mva-task-modal-footer" });
     if (this.opts.mode === "create") {
       const runWrap = footer.createEl("label", { cls: "mva-task-modal-run" });
-      this.runToggle = runWrap.createEl("input", { attr: { type: "checkbox" } }) as HTMLInputElement;
+      this.runToggle = runWrap.createEl("input", { attr: { type: "checkbox" } });
       runWrap.createSpan({ text: "Run immediately" });
     }
     const submitBtn = footer.createEl("button", {
@@ -245,8 +245,8 @@ export class TaskModal extends Modal {
   }
 
   private autoGrow(): void {
-    this.promptInput.style.height = "auto";
-    this.promptInput.style.height = `${Math.min(this.promptInput.scrollHeight, 320)}px`;
+    this.promptInput.setCssStyles({ height: "auto" });
+    this.promptInput.setCssStyles({ height: `${Math.min(this.promptInput.scrollHeight, 320)}px` });
   }
 }
 

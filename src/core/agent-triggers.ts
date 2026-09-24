@@ -38,9 +38,9 @@ export interface VaultEvent {
  * without it, an agent with a `modify` trigger would re-trigger itself on its
  * own output — the cheapest possible infinite loop.
  */
-export function isIgnoredTriggerPath(path: string, memoryRoot: string): boolean {
+export function isIgnoredTriggerPath(path: string, memoryRoot: string, configDir: string): boolean {
   if (!path.endsWith(".md")) return true;
-  const ignored = [".obsidian/", ".claude/", ".trash/", ".git/", `${memoryRoot}/`];
+  const ignored = [`${configDir}/`, ".claude/", ".trash/", ".git/", `${memoryRoot}/`];
   return ignored.some((prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix));
 }
 

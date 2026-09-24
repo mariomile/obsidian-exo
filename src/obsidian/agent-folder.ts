@@ -116,7 +116,7 @@ export class AgentFolder {
     await this.queue.enqueue(async () => {
       const f = this.app.vault.getAbstractFileByPath(write.snapshot.path);
       if (write.snapshot.before === null) {
-        if (f instanceof TFile) await this.app.vault.delete(f);
+        if (f instanceof TFile) await this.app.fileManager.trashFile(f);
         return;
       }
       if (f instanceof TFile) {

@@ -3,6 +3,10 @@
  * `scripts/chat-recall.mjs`, which owns the index and the embedder; this file
  * owns only process lifecycle and the contract with the caller.
  *
+ * The script is inlined into main.js and written to the plugin dir on first
+ * use: Obsidian's installer only downloads main.js, manifest.json and
+ * styles.css, so a sidecar file in the release would never reach users.
+ *
  * Why a subprocess and not an in-plugin embedder: the model and its runtime are
  * ~100MB of WASM that the plugin has no business bundling, and running them on
  * the renderer thread would freeze the UI for the duration of a query. Out of
@@ -13,8 +17,10 @@
  * never shows a Related section again this session.
  */
 import { spawn } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveCli } from "../cli";
+import CHAT_RECALL_SCRIPT from "../../scripts/chat-recall.mjs?raw";
 
 /** Exit code the script uses for "no local embedder here" — see chat-recall.mjs. */
 const NO_EMBEDDER = 3;
@@ -55,10 +61,27 @@ async function nodeBin(): Promise<{ bin: string; pathEnv: string } | null> {
   }
 }
 
+let scriptReady: Promise<boolean> | null = null;
+
+/** Materialize the inlined script at `scriptPath`, rewriting it only when the
+ *  bundled copy changed (a plugin update). Once per session. */
+function ensureScript(scriptPath: string): Promise<boolean> {
+  scriptReady ??= (async () => {
+    try {
+      const current = await readFile(scriptPath, "utf8").catch(() => null);
+      if (current !== CHAT_RECALL_SCRIPT) await writeFile(scriptPath, CHAT_RECALL_SCRIPT);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  return scriptReady;
+}
+
 async function run(host: RecallHost, args: string[], timeoutMs: number): Promise<string | null> {
   if (unavailable) return null;
   const node = await nodeBin();
-  if (!node) {
+  if (!node || !(await ensureScript(host.scriptPath))) {
     unavailable = true;
     return null;
   }
@@ -79,10 +102,10 @@ async function run(host: RecallHost, args: string[], timeoutMs: number): Promise
     const finish = (value: string | null) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       resolve(value);
     };
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       child.kill();
       finish(null);
     }, timeoutMs);
@@ -123,7 +146,7 @@ export async function reindexChats(host: RecallHost): Promise<void> {
   await run(host, ["index", host.pluginDir], INDEX_TIMEOUT_MS);
 }
 
-/** Resolve the script that ships next to the built plugin. */
+/** Where the script is materialized: next to the built plugin. */
 export const recallHost = (pluginDir: string): RecallHost => ({
   pluginDir,
   scriptPath: join(pluginDir, "chat-recall.mjs"),

@@ -1,4 +1,4 @@
-import { setIcon, type App } from "obsidian";
+import { setIcon, type App, type Component } from "obsidian";
 import type ExoPlugin from "../../main";
 import { clickable } from "../dom";
 
@@ -8,6 +8,9 @@ import { clickable } from "../dom";
 export interface HubTabContext {
   app: App;
   plugin: ExoPlugin;
+  /** Owner for rendered markdown children — the hub view, so they unload
+   *  with the pane rather than living as long as the plugin. */
+  component: Component;
   /** Re-render the currently visible tab (after an action mutated state). */
   rerender: () => void;
   /** Vault base path on disk ("" on non-desktop adapters). */

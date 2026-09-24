@@ -42,6 +42,7 @@ function makeDriver(over: Partial<TriggerDriverDeps> = {}, notes: Record<string,
   const deps: TriggerDriverDeps = {
     agents: () => [agent("triager", ["vault-event create _inbox/**"])],
     memoryRoot: () => "_system",
+    configDir: () => ".obsidian",
     readNote: async (p) => notes[p] ?? { tags: [], body: "" },
     dispatch: (r) => void dispatched.push(r),
     schedule: clock.schedule,

@@ -22,13 +22,13 @@ export function planInputParts(input: unknown): PlanInputParts {
     typeof rec.plan === "string" && rec.plan.trim()
       ? rec.plan
       : typeof rec.markdown === "string" && rec.markdown.trim()
-        ? (rec.markdown as string)
+        ? rec.markdown
         : null;
   const filePath =
     typeof rec.planFilePath === "string" && rec.planFilePath.trim()
       ? rec.planFilePath
       : typeof rec.planPath === "string" && rec.planPath.trim()
-        ? (rec.planPath as string)
+        ? rec.planPath
         : null;
   return { md, filePath };
 }

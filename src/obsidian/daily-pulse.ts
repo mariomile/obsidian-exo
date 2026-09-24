@@ -108,6 +108,9 @@ export interface DailyPulseCollectionOptions {
   /** The review-note path to exclude from "recent notes" (Exo's own output must
    *  not surface as a recent note). Absent → the legacy review-note path. */
   reviewPath?: string;
+  /** The vault's config folder (`Vault#configDir`); its files are never
+   *  "recent notes". */
+  configDir?: string;
 }
 
 export interface DailyPulseCollectionResult {
@@ -198,9 +201,8 @@ function normalizeVaultPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
-function isExcludedRecentPath(path: string, reviewPath: string): boolean {
-  return path === ".obsidian"
-    || path.startsWith(".obsidian/")
+function isExcludedRecentPath(path: string, reviewPath: string, configDir: string | undefined): boolean {
+  return (configDir !== undefined && (path === configDir || path.startsWith(`${configDir}/`)))
     || path === reviewPath
     || path === "Resources/_artifacts"
     || path.startsWith("Resources/_artifacts/");
@@ -210,12 +212,13 @@ function collectRecentNotes(
   candidates: readonly RecentNoteCandidate[],
   modifiedAfter: number,
   now: number,
-  reviewPath: string
+  reviewPath: string,
+  configDir: string | undefined
 ): DailyPulseInput["recentNotes"] {
   const newestByPath = new Map<string, number>();
   for (const candidate of candidates.slice(0, DAILY_PULSE_RECENT_NOTE_SCAN_LIMIT)) {
     const path = normalizeVaultPath(candidate.path);
-    if (!path || !/\.md$/i.test(path) || isExcludedRecentPath(path, reviewPath)) continue;
+    if (!path || !/\.md$/i.test(path) || isExcludedRecentPath(path, reviewPath, configDir)) continue;
     if (!Number.isFinite(candidate.mtime)
       || candidate.mtime <= modifiedAfter
       || candidate.mtime > now) continue;
@@ -308,7 +311,7 @@ export async function collectDailyPulseInput(
         startedAt: run.startedAt,
         writes: [...run.writes],
       })),
-      recentNotes: collectRecentNotes(notes.value, modifiedAfter, now, reviewPath),
+      recentNotes: collectRecentNotes(notes.value, modifiedAfter, now, reviewPath, options.configDir),
       budget: {
         remaining: budget.value === null ? null : remainingBudget(budget.value, now),
         ...(budget.value === null ? {} : { enabled: budget.value.enabled }),

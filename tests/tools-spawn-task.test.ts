@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { TFile } from "obsidian";
 import { createObsidianToolServer } from "../src/obsidian/tools";
 import { parseTasksFile, serializeTasks, TASKS_PATH, type TaskEntry } from "../src/core/tasks";
 import { WriteQueue } from "../src/core/write-queue";
@@ -27,7 +28,7 @@ function fakeApp() {
   const app = {
     vault: {
       getMarkdownFiles: () => [],
-      getAbstractFileByPath: (path: string) => (files.has(path) ? ({ path } as any) : null),
+      getAbstractFileByPath: (path: string) => (files.has(path) ? Object.assign(new TFile(), { path }) : null),
       read: async (f: { path: string }) => {
         const v = files.get(f.path);
         if (v === undefined) throw new Error(`no such file: ${f.path}`);

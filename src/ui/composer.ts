@@ -38,6 +38,7 @@ import { buildOptionRows, type SelectOption } from "../core/option-filter";
 import { queryWords, matchesWords } from "../core/ac-token";
 import { selectionPreview } from "../core/selection-preview";
 import { clampEffort, effortOptionsFor } from "../core/model-tuning";
+import { statSync } from "node:fs";
 
 /** Semantic risk modifier class for a toolbar selector option/chip ("" = neutral). */
 type RiskLevel = "" | "is-caution" | "is-danger";
@@ -548,7 +549,7 @@ export class Composer {
     // the menus stable when both sources know the same name.
     const add = (into: string[], names: string[]) => {
       const seen = new Set(into);
-      for (const n of names) if (!seen.has(n)) (seen.add(n), into.push(n));
+      for (const n of names) if (!seen.has(n)) { seen.add(n); into.push(n); }
     };
     if (this.host.sessionCaps) {
       add(commands, this.host.sessionCaps.commands);
@@ -702,7 +703,7 @@ export class Composer {
     this.buildResearchToggle(tb);
     this.buildAgentChip(tb);
 
-    tb.createDiv({ cls: "mva-spacer" }).style.flex = "1";
+    tb.createDiv({ cls: "mva-spacer" });
     // Context usage as a compact circular counter (donut ring). Click opens the
     // detailed breakdown, including the active model's real context limit.
     const contextWrap = tb.createDiv({ cls: "mva-ctx-control" });
@@ -1130,8 +1131,7 @@ export class Composer {
     // Fresh session / provider that doesn't report usage (Codex): empty ring.
     if (!u || !u.total) {
       ring.addClass("is-empty");
-      ring.style.setProperty("--pct", "0");
-      ring.style.setProperty("--ring-color", "var(--interactive-accent)");
+      ring.setCssProps({ "--pct": "0", "--ring-color": "var(--interactive-accent)" });
       const tip = "Context usage appears after the first reply · click for details";
       setTooltip(ring, tip);
       ring.setAttribute("aria-label", tip);
@@ -1144,8 +1144,7 @@ export class Composer {
     const pct = Math.min(100, Math.round((u.used / u.total) * 100));
     const risk: RiskLevel = pct >= 90 ? "is-danger" : pct >= 75 ? "is-caution" : "";
     const color = pct >= 90 ? "var(--color-red)" : pct >= 75 ? "var(--color-orange)" : "var(--interactive-accent)";
-    ring.style.setProperty("--pct", String(pct));
-    ring.style.setProperty("--ring-color", color);
+    ring.setCssProps({ "--pct": String(pct), "--ring-color": color });
     if (risk) ring.addClass(risk);
 
     // Cost lives in the tooltip only (Codex omits it; Claude omits it when the
@@ -1495,7 +1494,7 @@ export class Composer {
 
   /** Electron file picker for images → reuses the paste/drop attachment path. */
   private pickImage(): void {
-    const input = document.createElement("input");
+    const input = createEl("input");
     input.type = "file";
     input.accept = "image/*";
     input.multiple = true;
@@ -1511,7 +1510,7 @@ export class Composer {
    *  (no @electron/remote needed). Folder mode uses webkitdirectory and derives
    *  the folder root from the first entry's path minus its relative suffix. */
   private pickExternal(directory: boolean): void {
-    const input = document.createElement("input");
+    const input = createEl("input");
     input.type = "file";
     if (directory) input.webkitdirectory = true;
     else input.multiple = true;
@@ -1553,7 +1552,7 @@ export class Composer {
       thumb.addClass("is-icon");
       let isDir = false;
       try {
-        isDir = (require("fs") as typeof import("fs")).statSync(path).isDirectory();
+        isDir = statSync(path).isDirectory();
       } catch {
         /* unreadable — treat as file */
       }
@@ -1636,11 +1635,11 @@ export class Composer {
    *  send) the box auto-collapses — expansion is a per-draft state, never sticky. */
   autoGrow(): void {
     const el = this.inputEl;
-    el.style.height = "auto";
+    el.setCssStyles({ height: "auto" });
     const overflows = el.scrollHeight > INPUT_CAP + 1;
     if (!overflows) this.setInputExpanded(false);
     const cap = this.inputExpanded ? Math.min(Math.round(window.innerHeight * 0.5), INPUT_CAP_EXPANDED) : INPUT_CAP;
-    el.style.height = Math.min(el.scrollHeight, cap) + "px";
+    el.setCssStyles({ height: `${Math.min(el.scrollHeight, cap)}px` });
     this.expandBtn.toggleClass("is-visible", overflows);
   }
 

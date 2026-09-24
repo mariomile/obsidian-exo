@@ -53,7 +53,7 @@ export interface DreamCounts {
 
 /* ------------------------------ parsing --------------------------------- */
 
-function extractJsonObject(raw: string): unknown | null {
+function extractJsonObject(raw: string): unknown {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start === -1 || end === -1 || end < start) return null;
@@ -84,7 +84,7 @@ function validateProposal(item: unknown): Proposal | null {
     case "rule_draft":
       if (!isNonEmptyStr(p.slug) || !isNonEmptyStr(p.text)) return null;
       if (!Array.isArray(p.evidenceIds) || !p.evidenceIds.every(isStr)) return null;
-      return { kind: "rule_draft", slug: p.slug, text: p.text, evidenceIds: p.evidenceIds as string[], reason: p.reason };
+      return { kind: "rule_draft", slug: p.slug, text: p.text, evidenceIds: p.evidenceIds, reason: p.reason };
     case "import":
       if (typeof p.claudememId !== "number" || !Number.isFinite(p.claudememId)) return null;
       if (!isNonEmptyStr(p.text)) return null;

@@ -59,7 +59,7 @@ import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
 import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessOpts, type HeadlessResult } from "./headless";
-import { automationLastRunKey, migrateScheduledRuns, isDue, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
+import { automationLastRunKey, migrateScheduledRuns, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
 import { AutomationStore, adaptAppToAutomationVault, migrateToAutomationFiles } from "./obsidian/automation-store";
 import { contractFromAutomation, legacyConfigFromAutomation, scheduleRunKeys, type Automation } from "./core/automation-model";
 import { drainExoQueue, countPendingQueue } from "./queue";
@@ -367,7 +367,7 @@ export default class ExoPlugin extends Plugin {
     // Claude session at query() setup (first hit: dream-llm, 2026-07-06 — but it
     // breaks chat and headless identically). Mutating the module object is what
     // makes the bundled SDK see the shim (esbuild namespace getters are live).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- must mutate the live CJS module object, which an ES import binding cannot
     const nodeEvents = require("node:events") as { setMaxListeners: (n?: number, ...t: unknown[]) => void };
     if (!isTolerantShim(nodeEvents.setMaxListeners)) {
       nodeEvents.setMaxListeners = makeTolerantSetMaxListeners(nodeEvents.setMaxListeners.bind(nodeEvents));
@@ -494,7 +494,7 @@ export default class ExoPlugin extends Plugin {
 
     this.addCommand({
       id: "open-connections",
-      name: "Open Exo Connections",
+      name: "Open Connections",
       callback: () => void this.activateConnections(),
     });
 
@@ -733,7 +733,7 @@ export default class ExoPlugin extends Plugin {
 
     this.addCommand({
       id: "queue-drain",
-      name: "Drain Exo Queue now",
+      name: "Drain Queue now",
       callback: () => {
         if (!this.settings.exoQueueEnabled) {
           new Notice("Exo Queue is off — enable it in settings.");
@@ -745,7 +745,7 @@ export default class ExoPlugin extends Plugin {
     });
     this.addCommand({
       id: "queue-new-request",
-      name: "New Exo Queue request",
+      name: "New Queue request",
       callback: () => void this.createQueueRequest(),
     });
     registerCollaboCommands(this);
@@ -862,7 +862,7 @@ export default class ExoPlugin extends Plugin {
       leaf = workspace.getLeaf(true);
       await leaf.setViewState({ type: COCKPIT_VIEW_TYPE, active: true });
     }
-    workspace.revealLeaf(leaf);
+    await workspace.revealLeaf(leaf);
   }
 
   /** Add or remove the board ribbon icon so it matches the flag exactly. */
@@ -1304,7 +1304,7 @@ export default class ExoPlugin extends Plugin {
     // This value tracks cold-spawn cost, not response time — do not lower it
     // without a fresh measurement; that is exactly what regressed AI titles to
     // ~15% success before.
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       timedOut = true;
       ctrl.abort();
     }, 90_000);
@@ -1364,7 +1364,7 @@ export default class ExoPlugin extends Plugin {
       errDetail = err instanceof Error ? err.message : String(err);
       return ""; // CLI missing / errored / aborted — keep the placeholder
     } finally {
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
       const outcome = classifyTitleOutcome({ threw, timedOut, callerAborted: signal.aborted, title: resultTitle });
       const totalMs = Date.now() - t0;
@@ -1409,7 +1409,7 @@ export default class ExoPlugin extends Plugin {
     const onAbort = () => ctrl.abort();
     if (signal.aborted) ctrl.abort();
     else signal.addEventListener("abort", onAbort);
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const timer = window.setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const cli = await resolveCli("claude", this.settings.claudeBin);
       const session = ADAPTERS.claude.createSession({
@@ -1450,7 +1450,7 @@ export default class ExoPlugin extends Plugin {
       console.warn("[Exo] utility pass failed:", err);
       return "";
     } finally {
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
     }
   }
@@ -1593,7 +1593,8 @@ export default class ExoPlugin extends Plugin {
           this.paths,
         );
         if (notices.length) {
-          console.info("[Exo] automations migration:", notices.join(" · "));
+          if (ok) this.diag.push("automations", `migration: ${notices.join(" · ")}`);
+          else console.warn("[Exo] automations migration:", notices.join(" · "));
           new Notice(`Exo automations: ${notices.filter((n) => !n.startsWith("FAILED")).length} migrated${ok ? "" : " — some items failed, see console"}`);
         }
         if (ok) {
@@ -1646,6 +1647,7 @@ export default class ExoPlugin extends Plugin {
         return this.automationDefs();
       },
       memoryRoot: () => this.paths.root,
+      configDir: () => this.app.vault.configDir,
       readNote: makeNoteReader(this.app),
       dispatch: (run) => void this.dispatchTriggeredRun(run),
       schedule: (fn, ms) => window.setTimeout(fn, ms),
@@ -1850,7 +1852,7 @@ export default class ExoPlugin extends Plugin {
    * agent (headless runs are read-only). */
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<MVASettings> | null);
     // See session-caps-cache.ts: strips the orphaned pre-migration key that
     // Object.assign above can't drop on its own.
     if (stripLegacyCachedSessionCaps(this.settings)) await this.saveSettings();
@@ -2130,7 +2132,7 @@ export default class ExoPlugin extends Plugin {
     // W0 budget: check BEFORE the LLM call.
     const estimate = 8000;
     if (!this.checkBackgroundBudget(estimate)) {
-      console.info("[Exo] dream-llm skipped: background budget exhausted or disabled.");
+      this.diag.push("background", "dream-llm skipped: budget exhausted or disabled");
       return null;
     }
 
@@ -2315,7 +2317,7 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
-  /** "New Exo Queue request": create an empty request note in the queue folder
+  /** "New Queue request": create an empty request note in the queue folder
    *  and open it — the same note a phone capture would write; the next drain
    *  (60s poll or "Drain now") answers it in place. */
   async createQueueRequest(): Promise<void> {
@@ -2624,6 +2626,7 @@ export default class ExoPlugin extends Plugin {
     }, this.dailyPulseWriteQueue, {
       now,
       lastPulseAt: pulseState.lastSuccessAt || null,
+      configDir: this.app.vault.configDir,
     }, this.paths);
 
     return {
@@ -2930,7 +2933,7 @@ export default class ExoPlugin extends Plugin {
       canSpawn: !Platform.isMobile,
     });
     if (!gate.ok) {
-      console.info(`[Exo] automation run skipped (${gate.reason}): ${gate.detail}`);
+      this.diag.push("automations", `run skipped (${gate.reason}): ${gate.detail}`);
       return;
     }
     const automation = this.automationFor(run.agent);
@@ -3128,9 +3131,9 @@ export default class ExoPlugin extends Plugin {
     const parsed = parseProposalCandidates(block);
     const candidates = parsed.status === "ok" ? parsed.value : salvageProposalCandidates(block);
     if (parsed.status !== "ok") {
-      console.info(
-        `[Exo] agent "${agent.brain.slug}" proposal block partly invalid — salvaged ${candidates.length}:`,
-        parsed.errors ?? parsed.status
+      this.diag.push(
+        "agents",
+        `"${agent.brain.slug}" proposal block partly invalid — salvaged ${candidates.length}: ${JSON.stringify(parsed.errors ?? parsed.status)}`
       );
     }
     if (!candidates.length) return 0;

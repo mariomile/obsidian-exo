@@ -15,7 +15,7 @@ import { buildChatList, nextNeedsInput } from "../core/chat-rows";
 export function registerChatCommands(plugin: ExoPlugin): void {
   plugin.addCommand({
     id: "open-chat-list",
-    name: "Open Exo chats",
+    name: "Open chats",
     callback: () => void plugin.activateChats(),
   });
   plugin.addCommand({

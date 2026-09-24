@@ -193,7 +193,7 @@ export class MemoryObserver {
       if (stripped.trim() === "" && write.snapshot.before === null) {
         // The observer created this file and no other writer added anything —
         // safe to remove it entirely (leaving no empty store file behind).
-        await this.app.vault.delete(f);
+        await this.app.fileManager.trashFile(f);
       } else {
         await this.app.vault.modify(f, stripped);
       }

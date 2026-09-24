@@ -32,6 +32,8 @@ export interface TriggerDriverDeps {
   agents: () => AgentDef[];
   /** Vault-relative memory root, excluded from triggering. */
   memoryRoot: () => string;
+  /** The vault's config folder (`Vault#configDir`), excluded from triggering. */
+  configDir: () => string;
   /** Tags + body for a note, or null when unreadable. */
   readNote: (path: string) => Promise<{ tags: string[]; body: string } | null>;
   /** Hand a fired trigger to the executor (which applies the shared gates). */
@@ -71,7 +73,7 @@ export class AgentTriggerDriver {
    */
   notify(path: string, kind: VaultEventKind): void {
     if (!this.armed || this.disposed) return;
-    if (isIgnoredTriggerPath(path, this.deps.memoryRoot())) return;
+    if (isIgnoredTriggerPath(path, this.deps.memoryRoot(), this.deps.configDir())) return;
     if (!anyEventTriggers(this.deps.agents())) return;
 
     const existing = this.pending.get(path);
@@ -167,7 +169,7 @@ export function makeNoteReader(app: App): (path: string) => Promise<{ tags: stri
     const cache = app.metadataCache.getFileCache(file);
     const tags = new Set<string>();
     for (const t of cache?.tags ?? []) tags.add(t.tag);
-    const fmTags = cache?.frontmatter?.tags;
+    const fmTags: unknown = cache?.frontmatter?.tags;
     for (const t of Array.isArray(fmTags) ? fmTags : fmTags ? [fmTags] : []) {
       if (typeof t === "string") tags.add(t.startsWith("#") ? t : `#${t}`);
     }

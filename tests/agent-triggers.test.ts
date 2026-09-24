@@ -29,27 +29,27 @@ describe("isIgnoredTriggerPath", () => {
       "_system/reports/run.md",
       "_system/agents/x.md",
     ]) {
-      expect(isIgnoredTriggerPath(p, "_system")).toBe(true);
+      expect(isIgnoredTriggerPath(p, "_system", ".obsidian")).toBe(true);
     }
   });
 
   it("ignores non-markdown", () => {
-    expect(isIgnoredTriggerPath("Active/image.png", "_system")).toBe(true);
+    expect(isIgnoredTriggerPath("Active/image.png", "_system", ".obsidian")).toBe(true);
   });
 
   it("allows ordinary notes", () => {
-    expect(isIgnoredTriggerPath("_inbox/idea.md", "_system")).toBe(false);
-    expect(isIgnoredTriggerPath("Active/Projects/x/context.md", "_system")).toBe(false);
+    expect(isIgnoredTriggerPath("_inbox/idea.md", "_system", ".obsidian")).toBe(false);
+    expect(isIgnoredTriggerPath("Active/Projects/x/context.md", "_system", ".obsidian")).toBe(false);
   });
 
   it("does not treat a same-prefixed sibling folder as excluded", () => {
     // `_systems/` is not `_system/`
-    expect(isIgnoredTriggerPath("_systems/note.md", "_system")).toBe(false);
+    expect(isIgnoredTriggerPath("_systems/note.md", "_system", ".obsidian")).toBe(false);
   });
 
   it("follows a relocated memory root", () => {
-    expect(isIgnoredTriggerPath("_exo/reports/r.md", "_exo")).toBe(true);
-    expect(isIgnoredTriggerPath("_system/reports/r.md", "_exo")).toBe(false);
+    expect(isIgnoredTriggerPath("_exo/reports/r.md", "_exo", ".obsidian")).toBe(true);
+    expect(isIgnoredTriggerPath("_system/reports/r.md", "_exo", ".obsidian")).toBe(false);
   });
 });
 

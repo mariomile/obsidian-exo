@@ -13,7 +13,7 @@
  * file — so this module stays unit-testable with an in-memory fake instead of
  * requiring a real Obsidian `App`.
  */
-import type { App, TFile } from "obsidian";
+import { TFile, type App } from "obsidian";
 import {
   addBacklogTask,
   applyTaskArchive,
@@ -44,6 +44,12 @@ export interface TaskVaultAdapter {
   ensureFolder(dir: string): Promise<void>;
 }
 
+function vaultFile(app: App, path: string): TFile {
+  const f = app.vault.getAbstractFileByPath(path);
+  if (!(f instanceof TFile)) throw new Error(`Not a file: ${path}`);
+  return f;
+}
+
 /** Adapt a real Obsidian `App` to `TaskVaultAdapter`. Kept tiny and isolated
  *  so the read-modify-write logic in `createBacklogTask` never touches
  *  `app.vault` directly — that logic is exercised by unit tests against a
@@ -52,14 +58,14 @@ export function adaptAppToTaskVault(app: App): TaskVaultAdapter {
   return {
     getFile(path: string) {
       const f = app.vault.getAbstractFileByPath(path);
-      return f ? { path: (f as TFile).path } : null;
+      return f ? { path: f.path } : null;
     },
-    read: (path: string) => app.vault.read(app.vault.getAbstractFileByPath(path) as TFile),
+    read: (path: string) => app.vault.read(vaultFile(app, path)),
     create: async (path: string, content: string) => {
       await app.vault.create(path, content);
     },
     modify: async (path: string, content: string) => {
-      await app.vault.modify(app.vault.getAbstractFileByPath(path) as TFile, content);
+      await app.vault.modify(vaultFile(app, path), content);
     },
     ensureFolder: async (path: string) => {
       const slash = path.lastIndexOf("/");

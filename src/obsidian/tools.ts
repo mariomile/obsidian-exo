@@ -1,7 +1,6 @@
 import { App, TFile, prepareSimpleSearch, getAllTags } from "obsidian";
 import { z } from "zod";
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
-import type { SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { resolveLink, neighborhood, basename } from "./graph";
 import { exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "../core/paths";
 import { gatherConnections, linkMentionsIn, defaultExcludePrefixes } from "../mentions/connections";
@@ -29,14 +28,7 @@ import { patchFrontmatter } from "../core/frontmatter-patch";
 import { createBacklogTask, createChildTask, ChildTaskRefused, adaptAppToTaskVault } from "./task-store";
 import { canSpawnChild, childrenOf } from "../core/child-tasks";
 import { parseTasksFile } from "../core/tasks";
-import {
-  automationLastRunKey,
-  cadenceLabel,
-  formatDueIn,
-  nextDueAt,
-  parseCadenceInput,
-  unreviewedWriteRuns,
-} from "../core/automations";
+import { unreviewedWriteRuns } from "../core/automations";
 import { parseDuration, formatDuration } from "../core/agents";
 import {
   formatWhen,
@@ -52,6 +44,7 @@ import { ok, err, getExo, type Result } from "./tool-kit";
 import { buildCapabilityTools, CAPABILITY_READ_TOOLS } from "./capability-tools";
 import { buildBrowserTools, BROWSER_READ_TOOLS, type BrowserBridge } from "./browser-tools";
 import { buildCollaboTools, COLLABO_READ_TOOLS, collaboBridgeFrom } from "./collabo-tools";
+import { toSdkTools, type AnyTool } from "./sdk-tool";
 
 
 /** Structured question shape for `ask_user`. Duplicated from view.ts to avoid a
@@ -208,12 +201,8 @@ export interface ObsidianToolOpts {
  * Consumed directly by the Codex↔Obsidian bridge, and wrapped by
  * {@link createObsidianToolServer} for the Claude Agent SDK.
  */
-export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToolDefinition<any>[] {
+export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[] {
   const {
-    // Server-level flag only (consumed by createObsidianToolServer's
-    // createSdkMcpServer call) — destructured here for ObsidianToolOpts
-    // conformance, not used in tool-building itself.
-    alwaysLoad: _alwaysLoad = true,
     memoryWrite = true,
     askBridge,
     memoryRead = true,
@@ -542,7 +531,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     async (args) => {
       if (!askBridge) return ok("No user is present (headless run) — proceed with your best judgment.");
       try {
-        const answers = await askBridge(args.questions as AskQuestion[]);
+        const answers = await askBridge(args.questions);
         return ok(JSON.stringify(answers));
       } catch (e) {
         return ok(`User dismissed the question — proceed with your best judgment. (${e instanceof Error ? e.message : ""})`);
@@ -603,7 +592,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
     { target: z.string(), targets: z.array(z.string()) },
     async (args) => {
       const file = need(args.target);
-      const cached = app.metadataCache.getFileCache(file)?.frontmatter?.related;
+      const cached: unknown = app.metadataCache.getFileCache(file)?.frontmatter?.related;
       const cur = new Set<string>(Array.isArray(cached) ? cached.map(String) : cached ? [String(cached)] : []);
       for (const t of args.targets) cur.add(`[[${t.replace(/^\[\[|\]\]$/g, "")}]]`);
       const content = await app.vault.read(file);
@@ -1213,7 +1202,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
         changed.push(args.enabled ? "enabled" : "disabled");
       }
       if (args.mode && args.mode !== a.mode) {
-        a.mode = args.mode as AutomationMode;
+        a.mode = args.mode;
         changed.push(`mode → ${args.mode}`);
       }
       if (args.cooldown) {
@@ -1262,7 +1251,6 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
       const exo = getExo(app);
       if (!exo) return ok("Exo plugin not reachable.");
       const store = exo.automationStore;
-      const now = Date.now();
       const lines: string[] = [];
       const autos = store.list();
       if (!autos.length) lines.push("No automations yet.");
@@ -1394,7 +1382,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): SdkMcpToo
         if (args.mode === "propose" && !(args.agent ?? a.agent)) {
           return ok("Mode `propose` needs a bound agent — proposals are collected from an agent run. Use `report`, or set `agent`.");
         }
-        a.mode = args.mode as AutomationMode;
+        a.mode = args.mode;
       }
       if (args.write_scope) a.scope = args.write_scope;
       await store.save(a);
@@ -1483,7 +1471,7 @@ export function createObsidianToolServer(
     alwaysLoad,
     instructions:
       "Obsidian-native tools. Prefer these over generic file/Bash tools for vault work — they respect links, tags, and frontmatter.",
-    tools: buildObsidianTools(app, {
+    tools: toSdkTools(buildObsidianTools(app, {
       alwaysLoad,
       memoryWrite,
       askBridge,
@@ -1497,7 +1485,7 @@ export function createObsidianToolServer(
       agentFolderEnabled,
       rethinkBridge,
       paths,
-    }),
+    })),
   });
 }
 

@@ -147,7 +147,7 @@ import {
 import { planInputParts, planStateText } from "./core/plan";
 import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
 import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
-import { caretHost, type CaretNode } from "./core/caret-host";
+import { caretHost } from "./core/caret-host";
 import {
   buildResearchOutbound,
   initialResearchModeState,
@@ -165,6 +165,10 @@ import {
 import { memoryStoreNote, memoryStoreNoteProactive, agentFolderNote } from "./core/memory-prompts";
 import { buildAgentSystemPrompt } from "./core/agent-runs";
 import { readAgentBrainBody } from "./obsidian/agent-store";
+import { statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { shell } from "electron";
 
 export type { AskQuestion } from "./core/model";
 
@@ -396,7 +400,7 @@ export class ChatView extends ItemView {
     this.recapPanel = new RecapPanel(this.app, (p) => this.openNote(p));
     // Wire up link clicks in rendered markdown (MarkdownRenderer doesn't do this for custom views).
     this.registerDomEvent(this.listWrap, "click", (e) => {
-      const a = (e.target as HTMLElement).closest("a") as HTMLAnchorElement | null;
+      const a = (e.target as HTMLElement).closest("a");
       if (!a) return;
       const external = a.getAttr("href") ?? "";
       if (a.classList.contains("internal-link")) {
@@ -578,6 +582,7 @@ export class ChatView extends ItemView {
   /** Build the composer subsystem, wiring the narrow host adapter (turn engine,
    *  shared model/provider/permission state, view services) it calls back into. */
   private buildComposer(): void {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- the host's accessors are object-literal getters/setters, where `this` is the literal, so they need the view captured
     const self = this;
     this.composer = new Composer({
       plugin: this.plugin,
@@ -970,7 +975,7 @@ export class ChatView extends ItemView {
     this.brandDot = header.createSpan({ cls: "mva-brand-icon" });
     setIcon(this.brandDot, EXO_ICON);
     header.createSpan({ cls: "mva-brand-name", text: "Exo" });
-    header.createDiv({ cls: "mva-spacer" }).style.flex = "1";
+    header.createDiv({ cls: "mva-spacer" });
 
     // Apps menu — the single entry point for Exo's side surfaces (Cockpit,
     // Connections, Board). These live here, not in the global Obsidian ribbon.
@@ -2477,10 +2482,8 @@ export class ChatView extends ItemView {
    *  never on the second. */
   private probeSessionFile(vaultBase: string, sessionId: string): SessionFileProbe {
     try {
-      const fs = require("fs") as typeof import("fs");
-      const os = require("os") as typeof import("os");
-      const file = `${os.homedir()}/.claude/projects/${projectDirName(vaultBase)}/${sessionId}.jsonl`;
-      return fs.statSync(file, { throwIfNoEntry: false }) === undefined ? "absent" : "present";
+      const file = `${homedir()}/.claude/projects/${projectDirName(vaultBase)}/${sessionId}.jsonl`;
+      return statSync(file, { throwIfNoEntry: false }) === undefined ? "absent" : "present";
     } catch {
       return "failed";
     }
@@ -2839,7 +2842,7 @@ export class ChatView extends ItemView {
   private async rethinkBridge(c: Convo, req: RethinkRequest): Promise<string> {
     const ctx = c.currentCtx;
     if (!ctx) throw new Error("no active turn");
-    const block = req.block as BlockName;
+    const block = req.block;
     const plan = planRethink(block);
     const agent = this.agent();
     const current = (await agent.readBlock(block))?.content ?? "";
@@ -3063,7 +3066,7 @@ export class ChatView extends ItemView {
     // Claude utility pass regardless of which provider produced the turn.
     if (!userText.trim() || !assistantText.trim()) return;
     if (!this.plugin.canRunObserver()) {
-      console.info("[Exo] observer skipped: background budget exhausted or disabled.");
+      this.plugin.diag.push("background", "observer skipped: budget exhausted or disabled");
       return;
     }
     const observer = this.observer();
@@ -3156,7 +3159,7 @@ export class ChatView extends ItemView {
    *  the watermark and the turn's flush marker once the pass is attempted. */
   private runStepObserve(c: Convo, ctx: AssistantCtx, toStepCount: number): void {
     if (!this.plugin.checkBackgroundBudget(ChatView.STEP_OBSERVE_TOKEN_ESTIMATE)) {
-      console.info("[Exo] observer step-pass skipped: background budget exhausted or disabled.");
+      this.plugin.diag.push("background", "observer step-pass skipped: budget exhausted or disabled");
       return; // no unbounded retry — the next boundary (step or end-of-turn) gets another try
     }
     const userText = ctx.userText;
@@ -3491,7 +3494,7 @@ export class ChatView extends ItemView {
       const n = new Notification(title, { body, silent: false });
       n.onclick = () => {
         window.focus();
-        this.app.workspace.revealLeaf(this.leaf);
+        void this.app.workspace.revealLeaf(this.leaf);
       };
     } catch {
       /* ignore — notifications unavailable */
@@ -3619,7 +3622,7 @@ export class ChatView extends ItemView {
       // Inline placement: inside the last text-bearing block, after its last
       // character. A tail with no host (empty, trailing hr/image, blank
       // paragraph) gets no caret this tick — never a lone caret on its own line.
-      const host = caretHost(tail as unknown as CaretNode) as HTMLElement | null;
+      const host = caretHost(tail) as HTMLElement | null;
       if (host) {
         ctx.caretEl = host.createSpan({ cls: "mva-caret" });
       } else if (streaming && ctx.textStreaming) {
@@ -3826,7 +3829,7 @@ export class ChatView extends ItemView {
           const f = this.app.vault.getAbstractFileByPath(path);
           if (before === null) {
             if (f instanceof TFile) {
-              await this.app.vault.delete(f);
+              await this.app.fileManager.trashFile(f);
               changed++;
             }
           } else if (f instanceof TFile) {
@@ -3998,7 +4001,7 @@ export class ChatView extends ItemView {
     const f = this.app.vault.getAbstractFileByPath(rel);
     try {
       if (before === null) {
-        if (f instanceof TFile) await this.app.vault.delete(f);
+        if (f instanceof TFile) await this.app.fileManager.trashFile(f);
       } else if (f instanceof TFile) {
         await this.app.vault.modify(f, before);
       } else {
@@ -4067,7 +4070,7 @@ export class ChatView extends ItemView {
       .getLeavesOfType("markdown")
       .find((l) => (l.view as unknown as { file?: TFile }).file?.path === file.path);
     if (open) {
-      this.app.workspace.revealLeaf(open);
+      void this.app.workspace.revealLeaf(open);
       return;
     }
     void this.app.workspace.openLinkText(rel, "", "tab");
@@ -4187,7 +4190,7 @@ export class ChatView extends ItemView {
           .getLeavesOfType(viewType)
           .find((l) => (l.view as unknown as { file?: TFile }).file?.path === file.path);
         if (open) {
-          this.app.workspace.revealLeaf(open);
+          void this.app.workspace.revealLeaf(open);
           return;
         }
         void this.app.workspace.getLeaf("tab").openFile(file);
@@ -4197,8 +4200,7 @@ export class ChatView extends ItemView {
       return;
     }
     try {
-      const electron = require("electron") as { shell: { openPath(p: string): Promise<string> } };
-      void electron.shell.openPath(path);
+      void shell.openPath(path);
     } catch {
       new Notice("Couldn't open the artifact.");
     }
@@ -4309,7 +4311,7 @@ export class ChatView extends ItemView {
 
   /** Append a small badge chip to a tool card's head. */
   private addToolBadge(card: HTMLElement, text: string): HTMLElement {
-    const head = (card.querySelector(".mva-tool-head") as HTMLElement | null) ?? card;
+    const head = (card.querySelector(".mva-tool-head")) ?? card;
     return head.createSpan({ cls: "mva-badge-bg", text });
   }
 
@@ -4498,8 +4500,7 @@ export class ChatView extends ItemView {
    *  Returns null on any failure so the card degrades gracefully. */
   private async readPlanFile(filePath: string): Promise<string | null> {
     try {
-      const fs = require("fs") as typeof import("fs");
-      return await fs.promises.readFile(filePath, "utf8");
+      return await readFile(filePath, "utf8");
     } catch {
       return null;
     }
@@ -4846,7 +4847,7 @@ export class ChatView extends ItemView {
       return;
     }
     if (this.scrollRaf !== null) return;
-    this.scrollRaf = requestAnimationFrame(() => {
+    this.scrollRaf = window.requestAnimationFrame(() => {
       this.scrollRaf = null;
       this.listEl.scrollTop = this.listEl.scrollHeight;
       this.updateJumpPill();
@@ -4863,7 +4864,7 @@ export class ChatView extends ItemView {
       // Keep the outline's active tick in sync with the viewport (rAF-coalesced
       // so a fast scroll fires at most one rect read per frame).
       if (this.outlineRaf === null) {
-        this.outlineRaf = requestAnimationFrame(() => {
+        this.outlineRaf = window.requestAnimationFrame(() => {
           this.outlineRaf = null;
           this.updateOutlineActive();
         });
@@ -5557,7 +5558,7 @@ export class ChatView extends ItemView {
     const message = assembled.block ? `${assembled.block}\n\n${sendText}` : sendText;
     if (this.plugin.settings.debugContext && isActiveConvo) {
       const chips = this.composer.contextChips();
-      console.info(
+      console.debug(
         formatContextDebug({
           turnLabel: `${c.id.slice(0, 6)}#${c.messages.length}`,
           chips: { doc: chips.doc, manual: chips.manual, selectionChars: selection?.text.length ?? null },

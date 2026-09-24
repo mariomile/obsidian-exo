@@ -9,6 +9,8 @@ import { retiredFromStrip } from "../core/working-set";
 import { visibleSelection } from "../core/retention";
 import { projectDirName, resumeStatus, eligibleForFreeing } from "../core/resume-status";
 import type { ResumeStatus } from "../core/resume-status";
+import { readdir, unlink } from "node:fs/promises";
+import { homedir } from "node:os";
 
 /** The conversation history overlay ("gallery") and its bulk-selection cluster,
  *  lifted out of `ChatView` whole. One instance per view, created in the
@@ -104,10 +106,8 @@ export class GalleryView {
       // fine and holds no .jsonl — a *successful* read meaning "nothing
       // resumes". Refuse to answer instead of answering wrongly.
       if (!base) return null;
-      const fs = require("fs") as typeof import("fs");
-      const os = require("os") as typeof import("os");
-      const dir = `${os.homedir()}/.claude/projects/${projectDirName(base)}`;
-      const names = await fs.promises.readdir(dir);
+      const dir = `${homedir()}/.claude/projects/${projectDirName(base)}`;
+      const names = await readdir(dir);
       return new Set(names.filter((n) => n.endsWith(".jsonl")).map((n) => n.slice(0, -6)));
     } catch {
       return null;
@@ -528,15 +528,13 @@ export class GalleryView {
   private async freeSessions(ids: readonly string[]): Promise<number> {
     const base = this.view.vaultPath();
     if (!base) return 0;
-    const fs = require("fs") as typeof import("fs");
-    const os = require("os") as typeof import("os");
-    const dir = `${os.homedir()}/.claude/projects/${projectDirName(base)}`;
+    const dir = `${homedir()}/.claude/projects/${projectDirName(base)}`;
     let freed = 0;
     for (const id of ids) {
       const sessionId = this.view.convos.find((x) => x.id === id)?.sessionId;
       if (!sessionId) continue;
       try {
-        await fs.promises.unlink(`${dir}/${sessionId}.jsonl`);
+        await unlink(`${dir}/${sessionId}.jsonl`);
         freed++;
       } catch {
         /* best-effort: a failed unlink is not worth aborting the rest for */

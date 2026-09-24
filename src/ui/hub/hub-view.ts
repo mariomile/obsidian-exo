@@ -114,6 +114,7 @@ export class HubView extends ItemView {
     return {
       app: this.app,
       plugin: this.plugin,
+      component: this,
       rerender: () => void this.render(),
       base: () => this.base(),
       expanded: (key) => this.expandedKeys.has(key),

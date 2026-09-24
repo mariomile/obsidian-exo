@@ -260,7 +260,7 @@ export function cutTranscriptFrom(c: Convo, turnEl: HTMLElement): void {
  */
 export function reenterActive(c: Convo | null | undefined, host: ReentryHost): void {
   if (!c || !host.containerEl.isShown()) return;
-  revealReentry(c, host.openNote, host.persist);
+  revealReentry(c, (path) => host.openNote(path), () => host.persist());
   // Both halves of the same moment, from one call. They used to be wired to
   // two different event sets: the band answered layout-change, the verbs did
   // not, so the flagship path — collapse the sidebar, come back the next
@@ -295,7 +295,7 @@ function goToSlot(
  *  order — the unread stretch is below the band, and the same selectors match
  *  plenty of already-read turns above it. */
 function findAfter(root: HTMLElement, after: HTMLElement, selector: string): HTMLElement | null {
-  const all = Array.from(root.querySelectorAll(selector)) as HTMLElement[];
+  const all = Array.from(root.querySelectorAll<HTMLElement>(selector));
   return (
     all.find((el) => (after.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) ??
     null
@@ -366,7 +366,7 @@ export function renderResumeVerbs(host: HTMLElement, c: Convo, composer: ResumeC
   // repaint with a half-written draft returned no verbs and deleted the bar,
   // and the keystroke listener then had nothing left to unhide. Standing down
   // is a visibility question, and visibility is a class.
-  const input = host.querySelector(".mva-input") as HTMLTextAreaElement | null;
+  const input = host.querySelector<HTMLTextAreaElement>(".mva-input");
   if (!input) return;
   syncVerbVisibility(host, input);
   // Bound ONCE per textarea, and it looks the bar up on every keystroke rather

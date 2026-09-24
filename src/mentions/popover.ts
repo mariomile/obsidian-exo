@@ -63,11 +63,9 @@ function button(parent: HTMLElement, label: string, onClick: () => void): void {
 export function openMentionPopover(ctx: MentionPopoverCtx): void {
   closeMentionPopover();
 
-  const el = document.createElement("div");
+  const el = createDiv();
   el.className = "exo-mention-popover";
-  el.style.position = "fixed";
-  el.style.left = `${ctx.anchor.x}px`;
-  el.style.top = `${ctx.anchor.y}px`;
+  el.setCssStyles({ left: `${ctx.anchor.x}px`, top: `${ctx.anchor.y}px` });
   el.createDiv({ cls: "exo-mention-popover-title", text: `↳ ${ctx.targetBasename}` });
 
   button(el, "Link", () => {
@@ -98,7 +96,7 @@ export function openMentionPopover(ctx: MentionPopoverCtx): void {
   if (rect.bottom > window.innerHeight) el.style.top = `${ctx.anchor.y - rect.height - 8}px`;
 
   let justOpened = true;
-  requestAnimationFrame(() => {
+  window.requestAnimationFrame(() => {
     justOpened = false;
   });
   const onDown = (e: MouseEvent): void => {

@@ -95,7 +95,7 @@ export function capExecResult(raw: unknown): string {
   return s.length > EXEC_RESULT_CAP ? s.slice(0, EXEC_RESULT_CAP) : s;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms));
 
 export class BrowserHost {
   constructor(private readonly view: WebViewerView) {}
@@ -156,7 +156,7 @@ export class BrowserHost {
       };
       wv.addEventListener("did-stop-loading", finish);
       wv.addEventListener("did-fail-load", finish);
-      setTimeout(finish, timeoutMs);
+      window.setTimeout(finish, timeoutMs);
       this.view.navigate(url, true);
     });
     await sleep(SETTLE_EXTRA_MS);

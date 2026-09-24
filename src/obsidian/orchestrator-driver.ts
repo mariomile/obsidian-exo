@@ -143,7 +143,7 @@ export class OrchestratorDriver {
   /** Reports awaiting delivery, keyed by task id — a child that ends several
    *  turns in quick succession collapses to ONE report, not several. */
   private readonly pendingReports = new Map<string, ChildReport>();
-  private reportTimer: ReturnType<typeof setTimeout> | null = null;
+  private reportTimer: number | null = null;
 
   constructor(private readonly deps: DriverDeps) {}
 
@@ -195,7 +195,7 @@ export class OrchestratorDriver {
       this.unsubscribe = null;
     }
     if (this.reportTimer) {
-      clearTimeout(this.reportTimer);
+      window.clearTimeout(this.reportTimer);
       this.reportTimer = null;
     }
     // DELIVER what is pending, never drop it. The driver is stopped on plugin
@@ -269,7 +269,7 @@ export class OrchestratorDriver {
   private async applyArchive(taskId: string): Promise<void> {
     const t = this.tasks.find((x) => x.id === taskId);
     if (!t) return;
-    this.tasks = this.tasks.map((x) => (x.id === taskId ? { ...x, status: "archived" as TaskStatus } : x));
+    this.tasks = this.tasks.map((x) => (x.id === taskId ? { ...x, status: "archived" } : x));
     await this.deps.store.archive(taskId).catch(() => undefined);
     // Archiving a running task frees a slot — let the scheduler fill it.
     const result = this.reduceGated(this.tasks, { type: "slot-freed" });
@@ -341,8 +341,8 @@ export class OrchestratorDriver {
   }
 
   private scheduleReportFlush(): void {
-    if (this.reportTimer) clearTimeout(this.reportTimer);
-    this.reportTimer = setTimeout(() => {
+    if (this.reportTimer) window.clearTimeout(this.reportTimer);
+    this.reportTimer = window.setTimeout(() => {
       this.reportTimer = null;
       this.flushReports();
     }, REPORT_DEBOUNCE_MS);

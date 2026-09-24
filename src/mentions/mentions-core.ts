@@ -118,7 +118,7 @@ export function buildAliasSet(target: MentionTarget, opts: MentionOptions = {}):
     const seq = aliasTokens(name);
     if (seq.length === 0) continue;
     if (seq.length === 1) {
-      const w = seq[0]!;
+      const w = seq[0];
       if (w.length < minLen || stops.has(w)) continue;
     }
     const key = seq.join(" ");
@@ -138,12 +138,12 @@ function findSequence(tokens: Token[], aliasSeq: string[], doStem: boolean): Men
   for (let i = 0; i + n <= tokens.length; i++) {
     let ok = true;
     for (let j = 0; j < n; j++) {
-      if (norm(tokens[i + j]!.text, doStem) !== target[j]) {
+      if (norm(tokens[i + j].text, doStem) !== target[j]) {
         ok = false;
         break;
       }
     }
-    if (ok) hits.push({ start: tokens[i]!.start, end: tokens[i + n - 1]!.end });
+    if (ok) hits.push({ start: tokens[i].start, end: tokens[i + n - 1].end });
   }
   return hits;
 }
@@ -191,7 +191,7 @@ export function unlinkedMentions(
     ranges.sort((a, b) => a.start - b.start);
     const recency = now > 0 ? recencyFactor(doc.mtime, now, halfLife) : 1;
     const score = (0.6 + 0.1 * Math.min(ranges.length, 4)) * recency;
-    out.push({ sourcePath: doc.path, ranges, snippet: snippetAround(doc.text, ranges[0]!), score });
+    out.push({ sourcePath: doc.path, ranges, snippet: snippetAround(doc.text, ranges[0]), score });
   }
   out.sort((a, b) => b.score - a.score || a.sourcePath.localeCompare(b.sourcePath));
   return out;

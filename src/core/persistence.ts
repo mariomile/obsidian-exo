@@ -40,7 +40,7 @@ export function parseConversationsSource(
 function tryParseArray(raw: string | null): unknown[] | null {
   if (raw == null) return null;
   try {
-    const parsed = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;

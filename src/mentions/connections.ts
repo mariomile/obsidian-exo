@@ -62,7 +62,7 @@ export function blankFrontmatter(text: string): string {
 
 function targetOf(app: App, file: TFile): MentionTarget {
   const fm = app.metadataCache.getFileCache(file)?.frontmatter;
-  const rawAliases = fm?.aliases;
+  const rawAliases: unknown = fm?.aliases;
   const aliases = Array.isArray(rawAliases)
     ? rawAliases.map(String)
     : rawAliases
@@ -153,7 +153,7 @@ function allTargets(app: App, excludePrefixes: string[]): MentionTarget[] {
   const out: MentionTarget[] = [];
   for (const f of app.vault.getMarkdownFiles()) {
     if (excludePrefixes.some((p) => f.path.startsWith(p))) continue;
-    const rawAliases = app.metadataCache.getFileCache(f)?.frontmatter?.aliases;
+    const rawAliases: unknown = app.metadataCache.getFileCache(f)?.frontmatter?.aliases;
     const aliases = Array.isArray(rawAliases)
       ? rawAliases.map(String)
       : rawAliases

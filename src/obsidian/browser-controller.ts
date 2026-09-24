@@ -112,7 +112,7 @@ export class BrowserController {
     }
     // A leaf restored from layout may still be deferred: realize it first.
     await (leaf as WorkspaceLeaf & { loadIfDeferred?: () => Promise<void> }).loadIfDeferred?.();
-    if (reveal) workspace.revealLeaf(leaf);
+    if (reveal) await workspace.revealLeaf(leaf);
     const view = asWebViewer(leaf);
     if (!view) {
       this.ownLeaf = null;
