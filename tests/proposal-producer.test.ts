@@ -6,9 +6,11 @@ import type {
 } from "../src/obsidian/proposal-store";
 import {
   buildProposalProducerPrompt,
+  collectRunProposals,
   produceTurnProposals,
   type ProposalProducerDeps,
   type ProposalTurnInput,
+  type RunProposalDeps,
 } from "../src/obsidian/proposal-producer";
 
 const source: ProposalRecord["source"] = {
@@ -201,5 +203,82 @@ describe("proposal producer extraction", () => {
       invalid: 1,
     });
     expect(mocked.recordMetric).not.toHaveBeenCalled();
+  });
+});
+
+describe("collectRunProposals: fenced block from an unattended run", () => {
+  // Both `collectAgentProposals` (agent-backed) and `collectAutomationProposals`
+  // (prompt-only automations, src/main.ts) go through this: the mechanism a
+  // prompt-only `propose` automation was missing entirely before this fix.
+  const runSource: ProposalRecord["source"] = {
+    convoId: "automation:morning-digest",
+    turnId: "run-1",
+    createdAt: 1_720_000_000_000,
+  };
+
+  function fenced(candidates: unknown): string {
+    return ["Here is what I found.", "", "```exo-proposals", JSON.stringify(candidates), "```"].join("\n");
+  }
+
+  function runDeps(appendResults: AppendProposalResult[] = []): {
+    value: RunProposalDeps;
+    append: ReturnType<typeof vi.fn>;
+    diagnostic: ReturnType<typeof vi.fn>;
+  } {
+    const append = vi.fn(async (_candidate: ProposalCandidate) =>
+      appendResults.shift() ?? ({ status: "appended" as const, record: {} as ProposalRecord })
+    );
+    const diagnostic = vi.fn();
+    return { value: { store: { append }, diagnostic }, append, diagnostic };
+  }
+
+  it("is a no-op when not eligible, even with a fenced block present", async () => {
+    const mocked = runDeps();
+    const landed = await collectRunProposals(fenced([taskJson]), false, runSource, "morning-digest", mocked.value);
+    expect(landed).toBe(0);
+    expect(mocked.append).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when eligible but the output has no fenced block", async () => {
+    const mocked = runDeps();
+    const landed = await collectRunProposals("Nothing to report.", true, runSource, "morning-digest", mocked.value);
+    expect(landed).toBe(0);
+    expect(mocked.append).not.toHaveBeenCalled();
+  });
+
+  it("turns a fenced block into a pending proposal when eligible", async () => {
+    const mocked = runDeps();
+    const landed = await collectRunProposals(fenced([taskJson]), true, runSource, "morning-digest", mocked.value);
+    expect(landed).toBe(1);
+    expect(mocked.append).toHaveBeenCalledTimes(1);
+    expect(mocked.append.mock.calls[0][1]).toEqual(runSource);
+  });
+
+  it("salvages the valid entries when one candidate in the block is invalid", async () => {
+    const mocked = runDeps();
+    const missingRationale = { kind: "task", title: "Missing rationale", prompt: "do it" };
+    const landed = await collectRunProposals(
+      fenced([taskJson, missingRationale]),
+      true,
+      runSource,
+      "morning-digest",
+      mocked.value
+    );
+    expect(landed).toBe(1);
+    expect(mocked.append).toHaveBeenCalledTimes(1);
+    expect(mocked.diagnostic).toHaveBeenCalledTimes(1);
+  });
+
+  it("never throws when the store append fails", async () => {
+    const append = vi.fn(async () => {
+      throw new Error("disk full");
+    });
+    const diagnostic = vi.fn();
+    const landed = await collectRunProposals(fenced([taskJson]), true, runSource, "morning-digest", {
+      store: { append },
+      diagnostic,
+    });
+    expect(landed).toBe(0);
+    expect(diagnostic).toHaveBeenCalledTimes(1);
   });
 });

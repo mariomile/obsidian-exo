@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   agentLastRunKey,
   agentTriggerRunKey,
+  automationRunPrompt,
   dueScheduledAgentRuns,
   gateAgentRun,
   gateAgentInvoke,
@@ -339,6 +340,30 @@ describe("buildAgentRunPrompt — the proposal channel", () => {
     const p = buildAgentRunPrompt(agent("a", { autonomy: "propose" }), "x");
     for (const kind of ["task", "loop", "decision", "playbook"]) expect(p).toContain(`\`${kind}\``);
     expect(p).toContain("INERT until a human accepts");
+  });
+});
+
+describe("automationRunPrompt: prompt-only automations get the same contract", () => {
+  it("appends the proposal contract when the run is propose-eligible", () => {
+    const p = automationRunPrompt("Scan the inbox.", true, "your run report");
+    expect(p).toContain("Scan the inbox.");
+    expect(p).toContain(AGENT_PROPOSAL_FENCE);
+  });
+
+  // `report` mode (autonomy "notify") and `act` mode both call this with
+  // proposeEligible=false. `report` has nothing to propose, `act` already
+  // writes, so a contract would let the same change arrive twice.
+  it("leaves the prompt untouched when not propose-eligible (report or act mode)", () => {
+    const p = automationRunPrompt("Scan the inbox.", false, "your run report");
+    expect(p).toBe("Scan the inbox.");
+    expect(p).not.toContain(AGENT_PROPOSAL_FENCE);
+  });
+
+  it("leaves the prompt untouched even in propose mode when the kernel is off", () => {
+    // The caller computes proposeEligible as `mode === "propose" && proposalKernelEnabled`;
+    // a disabled kernel means false reaches here regardless of mode.
+    const p = automationRunPrompt("Scan the inbox.", false, "your run report");
+    expect(p).not.toContain(AGENT_PROPOSAL_FENCE);
   });
 });
 

@@ -2,6 +2,7 @@ import {
   parseProposalCandidates,
   type ProposalRecord,
 } from "../core/proposals";
+import { extractProposalBlock, salvageProposalCandidates } from "../core/agent-runs";
 import type {
   AppendProposalResult,
   ProposalStore,
@@ -130,7 +131,7 @@ function defaultDiagnostic(message: string, error?: unknown): void {
   else console.warn(message, error);
 }
 
-function diagnose(deps: ProposalProducerDeps, message: string, error?: unknown): void {
+function diagnose(deps: { diagnostic?: ProposalProducerDiagnostic }, message: string, error?: unknown): void {
   try {
     (deps.diagnostic ?? defaultDiagnostic)(message, error);
   } catch {
@@ -222,4 +223,65 @@ export async function produceTurnProposals(
     candidates: parsed.value.length,
     ...totals,
   };
+}
+
+/** Narrow store surface for the fenced-block collector below: append only,
+ *  no metrics (unattended runs don't feed the turn-suggestion counters). */
+export type RunProposalStore = Pick<ProposalStore, "append">;
+
+export interface RunProposalDeps {
+  store: RunProposalStore;
+  diagnostic?: ProposalProducerDiagnostic;
+}
+
+/**
+ * Turn an unattended run's fenced `exo-proposals` block (see
+ * `AGENT_PROPOSAL_FENCE` / `proposalContract` in core/agent-runs) into pending
+ * kernel proposals.
+ *
+ * This is the mechanism shared by agent-backed `propose` runs and prompt-only
+ * `propose` automations: both append the same contract to their prompt and
+ * both feed their raw output through this same extraction/validation/
+ * persistence path, so a fenced block means the same thing regardless of
+ * which executor produced it. `eligible` is computed by the caller (autonomy
+ * tier or automation mode, plus the kernel toggle) rather than re-derived
+ * here, since the two callers read that off different shapes.
+ *
+ * Never throws: a malformed block or a failed append costs the proposals, not
+ * the run that already did the work. Returns how many landed.
+ */
+export async function collectRunProposals(
+  output: string,
+  eligible: boolean,
+  source: ProposalRecord["source"],
+  label: string,
+  deps: RunProposalDeps
+): Promise<number> {
+  if (!eligible) return 0;
+  const block = extractProposalBlock(output ?? "");
+  if (!block) return 0;
+
+  // Whole-block first; on rejection, salvage the valid entries. Observed on
+  // the first real run: two proposals, the second missing `rationale`, and
+  // all-or-nothing threw away both.
+  const parsed = parseProposalCandidates(block);
+  const candidates = parsed.status === "ok" ? parsed.value : salvageProposalCandidates(block);
+  if (parsed.status !== "ok") {
+    diagnose(
+      deps,
+      `"${label}" proposal block partly invalid — salvaged ${candidates.length}: ${JSON.stringify(parsed.errors ?? parsed.status)}`
+    );
+  }
+  if (!candidates.length) return 0;
+
+  let landed = 0;
+  for (const candidate of candidates) {
+    try {
+      const res = await deps.store.append(candidate, source);
+      if (res.status === "appended") landed++;
+    } catch (err) {
+      diagnose(deps, `proposal append failed for "${label}"`, err);
+    }
+  }
+  return landed;
 }
