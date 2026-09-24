@@ -678,6 +678,7 @@ export class ChatView extends ItemView {
       s.nativeFirst,
       s.memoryReadEnabled,
       s.memoryWriteEnabled,
+      s.memoryStoreEnabled,
       s.autoCompactEnabled,
       s.contextSavingMode,
       s.codexSandbox,
@@ -750,7 +751,8 @@ export class ChatView extends ItemView {
           // Same contract for the single-file Open-Loops Ledger (paths/parentConvoId trail it below).
           this.plugin.loopsWriteQueue,
           this.plugin.paths, c.id, // parentConvoId: gates spawn_task
-          browserBridgeFor(this.plugin, c.id) // agent browser: undefined when off/mobile
+          browserBridgeFor(this.plugin, c.id), // agent browser: undefined when off/mobile
+          s.memoryStoreEnabled // gates remember/recall/log_session/capture_learning
         )
       : undefined;
 
@@ -761,23 +763,20 @@ export class ChatView extends ItemView {
       if (!this.memoryPreamble)
         this.memoryPreamble = await readBootContext(this.app, this.plugin.paths, {
           agentFolderEnabled: s.agentFolderEnabled,
+          memoryStoreEnabled: s.memoryStoreEnabled,
         });
       memoryPreamble = this.memoryPreamble || undefined;
-      // Tell the agent the union store exists whenever its tools are registered
-      // (obsidian tools on + memory read on ⇒ `recall`, +write ⇒ `remember`).
-      // With proactive recall ON, swap in the variant that says memories are
-      // auto-provided (the model needn't decide to call `recall`).
-      if (hasObsidianTools) {
+      // Union-store note, only while its tools are actually registered (store on).
+      // Proactive recall ON swaps in the auto-provided variant.
+      if (hasObsidianTools && s.memoryStoreEnabled) {
         const note = s.proactiveRecall
           ? memoryStoreNoteProactive(this.plugin.paths.store)
           : memoryStoreNote(this.plugin.paths.store);
         memoryPreamble = (memoryPreamble ? `${memoryPreamble}\n\n` : "") + note;
-        // The Agent Is the Folder: when the identity layer is on and its tool is
-        // registered, tell the model when to `rethink` (world-model change, not
-        // episodic notes — those go to `remember`).
-        if (s.memoryWriteEnabled && s.agentFolderEnabled) {
-          memoryPreamble = `${memoryPreamble}\n\n${agentFolderNote(this.plugin.paths.agentDir)}`;
-        }
+      }
+      // rethink_memory note — independent of the union store, so identity keeps working with it off.
+      if (hasObsidianTools && s.memoryWriteEnabled && s.agentFolderEnabled) {
+        memoryPreamble = `${memoryPreamble ? `${memoryPreamble}\n\n` : ""}${agentFolderNote(this.plugin.paths.agentDir)}`;
       }
     }
 
@@ -798,6 +797,7 @@ export class ChatView extends ItemView {
         const all = buildObsidianTools(this.app, {
           memoryWrite: s.memoryWriteEnabled && !readOnlySandbox,
           memoryRead: s.memoryReadEnabled,
+          memoryStoreEnabled: s.memoryStoreEnabled,
           // Per-session server + per-convo closure: ask_user always renders into
           // the conversation that owns this session, never a parallel one.
           askBridge: (qs) => this.askBridge(c, qs),
@@ -2987,7 +2987,7 @@ export class ChatView extends ItemView {
    *  to before this feature existed. */
   private proactiveRecallEligible(c: Convo): boolean {
     const s = this.plugin.settings;
-    if (!s.proactiveRecall || !s.memoryReadEnabled) return false;
+    if (!s.proactiveRecall || !s.memoryReadEnabled || !s.memoryStoreEnabled) return false;
     // Claude keeps the same preconditions that register the `recall` tool.
     // Codex (Tranche A parity): the injection is plain text in the outbound
     // turn — no tool pairing required.
@@ -3061,7 +3061,7 @@ export class ChatView extends ItemView {
    *  propose a now.md update (design §5) — rendered as an Apply/Dismiss card. */
   private observeTurn(c: Convo, el: HTMLElement, userText: string, assistantText: string): void {
     const s = this.plugin.settings;
-    if (!s.selfWritingMemory || !s.memoryWriteEnabled) return;
+    if (!s.selfWritingMemory || !s.memoryWriteEnabled || !s.memoryStoreEnabled) return;
     // Provider-agnostic (Tranche A): the observer itself runs on a transient
     // Claude utility pass regardless of which provider produced the turn.
     if (!userText.trim() || !assistantText.trim()) return;
@@ -3140,7 +3140,7 @@ export class ChatView extends ItemView {
   private maybeStepObserve(c: Convo, ctx: AssistantCtx): void {
     const s = this.plugin.settings;
     if (s.observerCadence !== "every-n-steps") return;
-    if (!s.selfWritingMemory || !s.memoryWriteEnabled) return;
+    if (!s.selfWritingMemory || !s.memoryWriteEnabled || !s.memoryStoreEnabled) return;
     // Provider-agnostic (Tranche A) — see observeTurn.
     const cadence = c.cadence ?? initialCadenceState();
     const stepped = recordStep(cadence, s.observerStepInterval);

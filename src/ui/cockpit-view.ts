@@ -146,9 +146,17 @@ export class CockpitView extends ItemView {
     }
   }
 
+  /** The note that carries current state: the identity `NOW.md` when the agent
+   *  folder is on and the file exists, else vault-context. */
+  private async stateNotePath(): Promise<string> {
+    const now = `${this.plugin.paths.agentDir}/NOW.md`;
+    if (this.plugin.settings.agentFolderEnabled && (await this.app.vault.adapter.exists(now))) return now;
+    return this.plugin.paths.vaultContext;
+  }
+
   private async contextAgeDays(now: number): Promise<number | null> {
     try {
-      const st = await this.app.vault.adapter.stat(this.plugin.paths.vaultContext);
+      const st = await this.app.vault.adapter.stat(await this.stateNotePath());
       return st?.mtime ? (now - st.mtime) / 86_400_000 : null;
     } catch {
       return null;
@@ -272,7 +280,7 @@ export class CockpitView extends ItemView {
         contextAgeDays: ctxAge,
         lastReport: report,
         now,
-        vaultContextPath: this.plugin.paths.vaultContext,
+        vaultContextPath: await this.stateNotePath(),
       });
       this.tile(grid, "Health", "heart-pulse", health, "Vault is healthy.");
     } finally {

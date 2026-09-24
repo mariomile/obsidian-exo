@@ -108,6 +108,7 @@ export async function runHeadlessPlaybook(
       const tools = buildObsidianTools(app, {
         memoryRead: settings.memoryReadEnabled,
         memoryWrite: false,
+        memoryStoreEnabled: settings.memoryStoreEnabled,
         paths: exoPaths(settings.memoryRoot || LEGACY_MEMORY_ROOT),
       }).filter((tool) => readNames.has(tool.name) || (write && WRITE_TOOLS.test(tool.name)));
       opts.codexBridge.bridge.setTools(tools);

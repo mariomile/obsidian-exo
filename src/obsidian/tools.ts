@@ -68,22 +68,36 @@ export interface RethinkRequest {
 
 const MAX_CONTENT = 8000;
 const SKIP_LARGER_THAN = 200_000;
-const MAX_SCAN_FILES = 2000; // cap the built-in fallback scan (Omnisearch has no such limit)
+const MAX_SCAN_FILES = 2000; // cap the built-in fallback scan (Sonar has no such limit)
 
-/** Omnisearch public API (when the plugin is installed). */
-interface OmnisearchResult {
-  score: number;
+/** One hit from Sonar's search service. Mirrors `KeywordHit` in
+ *  obsidian-sonar (src/service/search-service.ts) trimmed to the fields
+ *  `search_vault` renders — `excerpt.text` is the only excerpt field used. */
+interface SonarSearchHit {
   path: string;
   basename: string;
-  excerpt?: string;
+  score: number;
+  docType: string;
+  matched: string[];
+  excerpt?: { text: string };
 }
-interface OmnisearchApi {
-  search(query: string): Promise<OmnisearchResult[]>;
+/** Sonar's in-process search service (`plugin.service`, obsidian-sonar
+ *  src/service/search-service.ts ~line 381). `getStatus` is checked so a
+ *  still-building index falls back to the built-in scorer instead of
+ *  returning a partial/empty result set. */
+interface SonarSearchService {
+  query(raw: string, opts: { limit: number; now: number }): Promise<SonarSearchHit[]>;
+  getStatus?(): { ready: boolean };
 }
-function getOmnisearch(app: App): OmnisearchApi | null {
-  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, { api?: OmnisearchApi }> } }).plugins;
-  const api = plugins?.plugins?.["omnisearch"]?.api;
-  return api && typeof api.search === "function" ? api : null;
+/** Resolve Sonar's search service off its plugin instance, or null when the
+ *  plugin is absent or its index isn't ready yet. */
+function getSonarSearch(app: App): SonarSearchService | null {
+  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, { service?: Partial<SonarSearchService> }> } })
+    .plugins;
+  const svc = plugins?.plugins?.["sonar"]?.service;
+  if (!svc || typeof svc.query !== "function") return null;
+  if (typeof svc.getStatus === "function" && !svc.getStatus().ready) return null;
+  return svc as SonarSearchService;
 }
 
 /** AIditor's cross-plugin read/action API (when the aiditor plugin is enabled). */
@@ -174,6 +188,11 @@ export interface ObsidianToolOpts {
   memoryWrite?: boolean;
   askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>;
   memoryRead?: boolean;
+  /** Master flag for the Memory Union Store (default ON). OFF drops `remember`,
+   *  `recall`, `log_session`, and `capture_learning` — `capture_decision`,
+   *  `open_loop`, `close_loop`, and `rethink_memory` are unaffected; they write
+   *  to decisions/, the open-loops ledger, and the agent folder, not the store. */
+  memoryStoreEnabled?: boolean;
   memoryWriteQueue?: WriteQueue;
   loopsWriteQueue?: WriteQueue;
   orchestrationEnabled?: boolean;
@@ -206,6 +225,10 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
     memoryWrite = true,
     askBridge,
     memoryRead = true,
+    /** Memory Union Store master flag (default ON). OFF gates `remember`,
+     *  `recall`, `log_session`, `capture_learning` on top of memoryWrite/memoryRead —
+     *  every other memory tool is unaffected (see the field doc on ObsidianToolOpts). */
+    memoryStoreEnabled = true,
     memoryWriteQueue = new WriteQueue(),
     loopsWriteQueue = new WriteQueue(),
     /** Orchestration Board master flag (default OFF). Gates `add_task` only —
@@ -258,25 +281,24 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
 
   const searchVault = tool(
     "search_vault",
-    "Full-text search across your vault — notes, and with Omnisearch also indexed attachments (PDF/image/canvas). Returns ranked paths with snippets, using Omnisearch (BM25 + fuzzy) when installed, else a built-in scorer. Prefer this over Grep for vault content.",
+    "Full-text search across your vault — notes, and with Sonar also indexed attachments (PDF/HTML) and canvases. Returns ranked paths with snippets, using Sonar (BM25 + fuzzy) when installed and its index is ready, else a built-in scorer. Prefer this over Grep for vault content.",
     { query: z.string(), limit: z.number().optional() },
     async (args) => {
       const limit = Math.min(args.limit ?? 10, 30);
 
-      // Preferred path: Omnisearch plugin API (better ranking, fuzzy, attachments).
-      const omni = getOmnisearch(app);
-      if (omni) {
+      // Preferred path: Sonar's in-process search service (better ranking, fuzzy, attachments).
+      const sonar = getSonarSearch(app);
+      if (sonar) {
         try {
-          const results = await omni.search(args.query);
-          if (results.length === 0) return ok(`No matches for "${args.query}".`);
+          const hits = await sonar.query(args.query, { limit, now: Date.now() });
+          if (hits.length === 0) return ok(`No matches for "${args.query}".`);
           return ok(
-            results
-              .slice(0, limit)
-              .map((r) => `- [[${r.path}]] — ${(r.excerpt ?? "").replace(/\s+/g, " ").trim().slice(0, 160)}`)
+            hits
+              .map((h) => `- [[${h.path}]] — ${(h.excerpt?.text ?? "").replace(/\s+/g, " ").trim().slice(0, 160)}`)
               .join("\n")
           );
         } catch {
-          /* Omnisearch index not ready — fall back to the built-in scorer. */
+          /* Sonar query failed — fall back to the built-in scorer. */
         }
       }
 
@@ -306,7 +328,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
       if (top.length === 0) return ok(`No matches for "${args.query}".`);
       const body = top.map((h) => `- [[${h.path}]] — ${h.snippet}`).join("\n");
       const capped = files.length > MAX_SCAN_FILES
-        ? `\n\n(Searched the ${MAX_SCAN_FILES} most recently edited notes of ${files.length}. Install Omnisearch for full-vault search.)`
+        ? `\n\n(Searched the ${MAX_SCAN_FILES} most recently edited notes of ${files.length}. Install Sonar for full-vault search.)`
         : "";
       return ok(body + capped);
     }
@@ -1425,8 +1447,14 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
     listAgents, invokeAgent, manageAgent,
     listAutomations, savePlaybook, manageAutomation, reviewAutomationRun,
     ...buildCapabilityTools(app),
-    ...(memoryRead ? [recall] : []),
-    ...(memoryWrite ? [captureDecision, logSession, captureLearning, remember, openLoop, closeLoopTool] : []),
+    // `recall` reads the Memory Union Store — gated on the store flag too.
+    ...(memoryRead && memoryStoreEnabled ? [recall] : []),
+    // `capture_decision`, `open_loop`, and `close_loop` write to decisions/ and the
+    // open-loops ledger — NOT the union store, so they stay up when the store is off.
+    ...(memoryWrite ? [captureDecision, openLoop, closeLoopTool] : []),
+    // `log_session`, `capture_learning`, and `remember` write to the union store
+    // (session log, learnings/, store/) — gated on the store flag on top of memoryWrite.
+    ...(memoryWrite && memoryStoreEnabled ? [logSession, captureLearning, remember] : []),
     // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
     // agent-folder flag, plus a live view bridge to render its diff/proposal.
     ...(memoryWrite && agentFolderEnabled && rethinkBridge ? [rethinkMemory] : []),
@@ -1463,7 +1491,10 @@ export function createObsidianToolServer(
   parentConvoId?: string,
   // Shared agent-browser bridge: trailing for the same reason as parentConvoId,
   // and absent for every caller that has no visible tab to drive.
-  browserBridge?: BrowserBridge
+  browserBridge?: BrowserBridge,
+  // Memory Union Store master flag: trailing for the same reason as browserBridge.
+  // Default ON — existing callers are unaffected.
+  memoryStoreEnabled = true
 ) {
   return createSdkMcpServer({
     name: "obsidian",
@@ -1476,6 +1507,7 @@ export function createObsidianToolServer(
       memoryWrite,
       askBridge,
       memoryRead,
+      memoryStoreEnabled,
       memoryWriteQueue,
       loopsWriteQueue,
       orchestrationEnabled,
