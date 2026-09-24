@@ -32,6 +32,21 @@ export class Notice {
   hide(): void {}
 }
 
+/** Minimal case-insensitive substring matcher — just enough for
+ *  `search_vault`'s built-in fallback scorer (tools.ts) to be exercised by a
+ *  test without a live Obsidian search index. Real Obsidian's version does
+ *  fuzzy matching; this only needs to find-or-not-find, since the fallback
+ *  path under test cares about ranking/rendering, not match quality. */
+export function prepareSimpleSearch(
+  query: string
+): (text: string) => { score: number; matches: [number, number][] } | null {
+  const q = query.toLowerCase();
+  return (text: string) => {
+    const at = text.toLowerCase().indexOf(q);
+    return at === -1 ? null : { score: 1, matches: [[at, at + q.length]] };
+  };
+}
+
 /** Paints a lucide glyph into an element. Nothing here reads the icon back;
  *  the stub exists so a surface that labels its chips can be rendered in a
  *  test at all. */

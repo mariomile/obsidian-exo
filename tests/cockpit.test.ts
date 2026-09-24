@@ -138,6 +138,18 @@ describe("healthRows", () => {
     expect(rows[1].badge).toBe("12d");
   });
 
+  it("stale row names the measured state note", () => {
+    const rows = healthRows({
+      inboxCount: 0,
+      contextAgeDays: 9,
+      lastReport: null,
+      now: NOW,
+      vaultContextPath: "_system/agent/NOW.md",
+    });
+    expect(rows[0].label).toBe("NOW.md stale");
+    expect(rows[0].action.arg).toContain("_system/agent/NOW.md");
+  });
+
   it("healthy vault → no rows", () => {
     expect(healthRows({ inboxCount: 0, contextAgeDays: 2, lastReport: null, now: NOW })).toEqual([]);
   });

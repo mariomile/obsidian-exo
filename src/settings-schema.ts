@@ -78,6 +78,13 @@ export interface MVASettings {
   nativeFirst: boolean;
   memoryReadEnabled: boolean;
   memoryWriteEnabled: boolean;
+  /** Master flag for the Memory Union Store (`remember`/`recall`, `log_session`,
+   *  `capture_learning`, the session log, self-writing memory, proactive recall).
+   *  DEFAULT ON so existing vaults are unaffected. OFF keeps `capture_decision`,
+   *  `open_loop`, and `rethink_memory` (identity layer) working — those write to
+   *  decisions/, the open-loops ledger, and the agent folder, none of which is
+   *  the union store. */
+  memoryStoreEnabled: boolean;
   /** Self-Writing Memory: after each healthy turn, a cheap background observer
    *  proposes durable memories and writes them to the store (with veto/undo).
    *  OFF by default — only runs when this AND memoryWriteEnabled are on. */
@@ -307,6 +314,7 @@ export const DEFAULT_SETTINGS: MVASettings = {
   nativeFirst: false,
   memoryReadEnabled: true,
   memoryWriteEnabled: true,
+  memoryStoreEnabled: true,
   selfWritingMemory: false,
   agentFolderEnabled: false,
   observerCadence: "session-end",

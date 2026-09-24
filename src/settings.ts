@@ -6,6 +6,7 @@ import { modelOptions, BACKGROUND_MODEL_OPTIONS } from "./core/model-options";
 import { parseMcpJson } from "./core/mcp-config";
 import { DEFAULT_MEMORY_ROOT, LEGACY_MEMORY_ROOT } from "./core/paths";
 import { renderCliDiagnostics } from "./ui/settings-cli";
+import { renderRecallSettings } from "./ui/settings-memory";
 
 import { DEFAULT_SETTINGS, LEGACY_QUEUE_FOLDER, type MVASettings } from "./settings-schema";
 
@@ -490,6 +491,12 @@ export class MVASettingTab extends PluginSettingTab {
     );
     this.toggleSetting(
       el,
+      "Memory union store",
+      `Keep the second, self-writing memory store in ${paths.store}/ alongside decisions and open loops: the remember/recall tools, session log, self-writing memory, and proactive recall. On by default. Off leaves capture_decision, open_loop, and rethink_memory (identity layer) working — decisions, loops, and the agent folder are separate from the union store.`,
+      "memoryStoreEnabled"
+    );
+    this.toggleSetting(
+      el,
       "Self-writing memory",
       "After each healthy turn, a cheap background observer proposes durable memories and appends them to the store as @generated entries — you can review or undo each write. Off by default; runs only when Write vault memory is also on. The observer currently uses the configured Claude background model for both chat providers.",
       "selfWritingMemory"
@@ -501,66 +508,7 @@ export class MVASettingTab extends PluginSettingTab {
       "agentFolderEnabled"
     );
 
-    new Setting(el)
-      .setName("Proactive recall")
-      .setDesc(
-        "Before each message is sent, surface the most relevant stored memories into the turn automatically — so the agent no longer has to decide to call recall. Deduped per conversation and relevance-gated, so irrelevant turns cost nothing. On by default; needs Read vault memory."
-      )
-      .addToggle((t) =>
-        t.setValue(s.proactiveRecall).onChange(async (v) => {
-          s.proactiveRecall = v;
-          await this.plugin.saveSettings();
-          this.display(); // show/hide the per-turn count field
-        })
-      );
-
-    if (s.proactiveRecall) {
-      new Setting(el)
-        .setName("Proactive recall — memories per turn")
-        .setDesc("How many relevant memories to inject at most, per message.")
-        .addText((t) =>
-          t
-            .setPlaceholder("3")
-            .setValue(String(s.proactiveRecallK))
-            .onChange(async (v) => {
-              const n = Number.parseInt(v, 10);
-              if (Number.isFinite(n) && n > 0) s.proactiveRecallK = n;
-              await this.plugin.saveSettings();
-            })
-        );
-    }
-
-    new Setting(el)
-      .setName("Observer cadence")
-      .setDesc(
-        "When self-writing memory captures. \"End of turn\" (default) is the behavior above, unchanged. \"Every N tool-call steps\" ALSO flushes a delta capture partway through a long, tool-call-heavy turn — so context isn't lost waiting for it to finish — then the end-of-turn pass only covers whatever's left. Step passes respect the background-AI budget below."
-      )
-      .addDropdown((d) =>
-        d
-          .addOptions({ "session-end": "End of turn", "every-n-steps": "Every N tool-call steps" })
-          .setValue(s.observerCadence)
-          .onChange(async (v) => {
-            s.observerCadence = v as "session-end" | "every-n-steps";
-            await this.plugin.saveSettings();
-            this.display();
-          })
-      );
-
-    if (s.observerCadence === "every-n-steps") {
-      new Setting(el)
-        .setName("Observer step interval")
-        .setDesc("Flush a delta capture every this many tool-call steps within a conversation.")
-        .addText((t) =>
-          t
-            .setPlaceholder("25")
-            .setValue(String(s.observerStepInterval))
-            .onChange(async (v) => {
-              const n = Number.parseInt(v, 10);
-              if (Number.isFinite(n) && n > 0) s.observerStepInterval = n;
-              await this.plugin.saveSettings();
-            })
-        );
-    }
+    renderRecallSettings(this.plugin, el, () => this.display());
 
     new Setting(el)
       .setName("Memory dream pass")

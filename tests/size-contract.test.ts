@@ -112,7 +112,14 @@ const CEILINGS: Record<string, number> = {
   // righe reali.
   // Il tetto resta a 998, non a 983: 15 righe sono il budget dichiarato per
   // il wiring di Exo Collabo dei task 4 e 5, non un permesso di ricrescita.
-  "src/settings.ts": 998,
+  //
+  // Abbassato il 2026-09-24 (lean memory / Sonar search): il toggle "Memory
+  // union store" ha sforato il tetto di 998 (1012 righe reali). Proactive
+  // recall + observer cadence reggevano solo `plugin.settings` e un redraw
+  // callback — stessa proprietà di `settings-cli.ts` — quindi sono diventate
+  // `renderRecallSettings` in `ui/settings-memory.ts`. 1012 -> 946 righe reali.
+  // Il tetto resta a 950, non a 946: 4 righe di margine, come sugli altri file.
+  "src/settings.ts": 950,
   // Aggiunto il 2026-08-12. Questo file era l'UNICO pannello del repo senza
   // tetto, e nell'ondata chat+cosmos e' passato da 859 a 1020 righe senza che
   // niente lo fermasse — mentre lo stesso commit ABBASSAVA quello di main.ts.

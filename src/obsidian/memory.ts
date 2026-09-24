@@ -7,6 +7,7 @@ import {
 } from "../core/agent-self";
 import type { ExoPaths } from "../core/paths";
 import { bootFileHead, type BootHeadOpts } from "../core/boot-content";
+import { stripFrontmatter } from "../core/agents";
 
 const cap = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + "\n…(truncated)" : s);
 
@@ -18,8 +19,9 @@ const MAX_BOOT = 9000;
 const MAX_BOOT_AGENT = 12000;
 /** Cap the rules list so a vault with dozens of rule files stays bounded. */
 const MAX_RULES = 40;
-/** Cap raw ledger bytes read before parsing (bounded cost even for a huge hand-edited file). */
-const MAX_LOOPS_RAW = 20000;
+/** Cap the rules-index note read into the boot section (bounded chars, same idea
+ *  as the other head-slices below). */
+const MAX_RULES_INDEX = 1500;
 /** Cap how many loop lines the boot section lists (bounded count, mirrors MAX_RULES). */
 const MAX_LOOP_ITEMS = 12;
 /** Cap the rendered open-loops section itself (bounded chars, a slice of the overall MAX_BOOT budget). */
@@ -34,6 +36,10 @@ const SESSION_LOG_CHARS_WITH_NOW = 600;
 export interface BootOpts {
   /** Master flag for the identity layer (`agentFolderEnabled`, default OFF). */
   agentFolderEnabled?: boolean;
+  /** Master flag for the Memory Union Store (`memoryStoreEnabled`, default ON).
+   *  OFF → the recent-sessions digest is not read: the session log lives in the
+   *  store the flag turns off, alongside `remember`/`recall`. */
+  memoryStoreEnabled?: boolean;
 }
 
 /**
@@ -55,6 +61,20 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
     if (f instanceof TFile) {
       try {
         return bootFileHead(await app.vault.cachedRead(f), max, headOpts);
+      } catch {
+        /* ignore */
+      }
+    }
+    return "";
+  };
+  // Frontmatter-stripped, UNTRUNCATED — for files that must be parsed whole
+  // before any cap is applied (open loops: a loop past a raw-char cutoff would
+  // never reach the parser, regardless of how few loops the rendered section keeps).
+  const readFull = async (path: string): Promise<string> => {
+    const f = app.vault.getAbstractFileByPath(path);
+    if (f instanceof TFile) {
+      try {
+        return stripFrontmatter(await app.vault.cachedRead(f));
       } catch {
         /* ignore */
       }
@@ -91,23 +111,34 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
   const prefs = await read(paths.preferences, 2500);
   if (prefs) parts.push(`### Preferences\n${prefs}`);
 
-  const rulesPrefix = `${paths.rules}/`;
-  const ruleFiles = app.vault
-    .getMarkdownFiles()
-    .filter((f) => f.path.startsWith(rulesPrefix));
-  const rules = ruleFiles.slice(0, MAX_RULES).map((f) => `- ${f.basename}`);
-  if (ruleFiles.length > MAX_RULES) rules.push(`- …and ${ruleFiles.length - MAX_RULES} more`);
-  if (rules.length) parts.push(`### Active rules (read the file for detail)\n${rules.join("\n")}`);
+  // The index carries the trigger for each rule (when to load it) — a bare file-name
+  // list never does, so the model can't tell which rules apply without reading every
+  // one. Prefer it; fall back to the name list when no index exists.
+  const rulesIndex = await read(`${paths.rules}/_index.md`, MAX_RULES_INDEX);
+  if (rulesIndex) {
+    parts.push(`### Active rules (index — read the file for detail)\n${rulesIndex}`);
+  } else {
+    const rulesPrefix = `${paths.rules}/`;
+    const ruleFiles = app.vault
+      .getMarkdownFiles()
+      .filter((f) => f.path.startsWith(rulesPrefix));
+    const rules = ruleFiles.slice(0, MAX_RULES).map((f) => `- ${f.basename}`);
+    if (ruleFiles.length > MAX_RULES) rules.push(`- …and ${ruleFiles.length - MAX_RULES} more`);
+    if (rules.length) parts.push(`### Active rules (read the file for detail)\n${rules.join("\n")}`);
+  }
 
   // A non-empty `now.md` is a strictly-better "what matters right now" signal than
   // the recent-sessions digest, so we spend fewer chars on the log when it exists.
   const logChars = nowHasSignal ? SESSION_LOG_CHARS_WITH_NOW : SESSION_LOG_CHARS;
-  // The session log is GENERATED: its head is a title plus a "do not edit by hand"
-  // warning, so slice from the first `## ` entry or the section carries zero sessions.
-  const log = await read(paths.sessionLog, logChars, { fromFirstHeading: true });
-  if (log) parts.push(`### Recent sessions (prior sessions — background, NOT the current conversation)\n${log}`);
+  // The session log lives in the Memory Union Store — skip it when the store is off.
+  if (opts.memoryStoreEnabled !== false) {
+    // The session log is GENERATED: its head is a title plus a "do not edit by hand"
+    // warning, so slice from the first `## ` entry or the section carries zero sessions.
+    const log = await read(paths.sessionLog, logChars, { fromFirstHeading: true });
+    if (log) parts.push(`### Recent sessions (prior sessions — background, NOT the current conversation)\n${log}`);
+  }
 
-  const loopsRaw = await read(paths.openLoops, MAX_LOOPS_RAW);
+  const loopsRaw = await readFull(paths.openLoops);
   if (loopsRaw) {
     const entries: LoopEntry[] = parseLoopsFile(loopsRaw);
     const due = dueLoops(entries);
@@ -134,7 +165,7 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
       // Identity FIRST when present — it's the arbitration-winning frame (design §4).
       ...(identity ? [identity] : []),
       "## Vault memory — you are Exo, embedded in this Obsidian vault.",
-      "Honor these conventions: prefer the `mcp__obsidian__*` tools for vault operations (they respect links/tags/frontmatter); follow the tag system (#type/*, #status/*, #domain/*) and the object schema; use [[wikilinks]] for internal references; never create files at the vault root.",
+      "Honor these conventions: prefer the `mcp__obsidian__*` tools for vault operations (they respect links/tags/frontmatter); follow the tag system (#type/*, #domain/*), track status via the `status:` frontmatter property, and the object schema; use [[wikilinks]] for internal references; never create files at the vault root.",
       "Precedence: the sections below (especially `Recent sessions`) are BACKGROUND from prior sessions. The conversation you are in right now is authoritative — when the user says 'continue', refers to 'the proposed/other things', 'as above', or otherwise points back, resolve it from the CURRENT conversation's own history, never from a prior session's topic.",
       ...parts,
     ].join("\n\n"),

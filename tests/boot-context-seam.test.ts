@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readBootContext } from "../src/obsidian/memory";
 import { IDENTITY_ARBITRATION_LINE } from "../src/core/agent-self";
 import { exoPaths } from "../src/core/paths";
+import { formatLoop, type LoopEntry } from "../src/core/open-loops";
 
 // The fake vault is keyed on `_system/…`, so drive the boot fn with the legacy root.
 const P = exoPaths("_system");
@@ -136,5 +137,65 @@ describe("readBootContext — flag ON with a populated folder", () => {
     });
     const out = await readBootContext(app, P, { agentFolderEnabled: true });
     expect(out.match(/L+/)?.[0].length ?? 0).toBe(1000);
+  });
+});
+
+describe("readBootContext — memoryStoreEnabled OFF", () => {
+  it("drops the recent-sessions digest (the session log lives in the union store)", async () => {
+    const app = makeApp(BASE_FILES);
+    const on = await readBootContext(app, P, { memoryStoreEnabled: true });
+    const off = await readBootContext(app, P, { memoryStoreEnabled: false });
+    expect(on).toContain("### Recent sessions");
+    expect(off).not.toContain("### Recent sessions");
+  });
+
+  it("absent memoryStoreEnabled defaults to ON (byte-identical to explicit true)", async () => {
+    const app = makeApp(BASE_FILES);
+    const withDefault = await readBootContext(app, P);
+    const explicitOn = await readBootContext(app, P, { memoryStoreEnabled: true });
+    expect(withDefault).toBe(explicitOn);
+  });
+});
+
+describe("readBootContext — open loops past a raw-char cutoff", () => {
+  it("a loop placed after 20k chars of ledger content still reaches the boot section", async () => {
+    const lateLoop: LoopEntry = {
+      id: "loop-1720000000000",
+      title: "Late loop past the old raw cap",
+      note: "opened way past where the old MAX_LOOPS_RAW cap used to cut the raw read off",
+      openedAt: 1720000000000,
+      status: "open",
+    };
+    // Padding as junk lines between blocks (tolerated by parseLoopsFile) so the
+    // loop block itself starts well past the old 20000-char raw cutoff.
+    const padding = "junk line, not a loop block\n".repeat(1000); // ~29000 chars
+    expect(padding.length).toBeGreaterThan(20000);
+    const app = makeApp({
+      ...BASE_FILES,
+      "_system/memory/open-loops.md": { content: padding + formatLoop(lateLoop) },
+    });
+    const out = await readBootContext(app, P);
+    expect(out).toContain("Late loop past the old raw cap");
+  });
+});
+
+describe("readBootContext — rules section prefers the index", () => {
+  it("uses _index.md content when it exists, instead of the bare file-name list", async () => {
+    const app = makeApp({
+      ...BASE_FILES,
+      "_system/memory/rules/_index.md": { content: "| Task | Rule |\n|---|---|\n| Research | rule-research-protocol |" },
+    });
+    const out = await readBootContext(app, P);
+    expect(out).toContain("### Active rules");
+    expect(out).toContain("rule-research-protocol |");
+    // The bare file-name entry from BASE_FILES must not appear as a `- name` list item.
+    expect(out).not.toContain("- rule-verify-mario-bio");
+  });
+
+  it("falls back to the file-name list when no _index.md exists", async () => {
+    const app = makeApp(BASE_FILES); // no _index.md in BASE_FILES
+    const out = await readBootContext(app, P);
+    expect(out).toContain("### Active rules");
+    expect(out).toContain("- rule-verify-mario-bio");
   });
 });

@@ -147,12 +147,12 @@ export function previewFromMessages(
 
 export interface HealthInput {
   inboxCount: number;
-  /** Age of the vault-context note in days; null = file missing/unreadable. */
+  /** Age of the state note (NOW.md, else vault-context) in days; null = file missing/unreadable. */
   contextAgeDays: number | null;
   lastReport: { path: string; name: string; mtime: number } | null;
   now: number;
-  /** Vault-context note path (`paths.vaultContext`) — named in the stale-context
-   *  prompt. Absent → the legacy location (test/fallback). */
+  /** Path of the state note whose age is measured — named in the stale-state
+   *  row and prompt. Absent → the legacy vault-context location (test/fallback). */
   vaultContextPath?: string;
 }
 
@@ -169,12 +169,13 @@ export function healthRows(h: HealthInput): CockpitRow[] {
     });
   }
   if (h.contextAgeDays != null && h.contextAgeDays > 7) {
+    const path = h.vaultContextPath ?? exoPaths(LEGACY_MEMORY_ROOT).vaultContext;
     rows.push({
-      label: "vault-context.md stale",
+      label: `${path.split("/").pop()} stale`,
       badge: `${Math.floor(h.contextAgeDays)}d`,
       action: {
         kind: "ask",
-        arg: `Rinfreschiamo ${h.vaultContextPath ?? exoPaths(LEGACY_MEMORY_ROOT).vaultContext} — è stale. Rileggi lo stato attuale del vault e proponi gli aggiornamenti alla sezione dinamica.`,
+        arg: `Rinfreschiamo ${path}: è stale. Rileggi lo stato attuale e proponi gli aggiornamenti.`,
       },
     });
   }
