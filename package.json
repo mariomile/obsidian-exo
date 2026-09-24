@@ -1,13 +1,13 @@
 {
 	"name": "obsidian-exo-agent",
-	"version": "0.37.0",
+	"version": "0.37.1",
 	"packageManager": "pnpm@10.17.1",
 	"description": "Exo Agent: an agentic AI assistant in your Obsidian sidebar, powered by the Claude or Codex CLI, with a custom theme-aware chat UI.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
-		"build": "bash scripts/contract.sh && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"contract": "bash scripts/contract.sh",
+		"build": "node scripts/contract.mjs && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"contract": "node scripts/contract.mjs",
 		"release:check": "pnpm lint && pnpm lint:obsidian && pnpm test && pnpm build",
 		"typecheck": "tsc -noEmit -skipLibCheck",
 		"lint": "eslint src tests",

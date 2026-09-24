@@ -9,7 +9,7 @@ pnpm lint      # eslint clean
 pnpm lint:obsidian  # the Obsidian review bot's rule set (eslint-plugin-obsidianmd)
 pnpm test      # vitest — all unit tests green (pure core/ logic)
 pnpm smoke     # live contract test — see below
-pnpm build     # tsc typecheck + esbuild production bundle
+pnpm build     # contract ratchet (node) + tsc typecheck + esbuild production bundle
 ```
 
 ## `pnpm smoke` — what it is

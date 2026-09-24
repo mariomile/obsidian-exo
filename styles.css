@@ -4706,17 +4706,17 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 
 /* Honor the OS "reduce motion" setting. */
 @media (prefers-reduced-motion: reduce) {
-  .mva-root *,
-  .mva-root *::before,
-  .mva-root *::after,
-  /* Exo's two surfaces that render OUTSIDE .mva-root — the settings tab strip
-     lives in Obsidian's settings modal, the mention popover is body-anchored —
-     so the blanket above never reaches them. */
-  .mva-settings-tab,
-  .exo-mention-popover {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+  /* #mva-never matches nothing: in :is() it lends id specificity, no !important needed. */
+  :is(.mva-root, #mva-never) *,
+  :is(.mva-root, #mva-never) *::before,
+  :is(.mva-root, #mva-never) *::after,
+  /* Surfaces outside .mva-root (settings tab strip in Obsidian's settings
+     modal, body-anchored mention popover), which the blanket never reaches. */
+  :is(.mva-settings-tab, #mva-never),
+  :is(.exo-mention-popover, #mva-never) {
+    animation-duration: 0.001ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.001ms;
   }
   /* The identity glow collapses to nothing here, not just to "still". A frozen
      glow is still a glow, and reduced motion is a request for less light on the
@@ -5129,11 +5129,11 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   }
 }
 
-/* Preserve a visible keyboard focus indicator. */
-:is([class^="mva-"], [class*=" mva-"]) :is(button, .clickable-icon, [role="button"]):focus-visible {
-  outline: 2px solid var(--interactive-accent) !important;
+/* Keep a visible keyboard focus ring (#mva-never: id specificity beats core/theme outline: none). */
+:is([class^="mva-"], [class*=" mva-"], #mva-never) :is(button, .clickable-icon, [role="button"]):focus-visible {
+  outline: 2px solid var(--interactive-accent);
   outline-offset: 2px;
-  box-shadow: none !important;
+  box-shadow: none;
 }
 
 /* ------------------------- settings: tabbed panes -------------------------
