@@ -88,18 +88,16 @@ import type { AgentDef } from "./core/agents";
 import { AgentTriggerDriver, makeNoteReader, todayDailyNotePath } from "./obsidian/agent-triggers";
 import { extractJournalLine, journalLine } from "./core/agent-journal";
 import { agentRunId } from "./core/agent-ledger";
-import { parseProposalCandidates } from "./core/proposals";
 import {
   agentLastRunKey,
   agentRunName,
   type DueAgentRun,
+  automationRunPrompt,
   buildAgentRunPrompt,
   buildDirectAgentRunPrompt,
   buildAgentSystemPrompt,
   dueScheduledAgentRuns,
-  extractProposalBlock,
   isEmptyRun,
-  salvageProposalCandidates,
   gateAgentInvoke,
   gateAgentRun,
   writeModeFor,
@@ -128,6 +126,7 @@ import {
 } from "./obsidian/daily-pulse";
 import {
   produceTurnProposals,
+  collectRunProposals,
   type ProposalProducerResult,
   type ProposalTurnInput,
 } from "./obsidian/proposal-producer";
@@ -2259,11 +2258,17 @@ export default class ExoPlugin extends Plugin {
   }
 
   /** Run one playbook headlessly and write its report. Write-enabled runs also
-   *  persist a restorable run record (files touched + pre-write snapshots). */
-  async runPlaybook(name: string, prompt: string, opts: { write?: boolean; slug?: string } = {}): Promise<boolean> {
+   *  persist a restorable run record (files touched + pre-write snapshots).
+   *  Returns the raw output alongside `ok`: a prompt-only `propose`
+   *  automation needs it to pull any fenced proposal block out of the run. */
+  async runPlaybook(
+    name: string,
+    prompt: string,
+    opts: { write?: boolean; slug?: string } = {}
+  ): Promise<{ ok: boolean; output: string }> {
     if (/\{\{\s*[\w-]+\s*\}\}/.test(prompt)) {
       new Notice(`"${name}" has {{variables}} — run it from the composer instead.`);
-      return false;
+      return { ok: false, output: "" };
     }
     const startedAt = Date.now();
     new Notice(`Running playbook "${name}"…`);
@@ -2298,7 +2303,7 @@ export default class ExoPlugin extends Plugin {
         /* notifications unavailable — Notice above already covered it */
       }
     }
-    return result.ok;
+    return { ok: result.ok, output: result.output };
   }
 
   /** Run any scheduled playbooks that are due (off by default — empty list). */
@@ -2900,9 +2905,7 @@ export default class ExoPlugin extends Plugin {
     }
     this.agentRunsInFlight.add(key);
     try {
-      const ok = await this.runPlaybook(a.name, a.prompt, { write: a.mode === "act", slug: a.slug });
-      if (ok) await this.stampAutomationRun(a);
-      return ok;
+      return await this.runPromptOnlyAutomation(a);
     } finally {
       this.agentRunsInFlight.delete(key);
     }
@@ -2941,8 +2944,7 @@ export default class ExoPlugin extends Plugin {
       // Prompt-only automation → the proven playbook executor.
       this.agentRunsInFlight.add(run.runKey);
       try {
-        const ok = await this.runPlaybook(automation.name, automation.prompt, { write: automation.mode === "act", slug: automation.slug });
-        if (ok) await this.stampAutomationRun(automation);
+        await this.runPromptOnlyAutomation(automation);
       } catch (err) {
         console.warn(`[Exo] automation "${automation.name}" failed:`, err);
       } finally {
@@ -2951,6 +2953,25 @@ export default class ExoPlugin extends Plugin {
       return;
     }
     await this.runAgent(run.agent, run.reason, run.runKey);
+  }
+
+  /**
+   * Run a prompt-only automation through the playbook executor: the shared
+   * body for both manual "Run now" and the scheduled path, so the two can't
+   * drift the way they did before. A `propose` automation with no `agent:`
+   * field never got the proposal contract appended to its prompt, and its
+   * fenced block (if it emitted one anyway) was never extracted. Findings
+   * landed as prose in the report and nothing reached the proposals inbox.
+   * Mirrors what `runAgent` already does for agent-backed `propose` runs.
+   */
+  private async runPromptOnlyAutomation(a: Automation): Promise<boolean> {
+    const proposeEligible = a.mode === "propose" && this.settings.proposalKernelEnabled;
+    const prompt = automationRunPrompt(a.prompt, proposeEligible, this.paths.reports);
+    const startedAt = Date.now();
+    const { ok, output } = await this.runPlaybook(a.name, prompt, { write: a.mode === "act", slug: a.slug });
+    await this.collectAutomationProposals(a, output, startedAt, proposeEligible);
+    if (ok) await this.stampAutomationRun(a);
+    return ok;
   }
 
   /* ------------------------------ agent runs ----------------------------- */
@@ -3117,42 +3138,48 @@ export default class ExoPlugin extends Plugin {
    * validated, deduplicated, inert channel as every other producer. The kernel
    * still disposes; the agent only proposes.
    *
-   * Returns how many landed. Never throws: a malformed block costs the
-   * proposals, not the run that already did the work.
+   * The extraction/validation/persistence itself lives in `collectRunProposals`
+   * (obsidian/proposal-producer.ts), shared with `collectAutomationProposals`
+   * below: an agent-backed run and a prompt-only automation produce the same
+   * fenced block, so both feed it through the same path.
    */
   private async collectAgentProposals(agent: AgentDef, output: string, startedAt: number): Promise<number> {
-    if (agent.contract.autonomy !== "propose" || !this.settings.proposalKernelEnabled) return 0;
-    const block = extractProposalBlock(output ?? "");
-    if (!block) return 0;
+    const eligible = agent.contract.autonomy === "propose" && this.settings.proposalKernelEnabled;
+    return collectRunProposals(
+      output,
+      eligible,
+      {
+        convoId: `agent:${agent.brain.slug}`,
+        turnId: agentRunId(agent.brain.slug, startedAt),
+        createdAt: startedAt,
+      },
+      agent.brain.slug,
+      { store: this.proposalStore, diagnostic: (msg, err) => this.diag.push("agents", err ? `${msg}: ${err}` : msg) }
+    );
+  }
 
-    // Whole-block first; on rejection, salvage the valid entries. Observed on
-    // the first real run: two proposals, the second missing `rationale`, and
-    // all-or-nothing threw away both.
-    const parsed = parseProposalCandidates(block);
-    const candidates = parsed.status === "ok" ? parsed.value : salvageProposalCandidates(block);
-    if (parsed.status !== "ok") {
-      this.diag.push(
-        "agents",
-        `"${agent.brain.slug}" proposal block partly invalid — salvaged ${candidates.length}: ${JSON.stringify(parsed.errors ?? parsed.status)}`
-      );
-    }
-    if (!candidates.length) return 0;
-
-    const source = {
-      convoId: `agent:${agent.brain.slug}`,
-      turnId: agentRunId(agent.brain.slug, startedAt),
-      createdAt: startedAt,
-    };
-    let landed = 0;
-    for (const candidate of candidates) {
-      try {
-        const res = await this.proposalStore.append(candidate, source);
-        if (res.status === "appended") landed++;
-      } catch (err) {
-        console.warn(`[Exo] proposal append failed for "${agent.brain.slug}":`, err);
-      }
-    }
-    return landed;
+  /** Same as `collectAgentProposals`, for a prompt-only automation: the path
+   *  `runPromptOnlyAutomation` uses so a `propose` automation's fenced block
+   *  reaches the inbox the same way an agent-backed run's does. `eligible` is
+   *  passed in rather than recomputed so the prompt built with the contract
+   *  and the output collected from it always agree. */
+  private async collectAutomationProposals(
+    a: Automation,
+    output: string,
+    startedAt: number,
+    eligible: boolean
+  ): Promise<number> {
+    return collectRunProposals(
+      output,
+      eligible,
+      {
+        convoId: `automation:${a.slug}`,
+        turnId: agentRunId(a.slug, startedAt),
+        createdAt: startedAt,
+      },
+      a.slug,
+      { store: this.proposalStore, diagnostic: (msg, err) => this.diag.push("automations", err ? `${msg}: ${err}` : msg) }
+    );
   }
 
   /**

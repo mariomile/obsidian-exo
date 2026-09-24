@@ -302,6 +302,22 @@ export function proposalContract(memoryRootHint: string): string {
 }
 
 /**
+ * The prompt a prompt-only automation's run actually gets: unchanged in
+ * `report`/`act` mode, and with the same fenced-block contract an
+ * agent-backed `propose` run gets (see `agentRunBody` below) appended when
+ * the automation is `propose` and the kernel is on.
+ *
+ * Prompt-only automations (no `agent:` field) skip `agentRunBody` entirely:
+ * they go straight to the playbook executor with their raw prompt, so
+ * without this, a `propose` automation never received the contract and had
+ * nothing to extract from its output. This is the one place both the manual
+ * "Run now" and the scheduled path build that prompt, so they can't drift.
+ */
+export function automationRunPrompt(prompt: string, proposeEligible: boolean, reportsHint: string): string {
+  return proposeEligible ? [prompt, proposalContract(reportsHint)].join("\n") : prompt;
+}
+
+/**
  * Salvage the valid entries from a block the kernel rejected wholesale.
  *
  * `parseProposalCandidates` is all-or-nothing, which is right for its own
