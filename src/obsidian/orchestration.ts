@@ -74,7 +74,7 @@ export class OrchestrationRuntime {
   private ledgerWatch: LedgerWatch | null = null;
   private unwatchLedger: Unsubscribe | null = null;
   private unHostSignal: Unsubscribe | null = null;
-  private hostPoll: ReturnType<typeof setInterval> | null = null;
+  private hostPoll: number | null = null;
   private loadWarnings: string[] = [];
   private tasks: TaskEntry[] = [];
   private readonly listeners = new Set<TasksListener>();
@@ -124,8 +124,8 @@ export class OrchestrationRuntime {
     // route into this watch, so the modify events its own persistence causes
     // aren't mistaken for somebody else's edit.
     this.ledgerWatch = new LedgerWatch({
-      schedule: (fn, ms) => setTimeout(fn, ms) as unknown as number,
-      cancel: (id) => clearTimeout(id),
+      schedule: (fn, ms) => window.setTimeout(fn, ms),
+      cancel: (id) => window.clearTimeout(id),
       now: () => Date.now(),
       onExternalChange: () => void this.reloadIfLedgerChanged(),
     });
@@ -279,7 +279,7 @@ export class OrchestrationRuntime {
   private armHostWatch(): void {
     if (this.unHostSignal || this.hostPoll !== null) return;
     this.unHostSignal = this.deps.onHostSignal(() => this.retryIfHostAvailable());
-    this.hostPoll = setInterval(() => this.retryIfHostAvailable(), HOST_RETRY_MS);
+    this.hostPoll = window.setInterval(() => this.retryIfHostAvailable(), HOST_RETRY_MS);
   }
 
   private retryIfHostAvailable(): void {
@@ -296,7 +296,7 @@ export class OrchestrationRuntime {
     this.unHostSignal?.();
     this.unHostSignal = null;
     if (this.hostPoll !== null) {
-      clearInterval(this.hostPoll);
+      window.clearInterval(this.hostPoll);
       this.hostPoll = null;
     }
   }

@@ -154,18 +154,14 @@ describe('mv-kit style contract', () => {
   it('caps !important declarations at the post-mv-kit-audit count (ratchet down only)', () => {
     const importantCount = (css.match(/!important;/g) ?? []).length;
     // Ceiling set EXACTLY at the post-audit count in styles.css
-    // (`grep -c '!important' styles.css` → 6 at the time of writing).
+    // (`grep -c '!important' styles.css` → 5 at the time of writing).
     // RATCHET DOWN ONLY: any edit that adds an `!important` without removing
     // one fails this test. Removing one and lowering this number is always
     // welcome; raising it requires a new audit verdict, not a bump.
     //
-    // Each of the 6 survivors, with the docs/2026-07-mv-kit-audit.md verdict:
-    //  - styles.css:1466 `opacity: 1 !important` (.mva-doc-x:hover) — waived,
-    //    justified. `.mva-doc-card:hover .mva-doc-x { opacity: .7 }` is a more
-    //    specific selector that always co-matches (the pointer is necessarily
-    //    over the card while over the ×), so `!important` is the only way the
-    //    hover-over-the-× state reaches full opacity without a selector rewrite
-    //    for zero behavioural gain.
+    // Each of the 5 survivors, with the docs/2026-07-mv-kit-audit.md verdict
+    // (the sixth, `.mva-doc-x:hover` opacity, became a selector rewrite for
+    // the Obsidian plugin review, 2026-09):
     //  - styles.css:3669 `animation-duration: 0.001ms !important` — pass,
     //    expected. Inside the blanket `prefers-reduced-motion` block;
     //    accessibility overrides are the canonical sanctioned use, and without
@@ -184,7 +180,7 @@ describe('mv-kit style contract', () => {
     //  - styles.css:4066 `box-shadow: none !important` — waived, justified.
     //    Companion to 4064: themes that replace the outline with a glow
     //    box-shadow would otherwise stack a second ring on top of Exo's.
-    expect(importantCount).toBeLessThanOrEqual(6);
+    expect(importantCount).toBeLessThanOrEqual(5);
   });
 
   // ---- §6 "Elevation & motion depth" (2026-07 dinamica wave) --------------

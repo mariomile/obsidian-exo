@@ -65,7 +65,9 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 
 ## Privacy & Security
 
-**Network use.** Exo itself makes no network requests and sends no telemetry — it collects no data and does not phone home to the plugin author or anyone else. What Exo *does* is spawn the **`claude`** and/or **`codex`** CLI that you already have installed and authenticated on your machine, as a local child process (this is why the plugin is desktop-only — see `isDesktopOnly` in `manifest.json`). Those CLIs are the ones that talk to the network: `claude` calls Anthropic's API, `codex` calls OpenAI's API, each using **your own existing CLI login / API key** — never a key or account belonging to Exo or its author.
+**Network use.** Exo sends no telemetry and never phones home to the plugin author. The model traffic comes from the **`claude`** and/or **`codex`** CLI you already have installed and signed in on your machine, which Exo spawns as a local child process (this is why the plugin is desktop-only; see `isDesktopOnly` in `manifest.json`): `claude` calls Anthropic's API, `codex` calls OpenAI's API, each with **your own CLI login / API key**, never a key or account belonging to Exo or its author. Exo itself makes exactly two kinds of request, both through Obsidian's `requestUrl`:
+- **CLI update check**: at most once a day, a GET to `https://registry.npmjs.org/@anthropic-ai/claude-code/latest` to read the latest published version number. Nothing about you or your vault is sent.
+- **Exo Collabo** (opt-in, off until you set a service URL and API key in settings): when you run the share/import commands or the agent uses the collabo tools, the note you chose is sent to the service URL *you* configured.
 
 **What leaves your machine, and to whom.** When you send a message, the prompt text plus whatever context Exo attaches (the active note, `@`-mentioned files/folders, tool results, and — if you enable the Obsidian-native layer — your memory folder's content) is passed to the CLI process, which forwards it to Anthropic (Claude) or OpenAI (Codex) as part of your own authenticated session with them. That data goes only to the provider you're using, governed by your own account/agreement with them — **nothing is sent to, or visible to, the Exo author.**
 
@@ -75,7 +77,15 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 - **Claude backend** — Exo's permission system surfaces each tool call (Read/Write/Edit/Bash/etc.) as a card before it runs; sensitive actions (Edit, Write, unlisted Bash commands) require **Allow once / Always allow / Deny**, with a per-session allowlist and auto-allow limited to read-only tools. You control the permission mode (e.g. more/less restrictive) from the composer.
 - **Codex backend** — persistent streaming turns, Stop/steer/native compact, sandbox controls, and per-action command/file approvals routed through Exo's permission UI.
 
-In short: Exo is a thin, local UI over CLIs you already trust and are already signed into — it adds no new network surface of its own, but it does give the agent read/write access to your vault, scoped by the permission/sandbox settings above.
+**What the plugin touches outside the Obsidian API** (the capabilities Obsidian's automated review flags, and why each exists):
+- **Shell execution (`child_process`)**: spawning the `claude` / `codex` CLIs is the whole plugin. It also runs `node --version` / `<cli> --version` to find the binaries, `npm install -g @anthropic-ai/claude-code` or `claude update` when you click *Update now*, `claude mcp login/logout` from the Connections pane, and `node chat-recall.mjs` for the optional semantic chat search.
+- **Filesystem outside the vault (`fs`)**: reads the CLI install locations to resolve binaries; reads `~/.claude/` (skills, agents, MCP config, session transcripts) for the Skills/Connections panes and resume checks, and deletes a chat's CLI transcript there only when you free that chat; reads `~/.claude-mem/` if you use claude-mem; writes two helper scripts (`codex-bridge.mjs`, `chat-recall.mjs`) into the plugin's own folder.
+- **Environment variables**: the spawned CLIs inherit your environment with an augmented `PATH` (GUI apps don't get your login shell's `PATH`), and `$SHELL` is used to locate them. Nothing is read to identify you or your machine, and nothing leaves it.
+- **Vault enumeration**: `@`-mentions, the daily pulse, agent triggers and the agent's vault tools (search, backlinks, tags) list vault files. The list stays on your machine unless a prompt sends a file's content to your provider, as described above.
+- **Clipboard**: *Copy* buttons write to it; *Import a document from Collabo* reads a pasted share link from it, only when you run that command.
+- **Dynamic code (`new Function`)**: not Exo's code. It's a one-line feature probe (`new Function("")`) in the zod validator vendored inside the bundled Claude Agent SDK, which checks whether it may JIT-compile schemas.
+
+In short: Exo is a thin, local UI over CLIs you already trust and are already signed into. Beyond the daily version check and the opt-in Collabo service it adds no network surface of its own, but it does give the agent read/write access to your vault, scoped by the permission/sandbox settings above.
 
 ## Install
 

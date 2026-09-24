@@ -146,27 +146,28 @@ class ClaudeSession implements AgentSession {
    *  utility session's `dispose()`. `null` until a `result` with `usage` arrives. */
   private lastResultUsage: { inputTokens: number; outputTokens: number } | null = null;
 
+  /** The streaming-input side of the query: yields queued user messages,
+   *  parking on `wake` while the queue is empty, until disposed. */
+  private async *input(): AsyncGenerator<{
+    type: "user";
+    message: { role: "user"; content: UserContent };
+    parent_tool_use_id: null;
+    priority?: "now" | "next" | "later";
+  }> {
+    while (!this.disposed) {
+      if (this.queue.length === 0) {
+        await new Promise<void>((r) => (this.wake = r));
+        if (this.disposed) return;
+      }
+      // Split the SDK-visible message from Exo's private `priority` marker so
+      // the marker never leaks into MessageParam.
+      const { priority, ...message } = this.queue.shift()!;
+      yield { type: "user", message, parent_tool_use_id: null, ...(priority ? { priority } : {}) };
+    }
+  }
+
   constructor(opts: SessionOpts) {
     this.sessionId = opts.resumeSessionId;
-    const self = this;
-    async function* input(): AsyncGenerator<{
-      type: "user";
-      message: { role: "user"; content: UserContent };
-      parent_tool_use_id: null;
-      priority?: "now" | "next" | "later";
-    }> {
-      while (!self.disposed) {
-        if (self.queue.length === 0) {
-          await new Promise<void>((r) => (self.wake = r));
-          if (self.disposed) return;
-        }
-        // Split the SDK-visible message from Exo's private `priority` marker so
-        // the marker never leaks into MessageParam.
-        const { priority, ...message } = self.queue.shift()!;
-        yield { type: "user", message, parent_tool_use_id: null, ...(priority ? { priority } : {}) };
-      }
-    }
-
     this.q = query({
       // The generator yields structurally-valid SDKUserMessages, but our internal
       // UserContent (`Array<Record<string, unknown>>`, built in send() where image
@@ -174,7 +175,7 @@ class ClaudeSession implements AgentSession {
       // strict `MessageParam.content` (`ContentBlockParam[]` with a media-type
       // union) — so it's a downcast to the streaming-input type the SDK expects,
       // not `any`.
-      prompt: input() as AsyncIterable<SDKUserMessage>,
+      prompt: this.input() as AsyncIterable<SDKUserMessage>,
       options: {
         cwd: opts.cwd,
         // Load filesystem settings (CLAUDE.md + .claude/settings.json) explicitly —
@@ -596,8 +597,7 @@ class ClaudeSession implements AgentSession {
   setPermissionMode(mode: import("./types").PermissionMode): void {
     if (this.disposed) return;
     try {
-      const p = this.q.setPermissionMode?.(mode);
-      if (p && typeof p.catch === "function") p.catch(() => {});
+      void Promise.resolve(this.q.setPermissionMode?.(mode)).catch(() => {});
     } catch {
       /* ignore */
     }
@@ -627,8 +627,7 @@ class ClaudeSession implements AgentSession {
   private safeInterrupt(): void {
     this.interruptRequested = true;
     try {
-      const p = this.q.interrupt?.();
-      if (p && typeof p.catch === "function") p.catch(() => {});
+      void Promise.resolve(this.q.interrupt?.()).catch(() => {});
     } catch {
       /* ignore */
     }

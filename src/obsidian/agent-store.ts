@@ -12,7 +12,7 @@
  * join, scaffold and conflict logic is unit-testable against in-memory fakes
  * without a real Obsidian `App`.
  */
-import type { App, TFile } from "obsidian";
+import { TFile, type App } from "obsidian";
 import { readFile } from "fs/promises";
 import {
   formatDuration,
@@ -82,7 +82,7 @@ export function adaptAppToAgentVault(app: App): AgentVaultAdapter {
       const file = app.vault.getAbstractFileByPath(path);
       // Prefer the Vault API over the adapter so Obsidian's cache, Sync and
       // the plugin's own file watchers all see the change.
-      if (file) await app.vault.modify(file as TFile, content);
+      if (file instanceof TFile) await app.vault.modify(file, content);
       else await app.vault.create(path, content);
     },
     exists: (path) => app.vault.adapter.exists(path),

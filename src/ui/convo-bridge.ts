@@ -15,7 +15,7 @@ export function chatView(app: App): ChatView | null {
   // it and report null for now: the caller's next tick finds it. Without this
   // the chats sidebar sits on "Open Exo to see your chats" while a fully
   // populated conversation store is one deferred view away.
-  (leaf as unknown as { loadIfDeferred?: () => Promise<void> }).loadIfDeferred?.();
+  void (leaf as unknown as { loadIfDeferred?: () => Promise<void> }).loadIfDeferred?.();
   return null;
 }
 

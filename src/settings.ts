@@ -385,7 +385,7 @@ export class MVASettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
         t.inputEl.rows = 4;
-        t.inputEl.style.fontFamily = "var(--font-monospace)";
+        t.inputEl.addClass("mva-mono-input");
       });
 
     new Setting(el)
@@ -399,7 +399,7 @@ export class MVASettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
         t.inputEl.rows = 4;
-        t.inputEl.style.fontFamily = "var(--font-monospace)";
+        t.inputEl.addClass("mva-mono-input");
       });
 
     this.toggleSetting(
@@ -964,13 +964,12 @@ export class MVASettingTab extends PluginSettingTab {
     // exotic configs (or a broken file) still have a direct path.
     const details = root.createEl("details");
     details.createEl("summary", { text: "Advanced: edit raw .mcp.json", cls: "setting-item-description" });
-    const status = details.createEl("div", { cls: "setting-item-description" });
+    const status = details.createDiv({ cls: "setting-item-description" });
     const area = new Setting(details).setName(".mcp.json").setDesc("Must be valid JSON with an mcpServers key.");
     area.addTextArea((t) => {
       t.setValue(raw);
       t.inputEl.rows = 10;
-      t.inputEl.style.width = "100%";
-      t.inputEl.style.fontFamily = "var(--font-monospace)";
+      t.inputEl.addClass("mva-mono-input", "mva-full-width");
       area.addButton((b) =>
         b
           .setButtonText("Save")
@@ -980,7 +979,7 @@ export class MVASettingTab extends PluginSettingTab {
             const check = parseMcpJson(next);
             if (check.error) {
               status.setText(check.error);
-              status.style.color = "var(--text-error)";
+              status.addClass("mod-error");
               return;
             }
             await adapter.write(path, next);

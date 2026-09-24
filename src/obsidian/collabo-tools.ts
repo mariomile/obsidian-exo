@@ -9,7 +9,6 @@
  */
 import { z } from "zod";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
-import type { SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import type { App } from "obsidian";
 import { ok, err, getExo } from "./tool-kit";
 import { obsidianHttp } from "./collabo-http";
@@ -21,6 +20,7 @@ import {
   ackEvents,
   type CollaboConfig,
 } from "../core/collab-bridge";
+import type { AnyTool } from "./sdk-tool";
 
 /** Idempotency keys derived from the operation's own content, not the clock.
  *  A tool-loop retry (the model times out waiting for a result and calls the
@@ -96,7 +96,7 @@ async function run(fn: () => Promise<ReturnType<typeof ok>>): Promise<ReturnType
   }
 }
 
-export function buildCollaboTools(bridge: CollaboToolBridge): SdkMcpToolDefinition<any>[] {
+export function buildCollaboTools(bridge: CollaboToolBridge): AnyTool[] {
   const listShares = tool(
     "collabo_list_shares",
     "List the notes connected to Exo Collabo, with the slug, role and whether each one is yours or was received from someone else. Start here: every other collabo tool needs a slug.",

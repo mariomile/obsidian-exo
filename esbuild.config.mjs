@@ -1,6 +1,6 @@
 import esbuild from "esbuild";
 import process from "process";
-import builtins from "builtin-modules";
+import { builtinModules } from "node:module";
 import { existsSync, readFileSync, copyFileSync, mkdirSync } from "fs";
 import { join } from "path";
 
@@ -31,11 +31,6 @@ const deployPlugin = {
         mkdirSync(deployDir, { recursive: true });
         for (const f of ["main.js", "manifest.json", "styles.css"]) {
           if (existsSync(f)) copyFileSync(f, join(deployDir, f));
-        }
-        // Semantic chat recall runs OUT of process (see ui/chat-recall.ts), so
-        // its script ships beside the bundle rather than inside it.
-        if (existsSync("scripts/chat-recall.mjs")) {
-          copyFileSync("scripts/chat-recall.mjs", join(deployDir, "chat-recall.mjs"));
         }
         console.log(`[deploy] copied to ${deployDir}`);
       } catch (e) {
@@ -71,6 +66,27 @@ const sdkSafeTimers = {
   },
 };
 
+// `import text from "./file?raw"` inlines the file as a string. Used for the
+// chat-recall script: it runs out of process, but Obsidian only installs
+// main.js/manifest.json/styles.css, so it has to travel inside the bundle.
+const rawText = {
+  name: "raw-text",
+  setup(build) {
+    build.onResolve({ filter: /\?raw$/ }, (args) => ({
+      path: join(args.resolveDir, args.path.slice(0, -"?raw".length)),
+      namespace: "raw-text",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "raw-text" }, (args) => ({
+      contents: readFileSync(args.path, "utf8"),
+      loader: "text",
+    }));
+  },
+};
+
+// Node lists prefix-only builtins (node:test, node:sqlite…) already prefixed.
+const builtins = builtinModules.filter((m) => !m.startsWith("node:"));
+const prefixOnly = builtinModules.filter((m) => m.startsWith("node:"));
+
 const ctx = await esbuild.context({
   entryPoints: ["src/main.ts"],
   bundle: true,
@@ -91,6 +107,7 @@ const ctx = await esbuild.context({
     ...builtins,
     // The Claude Agent SDK imports builtins with the `node:` prefix.
     ...builtins.map((m) => `node:${m}`),
+    ...prefixOnly,
   ],
   format: "cjs",
   target: "es2021",
@@ -118,7 +135,7 @@ const ctx = await esbuild.context({
   treeShaking: true,
   outfile: "main.js",
   minify: prod,
-  plugins: [sdkSafeTimers, deployPlugin],
+  plugins: [rawText, sdkSafeTimers, deployPlugin],
 });
 
 if (prod) {

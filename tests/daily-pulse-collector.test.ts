@@ -123,7 +123,7 @@ describe("collectDailyPulseInput", () => {
         dailyBudget: 10_000,
         ledger: { dateUTC: "2026-07-20", tokensUsed: 3_250 },
       }),
-    }), { now: NOW, lastPulseAt: LAST_PULSE_AT });
+    }), { now: NOW, lastPulseAt: LAST_PULSE_AT, configDir: ".obsidian" });
 
     expect(listRecentNotes).toHaveBeenCalledWith({
       modifiedAfter: LAST_PULSE_AT,

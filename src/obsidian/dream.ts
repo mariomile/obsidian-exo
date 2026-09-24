@@ -65,7 +65,7 @@ function today(): string {
 
 /** Frontmatter of a file as a plain record (empty object if none). */
 function fm(app: App, file: TFile): Record<string, unknown> {
-  return (app.metadataCache.getFileCache(file)?.frontmatter ?? {}) as Record<string, unknown>;
+  return app.metadataCache.getFileCache(file)?.frontmatter ?? {};
 }
 
 /** The slug identity of a learning: basename minus a leading `YYYY-MM-DD-`, lowercased. */
@@ -203,7 +203,7 @@ export async function applyPlan(
           if (!dropFile) continue;
           snap(dropPath, await app.vault.read(dropFile));
           await checkpoint();
-          await app.vault.delete(dropFile);
+          await app.fileManager.trashFile(dropFile);
         } catch (err) {
           if (err instanceof DreamSnapshotPersistenceError) throw err;
           /* skip this drop, keep going */
@@ -280,7 +280,7 @@ export async function undoPlan(app: App, snap: DreamSnapshot): Promise<number> {
       if (before === null) {
         // File was created by the pass — remove it.
         if (existing instanceof TFile) {
-          await app.vault.delete(existing);
+          await app.fileManager.trashFile(existing);
           count++;
         }
         continue;

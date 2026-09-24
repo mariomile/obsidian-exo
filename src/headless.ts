@@ -277,7 +277,7 @@ export async function restoreRun(
     try {
       const f = app.vault.getAbstractFileByPath(path);
       if (before === null) {
-        if (f instanceof TFile) await app.vault.delete(f);
+        if (f instanceof TFile) await app.fileManager.trashFile(f);
       } else if (f instanceof TFile) {
         await app.vault.modify(f, before);
       } else {

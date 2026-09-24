@@ -184,7 +184,7 @@ class InlineAiController {
     });
     this.bar = bar;
     this.placeAbove(bar, anchor);
-    requestAnimationFrame(() => bar.addClass("is-shown"));
+    window.requestAnimationFrame(() => bar.addClass("is-shown"));
   }
 
   /** preventDefault on mousedown so the click does not steal focus and collapse
@@ -273,7 +273,7 @@ class InlineAiController {
         this.cancel();
       }
     });
-    setTimeout(() => input.focus(), 0);
+    window.setTimeout(() => input.focus(), 0);
   }
 
   private async runEdit(instruction: string): Promise<void> {
@@ -387,7 +387,7 @@ class InlineAiController {
     bar.createSpan({ cls: "mva-inai-hint", text: "Tab · y/n · ⌘⏎" });
     this.actionBar = bar;
     this.placeBelow(bar, pos);
-    requestAnimationFrame(() => bar.addClass("is-shown"));
+    window.requestAnimationFrame(() => bar.addClass("is-shown"));
   }
 
   private acceptAllReview(): void {
@@ -424,7 +424,7 @@ class InlineAiController {
     });
     this.panel = panel;
     this.placeBelow(panel, pos);
-    requestAnimationFrame(() => panel.addClass("is-shown"));
+    window.requestAnimationFrame(() => panel.addClass("is-shown"));
     return panel;
   }
 
@@ -442,7 +442,7 @@ class InlineAiController {
     stop.onclick = () => this.cancel();
     this.streamChip = chip;
     this.placeBelow(chip, pos);
-    requestAnimationFrame(() => chip.addClass("is-shown"));
+    window.requestAnimationFrame(() => chip.addClass("is-shown"));
     return {
       setText: (t: string) => {
         body.textContent = t;
@@ -519,7 +519,7 @@ class InlineAiController {
 
   destroy(): void {
     this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
-    window.removeEventListener("scroll", this.onScroll, { capture: true } as EventListenerOptions);
+    window.removeEventListener("scroll", this.onScroll, { capture: true });
     window.removeEventListener("resize", this.onScroll);
     this.teardownAll();
   }
@@ -565,8 +565,8 @@ class InlineAiController {
   }
 
   private autosize(el: HTMLTextAreaElement): void {
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    el.setCssStyles({ height: "auto" });
+    el.setCssStyles({ height: `${Math.min(el.scrollHeight, 140)}px` });
     this.reposition();
   }
 }

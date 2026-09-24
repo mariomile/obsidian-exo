@@ -67,7 +67,7 @@ export function buildFoundryDistillPrompt(input: FoundryDistillInput): string {
   ].join("\n");
 }
 
-function extractJsonObject(raw: string): unknown | undefined {
+function extractJsonObject(raw: string): unknown {
   const trimmed = raw.trim();
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(trimmed);
   const body = fenced ? fenced[1].trim() : trimmed;

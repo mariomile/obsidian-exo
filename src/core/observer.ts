@@ -185,7 +185,7 @@ function normalizeCandidate(raw: unknown): Candidate | null {
   const tags = Array.isArray(obj.tags)
     ? obj.tags.filter((t): t is string => typeof t === "string").map((t) => t.trim()).filter(Boolean)
     : [];
-  return { kind: kind as MemoryKind, text, tags };
+  return { kind, text, tags };
 }
 
 /** Pull a JSON array substring out of arbitrary text (fences, prose). */
@@ -194,7 +194,7 @@ function extractJsonArray(raw: string): unknown[] | null {
   const end = raw.lastIndexOf("]");
   if (start === -1 || end === -1 || end < start) return null;
   try {
-    const parsed = JSON.parse(raw.slice(start, end + 1));
+    const parsed: unknown = JSON.parse(raw.slice(start, end + 1));
     return Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;

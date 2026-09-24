@@ -35,7 +35,7 @@ export async function activateInMain(plugin: ExoPlugin, viewType: string): Promi
     leaf = workspace.getLeaf(true);
     await leaf.setViewState({ type: viewType, active: true });
   }
-  workspace.revealLeaf(leaf);
+  await workspace.revealLeaf(leaf);
   return leaf;
 }
 
@@ -47,7 +47,7 @@ export async function activateInRightSidebar(plugin: ExoPlugin, viewType: string
     leaf = workspace.getRightLeaf(false);
     await leaf?.setViewState({ type: viewType, active: true });
   }
-  if (leaf) workspace.revealLeaf(leaf);
+  if (leaf) await workspace.revealLeaf(leaf);
   return leaf;
 }
 
@@ -93,5 +93,5 @@ export async function activateChats(plugin: ExoPlugin): Promise<void> {
     leaf = workspace.getLeftLeaf(false);
     await leaf?.setViewState({ type: CHATS_VIEW_TYPE, active: true });
   }
-  if (leaf) workspace.revealLeaf(leaf);
+  if (leaf) await workspace.revealLeaf(leaf);
 }

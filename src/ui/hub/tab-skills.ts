@@ -2,6 +2,7 @@ import { Notice } from "obsidian";
 import { homedir } from "os";
 import { scanSkillDirs, assignSkillState, type DiscoveryItem } from "../../core/connections-scan";
 import { importSkill, removeSkill } from "../../core/connections-install";
+import { confirmModal } from "../confirm-modal";
 import {
   BUILTIN_TOOLS,
   FILE_BUILTINS,
@@ -142,7 +143,10 @@ function chip(parent: HTMLElement, label: string, active: boolean, desc?: string
   const el = parent.createSpan({ cls: `mva-caps-chip ${active ? "is-on" : "is-off"}` });
   el.createSpan({ cls: "mva-caps-dot" });
   el.createSpan({ cls: "mva-caps-label", text: label });
-  if (desc) el.setAttr("aria-label", desc), el.setAttr("title", desc);
+  if (desc) {
+    el.setAttr("aria-label", desc);
+    el.setAttr("title", desc);
+  }
   if (onClick) {
     el.addClass("is-clickable");
     el.onclick = onClick;
@@ -262,7 +266,12 @@ async function doImport(ctx: HubTabContext, it: DiscoveryItem, btn: HTMLButtonEl
     const dest = `${ctx.base()}/.claude/skills/${it.name}`;
     const res = await importSkill(it.path!, dest);
     if (res === "exists") {
-      if (!confirm(`A skill named "${it.name}" already exists in the vault. Overwrite it?`)) { btn.disabled = false; return; }
+      const overwrite = await confirmModal(ctx.app, {
+        title: "Overwrite skill?",
+        body: `A skill named "${it.name}" already exists in the vault. Overwrite it?`,
+        cta: "Overwrite",
+      });
+      if (!overwrite) { btn.disabled = false; return; }
       await importSkill(it.path!, dest, { overwrite: true });
     }
     new Notice(`Skill "${it.name}" imported into the vault.`);

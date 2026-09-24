@@ -149,7 +149,7 @@ function parseTags(object: Record<string, unknown>, path: string): ValidationRes
   if (!Array.isArray(value)) return validationError("invalid_type", path, "tags must be an array of strings");
   const tags: string[] = [];
   for (let index = 0; index < value.length; index++) {
-    const tag = value[index];
+    const tag: unknown = value[index];
     if (typeof tag !== "string") {
       return validationError("invalid_type", `${path}[${index}]`, "tag must be a string");
     }
@@ -172,7 +172,7 @@ function parseStringArray(
   if (!Array.isArray(value)) return validationError("invalid_type", path, `${key} must be an array of strings`);
   const items: string[] = [];
   for (let index = 0; index < value.length; index++) {
-    const item = value[index];
+    const item: unknown = value[index];
     if (typeof item !== "string") {
       return validationError("invalid_type", `${path}[${index}]`, `${key} entries must be strings`);
     }

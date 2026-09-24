@@ -99,10 +99,10 @@ async function maybeOfferCliUpdate(plugin: ExoPlugin): Promise<void> {
     if (plugin.app.loadLocalStorage(KEY) === latest) return; // offered once already
     plugin.app.saveLocalStorage(KEY, latest);
     plugin.diag.push("cli", `update available ${d.version} → ${latest}`);
-    const frag = document.createDocumentFragment();
-    const span = document.createElement("span");
+    const frag = createFragment();
+    const span = createSpan();
     span.textContent = `Exo — Claude CLI ${latest} available (installed ${d.version}). `;
-    const btn = document.createElement("button");
+    const btn = createEl("button");
     btn.textContent = "Update now";
     frag.append(span, btn);
     const n = new Notice(frag, 0); // sticky until clicked/dismissed

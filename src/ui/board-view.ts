@@ -389,7 +389,7 @@ export class BoardView extends ItemView {
     clickable(card, (e) => {
       // Ignore clicks that originate on the quick-add or drag handle interactions.
       if ((e.target as HTMLElement).closest("input, textarea, select, button")) return;
-      this.onCardClick(task);
+      void this.onCardClick(task);
     });
 
     // Context menu.

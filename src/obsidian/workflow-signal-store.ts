@@ -53,7 +53,7 @@ function isWorkflowSignal(value: unknown): value is WorkflowSignal {
     && typeof signal.signature === "string"
     && /^[a-z.-]+\|[a-z.>-]+\|[a-z-]+$/.test(signal.signature)
     && typeof signal.intent === "string"
-    && INTENTS.has(signal.intent as WorkflowIntent)
+    && INTENTS.has(signal.intent)
     && Array.isArray(signal.tools)
     && signal.tools.every((tool) => typeof tool === "string" && TOOLS.has(tool))
     && typeof signal.createdAt === "number"

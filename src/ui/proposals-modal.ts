@@ -225,13 +225,12 @@ export class ProposalsModal extends Modal {
    * Accept always commits the values the user last saw — never a stale copy.
    */
   private async persistPlaybookEdit(id: string): Promise<void> {
-    const update = this.options.updatePlaybook;
     const edit = this.editBuffer;
-    if (!update || !edit || edit.id !== id) return;
+    if (!this.options.updatePlaybook || !edit || edit.id !== id) return;
     const record = this.records.find((candidate) => candidate.id === id);
     if (!record || record.payload.kind !== "playbook") return;
     if (record.payload.name === edit.name && record.payload.prompt === edit.prompt) return;
-    await update(id, { name: edit.name, prompt: edit.prompt });
+    await this.options.updatePlaybook(id, { name: edit.name, prompt: edit.prompt });
   }
 
   private async accept(id: string): Promise<void> {

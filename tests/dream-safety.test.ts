@@ -21,6 +21,7 @@ describe("dream snapshot safety", () => {
       },
       fileManager: {
         processFrontMatter,
+        trashFile: vi.fn(),
         renameFile: vi.fn(),
       },
     } as unknown as App;

@@ -67,7 +67,7 @@ export const DEFAULT_AUTOMATION_COOLDOWN_MS = 15 * 60_000;
 
 /* ---------------------------- when grammar ---------------------------- */
 
-const EVENTS = ["create", "modify", "rename"] as const;
+type TriggerEvent = "create" | "modify" | "rename";
 
 /** Bare folders become recursive globs; existing globs pass through. */
 function normalizeEventPath(input: string): string {
@@ -99,7 +99,7 @@ export function parseWhen(line: string): AutomationWhen | null {
 
   m = s.match(/^on\s+(create|modify|rename)\s+in\s+(.+)$/i);
   if (m) {
-    const event = m[1].toLowerCase() as (typeof EVENTS)[number];
+    const event = m[1].toLowerCase() as TriggerEvent;
     return { on: "vault-event", event, path: normalizeEventPath(m[2]) };
   }
 

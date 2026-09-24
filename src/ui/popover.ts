@@ -52,7 +52,7 @@ export function openablePopover(opts: {
     pop.show();
     document.addEventListener("click", onDoc, true);
     document.addEventListener("keydown", onKey);
-    if (opts.focus) setTimeout(() => opts.focus?.(), 0);
+    if (opts.focus) window.setTimeout(() => opts.focus?.(), 0);
   };
 
   const toggle = () => {

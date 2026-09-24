@@ -8,9 +8,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "http";
 import { randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
-import type { SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
+import type { AnyTool } from "./sdk-tool";
 
-type AnyTool = SdkMcpToolDefinition<any>;
+
 interface ToolResult {
   content: Array<{ type: string; text?: string }>;
   isError?: boolean;
@@ -32,7 +32,8 @@ export async function callBridgeTool(tools: AnyTool[], name: string, input: unkn
   const parsed = z.object(def.inputSchema).safeParse(input ?? {});
   if (!parsed.success) return errResult(`Invalid input for ${name}: ${parsed.error.message}`);
   try {
-    return (await def.handler(parsed.data, {})) as ToolResult;
+    // `parsed.data` was just validated against this tool's own inputSchema.
+    return await def.handler(parsed.data as never, {});
   } catch (e) {
     return errResult(`Tool ${name} failed: ${e instanceof Error ? e.message : String(e)}`);
   }

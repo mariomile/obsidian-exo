@@ -130,17 +130,17 @@ function loginShellExec(cmd: string, timeoutMs = 6000): Promise<string> {
       const c = spawn(shell, ["-ilc", cmd], { env: process.env });
       let out = "";
       let settled = false;
-      let timer: ReturnType<typeof setTimeout> | null = null;
+      let timer: number | null = null;
       const finish = (value: string): void => {
         if (settled) return;
         settled = true;
-        if (timer !== null) clearTimeout(timer);
+        if (timer !== null) window.clearTimeout(timer);
         resolve(value);
       };
       c.stdout.on("data", (d: Buffer | string) => (out += d.toString()));
       c.on("error", () => finish(""));
       c.on("close", () => finish(out));
-      timer = setTimeout(() => {
+      timer = window.setTimeout(() => {
         try {
           c.kill("SIGKILL");
         } catch {
@@ -249,11 +249,11 @@ function probeVersion(bin: string, pathEnv: string): Promise<string | null> {
       const c = spawn(bin, ["--version"], { env: { ...process.env, PATH: pathEnv } });
       let out = "";
       let settled = false;
-      let timer: ReturnType<typeof setTimeout> | null = null;
+      let timer: number | null = null;
       const finish = (value: string | null): void => {
         if (settled) return;
         settled = true;
-        if (timer !== null) clearTimeout(timer);
+        if (timer !== null) window.clearTimeout(timer);
         resolve(value);
       };
       c.stdout.on("data", (d: Buffer | string) => (out += d.toString()));
@@ -262,7 +262,7 @@ function probeVersion(bin: string, pathEnv: string): Promise<string | null> {
         const m = out.match(/\d+\.\d+\.\d+[\w.-]*/);
         finish(m ? `v${m[0]}` : null);
       });
-      timer = setTimeout(() => {
+      timer = window.setTimeout(() => {
         try {
           c.kill("SIGKILL");
         } catch {
@@ -331,11 +331,11 @@ function runUpdater(spawnProc: () => ReturnType<typeof spawn>): Promise<{ ok: bo
   return new Promise((resolve) => {
     let out = "";
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let timer: number | null = null;
     const finish = (result: { ok: boolean; output: string }): void => {
       if (settled) return;
       settled = true;
-      if (timer !== null) clearTimeout(timer);
+      if (timer !== null) window.clearTimeout(timer);
       resolve(result);
     };
     const append = (d: Buffer | string) => {
@@ -357,7 +357,7 @@ function runUpdater(spawnProc: () => ReturnType<typeof spawn>): Promise<{ ok: bo
         finish({ ok, output: out.trim() });
       });
       // Both npm installs and `claude update` can be slow; cap at 3 minutes.
-      timer = setTimeout(() => {
+      timer = window.setTimeout(() => {
         try {
           c.kill("SIGKILL");
         } catch {
@@ -386,11 +386,11 @@ export function mcpLogin(cli: ResolvedCli, name: string, cwd: string): Promise<{
     if (!name.trim()) return resolve({ ok: false, output: "No server name." });
     let out = "";
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let timer: number | null = null;
     const finish = (result: { ok: boolean; output: string }): void => {
       if (settled) return;
       settled = true;
-      if (timer !== null) clearTimeout(timer);
+      if (timer !== null) window.clearTimeout(timer);
       resolve(result);
     };
     const append = (d: Buffer | string) => {
@@ -404,7 +404,7 @@ export function mcpLogin(cli: ResolvedCli, name: string, cwd: string): Promise<{
       c.on("error", (e: Error) => finish({ ok: false, output: e.message }));
       c.on("close", (code: number | null) => finish({ ok: code === 0, output: out.trim() }));
       // OAuth is user-paced (browser round-trip) — give it 3 minutes before giving up.
-      timer = setTimeout(() => {
+      timer = window.setTimeout(() => {
         try {
           c.kill("SIGKILL");
         } catch {
@@ -426,11 +426,11 @@ export function mcpLogout(cli: ResolvedCli, name: string, cwd: string): Promise<
     if (!name.trim()) return resolve({ ok: false, output: "No server name." });
     let out = "";
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let timer: number | null = null;
     const finish = (result: { ok: boolean; output: string }): void => {
       if (settled) return;
       settled = true;
-      if (timer !== null) clearTimeout(timer);
+      if (timer !== null) window.clearTimeout(timer);
       resolve(result);
     };
     const append = (d: Buffer | string) => {
@@ -443,7 +443,7 @@ export function mcpLogout(cli: ResolvedCli, name: string, cwd: string): Promise<
       c.stderr.on("data", append);
       c.on("error", (e: Error) => finish({ ok: false, output: e.message }));
       c.on("close", (code: number | null) => finish({ ok: code === 0, output: out.trim() }));
-      timer = setTimeout(() => {
+      timer = window.setTimeout(() => {
         try {
           c.kill("SIGKILL");
         } catch {

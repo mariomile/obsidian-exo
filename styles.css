@@ -1493,8 +1493,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
     "icon label detail"
     ".    desc  desc";
   align-items: center;
-  column-gap: 8px;
-  row-gap: 1px;
+  gap: 1px 8px;
   padding: 5px 8px;
   border-radius: var(--mva-r1);
   cursor: pointer;
@@ -2135,8 +2134,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-doc-card:hover .mva-doc-x {
   opacity: 0.7;
 }
-.mva-doc-x:hover {
-  opacity: 1 !important;
+.mva-doc-card .mva-doc-x:hover { /* = card-hover specificity, later: wins */
+  opacity: 1;
   color: var(--text-normal);
 }
 .mva-doc-x .svg-icon {
@@ -2252,13 +2251,12 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    metadata (2026-07-03 impeccable critique, P2). */
 .mva-link {
   cursor: pointer;
-  text-decoration-line: none;
-  text-decoration-style: dotted;
+  text-decoration: none;
   text-underline-offset: 2px;
 }
 .mva-link:hover {
   color: var(--text-accent, var(--interactive-accent));
-  text-decoration-line: underline;
+  text-decoration: underline;
 }
 .mva-input {
   flex: 1;
@@ -5891,8 +5889,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-ll-x { cursor: pointer; display: inline-flex; color: var(--text-faint); }
 .mva-ll-x:hover { color: var(--text-muted); }
 .mva-ll-x svg { width: 12px; height: 12px; }
-.mva-ll.is-review,
-.mva-ll:has(.mva-ll-head) { flex-direction: column; align-items: stretch; gap: 6px; }
+.mva-ll.is-review { flex-direction: column; align-items: stretch; gap: 6px; }
 .mva-ll-chev { cursor: pointer; display: inline-flex; color: var(--text-faint); }
 .mva-ll-chev:hover { color: var(--text-muted); }
 .mva-ll-chev svg { width: 13px; height: 13px; }
@@ -6056,9 +6053,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
    Theme-native: Obsidian CSS vars with fallbacks, no hardcoded palette.
    =================================================================== */
 .exo-mention-underline {
-  text-decoration: underline dotted;
-  text-decoration-color: var(--text-accent);
-  text-underline-offset: 3px;
+  border-bottom: 1px dotted var(--text-accent);
   cursor: pointer;
 }
 .exo-mention-underline:hover {
@@ -6067,6 +6062,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 }
 
 .exo-mention-popover {
+  position: fixed;
   z-index: var(--layer-menu, 100);
   display: flex;
   flex-direction: column;
@@ -6085,7 +6081,7 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
   font-size: var(--font-ui-smaller, 12px);
 }
 .exo-mention-btn {
-  all: unset;
+  appearance: none; display: block; height: auto; margin: 0; border: none; box-shadow: none; background: none; font: inherit; text-align: start;
   padding: 4px 8px;
   border-radius: 4px;
   cursor: pointer;
@@ -6097,7 +6093,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 
 /* Proposal Kernel — quiet turn affordance + explicit review inbox. */
 .mva-proposal-summary {
-  all: unset;
+  appearance: none; height: auto; padding: 0; border: none; border-radius: 0;
+  box-shadow: none; background: none; font: inherit;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -6380,7 +6377,6 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-mcp-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
 /* Goal pill — /goal loop status shown above the composer input */
-.mva-goal-pill-host { display: contents; }
 .mva-goal-pill {
   display: flex;
   align-items: center;
@@ -6997,3 +6993,8 @@ body:not(.is-mobile) .mod-sidedock .workspace-leaf-content > .view-content.mva-r
 .mva-chats-group[data-section="related"] .mva-chats-group-label { font-style: italic; }
 .mva-chats-group[data-section="related"] .mva-chats-row { opacity: 0.85; }
 
+/* Utilities that replaced inline styles (Obsidian plugin review). */
+.mva-spacer { flex: 1; }
+.mva-mono-input { font-family: var(--font-monospace); }
+.mva-full-width { width: 100%; }
+.setting-item-description.mod-error { color: var(--text-error); }

@@ -174,7 +174,7 @@ export function stripAfterChildSpawn(
  *  would retire every non-exempt tab in the strip in one go. */
 export function stripCap(cap: unknown, fallback: number): number {
   const usable = typeof cap === "number" && Number.isFinite(cap) && cap > 0;
-  return Math.floor(usable ? (cap as number) : fallback);
+  return Math.floor(usable ? cap : fallback);
 }
 
 /** The slice of a live conversation the strip's decision reads. Structural on

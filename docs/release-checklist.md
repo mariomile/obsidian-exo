@@ -6,6 +6,7 @@ Run these before tagging a new version.
 
 ```bash
 pnpm lint      # eslint clean
+pnpm lint:obsidian  # the Obsidian review bot's rule set (eslint-plugin-obsidianmd)
 pnpm test      # vitest — all unit tests green (pure core/ logic)
 pnpm smoke     # live contract test — see below
 pnpm build     # tsc typecheck + esbuild production bundle
@@ -46,4 +47,5 @@ pnpm bump -- 0.x.y
 pnpm build   # refresh main.js
 ```
 
-`minAppVersion` stays at `1.7.2` (the script carries it forward automatically).
+`minAppVersion` is `1.8.7` since 0.37.0 (`App.loadLocalStorage`); the script carries
+the previous entry's value forward automatically.

@@ -145,7 +145,7 @@ class AddWidget extends WidgetType {
     return other.text === this.text;
   }
   toDOM(): HTMLElement {
-    const span = document.createElement("span");
+    const span = createSpan();
     span.className = "mva-inai-add";
     span.textContent = this.text;
     return span;
@@ -170,10 +170,10 @@ class HunkCtrlWidget extends WidgetType {
     );
   }
   toDOM(view: EditorView): HTMLElement {
-    const wrap = document.createElement("span");
+    const wrap = createSpan();
     wrap.className = "mva-inai-hunk-ctl" + (this.current ? " is-current" : "");
     const mk = (symbol: string, cls: string, value: boolean, on: boolean) => {
-      const b = document.createElement("button");
+      const b = createEl("button");
       b.type = "button";
       b.className = "mva-inai-chip " + cls + (on ? " is-on" : "");
       b.textContent = symbol;

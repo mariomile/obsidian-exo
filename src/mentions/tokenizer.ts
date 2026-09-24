@@ -49,16 +49,16 @@ function isLower(ch: string): boolean {
 function caseSegments(run: string): Array<[number, number]> {
   const bounds: number[] = [0];
   for (let i = 1; i < run.length; i++) {
-    const prev = run[i - 1]!;
-    const cur = run[i]!;
-    const next = i + 1 < run.length ? run[i + 1]! : "";
+    const prev = run[i - 1];
+    const cur = run[i];
+    const next = i + 1 < run.length ? run[i + 1] : "";
     const camel = !isUpper(prev) && isUpper(cur);
     const acronym = isUpper(prev) && isUpper(cur) && isLower(next);
     if (camel || acronym) bounds.push(i);
   }
   bounds.push(run.length);
   const segments: Array<[number, number]> = [];
-  for (let i = 0; i < bounds.length - 1; i++) segments.push([bounds[i]!, bounds[i + 1]!]);
+  for (let i = 0; i < bounds.length - 1; i++) segments.push([bounds[i], bounds[i + 1]]);
   return segments;
 }
 

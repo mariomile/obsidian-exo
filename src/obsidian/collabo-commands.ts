@@ -296,7 +296,7 @@ export function registerCollaboCommands(plugin: ExoPlugin): void {
 
   plugin.addCommand({
     id: "collabo-share-note",
-    name: "Share this note to Exo Collabo",
+    name: "Share this note to Collabo",
     // Hidden entirely when no service is configured: an entry that always
     // fails is worse than no entry.
     checkCallback: (checking: boolean) => {
@@ -329,7 +329,7 @@ export function registerCollaboCommands(plugin: ExoPlugin): void {
 
   plugin.addCommand({
     id: "collabo-import",
-    name: "Import a document from Exo Collabo",
+    name: "Import a document from Collabo",
     checkCallback: (checking: boolean) => {
       const cfg = collaboConfig(plugin);
       if (!cfg) return false;

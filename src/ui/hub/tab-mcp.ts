@@ -319,7 +319,7 @@ function buildMcpBody(it: DiscoveryItem, ctx: HubTabContext, docRaw: string | nu
   } else {
     if (docRaw) {
       const preview = body.createDiv({ cls: "mva-hub-doc-preview markdown-rendered" });
-      void MarkdownRenderer.render(ctx.app, summarizeMcpDoc(docRaw), preview, "", ctx.plugin);
+      void MarkdownRenderer.render(ctx.app, summarizeMcpDoc(docRaw), preview, "", ctx.component);
       preview.createDiv({ cls: "mva-hub-doc-fade" });
     } else {
       body.createDiv({ cls: "mva-conn-empty", text: "No notes yet — describe what this server is for, so the agent knows when to use it." });

@@ -10,7 +10,6 @@
  */
 import { z } from "zod";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
-import type { SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ok, err } from "./tool-kit";
 import {
@@ -21,6 +20,7 @@ import {
   type PageElement,
 } from "../core/browser-page";
 import type { ElementTarget } from "../core/browser-inject";
+import type { AnyTool } from "./sdk-tool";
 
 /** Bridge-level status: page state plus who holds the lease. */
 export interface BrowserStatus extends BrowserPageStatus {
@@ -69,7 +69,7 @@ function targetOf(args: { ref?: string; selector?: string }): ElementTarget | st
   return args.ref ? { ref: args.ref } : { selector: args.selector! };
 }
 
-export function buildBrowserTools(bridge: BrowserBridge): SdkMcpToolDefinition<any>[] {
+export function buildBrowserTools(bridge: BrowserBridge): AnyTool[] {
   const browserOpen = tool(
     "browser_open",
     "Open the shared agent-browser tab in the workspace (creating it if needed) and take control of it for this conversation. Use it to research a source IN FRONT of Mario; he sees the same page you read, which beats a blind web fetch whenever the source matters. Optionally pass a url to navigate immediately. If another conversation was driving the tab, this takes over (say so).",
