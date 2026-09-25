@@ -52,6 +52,7 @@ import { buildRecap as buildConvoRecap } from "./core/recap";
 import { assembleContext, formatContextDebug, selectUnchangedPaths } from "./core/context-assembly";
 import type { SessionSnapshot, SessionLane } from "./core/session-cards";
 import { describeActivity } from "./core/activity";
+import { toVaultRelative } from "./core/vault-path";
 import { clickable } from "./ui/dom";
 import { swapTailChild } from "./ui/tail-child";
 import { StepsRun } from "./ui/steps";
@@ -3765,9 +3766,7 @@ export class ChatView extends ItemView {
   /** Normalize a possibly-absolute tool path (built-in Write/Edit use absolute paths)
    *  to a vault-relative path the vault API understands. */
   private relPath(p: string): string {
-    const base = this.vaultPath();
-    if (base && base !== "." && p.startsWith(base + "/")) return p.slice(base.length + 1);
-    return p;
+    return toVaultRelative(p, this.vaultPath());
   }
 
   /** Resolve a tool's user-facing target/link to the concrete vault path used
@@ -4035,9 +4034,7 @@ export class ChatView extends ItemView {
   }
 
   private openNote(path: string): void {
-    let p = path;
-    const base = this.vaultPath();
-    if (base && p.startsWith(base)) p = p.slice(base.length).replace(/^\/+/, "");
+    const p = toVaultRelative(path, this.vaultPath()).replace(/^\/+/, "");
     void this.app.workspace.openLinkText(p, "", false);
   }
 

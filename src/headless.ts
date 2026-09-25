@@ -8,6 +8,7 @@ import { READ_ONLY_TOOLS, toolFilePath, toolFilePaths } from "./ui/tools";
 import { isReadOnlyExternalTool } from "./core/headless-tools";
 import { WRITE_TOOLS } from "./core/touched";
 import { exoPaths, LEGACY_MEMORY_ROOT } from "./core/paths";
+import { toVaultRelative } from "./core/vault-path";
 import type { MVASettings } from "./settings";
 
 /** Per-step idle timeout — no event for this long aborts the run (bounded autonomy). */
@@ -49,10 +50,8 @@ function today(): string {
 
 /** Vault-relative form of a tool path (tools may hand back absolute paths). */
 function relPath(app: App, raw: string): string {
-  const base = vaultPath(app);
-  const norm = raw.replace(/\\/g, "/");
-  if (base && norm.startsWith(base + "/")) return norm.slice(base.length + 1);
-  return norm.replace(/^\.?\//, "");
+  const rel = toVaultRelative(raw, vaultPath(app)).replace(/\\/g, "/");
+  return rel.replace(/^\.?\//, "");
 }
 
 /** Resolve a tool path like the chat turn loop does: exact vault file first,
