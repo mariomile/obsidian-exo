@@ -5,6 +5,7 @@ import {
   obsidianMcpDenyList,
   claudeCliEnv,
   markSkippedObsidianMcp,
+  localScopeServers,
   DEFAULT_MCP_TOOL_IDLE_TIMEOUT_MS,
   OBSIDIAN_MCP_SKIP_REASON,
 } from "../src/core/mcp-guard";
@@ -61,6 +62,11 @@ describe("configuredMcpServers", () => {
   it("collects user, local (matching cwd) and project scopes", () => {
     const out = configuredMcpServers(claudeJson, { mcpServers: { proj: { command: "x" } } }, "C:/Users/me/Vault/");
     expect(out.map((s) => s.name)).toEqual(["mcp-obsidian", "local", "proj"]);
+  });
+
+  it("localScopeServers returns only this vault's entry", () => {
+    expect(Object.keys(localScopeServers(claudeJson, "c:/users/me/vault"))).toEqual(["local"]);
+    expect(localScopeServers(claudeJson, "/nowhere")).toEqual({});
   });
 
   it("tolerates missing or malformed files", () => {
@@ -124,5 +130,15 @@ describe("markSkippedObsidianMcp", () => {
     const out = markSkippedObsidianMcp(items);
     expect(out[0]).toMatchObject({ state: "active", status: "skipped", desc: OBSIDIAN_MCP_SKIP_REASON });
     expect(out.slice(1)).toEqual(items.slice(1));
+  });
+
+  it("relabels local-scope servers of this vault only", () => {
+    const items = [
+      { name: "vault-obs", source: "claude-project", config: { command: "uvx", args: ["mcp-obsidian"] }, state: "importable" },
+      { name: "repo-obs", source: "claude-project", config: { command: "uvx", args: ["mcp-obsidian"] }, state: "importable" },
+    ];
+    const out = markSkippedObsidianMcp(items, new Set(["vault-obs"]));
+    expect(out[0]).toMatchObject({ state: "active", status: "skipped" });
+    expect(out[1]).toEqual(items[1]);
   });
 });

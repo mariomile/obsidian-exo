@@ -30,7 +30,7 @@ import {
 import { connectMcp, disconnectMcp, setMcpEnabled, importSkill, removeSkill } from "../core/connections-install";
 import { parseMcpJson, summarizeServer, buildServerConfig } from "../core/mcp-config";
 import { mcpSections, skillSections } from "../core/hub-sections";
-import { markSkippedObsidianMcp } from "../core/mcp-guard";
+import { localScopeServers, markSkippedObsidianMcp } from "../core/mcp-guard";
 import {
   gatherFromScopes,
   gatherFromVault,
@@ -91,7 +91,9 @@ async function gatherMcp(app: App, exo: ExoToolHost | null): Promise<{ items: Di
   }));
   const covered = new Set([...ourNames, ...fromConfig.map((i) => i.name)]);
   const live = scanLiveCaps(caps?.mcpServers ?? [], covered);
-  return { items: markSkippedObsidianMcp([...vaultItems, ...fromConfig, ...live]), ourNames };
+  const vaultBase = (app.vault.adapter as { getBasePath?(): string }).getBasePath?.() ?? "";
+  const localNames = new Set(Object.keys(localScopeServers(claudeJson, vaultBase)));
+  return { items: markSkippedObsidianMcp([...vaultItems, ...fromConfig, ...live], localNames), ourNames };
 }
 
 /** Same gather the Skills tab runs, minus the DOM. */

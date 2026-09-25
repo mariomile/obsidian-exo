@@ -77,18 +77,22 @@ export function configuredMcpServers(
     if (!isRecord(servers)) return;
     for (const [name, config] of Object.entries(servers)) if (isRecord(config)) out.push({ name, config });
   };
-  if (isRecord(claudeJson)) {
-    add(claudeJson.mcpServers);
-    if (isRecord(claudeJson.projects)) {
-      const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-      const want = norm(cwd);
-      for (const [path, proj] of Object.entries(claudeJson.projects)) {
-        if (norm(path) === want && isRecord(proj)) add(proj.mcpServers);
-      }
-    }
-  }
+  if (isRecord(claudeJson)) add(claudeJson.mcpServers);
+  add(localScopeServers(claudeJson, cwd));
   if (isRecord(projectMcpJson)) add(projectMcpJson.mcpServers);
   return out;
+}
+
+/** Local-scope servers: `~/.claude.json` projects entry for `cwd` (path
+ *  compared slash- and case-insensitively, so Windows keys match). */
+export function localScopeServers(claudeJson: unknown, cwd: string): Record<string, unknown> {
+  if (!isRecord(claudeJson) || !isRecord(claudeJson.projects)) return {};
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const want = norm(cwd);
+  for (const [path, proj] of Object.entries(claudeJson.projects)) {
+    if (norm(path) === want && isRecord(proj) && isRecord(proj.mcpServers)) return proj.mcpServers;
+  }
+  return {};
 }
 
 /** `deniedMcpServers` entries for every external Obsidian server in `servers`.
@@ -143,13 +147,17 @@ export function claudeCliEnv(base: Record<string, string | undefined>, pathEnv: 
 }
 
 /** Connections pane: mark every Obsidian server Exo skips so the row says why
- *  instead of silently disappearing. Only sources Exo actually loads (Claude
- *  user scope, the vault's `.mcp.json`) are relabelled. */
+ *  instead of silently disappearing. Only sources Exo actually loads are
+ *  relabelled: Claude user scope, the vault's `.mcp.json`, and the local-scope
+ *  entries of THIS vault (`localNames`); other repos' servers are left alone. */
 export function markSkippedObsidianMcp<T extends { name: string; source: string; config?: Record<string, unknown>; state: string; status?: string; desc?: string }>(
   items: T[],
+  localNames: ReadonlySet<string> = new Set(),
 ): T[] {
+  const loaded = (it: T) =>
+    it.source === "claude-global" || it.source === "vault" || (it.source === "claude-project" && localNames.has(it.name));
   return items.map((it) =>
-    (it.source === "claude-global" || it.source === "vault") && it.config && isExternalObsidianMcp(it.name, it.config)
+    loaded(it) && it.config && isExternalObsidianMcp(it.name, it.config)
       ? { ...it, state: "active", status: "skipped", desc: OBSIDIAN_MCP_SKIP_REASON }
       : it,
   );
