@@ -37,6 +37,13 @@ reason). Timeout is 120s.
 
 ## Version bump
 
+`main` is protected (ruleset "Protect main"): no direct pushes, no force-push,
+no deletion; every change lands through a PR with the `check` CI job green. So
+the bump goes in its own PR (`chore(release): 0.x.y`); after it merges, push the
+tag from the merged `main` (`git tag 0.x.y && git push origin 0.x.y`), which
+triggers the Release workflow. Tags are not restricted.
+
+
 Run the bump script — it updates `manifest.json`, `package.json`,
 `package-lock.json` (both project version fields), and `versions.json` (adds
 `"<version>": "<minAppVersion>"`, reusing the previous latest `minAppVersion`) in
