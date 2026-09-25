@@ -1,10 +1,9 @@
 /**
  * WriteQueue — a pure, in-process promise-chain serializer (no Obsidian imports).
  *
- * Every append to the Memory Union Store (`paths.store`) must go through
- * ONE shared WriteQueue so concurrent writers — the `remember` tool today, the
- * future observer and dream passes — never interleave a read-modify-write cycle
- * and never clobber a monthly store file.
+ * Every read-modify-write on a shared file (a ledger, a memory note) goes
+ * through ONE shared WriteQueue per file family, so concurrent writers never
+ * interleave a cycle and never clobber each other.
  *
  * Guarantees:
  *  - Strict FIFO: tasks run in enqueue order, exactly one at a time; the next task

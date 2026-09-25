@@ -23,7 +23,6 @@ import type { Message, PersistedMessage, Segment } from "../core/model";
 import type { ResearchModeState } from "../core/research";
 import type { SessionLane } from "../core/session-cards";
 import type { GoalState } from "../core/goal-loop";
-import type { CadenceState } from "../core/observer-cadence";
 import type { LiveTask } from "../core/live-tasks";
 import type { TouchedNote } from "./graph-view";
 import type { ComposerDraft } from "./composer";
@@ -94,6 +93,11 @@ export interface ConvoData {
    *  "since you left" mean anything after a restart. Absent reads as 0
    *  (never read), so every existing conversations.json stays valid. */
   readIndex?: number;
+  /** Memory harvest watermark: how many of `messages` the harvest has already
+   *  read. Persisted, so a harvest never re-reads a message across reloads and
+   *  catch-up after a closed Obsidian starts where it left off. Absent = none
+   *  harvested yet (core/memory-harvest). */
+  harvestedIndex?: number;
   messages: PersistedMessage[];
 }
 
@@ -265,19 +269,17 @@ export interface Convo {
    *  read. Deliberately NOT `unread`, a runtime-only boolean about the tab
    *  strip: this one is a place in a transcript and has to survive a reload. */
   readIndex?: number;
-  /** Proactive recall (design 2026-07-09): ids of store entries already injected
-   *  into THIS conversation's outbound turns, so each memory is paid for once and
-   *  then lives in cached history. Runtime-only — never persisted (a reloaded
-   *  conversation re-injects from scratch, which is correct: the cached history is
-   *  gone too). Mirrors the runtime-only pattern of `aiTitleAttempts` above. */
-  injectedMemoryIds?: Set<string>;
+  /** Memory harvest watermark: how many of `messages` the harvest has already
+   *  read. Persisted, so a harvest never re-reads a message across reloads and
+   *  catch-up after a closed Obsidian starts where it left off. Absent = none
+   *  harvested yet (core/memory-harvest). */
+  harvestedIndex?: number;
   /** Context inlining (2026-08-12 calibration): path → the file's mtime at the
    *  moment its body was last inlined into an outbound turn of THIS conversation.
    *  A path here whose file still carries the same mtime rides the next turn as a
-   *  pointer, not as bytes: the body is already in the cached history. Same
-   *  lifecycle and same stamp-after-send rule as `injectedMemoryIds` above, and
-   *  runtime-only for the same reason: a reload loses the cached history too, so
-   *  re-inlining once is the correct restart. */
+   *  pointer, not as bytes: the body is already in the cached history. Stamped
+   *  only after the send is committed, and runtime-only: a reload loses the
+   *  cached history too, so re-inlining once is the correct restart. */
   inlinedNoteMtimes?: Map<string, number>;
   /** Controller for the in-flight AI-title call, so disposing the conversation
    *  (close/delete/reset) aborts it. Runtime-only. */
@@ -287,14 +289,6 @@ export interface Convo {
    *  with this true also poisons, recovery escalates to a fresh session + recap
    *  (see runTurn's two-stage recovery). Cleared on any healthy turn. */
   resumeRisky?: boolean;
-  /** Observer cadence (W2-3) — runtime-only, never persisted. `cadence` is the
-   *  pure per-conversation step-counter/watermark state (used only in
-   *  `observerCadence: "every-n-steps"`; harmless dead weight otherwise).
-   *  `cadenceTurnFlushLen` is how many chars of THIS turn's accumulated
-   *  assistant text a step pass already sent — reset at the top of each new
-   *  turn — so the end-of-turn pass only sends the unsent tail. */
-  cadence?: CadenceState;
-  cadenceTurnFlushLen?: number;
 }
 
 export interface AssistantCtx {

@@ -48,8 +48,8 @@ export function blockPath(block: BlockName, agentDir: string = AGENT_DIR): strin
 
 /**
  * Obsidian-side reader/writer for the identity blocks. Constructed with the
- * SHARED memory write-queue so its writes serialize against `remember`, the
- * observer, and the dream pass (single FIFO — no cross-writer clobber, w1-1).
+ * SHARED memory write-queue so its writes serialize against memory harvest
+ * (single FIFO, no cross-writer clobber, w1-1).
  */
 export class AgentFolder {
   constructor(

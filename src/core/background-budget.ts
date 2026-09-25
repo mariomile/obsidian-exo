@@ -2,7 +2,7 @@
  * Background AI budget — pure daily-ledger logic (no Obsidian imports).
  *
  * W0 cost governance: one shared daily token budget + master kill-switch for
- * every background LLM pass (observer, dream-LLM, heartbeat, skill foundry).
+ * every background LLM pass (memory harvest, turn suggestions, skill foundry).
  * The ledger is a single `{ dateUTC, tokensUsed }` record persisted in plugin
  * data; the impure shell reads/writes it and supplies `now`. Everything here is
  * a pure function returning a NEW ledger — inputs are never mutated — so it is

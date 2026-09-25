@@ -8,7 +8,7 @@ import { formatLoop, type LoopEntry } from "../src/core/open-loops";
 const P = exoPaths("_system");
 
 /**
- * Boot seam (design §9): with `agentFolderEnabled` OFF, `readBootContext` output
+ * Boot seam (design §9): with `identity` OFF, `readBootContext` output
  * is byte-identical to before the identity layer existed. With it ON but no
  * `_system/agent/` folder, the output is identical too (all blocks missing ⇒
  * empty identity section). Only a populated folder changes the preamble.
@@ -55,14 +55,13 @@ const BASE_FILES: Record<string, FileSpec> = {
   "_system/vault-context.md": { content: "Vault is marioverse. Mario is a PM." },
   "_system/memory/preferences/preferences.md": { content: "Prefers Italian for strategy." },
   "_system/memory/rules/rule-verify-mario-bio.md": { content: "verify bio" },
-  "_system/memory/session-log.md": { content: "## session one\n## session two" },
 };
 
 describe("readBootContext — flag OFF byte-identity", () => {
   it("OFF (no opts) equals OFF (explicit false)", async () => {
     const app = makeApp(BASE_FILES);
     const a = await readBootContext(app, P);
-    const b = await readBootContext(app, P, { agentFolderEnabled: false });
+    const b = await readBootContext(app, P, { identity: false });
     expect(a).toBe(b);
   });
 
@@ -74,8 +73,8 @@ describe("readBootContext — flag OFF byte-identity", () => {
       "_system/agent/NOW.md": { content: "Shipping the identity layer." },
     });
     const withoutFolder = makeApp(BASE_FILES);
-    const off = await readBootContext(withFolder, P, { agentFolderEnabled: false });
-    const bare = await readBootContext(withoutFolder, P, { agentFolderEnabled: false });
+    const off = await readBootContext(withFolder, P, { identity: false });
+    const bare = await readBootContext(withoutFolder, P, { identity: false });
     // The folder must not leak into the OFF output.
     expect(off).toBe(bare);
     expect(off).not.toContain("Be terse.");
@@ -86,8 +85,8 @@ describe("readBootContext — flag OFF byte-identity", () => {
 describe("readBootContext — flag ON with no folder", () => {
   it("is byte-identical to OFF when the agent folder is absent", async () => {
     const app = makeApp(BASE_FILES);
-    const off = await readBootContext(app, P, { agentFolderEnabled: false });
-    const onNoFolder = await readBootContext(app, P, { agentFolderEnabled: true });
+    const off = await readBootContext(app, P, { identity: false });
+    const onNoFolder = await readBootContext(app, P, { identity: true });
     expect(onNoFolder).toBe(off);
   });
 });
@@ -100,60 +99,18 @@ describe("readBootContext — flag ON with a populated folder", () => {
       "_system/agent/USER.md": { content: "Mario — 0-to-1 PM." },
       "_system/agent/NOW.md": { content: "Shipping the identity layer." },
     });
-    const out = await readBootContext(app, P, { agentFolderEnabled: true });
+    const out = await readBootContext(app, P, { identity: true });
     expect(out).toContain(IDENTITY_ARBITRATION_LINE);
     expect(out).toContain("Be terse and direct.");
     // Identity must come before the Vault-context section.
     expect(out.indexOf(IDENTITY_ARBITRATION_LINE)).toBeLessThan(out.indexOf("### Vault context"));
   });
 
-  it("halves the session-log slice when NOW.md carries signal", async () => {
-    const longLog = "L".repeat(1000);
-    const withNow = makeApp({
-      ...BASE_FILES,
-      "_system/memory/session-log.md": { content: longLog },
-      "_system/agent/NOW.md": { content: "hot project" },
-    });
-    const noNow = makeApp({
-      ...BASE_FILES,
-      "_system/memory/session-log.md": { content: longLog },
-    });
-    const on = await readBootContext(withNow, P, { agentFolderEnabled: true });
-    const off = await readBootContext(noNow, P, { agentFolderEnabled: true });
-    // With now.md present, the log is capped at 600 (truncated marker appears);
-    // without it, at 1200 (the whole 1000-char log fits, no marker).
-    const onLogRun = on.match(/L+/)?.[0].length ?? 0;
-    const offLogRun = off.match(/L+/)?.[0].length ?? 0;
-    expect(onLogRun).toBeLessThanOrEqual(600);
-    expect(offLogRun).toBe(1000);
-  });
-
-  it("an empty NOW.md does NOT halve the session-log slice", async () => {
-    const longLog = "L".repeat(1000);
-    const app = makeApp({
-      ...BASE_FILES,
-      "_system/memory/session-log.md": { content: longLog },
-      "_system/agent/NOW.md": { content: "   " }, // blank → no signal
-    });
-    const out = await readBootContext(app, P, { agentFolderEnabled: true });
-    expect(out.match(/L+/)?.[0].length ?? 0).toBe(1000);
-  });
-});
-
-describe("readBootContext — memoryStoreEnabled OFF", () => {
-  it("drops the recent-sessions digest (the session log lives in the union store)", async () => {
-    const app = makeApp(BASE_FILES);
-    const on = await readBootContext(app, P, { memoryStoreEnabled: true });
-    const off = await readBootContext(app, P, { memoryStoreEnabled: false });
-    expect(on).toContain("### Recent sessions");
-    expect(off).not.toContain("### Recent sessions");
-  });
-
-  it("absent memoryStoreEnabled defaults to ON (byte-identical to explicit true)", async () => {
-    const app = makeApp(BASE_FILES);
-    const withDefault = await readBootContext(app, P);
-    const explicitOn = await readBootContext(app, P, { memoryStoreEnabled: true });
-    expect(withDefault).toBe(explicitOn);
+  it("never reads a session log (removed with the union store)", async () => {
+    const app = makeApp({ ...BASE_FILES, "_system/memory/session-log.md": { content: "## old session" } });
+    const out = await readBootContext(app, P, { identity: true });
+    expect(out).not.toContain("old session");
+    expect(out).not.toContain("Recent sessions");
   });
 });
 

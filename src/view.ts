@@ -34,17 +34,12 @@ import {
 } from "./obsidian/tools";
 import { adaptAppToTaskVault, createBacklogTask } from "./obsidian/task-store";
 import { browserBridgeFor } from "./obsidian/browser-controller";
-import { MemoryObserver, type ObserverWrite } from "./obsidian/observer";
 import { AgentFolder, type BlockWrite } from "./obsidian/agent-folder";
 import { planRethink, type BlockName } from "./core/agent-self";
-import type { NowProposal } from "./core/observer";
-import {
-  initialCadenceState,
-  recordStep,
-  pendingDelta,
-  advanceWatermark,
-} from "./core/observer-cadence";
-import { readBootContext } from "./obsidian/memory";
+import { BootPreambleCache } from "./obsidian/memory";
+import { memoryCaps, type MemoryCaps } from "./core/memory-caps";
+import { recallForTurn, type TurnRecall } from "./obsidian/turn-recall";
+import { renderRecallRow } from "./ui/recall-row";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
 import { NoteDiffModal } from "./ui/note-diff";
@@ -147,8 +142,6 @@ import {
   evaluateWorkflowEligibility,
 } from "./core/workflow-signals";
 import { planInputParts, planStateText } from "./core/plan";
-import { parseStoreFile, selectRecall, isBackReference, DEFAULT_RECALL_OPTS, type MemoryEntry } from "./core/memory-store";
-import { RECALLED_MEMORY_OPEN, RECALLED_MEMORY_CLOSE } from "./core/observer";
 import { caretHost } from "./core/caret-host";
 import {
   buildResearchOutbound,
@@ -164,7 +157,6 @@ import {
   type AgentCommandResult,
   type AgentDef,
 } from "./core/agents";
-import { memoryStoreNote, memoryStoreNoteProactive, agentFolderNote } from "./core/memory-prompts";
 import { buildAgentSystemPrompt } from "./core/agent-runs";
 import { readAgentBrainBody } from "./obsidian/agent-store";
 import { statSync } from "node:fs";
@@ -208,7 +200,8 @@ export class ChatView extends ItemView {
   private get streaming(): boolean {
     return this.active?.streaming ?? false;
   }
-  private memoryPreamble = "";
+  /** Boot preamble, rebuilt only when its caps/inputs change (see BootPreambleCache). */
+  private readonly bootPreamble = new BootPreambleCache();
   /** In-flight session spawns, so a pre-warm and a real send don't double-spawn
    *  (and leak) a CLI session for the same conversation. */
   private sessionInit = new WeakMap<Convo, { sig: string; promise: Promise<AgentSession> }>();
@@ -294,8 +287,6 @@ export class ChatView extends ItemView {
   private recapHost: HTMLElement | null = null;
   private recapPanel: RecapPanel | null = null;
   private recapResizeObserver: ResizeObserver | null = null;
-  /** Self-Writing Memory observer — lazily created, one per view, disposed on close. */
-  private memoryObserver: MemoryObserver | null = null;
   /** The Agent Is the Folder — block reader/writer, lazily created (one per view). */
   private agentFolder: AgentFolder | null = null;
   /** Last computed wide state — only rebuild the Context panel on the transition. */
@@ -576,8 +567,6 @@ export class ChatView extends ItemView {
     if (this.persistTimer !== null) this.flushPersist();
     // this.active is always within this.convos, so the loop covers it.
     for (const c of this.convos) this.dropSession(c, "view-unload");
-    this.memoryObserver?.dispose();
-    this.memoryObserver = null;
     this.closeAgentPopover();
   }
 
@@ -678,9 +667,7 @@ export class ChatView extends ItemView {
       s.systemPrompt,
       s.obsidianToolsEnabled,
       s.nativeFirst,
-      s.memoryReadEnabled,
-      s.memoryWriteEnabled,
-      s.memoryStoreEnabled,
+      JSON.stringify(this.memoryCaps()),
       s.autoCompactEnabled,
       s.contextSavingMode,
       s.codexSandbox,
@@ -730,51 +717,29 @@ export class ChatView extends ItemView {
     // zod schemas), and the settings it depends on are read at creation time.
     // ONE tool configuration per spawn, shared by the Claude server and the
     // Codex bridge below (which only narrows it for a read-only sandbox).
+    const caps = this.memoryCaps();
     const toolOpts: ObsidianToolOpts = {
       alwaysLoad: !s.contextSavingMode,
-      memoryRead: s.memoryReadEnabled,
-      memoryWrite: s.memoryWriteEnabled,
-      memoryStoreEnabled: s.memoryStoreEnabled, // gates remember/recall/log_session/capture_learning
+      memory: caps,
       // Per-session server + per-convo closures: ask_user and rethink_memory
       // always render into the conversation that owns this session.
       askBridge: (qs) => this.askBridge(c, qs),
       rethinkBridge: (req) => this.rethinkBridge(c, req),
       // The plugin's ONE shared write-queues, so tool writes serialize against
-      // the observer, the board and the loops ledger (w1-1 contract).
-      memoryWriteQueue: this.plugin.memoryWriteQueue,
+      // the board and the loops ledger (w1-1 contract).
       tasksWriteQueue: this.plugin.tasksWriteQueue,
       loopsWriteQueue: this.plugin.loopsWriteQueue,
       orchestrationEnabled: s.orchestrationEnabled, // gates add_task
-      agentFolderEnabled: s.agentFolderEnabled, // gates rethink_memory
       paths: this.plugin.paths,
       parentConvoId: c.id, // gates spawn_task
       browserBridge: browserBridgeFor(this.plugin, c.id), // undefined when off/mobile
     };
     const obsidianServer = useObsidian ? createObsidianToolServer(this.app, toolOpts) : undefined;
 
-    let memoryPreamble: string | undefined;
     // Provider-agnostic since Tranche A (Codex parity): Claude appends it to
     // the system prompt; Codex prefixes it to the session's first turn.
-    if (s.memoryReadEnabled) {
-      if (!this.memoryPreamble)
-        this.memoryPreamble = await readBootContext(this.app, this.plugin.paths, {
-          agentFolderEnabled: s.agentFolderEnabled,
-          memoryStoreEnabled: s.memoryStoreEnabled,
-        });
-      memoryPreamble = this.memoryPreamble || undefined;
-      // Union-store note, only while its tools are actually registered (store on).
-      // Proactive recall ON swaps in the auto-provided variant.
-      if (hasObsidianTools && s.memoryStoreEnabled) {
-        const note = s.proactiveRecall
-          ? memoryStoreNoteProactive(this.plugin.paths.store)
-          : memoryStoreNote(this.plugin.paths.store);
-        memoryPreamble = (memoryPreamble ? `${memoryPreamble}\n\n` : "") + note;
-      }
-      // rethink_memory note — independent of the union store, so identity keeps working with it off.
-      if (hasObsidianTools && s.memoryWriteEnabled && s.agentFolderEnabled) {
-        memoryPreamble = `${memoryPreamble ? `${memoryPreamble}\n\n` : ""}${agentFolderNote(this.plugin.paths.agentDir)}`;
-      }
-    }
+    const memoryPreamble =
+      (await this.bootPreamble.get(this.app, { caps, tools: hasObsidianTools, paths: this.plugin.paths })) || undefined;
 
     // Codex ↔ Obsidian tools bridge (Tranche B1): same registry as Claude's SDK
     // server, swapped per session. SANDBOX HONESTY: bridge writes happen in the
@@ -792,9 +757,8 @@ export class ChatView extends ItemView {
         const readOnlySandbox = s.codexSandbox === "read-only";
         const all = buildObsidianTools(this.app, {
           ...toolOpts,
-          memoryWrite: s.memoryWriteEnabled && !readOnlySandbox,
+          memory: this.memoryCaps(readOnlySandbox),
           orchestrationEnabled: s.orchestrationEnabled && !readOnlySandbox,
-          agentFolderEnabled: s.agentFolderEnabled && !readOnlySandbox,
         });
         b.bridge.setTools(codexSessionToolset(all, readOnlySandbox, OBSIDIAN_READ_TOOLS));
         codexBridge = {
@@ -1129,8 +1093,7 @@ export class ChatView extends ItemView {
         liveTasks: new Map(),
         tailSurfaceEl: null,
         compactNudged: false,
-        cadence: initialCadenceState(),
-        cadenceTurnFlushLen: 0,
+        harvestedIndex: d.harvestedIndex,
       };
       if (wantDom.has(c.id)) this.renderConvoDom(c);
       this.wireScroll(c);
@@ -1197,6 +1160,7 @@ export class ChatView extends ItemView {
       ...(c.pendingChildReports?.length ? { pendingChildReports: c.pendingChildReports } : {}),
       ...(c.titleLocked ? { titleLocked: true } : {}),
       ...(c.readIndex !== undefined ? { readIndex: c.readIndex } : {}), // 0 is a position, not an absence
+      ...(c.harvestedIndex !== undefined ? { harvestedIndex: c.harvestedIndex } : {}), // memory harvest watermark
       messages: c.messages.map((message) =>
         persistMessage(message, {
           maxToolOutput: MAX_PERSIST_OUTPUT,
@@ -1361,8 +1325,6 @@ export class ChatView extends ItemView {
       liveTasks: new Map(),
       tailSurfaceEl: null,
       compactNudged: false,
-      cadence: initialCadenceState(),
-      cadenceTurnFlushLen: 0,
     };
     this.wireScroll(c);
     return c;
@@ -1460,6 +1422,7 @@ export class ChatView extends ItemView {
 
   switchTo(c: Convo): void {
     if (c === this.active) return;
+    this.plugin.memoryHarvest.leaving(this.active.id); // switching away settles it for memory
     this.saveActive();
     this.active.draft = this.composer.getDraft();
     if (!this.convos.includes(this.active)) this.convos.push(this.active);
@@ -1902,6 +1865,7 @@ export class ChatView extends ItemView {
     c.retiredAt = Date.now();
     this.openTabs.splice(idx, 1);
     this.dropSession(c, "tab-close"); // free the live session; resumable from history
+    this.plugin.memoryHarvest.leaving(c.id);
     if (c === this.active) {
       const nextId = nextFocusAfterRemoval(visualOrder, c.id);
       const next = nextId ? this.convos.find((x) => x.id === nextId) : undefined;
@@ -2602,7 +2566,7 @@ export class ChatView extends ItemView {
       usePrompt: (t) => this.composer.usePrompt(t),
       attachRelated: (p) => this.attachRelated(p),
       vaultSetupNeeded:
-        this.plugin.settings.memoryWriteEnabled &&
+        this.memoryCaps().ledgerWrite &&
         memorySetupNeeded(
           this.plugin.settings.memorySetup,
           isVaultSetUp((p) => !!this.app.vault.getAbstractFileByPath(p), this.plugin.paths)
@@ -2789,21 +2753,6 @@ export class ChatView extends ItemView {
       });
   }
 
-  /** Lazily build the Self-Writing Memory observer for this view. */
-  private observer(): MemoryObserver {
-    if (!this.memoryObserver) {
-      this.memoryObserver = new MemoryObserver(
-        this.app,
-        (prompt, signal) => this.plugin.runObserver(prompt, signal),
-        // Same shared store write-queue the `remember` tool uses — observer
-        // appends and undo serialize against every other store writer (w1-1).
-        this.plugin.memoryWriteQueue,
-        this.plugin.paths.store
-      );
-    }
-    return this.memoryObserver;
-  }
-
   /* ----------------------- the agent is the folder ------------------------ */
 
   /** Lazily build the identity block reader/writer for this view — one per view,
@@ -2965,283 +2914,28 @@ export class ChatView extends ItemView {
     }
   }
 
-  /* --------------------------- proactive recall --------------------------- */
+  /* ------------------------------ memory ------------------------------ */
 
-  /** True when proactive recall may run for `c`: the master flag is on and the
-   *  same preconditions that register the `recall` tool hold (obsidian tools +
-   *  memory read + agentic mode). Any false → the send path is byte-identical
-   *  to before this feature existed. */
-  private proactiveRecallEligible(c: Convo): boolean {
-    const s = this.plugin.settings;
-    if (!s.proactiveRecall || !s.memoryReadEnabled || !s.memoryStoreEnabled) return false;
-    // Claude keeps the same preconditions that register the `recall` tool.
-    // Codex (Tranche A parity): the injection is plain text in the outbound
-    // turn — no tool pairing required.
-    if (c.provider === "claude") return s.obsidianToolsEnabled && s.toolsEnabled;
-    return true;
+  /** What memory may do in this view's chat sessions. The one read of the
+   *  memory flags for the view: every gate below goes through it. */
+  memoryCaps(readOnlySandbox = false): MemoryCaps {
+    return memoryCaps(this.plugin.settings, { surface: "chat", readOnlySandbox });
   }
 
-  /** Read + parse the whole Union Store (all monthly files) — the SAME cheap
-   *  cached-read path the `recall` tool uses. Never throws; an unreadable file is
-   *  skipped, and a missing store yields `[]`. */
-  private async readMemoryStore(): Promise<MemoryEntry[]> {
-    const files = this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${this.plugin.paths.store}/`));
-    const all: MemoryEntry[] = [];
-    for (const f of files) {
-      try {
-        all.push(...parseStoreFile(await this.app.vault.cachedRead(f)));
-      } catch {
-        /* skip unreadable file */
-      }
-    }
-    return all;
-  }
-
-  /** Format the selected entries as the delimited `[recalled-memory]` block that
-   *  travels ONLY in the outbound payload (never the rendered/persisted bubble).
-   *  One bullet per entry: `- (kind, YYYY-MM-DD) …verbatim text…`. */
-  private formatRecallBlock(entries: MemoryEntry[]): string {
-    const lines = entries.map((e) => {
-      const date = new Date(e.at).toISOString().slice(0, 10);
-      const text = e.text.replace(/\s+/g, " ").trim();
-      return `- (${e.kind}, ${date}) ${text}`;
-    });
-    return `${RECALLED_MEMORY_OPEN}\n${lines.join("\n")}\n${RECALLED_MEMORY_CLOSE}`;
-  }
-
-  /** Select the memories to inject into THIS outbound turn (or `[]` when
-   *  ineligible / nothing relevant). Records the chosen ids into the convo's
-   *  per-conversation dedup set so each memory is injected at most once. `message`
-   *  is the clean user text (context-notes prefix and all) — never the rendered
-   *  bubble, which stays free of the injected block. */
-  private async selectTurnRecall(c: Convo, message: string): Promise<MemoryEntry[]> {
-    if (!this.proactiveRecallEligible(c)) return [];
-    const entries = await this.readMemoryStore();
-    if (entries.length === 0) return [];
-    if (!c.injectedMemoryIds) c.injectedMemoryIds = new Set<string>();
-    const picked = selectRecall(entries, message, c.injectedMemoryIds, {
-      ...DEFAULT_RECALL_OPTS,
-      k: this.plugin.settings.proactiveRecallK,
-    });
-    // Diagnostics: recall decisions are exactly where cue-list drift will show
-    // up (false skips / spurious injections) — make both outcomes readable.
-    if (isBackReference(message)) this.diag.push("recall", "skipped (back-reference)");
-    else if (picked.length) this.diag.push("recall", `injected ${picked.length}`);
-    // NOT stamped here. `injectedMemoryIds` means "already paid for in this
-    // conversation's outbound history", and until `session.send` actually
-    // carries them they have been paid for by nobody. Stamping at SELECTION
-    // time burned them on a turn that died before send (`ensureSession` throws
-    // — CLI missing, session expired): the user retries, recall re-runs, every
-    // id is already excluded, and the model answers without the memory while
-    // the affordance above the bubble still claims "N memories recalled".
-    // There is no compensating removal on any failure path, so those entries
-    // were unreachable for the rest of the conversation. `runTurn` stamps them
-    // once the send is committed.
-    return picked;
-  }
-
-  /** Self-Writing Memory: after a HEALTHY turn, fire the observer off the critical
-   *  path. Gated by both memory toggles; never blocks the turn or the next one.
-   *  On a successful write, render a discreet veto row (review · undo) into the turn.
-   *  When the agent folder is on, ALSO pass `now.md` as context so the pass can
-   *  propose a now.md update (design §5) — rendered as an Apply/Dismiss card. */
-  private observeTurn(c: Convo, el: HTMLElement, userText: string, assistantText: string): void {
-    const s = this.plugin.settings;
-    if (!s.selfWritingMemory || !s.memoryWriteEnabled || !s.memoryStoreEnabled) return;
-    // Provider-agnostic (Tranche A): the observer itself runs on a transient
-    // Claude utility pass regardless of which provider produced the turn.
-    if (!userText.trim() || !assistantText.trim()) return;
-    if (!this.plugin.canRunObserver()) {
-      this.plugin.diag.push("background", "observer skipped: budget exhausted or disabled");
-      return;
-    }
-    const observer = this.observer();
-    const wantNow = s.agentFolderEnabled;
-    const run = async (): Promise<{ write: ObserverWrite | null; nowProposal: NowProposal | null }> => {
-      const opts = wantNow ? { nowContext: await this.agent().nowContext() } : {};
-      let result = await observer.observeDetailed({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown", opts);
-      if (result.busy) {
-        await observer.whenIdle();
-        if (!this.plugin.canRunObserver()) return { write: null, nowProposal: null };
-        result = await observer.observeDetailed({ user: userText, assistant: assistantText }, c.sessionId ?? "unknown", opts);
-      }
-      return { write: result.write, nowProposal: result.nowProposal };
-    };
-    void run()
-      .then(async ({ write, nowProposal }) => {
-        if (!this.convos.includes(c) || !el.isConnected) return; // turn removed/rebuilt
-        if (write && write.entries.length > 0) this.renderMemoryVeto(el, write);
-        // Observer now.md proposal (§5): propose only — the Apply click writes.
-        if (nowProposal) {
-          const current = (await this.agent().readBlock("NOW"))?.content ?? "";
-          if (this.convos.includes(c) && el.isConnected) {
-            this.renderBlockProposalCard(el, "NOW", current, nowProposal.text);
-          }
-        }
-      })
-      .catch((err) => {
-        // Never surface into the turn — but record it, so a broken observer
-        // pipeline is visible in Diagnostics instead of failing silently.
-        this.diag.push("observer", `now-proposal: ${err instanceof Error ? err.message : String(err)}`);
-      });
-  }
-
-  /** Rough token estimate for a step-pass call — the digest is capped small
-   *  (current turn's user text + accumulated assistant text so far), so this
-   *  sits well under the dream-LLM stage's estimate. Mirrors the "estimate
-   *  before, record actual after" W0 pattern used by `maybeRunDreamLlm`. */
-  private static readonly STEP_OBSERVE_TOKEN_ESTIMATE = 1500;
-
-  /** Observer cadence dispatch (W2-3), called once per completed turn — the
-   *  exact spot the always-on end-of-turn observer used to fire from.
-   *
-   *  `observerCadence: "session-end"` (default): byte-for-byte the original
-   *  behavior — `observeTurn` on the full turn, cadence state untouched.
-   *
-   *  `observerCadence: "every-n-steps"`: a step pass may already have flushed
-   *  part of this turn's assistant text (tracked in `cadenceTurnFlushLen`,
-   *  reset below for the next turn) — only the unsent tail is handed to the
-   *  observer, and the conversation's watermark is advanced to cover the
-   *  whole turn, so nothing in it is ever sent twice. */
-  private observeTurnEnd(c: Convo, ctx: AssistantCtx): void {
-    const s = this.plugin.settings;
-    if (s.observerCadence !== "every-n-steps") {
-      this.observeTurn(c, ctx.el, ctx.userText, ctx.fullText);
-      return;
-    }
-    const flushed = c.cadenceTurnFlushLen ?? 0;
-    const assistantTail = ctx.fullText.slice(flushed);
-    c.cadenceTurnFlushLen = 0; // next turn starts with a clean slate
-    const cadence = c.cadence ?? initialCadenceState();
-    c.cadence = advanceWatermark(cadence, cadence.stepCount); // this turn is now fully covered
-    if (!assistantTail.trim()) return; // a step pass already captured everything this turn
-    this.observeTurn(c, ctx.el, ctx.userText, assistantTail);
-  }
-
-  /** Observer cadence (W2-3): count one real tool-call step for `c` and, when
-   *  `observerCadence: "every-n-steps"` crosses an interval boundary, flush a
-   *  delta capture over whatever this turn has produced so far — WITHOUT
-   *  waiting for the turn to end. No-op (state untouched) unless self-writing
-   *  memory is fully on and the setting is every-n-steps. */
-  private maybeStepObserve(c: Convo, ctx: AssistantCtx): void {
-    const s = this.plugin.settings;
-    if (s.observerCadence !== "every-n-steps") return;
-    if (!s.selfWritingMemory || !s.memoryWriteEnabled || !s.memoryStoreEnabled) return;
-    // Provider-agnostic (Tranche A) — see observeTurn.
-    const cadence = c.cadence ?? initialCadenceState();
-    const stepped = recordStep(cadence, s.observerStepInterval);
-    c.cadence = stepped.state;
-    if (!stepped.fired) return;
-    const delta = pendingDelta(stepped.state, stepped.state.stepCount);
-    if (!delta) return; // defensive — a fresh fire always has something pending
-    this.runStepObserve(c, ctx, stepped.state.stepCount);
-  }
-
-  /** Actually run one every-n-steps delta pass: budget-checked through the W0
-   *  ledger (skip silently, no retry queue, when it denies), same observer
-   *  pipeline as the end-of-turn pass. Only the assistant text produced SINCE
-   *  the last flush (step pass or turn start) is sent — so back-to-back step
-   *  passes within one marathon turn never re-send the same content. Advances
-   *  the watermark and the turn's flush marker once the pass is attempted. */
-  private runStepObserve(c: Convo, ctx: AssistantCtx, toStepCount: number): void {
-    if (!this.plugin.checkBackgroundBudget(ChatView.STEP_OBSERVE_TOKEN_ESTIMATE)) {
-      this.plugin.diag.push("background", "observer step-pass skipped: budget exhausted or disabled");
-      return; // no unbounded retry — the next boundary (step or end-of-turn) gets another try
-    }
-    const userText = ctx.userText;
-    const flushedSoFar = c.cadenceTurnFlushLen ?? 0;
-    const assistantDelta = ctx.fullText.slice(flushedSoFar);
-    // Snapshot NOW (before the async call) how much of this turn's assistant
-    // text this pass covers — text that streams in WHILE the call is in
-    // flight must stay unflushed for the next boundary, not silently skipped.
-    const coveredLen = ctx.fullText.length;
-    if (!userText.trim() || !assistantDelta.trim()) return; // nothing new yet this turn
-    const el = ctx.el;
-    void this.observer()
-      .observeDetailed({ user: userText, assistant: assistantDelta }, c.sessionId ?? "unknown")
-      .then((result) => {
-        if (!result.attempted) return;
-        // Regardless of whether a memory was actually written, the delta WAS
-        // shown to the model — mark it flushed so it's never re-sent.
-        c.cadenceTurnFlushLen = Math.max(c.cadenceTurnFlushLen ?? 0, coveredLen);
-        c.cadence = advanceWatermark(c.cadence ?? initialCadenceState(), toStepCount);
-        const write = result.write;
-        if (!write || write.entries.length === 0) return;
-        if (!this.convos.includes(c) || !el.isConnected) return; // turn removed/rebuilt
-        this.renderMemoryVeto(el, write);
-      })
-      .catch((err) => {
-        // Never surface into the turn — a later boundary retries — but log it so
-        // a persistently-failing memory pipeline is visible in Diagnostics.
-        this.diag.push("observer", `memory-veto: ${err instanceof Error ? err.message : String(err)}`);
-      });
-  }
-
-  /** Quiet, expandable "N memories recalled" row under a user turn — the
-   *  transparency surface for proactive recall, so injection is never invisible.
-   *  Collapsed by default: a brain icon + count (register C label). Click toggles
-   *  a list of the injected entries (kind · date · verbatim text). No fill at rest;
-   *  state comes from the caret + hover only (design laws 2 & 4). */
-  private renderRecallAffordance(turnEl: HTMLElement, entries: MemoryEntry[]): void {
-    const n = entries.length;
-    const wrap = turnEl.createDiv({ cls: "mva-recall" });
-    const header = wrap.createDiv({ cls: "mva-recall-header", attr: { role: "button", tabindex: "0" } });
-    setIcon(header.createSpan({ cls: "mva-recall-icon" }), "brain");
-    header.createSpan({ cls: "mva-recall-label", text: `${n} ${n === 1 ? "memory" : "memories"} recalled` });
-    const caret = header.createSpan({ cls: "mva-recall-caret" });
-    setIcon(caret, "chevron-right");
-
-    const list = wrap.createDiv({ cls: "mva-recall-list" });
-    for (const e of entries) {
-      const item = list.createDiv({ cls: "mva-recall-item" });
-      const date = new Date(e.at).toISOString().slice(0, 10);
-      item.createSpan({ cls: "mva-recall-meta", text: `${e.kind} · ${date}` });
-      item.createSpan({ cls: "mva-recall-text", text: e.text.replace(/\s+/g, " ").trim() });
-    }
-
-    const toggle = () => {
-      const open = wrap.hasClass("is-open");
-      wrap.toggleClass("is-open", !open);
-      header.setAttr("aria-expanded", String(!open));
-    };
-    header.setAttr("aria-expanded", "false");
-    this.clickable(header, toggle);
-    header.addEventListener("keydown", (ev: KeyboardEvent) => {
-      if (ev.key === "Enter" || ev.key === " ") {
-        ev.preventDefault();
-        toggle();
-      }
-    });
-  }
-
-  /** Discreet, non-blocking "N memories written — review · undo" indicator. */
-  private renderMemoryVeto(el: HTMLElement, write: ObserverWrite): void {
-    const n = write.entries.length;
-    const row = el.createDiv({ cls: "mva-faint mva-mem-veto" });
-    row.createSpan({ text: `${n} ${n === 1 ? "memory" : "memories"} written — ` });
-    const review = row.createEl("a", { text: "review", href: "#" });
-    this.clickable(review, (e) => {
-      e.preventDefault();
-      // Reveal the store file the entries were appended to.
-      void this.app.workspace.openLinkText(write.snapshot.path, "", "tab");
-    });
-    row.createSpan({ text: " · " });
-    const undo = row.createEl("a", { text: "undo", href: "#" });
-    this.clickable(undo, (e) => {
-      e.preventDefault();
-      void this.observer()
-        // Undo strips exactly this pass's entry ids from the CURRENT file —
-        // any @user entry written in between is preserved (never a blind restore).
-        .undo(write)
-        .then(() => {
-          row.empty();
-          row.createSpan({ text: `${n === 1 ? "Memory" : "Memories"} reverted.` });
-        })
-        .catch(() => {
-          row.empty();
-          row.createSpan({ text: "Couldn't undo — the store file may have changed." });
-        });
-    });
+  /** Per-turn recall for `c`: related notes and past chats for this message,
+   *  or null (caps off, message too short, nothing matched). */
+  private async turnRecall(c: Convo, userText: string): Promise<TurnRecall | null> {
+    if (!this.memoryCaps().autoRecall) return null;
+    const chats = this.allConvos().map((x) => ({
+      id: x.id,
+      title: x.title,
+      updatedAt: x.updatedAt,
+      archived: x.archived,
+      messages: x.messages,
+    }));
+    const recall = await recallForTurn(this.app, { message: userText, convoId: c.id, chats, now: Date.now() });
+    if (recall) this.diag.push("recall", `injected ${recall.notes.length} notes, ${recall.chats.length} chats`);
+    return recall;
   }
 
   private addUserTurn(c: Convo, text: string, images?: ImageAttachment[]): HTMLElement {
@@ -5556,12 +5250,11 @@ export class ChatView extends ItemView {
     const embedded = await this.composer.embeddedImages(text);
     if (embedded.length) imgs = [...(imgs ?? []), ...embedded];
 
-    // Proactive recall (design 2026-07-09): pick the relevant, not-yet-injected
-    // memories for THIS turn. Runs off the store's cached read; `[]` when the flag
-    // is off or nothing clears the floor — in which case the outbound payload
-    // below is built exactly as before this feature existed. Recovery retries skip
-    // it: they reuse the prior turn's bubble and already carry a recap prefix.
-    const recalled = opts?.isRecoveryRetry ? [] : await this.selectTurnRecall(c, message);
+    // Per-turn recall: related notes and past chats for THIS message, in a
+    // `[vault-recall]` block on the outbound payload only. Null when memory
+    // recall is off or nothing matched: the payload is then built exactly as
+    // before. Recovery retries skip it: they already carry a recap prefix.
+    const recalled = opts?.isRecoveryRetry ? null : await this.turnRecall(c, text);
 
     // A recovery retry reuses the user bubble the poisoned turn already rendered —
     // don't render (or re-persist) a duplicate. The original message is still the
@@ -5569,9 +5262,9 @@ export class ChatView extends ItemView {
     const turnFrom = c.messages.length; // where THIS turn starts; the stretch before it is not its to mark read
     if (!opts?.isRecoveryRetry && !opts?.reuseUserTurn) {
       const userEl = this.addUserTurn(c, text, imgs);
-      // Quiet "N memories recalled" affordance under the bubble — the trust
-      // surface, so the injection is never invisible. Only when there were any.
-      if (recalled.length) this.renderRecallAffordance(userEl, recalled);
+      // Quiet "Recalled N" row under the bubble: the trust surface, so the
+      // injection is never invisible. Only when there was any.
+      if (recalled) renderRecallRow(userEl, recalled, (p) => void this.app.workspace.openLinkText(p, "", "tab"));
       // Flush the user's message to disk immediately: it lives only in RAM until
       // the turn's finally otherwise, so an Obsidian crash mid-turn would lose the
       // exchange from the UI. The atomic write keeps this cheap and safe.
@@ -5685,10 +5378,6 @@ export class ChatView extends ItemView {
           // A real (non-interactive) tool is now running.
           toolNames.set(e.id, e.name);
           this.diag.push("tool", `${e.name} start${e.parentId ? " (sub)" : ""}`);
-          // Observer cadence (W2-3): count this real tool-call as one step. Only
-          // meaningful in "every-n-steps" mode; a no-op (state kept, never fires)
-          // otherwise since the setting gate below short-circuits first.
-          this.maybeStepObserve(c, ctx);
           // File tracking runs before the nesting branch: subagent writes must stay
           // rewindable (checkpoint) and visible in the touched-notes footer.
           const paths = toolFilePaths(e.name, e.input);
@@ -5894,7 +5583,7 @@ export class ChatView extends ItemView {
             isMemoryTool: OBSIDIAN_MEMORY_TOOLS.has(e.tool),
             alreadyAllowed: c.allow.has(allowKey(e.tool, e.input)),
             autoAllowRead: s.autoAllowRead,
-            memoryWriteEnabled: s.memoryWriteEnabled,
+            memoryWriteEnabled: this.memoryCaps().ledgerWrite,
             permDenyRules: s.permDenyRules,
             permAllowRules: s.permAllowRules,
           });
@@ -6061,15 +5750,15 @@ export class ChatView extends ItemView {
 
     try {
       const session = await this.ensureSession(c);
-      // sendPrefix (recovery recap) and the proactive-recall block are prepended to
+      // sendPrefix (recovery recap) and the recall block are prepended to
       // the OUTBOUND provider message only — never to the rendered/persisted user
       // text, so they can't leak into the transcript, c.messages, or serialize().
       // Order: recap (if any) -> recalled memory -> research contract -> the
       // user's message.
-      const recallBlock = recalled.length ? this.formatRecallBlock(recalled) : "";
+      const recallBlock = recalled?.block ?? "";
       // Cold-spawn rehydration: a session spawned with no resumable session starts
       // on an EMPTY CLI transcript, so a "continua/riprendi" has nothing to continue
-      // — the model forages the vault (session-log, open-items) to reconstruct
+      // — the model forages the vault (open-items, old notes) to reconstruct
       // "which conversation" instead of reading THIS thread. Whenever we spawn cold but the
       // convo already carries real history, reseed it with the same recap the
       // stage-2 recovery uses. This generalizes that narrow path to close every
@@ -6101,15 +5790,7 @@ export class ChatView extends ItemView {
       const agentMessage =
         boundAgent && c.provider === "claude" ? buildAgentBindingOutbound(boundAgent, researchMessage) : researchMessage;
       const outbound = [opts?.sendPrefix, coldRecap, compactPrefix, childReports, recallBlock, agentMessage].filter(Boolean).join("\n\n");
-      // Recalled memories are "paid for" only now, with `outbound` built and the
-      // session alive — everything that could still fail is the send itself, and
-      // a failed send re-recalls on the next attempt rather than answering
-      // without a memory it already claimed to have injected. See the note in
-      // `selectTurnRecall`, which deliberately does NOT stamp at selection time.
-      if (recalled.length && c.injectedMemoryIds) {
-        for (const e of recalled) c.injectedMemoryIds.add(e.id);
-      }
-      // Same commit-point rule, for the same reason: a note body counts as
+      // A note body counts as
       // "already provided" only once the send that carried it is real.
       if (assembled.injectedContentPaths.length) {
         if (!c.inlinedNoteMtimes) c.inlinedNoteMtimes = new Map();
@@ -6299,11 +5980,6 @@ export class ChatView extends ItemView {
       ) {
         c.aiTitleAttempts = (c.aiTitleAttempts ?? 0) + 1; // counts fires, not successes
         this.aiTitle(c, ctx.userText, ctx.fullText);
-      }
-      // Self-Writing Memory: observe HEALTHY turns only (not poisoned/errored, not
-      // stopped). Fires off the critical path — never delays the next user turn.
-      if (!poisoned && !c.stopped && ctx.fullText.trim()) {
-        this.observeTurnEnd(c, ctx);
       }
       if (plan.enqueueRecapRetry) {
         // Stage 2: auto-retry the SAME user message once with a private recap

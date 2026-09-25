@@ -29,22 +29,18 @@ import { registerExoIcons } from "./ui/icons";
 import { AgentPicker, PlaybookPicker } from "./ui/pickers";
 import * as convoBridge from "./ui/convo-bridge";
 import { DEFAULT_SETTINGS, MVASettingTab, type MVASettings } from "./settings";
+import { stripObsoleteSettings } from "./settings-schema";
+import { pluginMemoryCaps, registerMemory, undoMemoryWrite } from "./obsidian/memory-wiring";
+import type { MemoryHarvester } from "./obsidian/memory-harvest";
+import type { HarvestLog } from "./obsidian/harvest-log";
+import type { MemoryCaps } from "./core/memory-caps";
+import type { ChatRecord } from "./core/recent-chats";
 import { ADAPTERS } from "./providers/registry";
 import { resolveCli, cliDiagnostics } from "./cli";
 import { runCliUpdate, maybeAutoUpdateCli } from "./cli-maintenance";
 import { cliVerifyStatus, VERIFIED_CLAUDE_CLI } from "./core/semver";
 import { InlineEditModal } from "./ui/inline-edit";
 import type { AgentEvent } from "./providers/types";
-import {
-  computePlan,
-  applyPlan,
-  applyLlmPlan,
-  mergeSnapshots,
-  undoPlan,
-  DreamSnapshotPersistenceError,
-  type DreamSnapshot,
-} from "./obsidian/dream";
-import { runDreamLlm, type DreamLlmResult } from "./obsidian/dream-llm";
 import {
   AGENT_BLOCK_NAMES,
   buildSeedPrompt,
@@ -54,10 +50,7 @@ import {
 } from "./core/agent-self";
 import { scaffoldItems, parentFolder, type MemorySetup } from "./core/vault-setup";
 import { detectMemoryRoot, exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "./core/paths";
-import { readUnimportedObservations, advanceAndPersistWatermark } from "./obsidian/claudemem";
-import { formatDreamSummary } from "./core/dream-proposals";
 import { resetIfNewDay, canSpend, recordSpend } from "./core/background-budget";
-import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessOpts, type HeadlessResult } from "./headless";
 import { automationLastRunKey, migrateScheduledRuns, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
 import { AutomationStore, adaptAppToAutomationVault, migrateToAutomationFiles } from "./obsidian/automation-store";
@@ -143,6 +136,7 @@ import {
   stripLegacyCachedSessionCaps,
   writeSessionCapsCache,
 } from "./session-caps-cache";
+import { checkGitRepo, gitRunner, isWorktreeDirty, runGitCommit } from "./obsidian/git";
 import {
   initialAutoCommitState,
   recordVaultWrite,
@@ -236,14 +230,16 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
   lastRateLimit: import("./providers/types").RateLimitInfo | null = null;
 
   /**
-   * THE ONE shared write path for every append to the Memory Union Store
-   * (`paths.store`). Plugin-scoped so all store writers — the
-   * `remember` tool, the Self-Writing Memory observer (append + undo), and any
-   * future dream pass — enqueue on the SAME FIFO and never interleave a
-   * read-modify-write cycle (w1-1 contract). Injected into both
-   * `createObsidianToolServer` and `MemoryObserver`.
+   * THE ONE shared write path for Exo's own memory writes into vault notes: the
+   * agent-folder blocks (`rethink_memory`) and memory harvest. Plugin-scoped so
+   * every writer enqueues on the SAME FIFO and never interleaves a
+   * read-modify-write cycle on the same note (w1-1 contract).
    */
   readonly memoryWriteQueue = new WriteQueue();
+  /** Automatic memory: the harvester and its record of recent harvests
+   *  (built in onload by `registerMemory`, obsidian/memory-wiring). */
+  memoryHarvest!: MemoryHarvester;
+  harvestLog!: HarvestLog;
   /** One shared write path for the open-loops ledger (`paths.openLoops`) across every
    *  Claude/Codex conversation. Each session gets a fresh tool registry, so a
    *  queue created inside that registry cannot prevent lost updates. */
@@ -255,7 +251,6 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
   /** Settings share one JSON file; serialize snapshots so background update
    *  checks and interactive settings changes cannot race saveData(). */
   private readonly settingsWriteQueue = new WriteQueue();
-  private readonly dreamSnapshotWriteQueue = new WriteQueue();
   private readonly sessionCapsWriteQueue = new WriteQueue();
   /**
    * THE ONE shared write path for every append to the Orchestration Board
@@ -365,7 +360,7 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     // Electron-renderer interop, BEFORE anything can spawn a session: the Agent
     // SDK hands its (DOM-realm) AbortSignals to Node's events.setMaxListeners,
     // which throws ERR_INVALID_ARG_TYPE in Obsidian's renderer and kills every
-    // Claude session at query() setup (first hit: dream-llm, 2026-07-06 — but it
+    // Claude session at query() setup (first hit: a background utility pass, 2026-07-06 — but it
     // breaks chat and headless identically). Mutating the module object is what
     // makes the bundled SDK see the shim (esbuild namespace getters are live).
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- must mutate the live CJS module object, which an ES import binding cannot
@@ -447,6 +442,7 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
       decisionsDir: this.paths.decisions,
     });
 
+    registerMemory(this);
     registerExoIcons();
     registerExoViews(this);
 
@@ -637,35 +633,13 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     });
 
     this.addCommand({
-      id: "memory-dream-pass",
-      name: `Run memory dream pass (consolidate ${this.paths.memory})`,
-      callback: () => void this.openDreamPass(),
-    });
-    this.addCommand({
-      id: "memory-dream-undo",
-      name: "Undo last memory dream pass",
-      callback: async () => {
-        const snap = await this.loadDreamSnapshot();
-        if (!snap) {
-          new Notice("No dream pass to undo.");
-          return;
-        }
-        const n = await undoPlan(this.app, snap);
-        await this.clearDreamSnapshot();
-        new Notice(`Undid the dream pass — restored ${n} file(s).`);
-      },
-    });
-    // Hourly check; runs a scheduled pass only when due per settings.
-    this.registerInterval(window.setInterval(() => void this.maybeScheduledDreamPass(), 60 * 60 * 1000));
-
-    this.addCommand({
       id: "seed-agent-folder",
       name: "Seed agent folder",
       // Visible whenever vault-memory writes are allowed. Seeding is safe with the
       // agent-folder flag OFF (boot ignores the folder until it's flipped on) — it
       // IS the natural rollout: seed → review USER.md → enable the flag.
       checkCallback: (checking: boolean) => {
-        if (!this.settings.memoryWriteEnabled) return false;
+        if (!this.memoryCaps().ledgerWrite) return false;
         if (!checking) void this.seedAgentFolder();
         return true;
       },
@@ -677,7 +651,7 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
       // Same gate as seed-agent-folder: pointless (and confusing) to offer
       // scaffolding when the user has turned vault-memory writes off.
       checkCallback: (checking: boolean) => {
-        if (!this.settings.memoryWriteEnabled) return false;
+        if (!this.memoryCaps().ledgerWrite) return false;
         // The explicit command scaffolds the complete layer; the empty-state
         // picker is where "minimal" vs "full" is chosen.
         if (!checking) void this.applyMemorySetup("full");
@@ -1137,8 +1111,9 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     let completed = false;
 
     try {
-      const { isGitRepo, gitAvailable } = await checkGitRepo(cwd);
-      const worktreeDirty = isGitRepo && gitAvailable ? await isWorktreeDirty(cwd, paths) : false;
+      const git = gitRunner(cwd);
+      const { isGitRepo, gitAvailable } = await checkGitRepo(git);
+      const worktreeDirty = isGitRepo && gitAvailable ? await isWorktreeDirty(git, paths) : false;
       const pendingFileCount = paths.length;
       const commit = shouldCommitNow({
         enabled: this.settings.vaultAutoCommit,
@@ -1150,7 +1125,7 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
         debounceMs,
         cadenceMs,
       });
-      if (commit) await runGitCommit(cwd, paths, formatCommitMessage(pendingFileCount));
+      if (commit) await runGitCommit(git, paths, formatCommitMessage(pendingFileCount));
       completed = true;
     } catch (err) {
       // Never let a failed commit break anything — log it and surface at most
@@ -1380,13 +1355,12 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
   /**
    * Run a prompt on a cheap, transient, tool-less Claude CLI session (same
    * lifecycle shape as {@link generateTitle}). The reusable chassis behind every
-   * background utility pass — the Self-Writing Memory observer and the Dream Pass
-   * v2 LLM stage. Returns the raw model text, or "" on any failure — never throws,
+   * background utility pass: memory harvest, turn suggestions, playbook
+   * distillation. Returns the raw model text, or "" on any failure — never throws,
    * aborts silently. A hard timeout plus the caller's `signal` guarantees a hung
    * call can't leak.
    *
-   * @param opts.model    Cheap model id (defaults to Haiku — the observer's model
-   *                      by product policy; the dream stage passes a Sonnet id).
+   * @param opts.model    Model id (defaults to the `backgroundModel` setting).
    * @param opts.timeoutMs Hard ceiling (default 15s).
    * @param opts.onUsage  W0 cost governance: invoked once with the real
    *                      input+output token count for this call, read from the
@@ -1447,7 +1421,7 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     } catch (err) {
       // Caller treats "" as no-op, but NEVER swallow the reason silently —
       // an instantly-empty utility pass is indistinguishable from a healthy
-      // empty answer without this line (bit us on the first dream-llm run).
+      // empty answer without this line (bit us on the first background LLM run).
       console.warn("[Exo] utility pass failed:", err);
       return "";
     } finally {
@@ -1799,34 +1773,6 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     onWrite();
   }
 
-  /** Rough fallback estimate (chars/4-equivalent order of magnitude) for the
-   *  observer's budget pre-check and for `recordBackgroundSpend` when the
-   *  provider's real per-turn token count (`lastTurnTokens`) isn't available. */
-  private static readonly OBSERVER_TOKEN_ESTIMATE = 1500;
-
-  /** Back-compat thin wrapper around the observer chassis. Kept so
-   *  ChatView keeps calling `runObserver(prompt, signal)` with unchanged behavior.
-   *
-   *  Callers gate with `canRunObserver()` before dispatch. This method records the
-   *  real per-turn token count from the SDK result (or a bounded fallback) exactly
-   *  once after the call. */
-  async runObserver(prompt: string, signal: AbortSignal): Promise<string> {
-    let tokens: number | null = null;
-    const out = await this.runUtilityPass(prompt, {
-      signal,
-      timeoutMs: 90_000, // explicit: long-transcript extraction is slower than a plain turn
-      onUsage: (t) => {
-        tokens = t;
-      },
-    });
-    this.recordBackgroundSpend(tokens ?? ExoPlugin.OBSERVER_TOKEN_ESTIMATE);
-    return out;
-  }
-
-  canRunObserver(): boolean {
-    return this.checkBackgroundBudget(ExoPlugin.OBSERVER_TOKEN_ESTIMATE);
-  }
-
   private inlineEdit(editor: Editor): void {
     const selection = editor.getSelection();
     const text = selection || editor.getLine(editor.getCursor().line);
@@ -1857,6 +1803,7 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     // See session-caps-cache.ts: strips the orphaned pre-migration key that
     // Object.assign above can't drop on its own.
     if (stripLegacyCachedSessionCaps(this.settings)) await this.saveSettings();
+    if (stripObsoleteSettings(this.settings)) await this.saveSettings();
     // Codex app-server no longer accepts the legacy `on-failure` policy.
     if (this.settings.codexApproval === "on-failure") {
       this.settings.codexApproval = "on-request";
@@ -2026,42 +1973,6 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     return this.saveConversations(data, "conversations-archive.json");
   }
 
-  private dreamFile(): string {
-    return `${this.manifest.dir}/dream-snapshot.json`;
-  }
-  async saveDreamSnapshot(s: DreamSnapshot): Promise<boolean> {
-    const json = JSON.stringify(s);
-    return this.dreamSnapshotWriteQueue.enqueue(async () => {
-      try {
-        await this.app.vault.adapter.write(this.dreamFile(), json);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-  }
-
-  private async requireDreamSnapshot(s: DreamSnapshot): Promise<void> {
-    if (!(await this.saveDreamSnapshot(s))) throw new DreamSnapshotPersistenceError();
-  }
-  async loadDreamSnapshot(): Promise<DreamSnapshot | null> {
-    try {
-      const p = this.dreamFile();
-      if (await this.app.vault.adapter.exists(p)) return JSON.parse(await this.app.vault.adapter.read(p)) as DreamSnapshot;
-    } catch {
-      /* corrupt/missing */
-    }
-    return null;
-  }
-  async clearDreamSnapshot(): Promise<void> {
-    try {
-      const p = this.dreamFile();
-      if (await this.app.vault.adapter.exists(p)) await this.app.vault.adapter.remove(p);
-    } catch {
-      /* ignore */
-    }
-  }
-
   // Mechanics (file path, read/write/corrupt-handling) live in
   // session-caps-cache.ts — these three are thin wrappers that own only the
   // WriteQueue serialization, same division of labor as workflow-signal-store.
@@ -2076,101 +1987,8 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
   async clearSessionCapsCache(): Promise<void> {
     return removeSessionCapsCache(this.app.vault.adapter, this.manifest.dir);
   }
-  /**
-   * Manual dream pass: compute the deterministic plan, optionally run the Dream
-   * Pass v2 LLM proposal stage (when `dreamLlmEnabled`), and open the preview
-   * modal. Nothing mutates until the user clicks Apply.
-   */
-  private async openDreamPass(): Promise<void> {
-    const plan = computePlan(this.app, this.paths);
-    const llm = await this.maybeRunDreamLlm();
-    new DreamModal(this.app, plan, llm, async () => {
-      const ranAt = new Date().toISOString();
-      let snap = await applyPlan(this.app, plan, ranAt, (partial) => this.requireDreamSnapshot(partial));
-
-      if (llm && (llm.writePlan.storeEntries.length || llm.writePlan.ruleDrafts.length)) {
-        const llmSnap = await applyLlmPlan(
-          this.app,
-          llm.writePlan,
-          this.memoryWriteQueue,
-          ranAt,
-          (partial) => this.requireDreamSnapshot(mergeSnapshots(snap, partial)),
-          this.paths
-        );
-        snap = mergeSnapshots(snap, llmSnap);
-        // Watermark advances ONLY on apply (never on propose/preview).
-        if (llm.writePlan.importedIds.length) {
-          await advanceAndPersistWatermark(this.app, this.memoryWriteQueue, llm.writePlan.importedIds, ranAt, this.paths.claudememSync);
-        }
-        // Persist applied keys so the next run's gate culls duplicates.
-        this.settings.appliedProposalKeys = [...this.settings.appliedProposalKeys, ...llm.writePlan.keys].slice(-500);
-        await this.saveSettings();
-      }
-
-      await this.requireDreamSnapshot(snap);
-      const summary = llm
-        ? formatDreamSummary(llm.writePlan.summary)
-        : `dream — promoted ${plan.promote.length}, merged ${plan.dedup.length}, stale ${plan.stale.length}`;
-      await this.commitDreamApply(snap.files.map((file) => file.path), summary);
-      const s = llm?.writePlan.summary;
-      const llmBit = s ? `; LLM: merged ${s.merged}, superseded ${s.superseded}, drafts ${s.ruleDrafts}, imported ${s.imported}` : "";
-      new Notice(
-        `Dream pass: ${plan.promote.length} promoted, ${plan.dedup.length} merged, ${plan.stale.length} marked stale${llmBit}. Undo from the command palette.`
-      );
-    }).open();
-  }
-
-  /**
-   * Run the Dream Pass v2 LLM proposal stage, or null when it should not run
-   * (toggle off, non-Claude provider, or the background budget is exhausted —
-   * checked BEFORE the LLM call). Never throws.
-   */
-  private async maybeRunDreamLlm(): Promise<DreamLlmResult | null> {
-    const s = this.settings;
-    if (!s.dreamLlmEnabled) return null;
-    if (s.provider !== "claude") return null;
-
-    // W0 budget: check BEFORE the LLM call.
-    const estimate = 8000;
-    if (!this.checkBackgroundBudget(estimate)) {
-      this.diag.push("background", "dream-llm skipped: budget exhausted or disabled");
-      return null;
-    }
-
-    try {
-      const controller = new AbortController();
-      const observations = await readUnimportedObservations(this.app, {
-        projects: s.claudememProjects,
-        limit: 100,
-        syncStatePath: this.paths.claudememSync,
-      });
-      const result = await runDreamLlm({
-        app: this.app,
-        // Generating a full proposal batch over store+learnings+observations
-        // takes far longer than the 15s utility default — give it real room.
-        runUtilityPass: (p, o) => this.runUtilityPass(p, { ...o, timeoutMs: 300_000 }),
-        queue: this.memoryWriteQueue,
-        observations,
-        appliedKeys: new Set(s.appliedProposalKeys),
-        memoryFileBudget: s.memoryFileBudget,
-        signal: controller.signal,
-        now: Date.now(),
-        session: "dream",
-        model: s.backgroundModel,
-        paths: this.paths,
-      });
-      // Record spend (rough estimate: prompt overhead + output length).
-      this.recordBackgroundSpend(estimate + Math.ceil((result.raw?.length ?? 0) / 4));
-      return result;
-    } catch (err) {
-      console.warn("[Exo] dream-llm stage failed (no-op):", err);
-      return null;
-    }
-  }
-
   /** Roll the daily ledger and answer whether a background pass may spend `estimate`.
-   *  Not `private`: the observer-cadence step passes (view.ts, W2-3) gate through
-   *  this same W0 ledger as the dream-LLM stage does. */
+   *  Not `private`: memory harvest gates through this same W0 ledger. */
   checkBackgroundBudget(estimate: number): boolean {
     const s = this.settings;
     const now = Date.now();
@@ -2188,22 +2006,6 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     const s = this.settings;
     s.backgroundBudgetLedger = recordSpend(s.backgroundBudgetLedger, tokens, Date.now());
     void this.saveSettings();
-  }
-
-  /** Fire one descriptive git commit for an applied dream pass. Gated on the same
-   *  opt-in git safety-net setting; a no-op when the vault isn't a git repo. */
-  private async commitDreamApply(paths: readonly string[], summary: string): Promise<void> {
-    if (!this.settings.vaultAutoCommit) return;
-    const cwd = this.vaultPath();
-    if (cwd === ".") return;
-    try {
-      const { isGitRepo, gitAvailable } = await checkGitRepo(cwd);
-      if (isGitRepo && gitAvailable && paths.length) {
-        await runGitCommit(cwd, paths, formatCommitMessage(paths.length, summary));
-      }
-    } catch (err) {
-      console.error("[Exo] dream commit failed:", err);
-    }
   }
 
   /** Epoch ms of the most recent `exo: auto-commit` in the vault's git log, or
@@ -2225,38 +2027,6 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     } catch {
       return null;
     }
-  }
-
-  private async maybeScheduledDreamPass(): Promise<void> {
-    const sched = this.settings.dreamPassSchedule;
-    if (sched === "off") return;
-    const now = Date.now();
-    const period = sched === "daily" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-    if (this.settings.lastDreamPass && now - this.settings.lastDreamPass < period) return;
-    const plan = computePlan(this.app, this.paths);
-    if (plan.promote.length + plan.dedup.length + plan.stale.length === 0) {
-      this.settings.lastDreamPass = now;
-      await this.saveSettings();
-      return;
-    }
-    try {
-      const ranAt = new Date().toISOString();
-      const snap = await applyPlan(this.app, plan, ranAt, (partial) => this.requireDreamSnapshot(partial));
-      await this.requireDreamSnapshot(snap);
-      await this.commitDreamApply(
-        snap.files.map((file) => file.path),
-        `dream — promoted ${plan.promote.length}, merged ${plan.dedup.length}, stale ${plan.stale.length}`
-      );
-    } catch (err) {
-      console.error("[Exo] scheduled dream pass failed:", err);
-      new Notice(err instanceof Error ? err.message : "Scheduled dream pass failed; see the developer console.");
-      return;
-    }
-    this.settings.lastDreamPass = now;
-    await this.saveSettings();
-    new Notice(
-      `Scheduled dream pass: ${plan.promote.length} promoted, ${plan.dedup.length} merged, ${plan.stale.length} stale. Undo from the command palette.`
-    );
   }
 
   /** Run one playbook headlessly and write its report. Write-enabled runs also
@@ -2547,6 +2317,11 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
    *  snapshot arrives, so the pane's live statuses (MCP health, skill/tool
    *  inventories) match the session without a manual refresh. Cheap: the
    *  row-based tabs reconcile by key, so unchanged rows aren't rebuilt. */
+  /** What memory may do on the plugin's own surfaces (see core/memory-caps). */
+  memoryCaps(): MemoryCaps { return pluginMemoryCaps(this); }
+  readConversationStore(): Promise<ChatRecord[]> { return convoBridge.readConversationStore(this); }
+  undoMemoryWrite(sha?: string): Promise<{ ok: boolean; message: string }> { return undoMemoryWrite(this, this.harvestLog, sha); }
+
   refreshHub(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(HUB_VIEW_TYPE)) {
       if (leaf.view instanceof HubView) leaf.view.refresh();
@@ -3262,55 +3037,4 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     await this.saveAutomationRuns(records);
   }
 
-}
-
-/* -------------------- git auto-commit — impure shell -------------------- */
-// Argument arrays only, explicit cwd, never a shell string — no interpolation
-// of any path or message into a command line. See core/git-autocommit.ts for
-// the pure decision logic these merely execute.
-
-/** Best-effort text of a node `child_process` error, for matching known-benign
- *  git outcomes (e.g. "nothing to commit"). Never throws. */
-function errText(err: unknown): string {
-  if (!err || typeof err !== "object") return String(err);
-  const e = err as { message?: unknown; stdout?: unknown; stderr?: unknown };
-  return [e.message, e.stdout, e.stderr]
-    .filter((x): x is string => typeof x === "string")
-    .join("\n");
-}
-
-/** Is `cwd` inside a git working tree, and is the `git` binary itself
- *  available? A single `git rev-parse` call answers both: ENOENT means the
- *  binary is missing; any other failure (exit 128, "not a git repository")
- *  means git ran fine but this path isn't a repo. Neither case throws — both
- *  are normal, silent no-op conditions, not failures. */
-async function checkGitRepo(cwd: string): Promise<{ isGitRepo: boolean; gitAvailable: boolean }> {
-  try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], { cwd });
-    return { isGitRepo: stdout.trim() === "true", gitAvailable: true };
-  } catch (err) {
-    const code = (err as { code?: unknown } | undefined)?.code;
-    if (code === "ENOENT") return { isGitRepo: false, gitAvailable: false }; // git binary not found
-    return { isGitRepo: false, gitAvailable: true }; // git ran, just not (cleanly) a repo here
-  }
-}
-
-/** `git status --porcelain` — non-empty output means the worktree is dirty. */
-async function isWorktreeDirty(cwd: string, paths: readonly string[]): Promise<boolean> {
-  const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--", ...paths], { cwd });
-  return stdout.trim().length > 0;
-}
-
-/** Stage everything and commit with `message`. A concurrent process (another
- *  Exo tick, a manual commit) can beat us to it between the dirty-check and
- *  here — `git commit` then exits non-zero with "nothing to commit", which is
- *  swallowed as benign; any other failure propagates to the caller. */
-async function runGitCommit(cwd: string, paths: readonly string[], message: string): Promise<void> {
-  await execFileAsync("git", ["add", "-A", "--", ...paths], { cwd });
-  try {
-    await execFileAsync("git", ["commit", "-m", message, "--", ...paths], { cwd });
-  } catch (err) {
-    if (/nothing to commit/i.test(errText(err))) return; // race — benign, silent
-    throw err;
-  }
 }

@@ -8,6 +8,7 @@ import { READ_ONLY_TOOLS, toolFilePath, toolFilePaths } from "./ui/tools";
 import { isReadOnlyExternalTool } from "./core/headless-tools";
 import { WRITE_TOOLS } from "./core/touched";
 import { exoPaths, LEGACY_MEMORY_ROOT } from "./core/paths";
+import { memoryCaps } from "./core/memory-caps";
 import { toVaultRelative } from "./core/vault-path";
 import type { MVASettings } from "./settings";
 
@@ -98,12 +99,11 @@ export async function runHeadlessPlaybook(
   const pendingSnapshots: Promise<void>[] = [];
   let output = "";
 
-  // One tool configuration for both engines. Memory-write stays OFF even in
-  // write mode: automations edit notes, they don't get to rewrite Exo's memory.
+  // One tool configuration for both engines. The headless surface never writes
+  // memory, even in write mode: automations edit notes, they don't get to
+  // rewrite Exo's memory (memoryCaps owns that rule).
   const toolOpts: ObsidianToolOpts = {
-    memoryRead: settings.memoryReadEnabled,
-    memoryWrite: false,
-    memoryStoreEnabled: settings.memoryStoreEnabled,
+    memory: memoryCaps(settings, { surface: "headless" }),
     paths: exoPaths(settings.memoryRoot || LEGACY_MEMORY_ROOT),
   };
 

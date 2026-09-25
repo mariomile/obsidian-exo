@@ -1,22 +1,21 @@
 /**
  * Actions Hub — pure view-model builders for Exo's capabilities panel (W2-UX).
  *
- * The Wave 1-2 machinery (dream pass, open-loops, memory store, background
+ * The memory and autonomy machinery (memory harvest, open-loops, background
  * budget, review.md) is scattered across the command palette, settings toggles,
- * and agent-only tools. This module turns plain inputs — parsed store entries,
+ * and agent-only tools. This module turns plain inputs — harvest summaries,
  * loop entries, the budget ledger, timestamps, and a few booleans/flags — into
  * render-ready view models the panel paints as quiet, theme-native chips. It
  * adds NO new capability: every action row maps to an existing command or file
  * open; every status row is a read-only status + deep-link.
  *
  * No `obsidian` import — deliberately, so it is unit-testable with plain values.
- * The impure shell (the panel module) gathers the inputs (reads the store/loops
- * files, checks snapshot presence, shells out to git for the last auto-commit)
+ * The impure shell (the panel module) gathers the inputs (reads the harvest log
+ * and the loops file, shells out to git for the last auto-commit)
  * and wires the returned view models to click handlers.
  */
 
 import { activeLoops, dueLoops, type LoopEntry } from "./open-loops";
-import { type MemoryEntry } from "./memory-store";
 import { resetIfNewDay, type BudgetLedger } from "./background-budget";
 import { nextAutomation, type AutomationConfig } from "./automations";
 
@@ -29,9 +28,8 @@ export interface HubStat {
 /** An action row → maps by `id` to an existing command / file open in the panel. */
 export interface HubAction {
   id:
-    | "dream-run"
-    | "dream-undo"
-    | "open-store"
+    | "undo-harvest"
+    | "open-inbox"
     | "open-loops"
     | "open-review"
     | "queue-drain"
@@ -51,7 +49,7 @@ export interface HubAction {
 
 /** A read-only status row → deep-links to Exo settings; the dot reflects `enabled`. */
 export interface HubStatus {
-  id: "autocommit" | "observer" | "queue" | "schedules";
+  id: "autocommit" | "memory" | "queue" | "schedules";
   label: string;
   value: string;
   enabled: boolean;
@@ -86,7 +84,7 @@ export function formatBudget(ledger: BudgetLedger, dailyBudget: number, now: num
 
 /** Relative age of `then` (epoch ms) vs `now`: "just now", "5m ago", "3h ago",
  *  "2d ago", else an absolute `YYYY-MM-DD`. Null / non-positive / non-finite →
- *  `fallback` (e.g. "never" for the dream pass, "—" while the git fetch is
+ *  `fallback` (e.g. "never" for the last harvest, "—" while the git fetch is
  *  pending). A future timestamp (clock skew) reads as "just now". */
 export function formatAge(then: number | null | undefined, now: number, fallback: string): string {
   if (then == null || !Number.isFinite(then) || then <= 0) return fallback;
@@ -105,61 +103,64 @@ export function formatAge(then: number | null | undefined, now: number, fallback
 
 /* ------------------------------ Memory card ------------------------------ */
 
+/** One memory harvest as the Memory card counts it. */
+export interface HarvestSummary {
+  at: number;
+  writes: number;
+  undone: boolean;
+}
+
 export interface MemoryCardInput {
-  /** All parsed store entries (across month files). */
-  storeEntries: MemoryEntry[];
+  /** `autoMemory` setting. */
+  autoMemory: boolean;
+  /** Recent harvests, newest first. */
+  harvests: HarvestSummary[];
   /** All parsed open-loops ledger entries. */
   loops: LoopEntry[];
   ledger: BudgetLedger;
   /** `backgroundDailyTokenBudget` (≤ 0 = unlimited). */
   dailyBudget: number;
-  /** `lastDreamPass` epoch ms (0 = never). */
-  lastDreamPass: number;
   now: number;
 }
 
-/** The Memory card's live stats line: store totals, loop counts, last dream, budget. */
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The Memory card's live stats line: automatic memory, last harvest, writes
+ *  this week, loop counts, budget. */
 export function memoryStats(input: MemoryCardInput): HubStat[] {
-  const total = input.storeEntries.length;
-  const generated = input.storeEntries.filter((e) => e.source === "generated").length;
   const open = activeLoops(input.loops).length;
   const due = dueLoops(input.loops, input.now).length;
+  const week = input.harvests
+    .filter((h) => !h.undone && input.now - h.at <= WEEK_MS)
+    .reduce((n, h) => n + h.writes, 0);
   return [
-    { label: "Store", value: `${total} · ${generated} gen` },
+    { label: "Auto memory", value: input.autoMemory ? "on" : "off" },
+    { label: "Last harvest", value: formatAge(input.harvests[0]?.at, input.now, "never") },
+    { label: "Writes 7d", value: String(week) },
     { label: "Loops", value: `${open} open · ${due} due` },
-    { label: "Dream", value: formatAge(input.lastDreamPass, input.now, "never") },
     { label: "Budget", value: formatBudget(input.ledger, input.dailyBudget, input.now) },
   ];
 }
 
 export interface MemoryActionsInput {
-  /** A dream snapshot exists → undo is available. */
-  snapshotPresent: boolean;
+  /** A harvest not yet undone exists → undo is available. */
+  canUndo: boolean;
+  /** Today's inbox note exists → the inbox row is enabled. */
+  inboxExists: boolean;
   /** The review note (`paths.review`) exists → the review row is shown. */
   reviewExists: boolean;
   loops: LoopEntry[];
   now: number;
-  /** `dreamLlmEnabled` setting. When false, the deterministic pass still runs
-   *  but skips the LLM proposal stage — surfaced as a hint, not a disable,
-   *  since the button remains a real action either way. */
-  dreamLlmEnabled: boolean;
 }
 
-/** The Memory card's action rows. `dream-undo` is disabled without a snapshot;
- *  `open-loops` carries a due-count badge; `open-review` is omitted when the
- *  file is absent; `dream-run` carries a "LLM stage off" hint when the LLM
- *  proposal stage (Wave 2, gated separately) hasn't been turned on yet. */
+/** The Memory card's action rows. `undo-harvest` is disabled with nothing to
+ *  undo; `open-loops` carries a due-count badge; `open-review` is omitted when
+ *  the file is absent. */
 export function memoryActions(input: MemoryActionsInput): HubAction[] {
   const due = dueLoops(input.loops, input.now).length;
   const actions: HubAction[] = [
-    {
-      id: "dream-run",
-      label: "Run dream pass",
-      enabled: true,
-      ...(input.dreamLlmEnabled ? {} : { hint: "LLM stage off" }),
-    },
-    { id: "dream-undo", label: "Undo last dream", enabled: input.snapshotPresent },
-    { id: "open-store", label: "Open memory store", enabled: true },
+    { id: "undo-harvest", label: "Undo last memory write", enabled: input.canUndo },
+    { id: "open-inbox", label: "Open today's memory inbox", enabled: input.inboxExists },
     { id: "open-loops", label: "Open open-loops", enabled: true, ...(due > 0 ? { badge: `${due} due` } : {}) },
   ];
   if (input.reviewExists) actions.push({ id: "open-review", label: "Open review.md", enabled: true });
@@ -244,18 +245,15 @@ export interface SystemCardInput {
   vaultAutoCommit: boolean;
   /** Epoch ms of the last `exo: auto-commit` in git log, or null (unknown / pending / none). */
   lastAutoCommitEpoch: number | null;
-  /** `selfWritingMemory` setting. */
-  selfWritingMemory: boolean;
-  observerCadence: "session-end" | "every-n-steps";
-  observerStepInterval: number;
+  /** `memoryCaps(...).autoCapture`: memory harvest can run. */
+  autoCapture: boolean;
   now: number;
 }
 
-/** The System card's read-only status rows (auto-commit, observer). Each is a
+/** The System card's read-only status rows (auto-commit, memory). Each is a
  *  status + deep-link to settings — never a toggle. */
 export function systemStatuses(input: SystemCardInput): HubStatus[] {
   const commitAge = formatAge(input.lastAutoCommitEpoch, input.now, "—");
-  const cadence = input.observerCadence === "every-n-steps" ? `every ${input.observerStepInterval} steps` : "session-end";
   return [
     {
       id: "autocommit",
@@ -264,10 +262,10 @@ export function systemStatuses(input: SystemCardInput): HubStatus[] {
       enabled: input.vaultAutoCommit,
     },
     {
-      id: "observer",
-      label: "Observer",
-      value: input.selfWritingMemory ? `on · ${cadence}` : "off",
-      enabled: input.selfWritingMemory,
+      id: "memory",
+      label: "Automatic memory",
+      value: input.autoCapture ? "on" : "off",
+      enabled: input.autoCapture,
     },
   ];
 }

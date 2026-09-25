@@ -1,7 +1,6 @@
 import { App } from "obsidian";
 import { readdir, readFile, stat } from "fs/promises";
 import { homedir } from "os";
-import { parseStoreFile, type MemoryEntry } from "./memory-store";
 import { parseLoopsFile, type LoopEntry } from "./open-loops";
 import type { SkillDir } from "./connections-scan";
 import { codexSkillNames } from "./capability-desc";
@@ -21,7 +20,7 @@ export const BUILTIN_TOOLS = [
 export const FILE_BUILTINS = new Set(["Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS", "NotebookEdit"]);
 export const NATIVE_READ = ["search_vault", "read_note", "get_backlinks", "get_neighborhood", "list_notes", "list_tags", "get_active_context"];
 export const NATIVE_WRITE = ["create_note", "append_to_note", "update_frontmatter", "add_links", "open_note", "edit_note", "insert_at_cursor", "rename_note"];
-export const NATIVE_MEMORY = ["capture_decision", "log_session", "capture_learning"];
+export const NATIVE_MEMORY = ["capture_decision", "open_loop", "close_loop", "undo_memory_write"];
 
 async function scanNames(dir: string): Promise<{ folders: string[]; mds: string[] }> {
   const out = { folders: [] as string[], mds: [] as string[] };
@@ -185,26 +184,6 @@ export async function gatherHooks(path: string): Promise<HookSummary[]> {
     /* missing / unreadable / not JSON — ignore */
     return [];
   }
-}
-
-/** Read + parse every month file in the store dir. Missing dir / unreadable
- *  files are tolerated (→ fewer entries), never thrown on. */
-export async function gatherStoreEntries(app: App, storeDir: string): Promise<MemoryEntry[]> {
-  const entries: MemoryEntry[] = [];
-  try {
-    const res = await app.vault.adapter.list(storeDir);
-    for (const f of res.files) {
-      if (!f.endsWith(".md")) continue;
-      try {
-        entries.push(...parseStoreFile(await app.vault.adapter.read(f)));
-      } catch {
-        /* skip unreadable file */
-      }
-    }
-  } catch {
-    /* missing dir */
-  }
-  return entries;
 }
 
 /** Read + parse the open-loops ledger (empty when absent/unreadable). */

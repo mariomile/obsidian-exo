@@ -11,7 +11,7 @@ describe("exoPaths", () => {
     const p = exoPaths("_exo");
     expect(p.root).toBe("_exo");
     expect(p.memory).toBe("_exo/memory");
-    expect(p.store).toBe("_exo/memory/store");
+    expect(p.inbox).toBe("_exo/memory/inbox");
     expect(p.tasks).toBe("_exo/orchestration/tasks.md");
     expect(p.queue).toBe("_exo/exo-queue");
     expect(p.vaultContext).toBe("_exo/vault-context.md");
@@ -30,12 +30,11 @@ describe("exoPaths", () => {
   it("reproduces the exact legacy _system/ layout (marioverse must not move)", () => {
     const p = exoPaths(LEGACY_MEMORY_ROOT);
     expect(p.vaultContext).toBe("_system/vault-context.md");
-    expect(p.store).toBe("_system/memory/store");
+    expect(p.inbox).toBe("_system/memory/inbox");
     expect(p.tasks).toBe("_system/orchestration/tasks.md");
     expect(p.queue).toBe("_system/exo-queue");
     expect(p.review).toBe("_system/review.md");
     expect(p.rules).toBe("_system/memory/rules");
-    expect(p.knownFalse).toBe("_system/memory/known-false.md");
     expect(p.workflowSignals).toBe("_system/memory/workflow-signals.json");
   });
 

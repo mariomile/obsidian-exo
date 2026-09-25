@@ -1,6 +1,20 @@
 import { describe, it, expect } from "vitest";
 import type { App } from "obsidian";
 import { buildObsidianTools } from "../src/obsidian/tools";
+import { memoryCaps, type MemorySettings } from "../src/core/memory-caps";
+
+const memory = (over: Partial<MemorySettings> = {}, readOnlySandbox = false) =>
+  memoryCaps(
+    {
+      memoryReadEnabled: true,
+      memoryWriteEnabled: true,
+      agentFolderEnabled: false,
+      autoMemory: true,
+      backgroundPassesEnabled: true,
+      ...over,
+    },
+    { surface: "chat", readOnlySandbox },
+  );
 
 const app = {} as App;
 const names = (opts?: Parameters<typeof buildObsidianTools>[1]) =>
@@ -38,23 +52,35 @@ const BROWSER_TOOLS = [
 ];
 
 describe("buildObsidianTools", () => {
-  it("default build carries the full read+write set, no memory writes off-flag", () => {
-    const n = names({ memoryWrite: true, memoryRead: true });
-    for (const t of ["search_vault", "read_note", "ask_user", "edit_note", "create_note", "recall", "remember", "open_loop"]) {
+  it("default build carries the full read+write set, including the memory tools", () => {
+    const n = names({ memory: memory() });
+    for (const t of ["search_vault", "read_note", "ask_user", "edit_note", "create_note", "recent_chats", "undo_memory_write", "open_loop"]) {
       expect(n, t).toContain(t);
     }
   });
 
-  it("memoryWrite=false drops the memory-write tools but keeps recall", () => {
-    const n = names({ memoryWrite: false, memoryRead: true });
-    for (const t of ["capture_decision", "log_session", "capture_learning", "remember", "open_loop", "close_loop"]) {
-      expect(n, t).not.toContain(t);
-    }
-    expect(n).toContain("recall");
+  it("the old union-store tools are gone", () => {
+    const n = names({ memory: memory() });
+    for (const t of ["remember", "recall", "log_session", "capture_learning"]) expect(n, t).not.toContain(t);
   });
 
-  it("memoryRead=false drops recall", () => {
-    expect(names({ memoryRead: false })).not.toContain("recall");
+  it("memory write off drops the memory-write tools but keeps recent_chats", () => {
+    const n = names({ memory: memory({ memoryWriteEnabled: false }) });
+    for (const t of ["capture_decision", "open_loop", "close_loop", "undo_memory_write"]) {
+      expect(n, t).not.toContain(t);
+    }
+    expect(n).toContain("recent_chats");
+  });
+
+  it("a read-only sandbox gets the read memory tools only", () => {
+    const n = names({ memory: memory({}, true) });
+    expect(n).toContain("recent_chats");
+    expect(n).not.toContain("undo_memory_write");
+    expect(n).not.toContain("capture_decision");
+  });
+
+  it("memory read off drops recent_chats", () => {
+    expect(names({ memory: memory({ memoryReadEnabled: false }) })).not.toContain("recent_chats");
   });
 
   it("orchestrationEnabled gates add_task", () => {
@@ -62,11 +88,11 @@ describe("buildObsidianTools", () => {
     expect(names({ orchestrationEnabled: true })).toContain("add_task");
   });
 
-  it("rethink_memory needs memoryWrite AND agentFolder AND a bridge", () => {
-    expect(names({ memoryWrite: true, agentFolderEnabled: true })).not.toContain("rethink_memory");
-    expect(
-      names({ memoryWrite: true, agentFolderEnabled: true, rethinkBridge: async () => "" })
-    ).toContain("rethink_memory");
+  it("rethink_memory needs memory write AND the agent folder AND a bridge", () => {
+    const withFolder = memory({ agentFolderEnabled: true });
+    expect(names({ memory: withFolder })).not.toContain("rethink_memory");
+    expect(names({ memory: withFolder, rethinkBridge: async () => "" })).toContain("rethink_memory");
+    expect(names({ memory: memory(), rethinkBridge: async () => "" })).not.toContain("rethink_memory");
   });
 
   it("browser tools register only when a bridge is present, byte-identical otherwise", () => {

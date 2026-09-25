@@ -6,8 +6,10 @@ import {
   type IdentityBlock,
 } from "../core/agent-self";
 import type { ExoPaths } from "../core/paths";
-import { bootFileHead, type BootHeadOpts } from "../core/boot-content";
+import { bootFileHead } from "../core/boot-content";
 import { stripFrontmatter } from "../core/agents";
+import type { MemoryCaps } from "../core/memory-caps";
+import { autoMemoryNote, agentFolderNote } from "../core/memory-prompts";
 
 const cap = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + "\n…(truncated)" : s);
 
@@ -26,20 +28,10 @@ const MAX_RULES_INDEX = 1500;
 const MAX_LOOP_ITEMS = 12;
 /** Cap the rendered open-loops section itself (bounded chars, a slice of the overall MAX_BOOT budget). */
 const MAX_LOOP_SECTION = 1500;
-/** Session-log slice when the identity `now.md` is absent — the historical value. */
-const SESSION_LOG_CHARS = 1200;
-/** Session-log slice when `now.md` exists non-empty — halved, since `now.md` is the
- *  strictly-better "what matters right now" signal (design §4). */
-const SESSION_LOG_CHARS_WITH_NOW = 600;
-
-/** Options for {@link readBootContext}. Absent/false → today's behavior, byte-identical. */
+/** Options for {@link readBootContext}. Absent/false → no identity section. */
 export interface BootOpts {
-  /** Master flag for the identity layer (`agentFolderEnabled`, default OFF). */
-  agentFolderEnabled?: boolean;
-  /** Master flag for the Memory Union Store (`memoryStoreEnabled`, default ON).
-   *  OFF → the recent-sessions digest is not read: the session log lives in the
-   *  store the flag turns off, alongside `remember`/`recall`. */
-  memoryStoreEnabled?: boolean;
+  /** Prepend the agent folder (`memoryCaps(...).identity`). */
+  identity?: boolean;
 }
 
 /**
@@ -47,20 +39,18 @@ export interface BootOpts {
  * agent boots with the user's context, preferences, and active rules. The agent can
  * read deeper on demand via the read_note tool.
  *
- * When `agentFolderEnabled` is ON, the compiled identity section (from
- * the agent folder) is prepended BEFORE every existing section, the session-log
- * slice halves when `now.md` carries signal, and the overall cap widens to
+ * When `identity` is ON, the compiled identity section (from the agent folder)
+ * is prepended BEFORE every existing section and the overall cap widens to
  * {@link MAX_BOOT_AGENT}. When OFF (or absent), none of the folder is read and the
  * output is byte-identical to before this feature existed (seam test).
  */
 export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts = {}): Promise<string> {
-  // Head-slices are frontmatter-free (and, for generated logs, heading-anchored):
-  // the boot budget buys content, never YAML or a "this file is generated" warning.
-  const read = async (path: string, max: number, headOpts?: BootHeadOpts): Promise<string> => {
+  // Head-slices are frontmatter-free: the boot budget buys content, never YAML.
+  const read = async (path: string, max: number): Promise<string> => {
     const f = app.vault.getAbstractFileByPath(path);
     if (f instanceof TFile) {
       try {
-        return bootFileHead(await app.vault.cachedRead(f), max, headOpts);
+        return bootFileHead(await app.vault.cachedRead(f), max);
       } catch {
         /* ignore */
       }
@@ -83,11 +73,10 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
   };
 
   // Identity overlay (design §4) — read the three blocks + mtimes here (impure);
-  // compilation is the pure `compileIdentity`. OFF → identity is "" and `now.md`
-  // is treated as absent, so nothing below changes.
-  const agentOn = opts.agentFolderEnabled === true;
+  // compilation is the pure `compileIdentity`. OFF → identity is "", so nothing
+  // below changes.
+  const agentOn = opts.identity === true;
   let identity = "";
-  let nowHasSignal = false;
   if (agentOn) {
     const blocks: IdentityBlock[] = [];
     for (const spec of AGENT_BLOCKS) {
@@ -97,7 +86,6 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
       try {
         const content = await app.vault.cachedRead(f);
         blocks.push({ name: spec.name, content, mtime: f.stat?.mtime });
-        if (spec.name === "NOW" && content.trim().length > 0) nowHasSignal = true;
       } catch {
         /* unreadable block — skip silently (§8) */
       }
@@ -125,17 +113,6 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
     const rules = ruleFiles.slice(0, MAX_RULES).map((f) => `- ${f.basename}`);
     if (ruleFiles.length > MAX_RULES) rules.push(`- …and ${ruleFiles.length - MAX_RULES} more`);
     if (rules.length) parts.push(`### Active rules (read the file for detail)\n${rules.join("\n")}`);
-  }
-
-  // A non-empty `now.md` is a strictly-better "what matters right now" signal than
-  // the recent-sessions digest, so we spend fewer chars on the log when it exists.
-  const logChars = nowHasSignal ? SESSION_LOG_CHARS_WITH_NOW : SESSION_LOG_CHARS;
-  // The session log lives in the Memory Union Store — skip it when the store is off.
-  if (opts.memoryStoreEnabled !== false) {
-    // The session log is GENERATED: its head is a title plus a "do not edit by hand"
-    // warning, so slice from the first `## ` entry or the section carries zero sessions.
-    const log = await read(paths.sessionLog, logChars, { fromFirstHeading: true });
-    if (log) parts.push(`### Recent sessions (prior sessions — background, NOT the current conversation)\n${log}`);
   }
 
   const loopsRaw = await readFull(paths.openLoops);
@@ -166,9 +143,63 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
       ...(identity ? [identity] : []),
       "## Vault memory — you are Exo, embedded in this Obsidian vault.",
       "Honor these conventions: prefer the `mcp__obsidian__*` tools for vault operations (they respect links/tags/frontmatter); follow the tag system (#type/*, #domain/*), track status via the `status:` frontmatter property, and the object schema; use [[wikilinks]] for internal references; never create files at the vault root.",
-      "Precedence: the sections below (especially `Recent sessions`) are BACKGROUND from prior sessions. The conversation you are in right now is authoritative — when the user says 'continue', refers to 'the proposed/other things', 'as above', or otherwise points back, resolve it from the CURRENT conversation's own history, never from a prior session's topic.",
+      "Precedence: the sections below are BACKGROUND from prior sessions. The conversation you are in right now is authoritative — when the user says 'continue', refers to 'the proposed/other things', 'as above', or otherwise points back, resolve it from the CURRENT conversation's own history, never from a prior session's topic.",
       ...parts,
     ].join("\n\n"),
     maxBoot
   );
+}
+
+/** Everything the boot preamble depends on besides the files it reads. */
+export interface PreambleInputs {
+  caps: MemoryCaps;
+  /** The Obsidian tool server is registered for this session. */
+  tools: boolean;
+  paths: ExoPaths;
+}
+
+/** The full session preamble: vault memory plus the standing memory notes.
+ *  "" when boot reads are off. */
+export async function buildBootPreamble(app: App, inputs: PreambleInputs): Promise<string> {
+  const { caps, tools, paths } = inputs;
+  if (!caps.bootRead) return "";
+  const parts = [await readBootContext(app, paths, { identity: caps.identity })];
+  if (caps.autoCapture || caps.autoRecall) {
+    parts.push(autoMemoryNote({ recall: caps.autoRecall, chats: tools && caps.chatSearch }));
+  }
+  if (tools && caps.rethink) parts.push(agentFolderNote(paths.agentDir));
+  return parts.filter(Boolean).join("\n\n");
+}
+
+/** Cache key: the inputs plus the mtime of every file the preamble reads, so an
+ *  edit to a memory note, a caps change, or a new memory root rebuilds it. */
+function preambleKey(app: App, inputs: PreambleInputs): string {
+  const { paths } = inputs;
+  const sources = [
+    paths.vaultContext,
+    paths.preferences,
+    `${paths.rules}/_index.md`,
+    paths.openLoops,
+    ...AGENT_BLOCKS.map((spec) => `${paths.agentDir}/${spec.name}.md`),
+  ];
+  const mtimes = sources.map((path) => {
+    const f = app.vault.getAbstractFileByPath(path);
+    return f instanceof TFile ? f.stat?.mtime ?? 0 : -1;
+  });
+  return JSON.stringify([inputs.caps, inputs.tools, paths.root, mtimes]);
+}
+
+/** One per view: rebuilds only when {@link preambleKey} changes. */
+export class BootPreambleCache {
+  private key: string | null = null;
+  private value = "";
+
+  async get(app: App, inputs: PreambleInputs): Promise<string> {
+    const key = preambleKey(app, inputs);
+    if (key !== this.key) {
+      this.value = await buildBootPreamble(app, inputs);
+      this.key = key;
+    }
+    return this.value;
+  }
 }

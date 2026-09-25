@@ -6,7 +6,6 @@ import { modelOptions, BACKGROUND_MODEL_OPTIONS } from "./core/model-options";
 import { parseMcpJson } from "./core/mcp-config";
 import { DEFAULT_MEMORY_ROOT, LEGACY_MEMORY_ROOT } from "./core/paths";
 import { renderCliDiagnostics } from "./ui/settings-cli";
-import { renderRecallSettings } from "./ui/settings-memory";
 
 import { DEFAULT_SETTINGS, LEGACY_QUEUE_FOLDER, type MVASettings } from "./settings-schema";
 
@@ -480,73 +479,27 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Read vault memory",
-      `Boot each conversation with context from ${paths.root}/ (vault-context, preferences, rules, recent sessions).`,
+      `Boot each conversation with context from ${paths.root}/ (vault-context, preferences, rules, open loops).`,
       "memoryReadEnabled"
     );
     this.toggleSetting(
       el,
       "Write vault memory",
-      `Let the agent capture decisions, learnings, and session-log entries into ${paths.root}/ — every write is still permission-gated.`,
+      `Let the agent record decisions and open loops into ${paths.root}/, and let automatic memory write into your notes.`,
       "memoryWriteEnabled"
     );
     this.toggleSetting(
       el,
-      "Memory union store",
-      `Keep the second, self-writing memory store in ${paths.store}/ alongside decisions and open loops: the remember/recall tools, session log, self-writing memory, and proactive recall. On by default. Off leaves capture_decision, open_loop, and rethink_memory (identity layer) working — decisions, loops, and the agent folder are separate from the union store.`,
-      "memoryStoreEnabled"
-    );
-    this.toggleSetting(
-      el,
-      "Self-writing memory",
-      "After each healthy turn, a cheap background observer proposes durable memories and appends them to the store as @generated entries — you can review or undo each write. Off by default; runs only when Write vault memory is also on. The observer currently uses the configured Claude background model for both chat providers.",
-      "selfWritingMemory"
+      "Automatic memory",
+      `After a chat goes idle (or you switch away), Exo reads it and adds or updates one-line facts in your existing notes, following the memory rules in AGENTS.md when your vault has them; anything without an obvious home lands in ${paths.inbox}/. Before each message it recalls related notes and past chats. Every harvest is one git commit (or a snapshot without git) you can undo with "Undo last memory write". Uses the background AI budget below.`,
+      "autoMemory"
     );
     this.toggleSetting(
       el,
       "The agent is the folder (identity)",
-      `Hydrate every conversation from ${paths.agentDir}/ — three human-readable shared-kernel blocks (SOUL = principles, USER = working model of you, NOW = current focus) used by Exo and external agents. Adds the rethink_memory tool (NOW rewrites directly, USER requires a rationale, SOUL is propose-only) and an observer that proposes NOW.md updates after a turn. Off by default; with it off, boot is unchanged and the folder is never read. Rollout: run "Exo: Seed agent folder", review USER.md, then flip this on.`,
+      `Hydrate every conversation from ${paths.agentDir}/: three human-readable shared-kernel blocks (SOUL = principles, USER = working model of you, NOW = current focus) used by Exo and external agents. Adds the rethink_memory tool (NOW rewrites directly, USER requires a rationale, SOUL is propose-only). Off by default; with it off, boot is unchanged and the folder is never read. Rollout: run "Exo: Seed agent folder", review USER.md, then flip this on.`,
       "agentFolderEnabled"
     );
-
-    renderRecallSettings(this.plugin, el, () => this.display());
-
-    new Setting(el)
-      .setName("Memory dream pass")
-      .setDesc(
-        `Consolidate ${this.plugin.paths.memory} deterministically: merge duplicate learnings, promote well-evidenced ones to rules, mark stale rules. Every run is snapshotted and undoable; set a schedule to automate it, or run it manually from the command palette.`
-      )
-      .addDropdown((d) =>
-        d
-          .addOptions({ off: "Off", daily: "Daily", weekly: "Weekly" })
-          .setValue(s.dreamPassSchedule)
-          .onChange(async (v) => {
-            s.dreamPassSchedule = v as "off" | "daily" | "weekly";
-            await this.plugin.saveSettings();
-          })
-      );
-
-    this.toggleSetting(
-      el,
-      "Dream pass — LLM proposal stage",
-      "When the dream pass runs, add a transient tool-less LLM stage that PROPOSES typed changes (merge duplicates, supersede, draft rule candidates, import durable claude-mem observations). A deterministic gate culls anything that would touch your own @user memories or match a known-false pattern BEFORE the preview; you still review and can undo every applied change. Off by default; respects the background-AI budget. Claude only.",
-      "dreamLlmEnabled"
-    );
-
-    new Setting(el)
-      .setName("Memory file budget (defrag threshold)")
-      .setDesc(
-        "When the memory store/ or learnings/ folder exceeds this many files, the dream LLM stage is asked to propose consolidation merges to reduce sprawl."
-      )
-      .addText((t) =>
-        t
-          .setPlaceholder("25")
-          .setValue(String(s.memoryFileBudget))
-          .onChange(async (v) => {
-            const n = Number.parseInt(v, 10);
-            if (Number.isFinite(n) && n > 0) s.memoryFileBudget = n;
-            await this.plugin.saveSettings();
-          })
-      );
 
     new Setting(el).setName("Background AI").setHeading();
 
@@ -569,7 +522,7 @@ export class MVASettingTab extends PluginSettingTab {
     this.toggleSetting(
       el,
       "Enable background AI passes",
-      "Master switch for every background LLM pass (self-writing observer, dream LLM stage). Turn off to silence all of them at once regardless of their individual toggles.",
+      "Master switch for every background LLM pass (automatic memory, suggestions, playbook distillation). Turn off to silence all of them at once regardless of their individual toggles.",
       "backgroundPassesEnabled"
     );
 
@@ -592,7 +545,7 @@ export class MVASettingTab extends PluginSettingTab {
     new Setting(el)
       .setName("Background AI model")
       .setDesc(
-        "Model used by background LLM passes (self-writing observer's dream stage, and future background passes). Floor is Sonnet — Haiku is never offered here, regardless of the observer's own cheap-model default."
+        "Model used by background LLM passes (automatic memory and the other background passes). Floor is Sonnet: Haiku is never offered here."
       )
       .addDropdown((d) => {
         for (const o of BACKGROUND_MODEL_OPTIONS) d.addOption(o.id, o.label);

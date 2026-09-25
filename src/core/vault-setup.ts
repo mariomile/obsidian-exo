@@ -2,8 +2,7 @@
  * Vault Setup — pure logic (no Obsidian imports).
  *
  * Exo reads and writes a fixed set of paths under its memory root for its
- * memory features (open loops, task board, preferences, cockpit staleness,
- * dream pass). On a fresh vault none of that exists, so every one of those
+ * memory features (open loops, task board, preferences, cockpit staleness). On a fresh vault none of that exists, so every one of those
  * features silently degrades to empty/inert with no signal to the user that
  * anything is missing. `scaffoldItems(paths)` is the create-only-if-absent
  * list that fixes that; `isVaultSetUp` is the single-file detection check used
@@ -14,7 +13,7 @@
  *
  * The "full" preset also lays down the marioverse knowledge-OS: guided
  * templates for vault-context/preferences/mental-model, README-documented
- * rules/decisions/learnings folders, and hand-fillable `agent/{SOUL,USER,
+ * rules/decisions folders, and hand-fillable `agent/{SOUL,USER,
  * NOW}.md` kernel blocks. The blocks carry a template marker so the "Agent Is
  * the Folder" seeder regenerates them while untouched (isUnfilledAgentBlock) yet
  * never clobbers hand-written identity — that's why pre-creating them is now
@@ -33,10 +32,10 @@ export type ScaffoldKind = "folder" | "file";
  * What the user picks at onboarding (persisted as `settings.memorySetup`):
  *  - `none`    → create nothing; memory features stay inert until the user
  *                opts into setup later. Boot reads CLAUDE.md only.
- *  - `minimal` → the tool's own operational layer (store, task board, open
- *                loops, reports, session log) — no marioverse knowledge-OS.
+ *  - `minimal` → the tool's own operational layer (task board, open loops,
+ *                reports) — no marioverse knowledge-OS.
  *  - `full`    → minimal + the marioverse content scaffold (preferences,
- *                vault-context, rules/decisions/learnings folders).
+ *                vault-context, rules/decisions folders).
  * `undefined` (setting unset) = not chosen yet → the picker is still offered.
  */
 export type MemorySetup = "none" | "minimal" | "full";
@@ -63,25 +62,13 @@ const heading = (title: string, body: string): string => `# ${title}\n\n${body}\
 function allScaffoldItems(paths: ExoPaths): ScaffoldItem[] {
   return [
     // ── mechanism (minimal + full) ─────────────────────────────────────────
-    { path: paths.store, kind: "folder", tier: "mechanism" },
     { path: paths.queue, kind: "folder", tier: "mechanism" },
     { path: paths.reports, kind: "folder", tier: "mechanism" },
     { path: paths.openLoops, kind: "file", tier: "mechanism", content: heading("Open loops", "_Nothing tracked yet._") },
-    { path: paths.sessionLog, kind: "file", tier: "mechanism", content: "# Session log\n" },
-    {
-      path: paths.knownFalse,
-      kind: "file",
-      tier: "mechanism",
-      content: heading(
-        "Known false",
-        "_Corrections and debunked assumptions go here — dream-pass proposals matching these patterns are culled before they reach you._"
-      ),
-    },
     { path: paths.tasks, kind: "file", tier: "mechanism", content: heading("Tasks", "_Nothing tracked yet._") },
     // ── content (full only): guided templates + the knowledge-OS folders ────
     { path: `${paths.rules}/README.md`, kind: "file", tier: "content", content: FOLDER_README.rules },
     { path: `${paths.decisions}/README.md`, kind: "file", tier: "content", content: FOLDER_README.decisions },
-    { path: `${paths.learnings}/README.md`, kind: "file", tier: "content", content: FOLDER_README.learnings },
     { path: paths.preferences, kind: "file", tier: "content", content: PREFERENCES_TEMPLATE },
     { path: paths.mentalModel, kind: "file", tier: "content", content: MENTAL_MODEL_TEMPLATE },
     { path: paths.vaultContext, kind: "file", tier: "content", content: VAULT_CONTEXT_TEMPLATE },
@@ -100,15 +87,11 @@ function allScaffoldItems(paths: ExoPaths): ScaffoldItem[] {
 const FOLDER_README = {
   rules: heading(
     "Rules",
-    "One durable rule per file — patterns confirmed across sessions that Exo should always follow. Promote a learning here once you've seen it hold three times."
+    "One durable rule per file — patterns confirmed across sessions that Exo should always follow. Add one once you've seen a pattern hold three times."
   ),
   decisions: heading(
     "Decisions",
     "One decision record per file: the choice, the context, the trade-offs, and when to revisit it. Exo appends here when you decide something that shapes future work."
-  ),
-  learnings: heading(
-    "Learnings",
-    "Single-session insights — the raw material that graduates into rules. Cheap to write, safe to prune."
   ),
 } as const;
 

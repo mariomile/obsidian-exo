@@ -8,21 +8,19 @@ function registeredTools(server: ReturnType<typeof createObsidianToolServer>) {
   })._registeredTools;
 }
 
-/** Fake Obsidian App with an optional sonar plugin exposing the search
- *  service shape (`plugin.service.query`, obsidian-sonar's SearchService). */
+/** Fake Obsidian App with an optional sonar plugin exposing Sonar's declared
+ *  cross-plugin API: `search(query, { limit })` → `{ path, title, score, excerpt }[]`. */
 function fakeApp(opts: {
-  sonarHits?: { path: string; basename: string; score: number; docType: string; matched: string[]; excerpt?: { text: string } }[];
-  sonarReady?: boolean; // default true when sonar is present
+  sonarHits?: { path: string; title: string; score: number; excerpt: string }[];
   withSonar?: boolean;
   mdFiles?: { basename: string; path: string; stat: { size: number; mtime: number }; content: string }[];
 } = {}) {
   const calls: { query: string; opts: unknown }[] = [];
-  const service = {
-    query: async (query: string, queryOpts: unknown) => {
-      calls.push({ query, opts: queryOpts });
+  const sonar = {
+    search: async (query: string, searchOpts: unknown) => {
+      calls.push({ query, opts: searchOpts });
       return opts.sonarHits ?? [];
     },
-    getStatus: () => ({ ready: opts.sonarReady !== false }),
   };
   const files = opts.mdFiles ?? [];
   const app = {
@@ -32,21 +30,21 @@ function fakeApp(opts: {
     },
     workspace: { getActiveFile: () => null, activeEditor: undefined },
     metadataCache: {},
-    plugins: { plugins: opts.withSonar === false ? {} : { sonar: { service } } },
+    plugins: { plugins: opts.withSonar === false ? {} : { sonar } },
   } as any;
   return { app, calls };
 }
 
 function makeServer(app: any) {
-  return createObsidianToolServer(app, { alwaysLoad: true, memoryWrite: false, memoryRead: true });
+  return createObsidianToolServer(app, { alwaysLoad: true });
 }
 
+const BUILDRS = { basename: "Buildrs", path: "Notes/Buildrs.md", stat: { size: 10, mtime: 1 }, content: "Buildrs pipeline notes" };
+
 describe("search_vault — Sonar path", () => {
-  it("uses Sonar's search service when the plugin is loaded and ready", async () => {
+  it("uses Sonar's public search() when the plugin is loaded", async () => {
     const { app, calls } = fakeApp({
-      sonarHits: [
-        { path: "Notes/Buildrs.md", basename: "Buildrs", score: 3.1, docType: "md", matched: ["buildrs"], excerpt: { text: "Buildrs pipeline notes" } },
-      ],
+      sonarHits: [{ path: "Notes/Buildrs.md", title: "Buildrs", score: 3.1, excerpt: "Buildrs pipeline notes" }],
     });
     const res = await registeredTools(makeServer(app))["search_vault"].handler({ query: "Buildrs" }, {});
     expect(calls).toHaveLength(1);
@@ -58,38 +56,23 @@ describe("search_vault — Sonar path", () => {
   });
 
   it("reports no matches without falling back when Sonar returns zero hits", async () => {
-    const { app, calls } = fakeApp({ sonarHits: [] });
+    const { app, calls } = fakeApp({ sonarHits: [], mdFiles: [BUILDRS] });
     const res = await registeredTools(makeServer(app))["search_vault"].handler({ query: "zzz" }, {});
     expect(calls).toHaveLength(1);
     expect(res.content[0].text).toMatch(/No matches for "zzz"/);
   });
 
   it("falls back to the built-in scorer when Sonar is not installed", async () => {
-    const { app } = fakeApp({
-      withSonar: false,
-      mdFiles: [{ basename: "Buildrs", path: "Notes/Buildrs.md", stat: { size: 10, mtime: 1 }, content: "Buildrs pipeline notes" }],
-    });
+    const { app } = fakeApp({ withSonar: false, mdFiles: [BUILDRS] });
     const res = await registeredTools(makeServer(app))["search_vault"].handler({ query: "Buildrs" }, {});
     expect(res.content[0].text).toContain("[[Notes/Buildrs.md]]");
   });
 
-  it("falls back to the built-in scorer when Sonar's index isn't ready", async () => {
-    const { app, calls } = fakeApp({
-      sonarReady: false,
-      mdFiles: [{ basename: "Buildrs", path: "Notes/Buildrs.md", stat: { size: 10, mtime: 1 }, content: "Buildrs pipeline notes" }],
-    });
-    const res = await registeredTools(makeServer(app))["search_vault"].handler({ query: "Buildrs" }, {});
-    expect(calls).toHaveLength(0); // Sonar never queried — the built-in scorer ran instead
-    expect(res.content[0].text).toContain("[[Notes/Buildrs.md]]");
-  });
-
-  it("falls back to the built-in scorer when Sonar's query throws", async () => {
-    const { app } = fakeApp();
-    app.plugins.plugins.sonar.service.query = async () => {
+  it("falls back to the built-in scorer when Sonar's search throws", async () => {
+    const { app } = fakeApp({ mdFiles: [BUILDRS] });
+    app.plugins.plugins.sonar.search = async () => {
       throw new Error("index not built");
     };
-    const mdFile = { basename: "Buildrs", path: "Notes/Buildrs.md", stat: { size: 10, mtime: 1 }, content: "Buildrs pipeline notes" };
-    app.vault.getMarkdownFiles = () => [mdFile];
     const res = await registeredTools(makeServer(app))["search_vault"].handler({ query: "Buildrs" }, {});
     expect(res.content[0].text).toContain("[[Notes/Buildrs.md]]");
   });

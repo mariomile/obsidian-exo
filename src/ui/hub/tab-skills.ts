@@ -236,7 +236,9 @@ async function vocabularySections(ctx: HubTabContext): Promise<CardModel[]> {
     if (nativeOn) {
       for (const t of NATIVE_READ) chip(body, t, true);
       for (const t of NATIVE_WRITE) chip(body, t, true);
-      for (const t of NATIVE_MEMORY) chip(body, t, s.memoryWriteEnabled, "memory write");
+      const memory = ctx.plugin.memoryCaps();
+      for (const t of NATIVE_MEMORY) chip(body, t, memory.ledgerWrite, "memory write");
+      chip(body, "recent_chats", memory.chatSearch, "memory read");
     }
   }, toolSig));
 

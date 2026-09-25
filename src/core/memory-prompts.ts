@@ -1,38 +1,26 @@
 /**
  * Prompt surfaces for the memory layer: the short standing notes appended to the
- * boot preamble that tell the model which memory tools exist and when to use
- * them.
- *
- * WHY THIS FILE (2026-08-12): these three builders are pure string templates with
- * no `this`, no Obsidian, and exactly one call site each (`ensureSession` in
- * `view.ts`). They were module-level constants in `view.ts` only because that is
- * where the call site is. They belong next to `boot-content.ts` and
- * `context-assembly.ts`: this directory already owns what Exo injects and what it
- * costs, and the injected text is now editable without opening a 6.6k-line file.
+ * boot preamble that tell the model which memory capabilities exist and when to
+ * use them. Pure string templates, one call site each (`bootPreambleFor` in
+ * `obsidian/memory.ts`).
  */
 
-/** Prompt surface for the Memory Union Store — appended to the boot preamble only
- *  when the store tools are registered. Kept short: the tool descriptions carry
- *  the detail. */
-export const memoryStoreNote = (storeDir: string): string =>
-  "### Memory union store\n" +
-  `A persistent, append-only memory store lives in \`${storeDir}/\` — verbatim preferences, facts, decisions, and lessons from past sessions. ` +
-  "Call `recall` before answering anything that may depend on prior sessions instead of guessing, and use `remember` to store new durable statements in the user's exact words (never summarized).";
+/** Prompt surface for automatic memory: the vault IS the memory, Exo captures
+ *  after each chat and recalls before each turn, so the model neither stores
+ *  nor searches a parallel memory. Appended when capture or recall is on. */
+export const autoMemoryNote = (opts: { recall: boolean; chats: boolean }): string =>
+  "### Memory\n" +
+  "Your memory is this vault: durable facts live in the user's own notes. After a chat goes idle, Exo reads it and adds or updates one-line facts in the right notes by itself, so you do not need to save anything to remember it. " +
+  (opts.recall
+    ? "Before each message, Exo may prepend a `[vault-recall]` block with related notes and past chats: it is BACKGROUND, never the current conversation. When the user points back ('continua', 'as above'), resolve it from THIS thread. "
+    : "") +
+  (opts.chats ? "Use `recent_chats` when the user asks what you discussed recently." : "");
 
-/** Variant used when proactive recall is ON: the plugin auto-injects the relevant
- *  memories, so the model no longer needs to *decide* to call `recall`. Kept short —
- *  `recall`/`remember` tool descriptions carry the detail. */
-export const memoryStoreNoteProactive = (storeDir: string): string =>
-  "### Memory union store\n" +
-  `A persistent, append-only memory store lives in \`${storeDir}/\`. Relevant past memories are auto-provided each turn inside \`[recalled-memory]…[/recalled-memory]\` blocks — trusted verbatim context, but BACKGROUND from other sessions. ` +
-  "When the user refers back to the running conversation ('continua', 'le altre cose proposte', 'quello sopra', 'as above', 'go on'), the referent is THIS conversation's own history — resolve it from the current thread, never from recalled memory or the boot `Recent sessions` digest. " +
-  "Use `recall` for a deeper or explicit search (e.g. `as_of` point-in-time queries), and `remember` to store new durable statements in the user's exact words (never summarized).";
-
-/** Prompt surface for the identity layer — appended when the agent folder is on
+/** Prompt surface for the identity layer: appended when the agent folder is on
  *  and `rethink_memory` is registered. Explains WHEN to rethink (world-model
- *  change) vs `remember` (episodic), and the propose-only persona tier. */
+ *  change) and the propose-only persona tier. */
 export const agentFolderNote = (agentDir: string): string =>
-  "### Identity — `rethink_memory`\n" +
+  "### Identity: `rethink_memory`\n" +
   `Your shared kernel lives in \`${agentDir}/\` (SOUL, USER, NOW) and is already in your boot context above. ` +
-  "Call `rethink_memory` only when your MODEL OF THE WORLD changes — a shifted priority (NOW.md), a durable update to how you understand the user (USER.md, pass a rationale). NOT for episodic notes — those go to `remember`. " +
+  "Call `rethink_memory` only when your MODEL OF THE WORLD changes: a shifted priority (NOW.md), a durable update to how you understand the user (USER.md, pass a rationale). Not for single facts: those land in the vault automatically. " +
   "`SOUL.md` is propose-only: a `rethink_memory` on it records a proposal for the user to approve, it does not write.";

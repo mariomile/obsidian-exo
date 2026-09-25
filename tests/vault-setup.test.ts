@@ -61,7 +61,7 @@ describe("scaffoldItems presets", () => {
   it("minimal creates the operational layer but no marioverse content", () => {
     const minimal = scaffoldItems(LEGACY, "minimal").map((i) => i.path);
     // mechanism present
-    expect(minimal).toContain(LEGACY.store);
+    expect(minimal).toContain(LEGACY.queue);
     expect(minimal).toContain(LEGACY.tasks);
     expect(minimal).toContain(LEGACY.openLoops);
     // no content whatsoever — no vault-context, preferences, or agent identity
@@ -80,7 +80,6 @@ describe("scaffoldItems presets", () => {
     // folder READMEs (the folders exist by virtue of a file inside them)
     expect(full).toContain(`${LEGACY.rules}/README.md`);
     expect(full).toContain(`${LEGACY.decisions}/README.md`);
-    expect(full).toContain(`${LEGACY.learnings}/README.md`);
     // hand-fillable identity blocks
     expect(full).toContain(`${LEGACY.agentDir}/SOUL.md`);
     expect(full).toContain(`${LEGACY.agentDir}/USER.md`);
