@@ -40,7 +40,7 @@ import {
   DEFAULT_AUTOMATION_COOLDOWN_MS,
 } from "../core/automation-model";
 import { automationSlug } from "./automation-store";
-import { ok, err, getExo, type Result } from "./tool-kit";
+import { ok, err, getExo, pluginInstance, type Result } from "./tool-kit";
 import { buildCapabilityTools, CAPABILITY_READ_TOOLS } from "./capability-tools";
 import { buildBrowserTools, BROWSER_READ_TOOLS, type BrowserBridge } from "./browser-tools";
 import { buildCollaboTools, COLLABO_READ_TOOLS, collaboBridgeFrom } from "./collabo-tools";
@@ -92,9 +92,7 @@ interface SonarSearchService {
 /** Resolve Sonar's search service off its plugin instance, or null when the
  *  plugin is absent or its index isn't ready yet. */
 function getSonarSearch(app: App): SonarSearchService | null {
-  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, { service?: Partial<SonarSearchService> }> } })
-    .plugins;
-  const svc = plugins?.plugins?.["sonar"]?.service;
+  const svc = (pluginInstance(app, "sonar") as { service?: Partial<SonarSearchService> } | undefined)?.service;
   if (!svc || typeof svc.query !== "function") return null;
   if (typeof svc.getStatus === "function" && !svc.getStatus().ready) return null;
   return svc as SonarSearchService;
@@ -114,8 +112,7 @@ interface AIditorApi {
 }
 /** Resolve AIditor's public API off its plugin instance, or null when absent/disabled. */
 function getAIditor(app: App): AIditorApi | null {
-  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, Partial<AIditorApi>> } }).plugins;
-  const p = plugins?.plugins?.["aiditor"];
+  const p = pluginInstance(app, "aiditor") as Partial<AIditorApi> | undefined;
   return p && typeof p.getAnnotations === "function" && typeof p.resolveAnnotation === "function"
     ? (p as AIditorApi)
     : null;
@@ -143,8 +140,7 @@ interface SonarApi {
 }
 /** Resolve Sonar's public API off its plugin instance, or null when absent/disabled. */
 function getSonar(app: App): SonarApi | null {
-  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, Partial<SonarApi>> } }).plugins;
-  const p = plugins?.plugins?.["sonar"];
+  const p = pluginInstance(app, "sonar") as Partial<SonarApi> | undefined;
   return p && typeof p.getActions === "function" && typeof p.runAction === "function"
     ? (p as SonarApi)
     : null;
@@ -181,9 +177,10 @@ async function ensureParentFolder(app: App, path: string): Promise<void> {
   }
 }
 
-/** Options bag for {@link buildObsidianTools} — one field per gating/bridge
- *  input that `createObsidianToolServer` used to take positionally. */
+/** Options bag for {@link buildObsidianTools} and {@link createObsidianToolServer}:
+ *  one field per gating/bridge input. */
 export interface ObsidianToolOpts {
+  /** Claude server only: load the tools up front instead of deferring them. */
   alwaysLoad?: boolean;
   memoryWrite?: boolean;
   askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>;
@@ -1358,9 +1355,6 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
       if (args.action === "create") {
         if (auto) return ok(`Automation "${auto.name}" already exists — use update.`);
         if (!args.prompt && !args.agent) return ok("Give the automation a prompt, or bind it to an agent.");
-        if (args.mode === "propose" && !args.agent) {
-          return ok("Mode `propose` needs a bound agent — proposals are collected from an agent run. Use `report`, or set `agent`.");
-        }
         const when = args.when ? parseWhens(args.when) : [];
         if (when === null) return err("Unparseable when-line — use forms like: daily 08:00 · on create in _inbox/**");
         const a: Automation = {
@@ -1400,12 +1394,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
       if (args.description !== undefined) a.description = args.description;
       if (args.prompt !== undefined) a.prompt = args.prompt;
       if (args.agent !== undefined) a.agent = args.agent || undefined;
-      if (args.mode) {
-        if (args.mode === "propose" && !(args.agent ?? a.agent)) {
-          return ok("Mode `propose` needs a bound agent — proposals are collected from an agent run. Use `report`, or set `agent`.");
-        }
-        a.mode = args.mode;
-      }
+      if (args.mode) a.mode = args.mode;
       if (args.write_scope) a.scope = args.write_scope;
       await store.save(a);
       return ok(`Automation updated: ${a.name} — ${a.when.map(formatWhen).join(" · ") || "no when-lines"}, ${a.enabled ? "on" : "paused"}, ${modeSentence(a.mode)}.`);
@@ -1467,57 +1456,19 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
 
 /**
  * In-process MCP server exposing Obsidian-native tools to the agent via the
- * Claude Agent SDK. Thin wrapper around {@link buildObsidianTools} — the tool
- * array itself is built there so the Codex↔Obsidian bridge can consume it
- * directly without going through `createSdkMcpServer`.
+ * Claude Agent SDK. Thin wrapper around {@link buildObsidianTools}: the tool
+ * array itself is built there so the Codex/Obsidian bridge can consume it
+ * directly without going through `createSdkMcpServer`. Same options bag.
  */
-export function createObsidianToolServer(
-  app: App,
-  alwaysLoad = true,
-  memoryWrite = true,
-  askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>,
-  memoryRead = true,
-  memoryWriteQueue: WriteQueue = new WriteQueue(),
-  orchestrationEnabled = false,
-  tasksWriteQueue: WriteQueue = new WriteQueue(),
-  agentFolderEnabled = false,
-  rethinkBridge?: (req: RethinkRequest) => Promise<string>,
-  loopsWriteQueue: WriteQueue = new WriteQueue(),
-  paths: ExoPaths = exoPaths(LEGACY_MEMORY_ROOT),
-  // Convo id of the conversation this server belongs to. Kept last in the
-  // positional API so existing callers retain their argument slots (same
-  // convention as `loopsWriteQueue` above). Absent for headless runs, which
-  // must not get `spawn_task` — a child with no parent has nobody to report to.
-  parentConvoId?: string,
-  // Shared agent-browser bridge: trailing for the same reason as parentConvoId,
-  // and absent for every caller that has no visible tab to drive.
-  browserBridge?: BrowserBridge,
-  // Memory Union Store master flag: trailing for the same reason as browserBridge.
-  // Default ON — existing callers are unaffected.
-  memoryStoreEnabled = true
-) {
+export function createObsidianToolServer(app: App, opts: ObsidianToolOpts) {
+  const alwaysLoad = opts.alwaysLoad ?? true;
   return createSdkMcpServer({
     name: "obsidian",
     version: "1.0.0",
     alwaysLoad,
     instructions:
       "Obsidian-native tools. Prefer these over generic file/Bash tools for vault work — they respect links, tags, and frontmatter.",
-    tools: toSdkTools(buildObsidianTools(app, {
-      alwaysLoad,
-      memoryWrite,
-      askBridge,
-      memoryRead,
-      memoryStoreEnabled,
-      memoryWriteQueue,
-      loopsWriteQueue,
-      orchestrationEnabled,
-      tasksWriteQueue,
-      parentConvoId,
-      browserBridge,
-      agentFolderEnabled,
-      rethinkBridge,
-      paths,
-    })),
+    tools: toSdkTools(buildObsidianTools(app, opts)),
   });
 }
 

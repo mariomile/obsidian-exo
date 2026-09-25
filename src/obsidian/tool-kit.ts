@@ -40,7 +40,7 @@ export interface ExoToolHost {
     archive(slug: string): Promise<void>;
     filePath(slug: string): string;
   };
-  /** Manual run of one automation through the shared executors. */
+  /** Manual run of one automation through the shared executor. */
   runAutomationNow(a: Automation): Promise<boolean>;
   /** Resolves false when named agents are disabled in settings. */
   agentsReady(): Promise<boolean>;
@@ -69,9 +69,15 @@ export interface ExoToolHost {
   refreshHub(): void;
 }
 
+/** Another plugin's live instance by id, or undefined when it is absent or
+ *  disabled. `app.plugins` is not in Obsidian's public typings; this is the one
+ *  place that reaches into it. Callers duck-type the result. */
+export function pluginInstance(app: App, id: string): unknown {
+  return (app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins?.plugins?.[id];
+}
+
 export function getExo(app: App): ExoToolHost | null {
-  const plugins = (app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
-  const p = plugins?.plugins?.["exo-agent"] as Partial<ExoToolHost> | undefined;
+  const p = pluginInstance(app, "exo-agent") as Partial<ExoToolHost> | undefined;
   return p && typeof p.loadAutomationRuns === "function" && typeof p.runPlaybook === "function"
     ? (p as ExoToolHost)
     : null;

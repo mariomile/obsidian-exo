@@ -1,9 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   agentLastRunKey,
   agentTriggerRunKey,
-  automationRunPrompt,
-  automationTriggerLine,
   dueScheduledAgentRuns,
   gateAgentRun,
   gateAgentInvoke,
@@ -18,10 +16,13 @@ import {
   buildAgentSystemPrompt,
   salvageProposalCandidates,
   buildAgentRunPrompt,
+  collectRunProposals,
+  proposeEligible,
+  type RunProposalDeps,
 } from "../src/core/agent-runs";
 import { mergeAgents, defaultContract, parseTrigger, type AgentBrain, type AgentContract } from "../src/core/agents";
 import { JOURNAL_MARKER } from "../src/core/agent-journal";
-import { parseProposalCandidates } from "../src/core/proposals";
+import { parseProposalCandidates, type ProposalCandidate, type ProposalRecord } from "../src/core/proposals";
 
 const at = (y: number, mo: number, d: number, h = 0, mi = 0) => new Date(y, mo - 1, d, h, mi).getTime();
 
@@ -234,7 +235,7 @@ describe("extractProposalBlock", () => {
   });
 
   it("the example in the prompt is itself valid input", () => {
-    const example = buildAgentRunPrompt(agent("a", { autonomy: "propose" }), "x")
+    const example = buildAgentRunPrompt(agent("a", { autonomy: "propose" }), "x", undefined, undefined, "r", true)
       .split("\n")
       .find((l) => l.trim().startsWith('[{"kind"'));
     expect(example).toBeDefined();
@@ -328,80 +329,75 @@ describe("agentRunName — report filenames", () => {
   });
 });
 
-describe("buildAgentRunPrompt — the proposal channel", () => {
-  it("is offered to `propose` only", () => {
-    expect(buildAgentRunPrompt(agent("a", { autonomy: "propose" }), "x")).toContain(AGENT_PROPOSAL_FENCE);
+describe("proposeEligible: the one rule for the proposal channel", () => {
+  it("holds only for a `propose` tier with the kernel on", () => {
+    expect(proposeEligible({ autonomy: "propose" }, true)).toBe(true);
+    expect(proposeEligible({ autonomy: "propose" }, false)).toBe(false);
     // `notify` has nothing to propose; `act` already writes, so proposing too
     // would let one change arrive twice.
-    expect(buildAgentRunPrompt(agent("a", { autonomy: "notify" }), "x")).not.toContain(AGENT_PROPOSAL_FENCE);
-    expect(buildAgentRunPrompt(agent("a", { autonomy: "act" }), "x")).not.toContain(AGENT_PROPOSAL_FENCE);
+    expect(proposeEligible({ autonomy: "notify" }, true)).toBe(false);
+    expect(proposeEligible({ autonomy: "act" }, true)).toBe(false);
+  });
+});
+
+describe("buildAgentRunPrompt — the proposal channel", () => {
+  const propose = agent("a", { autonomy: "propose" });
+  const eligible = (a: typeof propose, kernel: boolean) => proposeEligible(a.contract, kernel);
+
+  it("carries the contract only when the run is propose-eligible", () => {
+    expect(buildAgentRunPrompt(propose, "x", undefined, undefined, "r", eligible(propose, true))).toContain(
+      AGENT_PROPOSAL_FENCE
+    );
+    for (const a of [agent("a", { autonomy: "notify" }), agent("a", { autonomy: "act" })]) {
+      expect(buildAgentRunPrompt(a, "x", undefined, undefined, "r", eligible(a, true))).not.toContain(
+        AGENT_PROPOSAL_FENCE
+      );
+    }
+  });
+
+  it("leaves the contract out of a propose run when the kernel is off, on BOTH engines", () => {
+    const off = eligible(propose, false);
+    expect(buildAgentRunPrompt(propose, "x", undefined, undefined, "r", off)).not.toContain(AGENT_PROPOSAL_FENCE);
+    expect(buildDirectAgentRunPrompt(propose, "x", undefined, undefined, "r", off)).not.toContain(
+      AGENT_PROPOSAL_FENCE
+    );
   });
 
   it("names the kernel's existing kinds and says proposals are inert", () => {
-    const p = buildAgentRunPrompt(agent("a", { autonomy: "propose" }), "x");
+    const p = buildAgentRunPrompt(propose, "x", undefined, undefined, "r", true);
     for (const kind of ["task", "loop", "decision", "playbook"]) expect(p).toContain(`\`${kind}\``);
     expect(p).toContain("INERT until a human accepts");
   });
 });
 
-describe("automationRunPrompt: prompt-only automations get the same contract", () => {
-  it("appends the proposal contract when the run is propose-eligible", () => {
-    const p = automationRunPrompt("Scan the inbox.", true, "your run report", "daily 08:00");
-    expect(p).toContain("Scan the inbox.");
-    expect(p).toContain(AGENT_PROPOSAL_FENCE);
-  });
+describe("a prompt-only automation: inline brain through the direct prompt", () => {
+  // What `automationDef` in main.ts builds for an automation with no `agent:`.
+  const inline = (mode: AgentContract["autonomy"]) =>
+    ({
+      brain: { slug: "morning-digest", name: "Morning Digest", invocable: "", source: "vault", prompt: "  Scan the inbox.  " },
+      contract: { ...defaultContract("morning-digest"), enabled: true, autonomy: mode },
+    }) as const;
 
-  // `report` mode (autonomy "notify") and `act` mode both call this with
-  // proposeEligible=false. `report` has nothing to propose, `act` already
-  // writes, so a contract would let the same change arrive twice.
-  it("adds only the trigger line when not propose-eligible (report or act mode)", () => {
-    const p = automationRunPrompt("Scan the inbox.", false, "your run report", "daily 08:00");
-    expect(p).toBe("Trigger: daily 08:00\n\nScan the inbox.");
+  it("states its own prompt as the standing task, inside the trigger envelope", () => {
+    const p = buildDirectAgentRunPrompt(inline("notify"), "create Input/Call X.md");
+    expect(p.split("\n")[0]).toBe('<agent-run trigger="create Input/Call X.md">');
+    expect(p).toContain('You are the "Morning Digest" agent');
+    expect(p).toContain("Standing task:\nScan the inbox.");
+    expect(p).not.toContain("regular job as defined in its own agent file");
+    expect(p).not.toContain("subagent_type");
+    expect(p).toContain(NOTHING_TO_REPORT);
     expect(p).not.toContain(AGENT_PROPOSAL_FENCE);
   });
 
-  it("leaves the contract out even in propose mode when the kernel is off", () => {
-    // The caller computes proposeEligible as `mode === "propose" && proposalKernelEnabled`;
-    // a disabled kernel means false reaches here regardless of mode.
-    const p = automationRunPrompt("Scan the inbox.", false, "your run report", "daily 08:00");
-    expect(p).not.toContain(AGENT_PROPOSAL_FENCE);
-  });
-});
-
-describe("automationRunPrompt: the run knows what fired it", () => {
-  it("names the file for a vault-event trigger, before the prompt", () => {
-    const p = automationRunPrompt(
-      "Summarize the meeting.",
-      false,
-      "your run report",
-      "create Input/Meeting/Granola/2026-09/Call X.md"
-    );
-    expect(p.split("\n")[0]).toBe("Trigger: create Input/Meeting/Granola/2026-09/Call X.md");
-    expect(p).toContain("Summarize the meeting.");
+  it("gets the proposal contract after its task in propose mode", () => {
+    const p = buildDirectAgentRunPrompt(inline("propose"), "daily 08:00", undefined, undefined, "r", true);
+    expect(p.indexOf(AGENT_PROPOSAL_FENCE)).toBeGreaterThan(p.indexOf("Scan the inbox."));
   });
 
-  it("carries the tag trigger's path", () => {
-    const p = automationRunPrompt("Triage.", false, "r", "#todo on Inbox/Note.md");
-    expect(p.startsWith("Trigger: #todo on Inbox/Note.md\n")).toBe(true);
-  });
-
-  it("says so when the run is a manual Run now", () => {
-    expect(automationRunPrompt("Triage.", false, "r", "manual").split("\n")[0]).toBe(
-      "Trigger: manual (Run now)"
-    );
-  });
-
-  it("keeps the trigger line first and the contract last in propose mode", () => {
-    const p = automationRunPrompt("Triage.", true, "r", "create A.md");
-    expect(p.indexOf("Trigger: create A.md")).toBe(0);
-    expect(p.indexOf(AGENT_PROPOSAL_FENCE)).toBeGreaterThan(p.indexOf("Triage."));
-  });
-});
-
-describe("automationTriggerLine", () => {
-  it("formats schedule labels verbatim and never renders an empty trigger", () => {
-    expect(automationTriggerLine("daily 08:00")).toBe("Trigger: daily 08:00");
-    expect(automationTriggerLine("  ")).toBe("Trigger: unknown");
+  it("lets a delegated task override the standing prompt", () => {
+    const p = buildDirectAgentRunPrompt(inline("notify"), "invoked by exo", undefined, { from: "exo", text: "check X" });
+    expect(p).toContain("Task from exo: check X");
+    expect(p).not.toContain("Scan the inbox.");
   });
 });
 
@@ -421,7 +417,10 @@ describe("buildDirectAgentRunPrompt — no delegation, no subagent", () => {
     const p = buildDirectAgentRunPrompt(
       agent("a", { autonomy: "propose", output: "journal", scope: { read: ["x/**"], write: [] } }),
       "hourly",
-      { path: "m.md", excerpt: "learned X" }
+      { path: "m.md", excerpt: "learned X" },
+      undefined,
+      "r",
+      true
     );
     expect(p).toContain(NOTHING_TO_REPORT);
     expect(p).toContain("Read scope: x/**");
@@ -642,5 +641,54 @@ describe("delegation must be synchronous", () => {
   it("a delegated run waits too", () => {
     const p = buildAgentRunPrompt(agent("a"), "invoked by exo", undefined, { from: "exo", text: "do X" });
     expect(p).toContain("run_in_background: false");
+  });
+});
+
+describe("collectRunProposals: fenced block from an unattended run", () => {
+  const runSource: ProposalRecord["source"] = {
+    convoId: "agent:morning-digest",
+    turnId: "run-1",
+    createdAt: 1_720_000_000_000,
+  };
+  const taskJson = { kind: "task", title: "Follow up", prompt: "do it", rationale: "because" };
+
+  function fenced(candidates: unknown): string {
+    return ["Here is what I found.", "", "```exo-proposals", JSON.stringify(candidates), "```"].join("\n");
+  }
+
+  function runDeps(): { value: RunProposalDeps; append: ReturnType<typeof vi.fn>; diagnostic: ReturnType<typeof vi.fn> } {
+    const append = vi.fn(async (_candidate: ProposalCandidate) => ({ status: "appended" }));
+    const diagnostic = vi.fn();
+    return { value: { store: { append }, diagnostic }, append, diagnostic };
+  }
+
+  it("is a no-op when the output has no fenced block", async () => {
+    const mocked = runDeps();
+    expect(await collectRunProposals("Nothing to report.", runSource, mocked.value)).toBe(0);
+    expect(mocked.append).not.toHaveBeenCalled();
+  });
+
+  it("turns a fenced block into a pending proposal with the run as its source", async () => {
+    const mocked = runDeps();
+    expect(await collectRunProposals(fenced([taskJson]), runSource, mocked.value)).toBe(1);
+    expect(mocked.append).toHaveBeenCalledTimes(1);
+    expect(mocked.append.mock.calls[0][1]).toEqual(runSource);
+  });
+
+  it("salvages the valid entries when one candidate in the block is invalid", async () => {
+    const mocked = runDeps();
+    const missingRationale = { kind: "task", title: "Missing rationale", prompt: "do it" };
+    expect(await collectRunProposals(fenced([taskJson, missingRationale]), runSource, mocked.value)).toBe(1);
+    expect(mocked.append).toHaveBeenCalledTimes(1);
+    expect(mocked.diagnostic).toHaveBeenCalledTimes(1);
+  });
+
+  it("never throws when the store append fails", async () => {
+    const append = vi.fn(async () => {
+      throw new Error("disk full");
+    });
+    const diagnostic = vi.fn();
+    expect(await collectRunProposals(fenced([taskJson]), runSource, { store: { append }, diagnostic })).toBe(0);
+    expect(diagnostic).toHaveBeenCalledTimes(1);
   });
 });

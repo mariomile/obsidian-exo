@@ -23,7 +23,9 @@ import {
   parseAnsweredStamp,
   type AttentionItem,
   type CockpitRow,
+  type StateNote,
 } from "../core/cockpit";
+import { blockPath } from "../obsidian/agent-folder";
 import { parseLoopsFile } from "../core/open-loops";
 import { unreviewedWriteRuns } from "../core/automations";
 import { dailyPulseNeedsReview } from "../core/daily-pulse";
@@ -146,18 +148,19 @@ export class CockpitView extends ItemView {
     }
   }
 
-  /** The note that carries current state: the identity `NOW.md` when the agent
-   *  folder is on and the file exists, else vault-context. */
-  private async stateNotePath(): Promise<string> {
-    const now = `${this.plugin.paths.agentDir}/NOW.md`;
-    if (this.plugin.settings.agentFolderEnabled && (await this.app.vault.adapter.exists(now))) return now;
-    return this.plugin.paths.vaultContext;
-  }
-
-  private async contextAgeDays(now: number): Promise<number | null> {
+  /** The note that carries current state, and how old it is: the identity
+   *  `NOW.md` when the agent folder is on and the file exists, else
+   *  vault-context. Null when that note is missing or unreadable. */
+  private async stateNote(now: number): Promise<StateNote | null> {
+    const adapter = this.app.vault.adapter;
     try {
-      const st = await this.app.vault.adapter.stat(await this.stateNotePath());
-      return st?.mtime ? (now - st.mtime) / 86_400_000 : null;
+      const identity = blockPath("NOW", this.plugin.paths.agentDir);
+      const path =
+        this.plugin.settings.agentFolderEnabled && (await adapter.exists(identity))
+          ? identity
+          : this.plugin.paths.vaultContext;
+      const st = await adapter.stat(path);
+      return st?.mtime ? { path, ageDays: (now - st.mtime) / 86_400_000 } : null;
     } catch {
       return null;
     }
@@ -190,7 +193,7 @@ export class CockpitView extends ItemView {
     this.rendering = true;
     try {
       const now = Date.now();
-      const [loopsRaw, tasksRaw, queuePending, answers, convos, inbox, ctxAge, report, unreviewedRuns, proposalPending] =
+      const [loopsRaw, tasksRaw, queuePending, answers, convos, inbox, stateNote, report, unreviewedRuns, proposalPending] =
         await Promise.all([
           this.readOr(this.plugin.paths.openLoops, ""),
           this.readOr(this.plugin.paths.tasks, ""),
@@ -198,7 +201,7 @@ export class CockpitView extends ItemView {
           this.recentAnswers(now),
           this.plugin.loadConversations().catch(() => []),
           this.inboxCount(),
-          this.contextAgeDays(now),
+          this.stateNote(now),
           this.lastReport(),
           this.plugin
             .loadAutomationRuns()
@@ -277,10 +280,9 @@ export class CockpitView extends ItemView {
 
       const health = healthRows({
         inboxCount: inbox,
-        contextAgeDays: ctxAge,
+        stateNote,
         lastReport: report,
         now,
-        vaultContextPath: await this.stateNotePath(),
       });
       this.tile(grid, "Health", "heart-pulse", health, "Vault is healthy.");
     } finally {

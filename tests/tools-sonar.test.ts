@@ -40,7 +40,7 @@ function fakeApp(opts: { actions?: FakeAction[]; withSonar?: boolean } = {}) {
 function makeServer(app: any) {
   // Read-only construction — the sonar tools are unconditional so this
   // default shape registers them.
-  return createObsidianToolServer(app, true, false, undefined, true);
+  return createObsidianToolServer(app, { alwaysLoad: true, memoryWrite: false, memoryRead: true });
 }
 
 const ACTIONS: FakeAction[] = [

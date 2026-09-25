@@ -8,7 +8,6 @@
  */
 
 import { activeLoops, dueLoops, type LoopEntry } from "./open-loops";
-import { exoPaths, LEGACY_MEMORY_ROOT } from "./paths";
 import { formatAge } from "./actions-hub";
 import { normalizeUtilization } from "./rate-limit";
 import type { TaskEntry, TaskStatus } from "./tasks";
@@ -145,15 +144,19 @@ export function previewFromMessages(
   return "";
 }
 
+/** The note that carries current state (NOW.md, else vault-context) and its
+ *  age in days. */
+export interface StateNote {
+  path: string;
+  ageDays: number;
+}
+
 export interface HealthInput {
   inboxCount: number;
-  /** Age of the state note (NOW.md, else vault-context) in days; null = file missing/unreadable. */
-  contextAgeDays: number | null;
+  /** Null when the state note is missing or unreadable: no stale row then. */
+  stateNote: StateNote | null;
   lastReport: { path: string; name: string; mtime: number } | null;
   now: number;
-  /** Path of the state note whose age is measured — named in the stale-state
-   *  row and prompt. Absent → the legacy vault-context location (test/fallback). */
-  vaultContextPath?: string;
 }
 
 /** Maintenance debt made visible. Only real signals — a healthy vault renders
@@ -168,11 +171,11 @@ export function healthRows(h: HealthInput): CockpitRow[] {
       action: { kind: "ask", arg: "/inbox-triage" },
     });
   }
-  if (h.contextAgeDays != null && h.contextAgeDays > 7) {
-    const path = h.vaultContextPath ?? exoPaths(LEGACY_MEMORY_ROOT).vaultContext;
+  if (h.stateNote && h.stateNote.ageDays > 7) {
+    const { path, ageDays } = h.stateNote;
     rows.push({
       label: `${path.split("/").pop()} stale`,
-      badge: `${Math.floor(h.contextAgeDays)}d`,
+      badge: `${Math.floor(ageDays)}d`,
       action: {
         kind: "ask",
         arg: `Rinfreschiamo ${path}: è stale. Rileggi lo stato attuale e proponi gli aggiornamenti.`,

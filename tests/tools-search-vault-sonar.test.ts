@@ -38,7 +38,7 @@ function fakeApp(opts: {
 }
 
 function makeServer(app: any) {
-  return createObsidianToolServer(app, true, false, undefined, true);
+  return createObsidianToolServer(app, { alwaysLoad: true, memoryWrite: false, memoryRead: true });
 }
 
 describe("search_vault — Sonar path", () => {

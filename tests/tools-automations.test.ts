@@ -102,7 +102,9 @@ describe("automation tools (v2, file-backed)", () => {
     expect(exo.automationStore.save).not.toHaveBeenCalled();
   });
 
-  it("refuses propose mode without a bound agent", async () => {
+  // Prompt-only automations run through the agent executor too, so `propose`
+  // needs no bound agent: the run gets the contract and its block is collected.
+  it("creates a prompt-only automation in propose mode", async () => {
     const { app, exo } = fakeApp([]);
     const result = await toolHandler(app, "manage_automation")({
       action: "create",
@@ -111,8 +113,16 @@ describe("automation tools (v2, file-backed)", () => {
       mode: "propose",
     }, {});
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(text).toContain("needs a bound agent");
-    expect(exo.automationStore.save).not.toHaveBeenCalled();
+    expect(text).toContain("Automation created");
+    expect(exo.automationStore.save).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "propose", agent: undefined, prompt: "Suggest things." })
+    );
+  });
+
+  it("switches a prompt-only automation to propose mode", async () => {
+    const { app, exo } = fakeApp([automation({ slug: "morning-digest", name: "Morning Digest" })]);
+    await toolHandler(app, "manage_automation")({ action: "update", name: "Morning Digest", mode: "propose" }, {});
+    expect(exo.automationStore.save).toHaveBeenCalledWith(expect.objectContaining({ mode: "propose" }));
   });
 
   it("run_now routes through runAutomationNow", async () => {

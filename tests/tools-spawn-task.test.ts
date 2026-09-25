@@ -62,11 +62,17 @@ function childEntry(id: string, parent: string, status: TaskEntry["status"] = "q
 describe("fan-out tools registration gating", () => {
   it("registers neither spawn_task nor list_tasks when orchestrationEnabled is false", () => {
     const { app } = fakeApp();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      new WriteQueue(), /* orchestrationEnabled */ false, new WriteQueue(),
-      false, undefined, new WriteQueue(), undefined, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: new WriteQueue(),
+      orchestrationEnabled: false,
+      tasksWriteQueue: new WriteQueue(),
+      agentFolderEnabled: false,
+      loopsWriteQueue: new WriteQueue(),
+      parentConvoId: "convo-a",
+    });
     const names = toolNames(server);
     expect(names).not.toContain("spawn_task");
     expect(names).not.toContain("list_tasks");
@@ -74,11 +80,16 @@ describe("fan-out tools registration gating", () => {
 
   it("registers list_tasks but withholds spawn_task when there is no parentConvoId", () => {
     const { app } = fakeApp();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      new WriteQueue(), /* orchestrationEnabled */ true, new WriteQueue(),
-      false, undefined, new WriteQueue(), undefined, /* parentConvoId */ undefined
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: new WriteQueue(),
+      orchestrationEnabled: true,
+      tasksWriteQueue: new WriteQueue(),
+      agentFolderEnabled: false,
+      loopsWriteQueue: new WriteQueue(),
+    });
     const names = toolNames(server);
     expect(names).toContain("list_tasks");
     expect(names).not.toContain("spawn_task");
@@ -86,11 +97,17 @@ describe("fan-out tools registration gating", () => {
 
   it("registers both spawn_task and list_tasks when orchestration is on and a parentConvoId is present", () => {
     const { app } = fakeApp();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      new WriteQueue(), /* orchestrationEnabled */ true, new WriteQueue(),
-      false, undefined, new WriteQueue(), undefined, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: new WriteQueue(),
+      orchestrationEnabled: true,
+      tasksWriteQueue: new WriteQueue(),
+      agentFolderEnabled: false,
+      loopsWriteQueue: new WriteQueue(),
+      parentConvoId: "convo-a",
+    });
     const names = toolNames(server);
     expect(names).toContain("spawn_task");
     expect(names).toContain("list_tasks");
@@ -107,10 +124,17 @@ describe("fan-out tools registration gating", () => {
 describe("spawn_task tells the truth about needing an open board", () => {
   const spawnTool = () => {
     const { app } = fakeApp();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      new WriteQueue(), true, new WriteQueue(), false, undefined, new WriteQueue(), undefined, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: new WriteQueue(),
+      orchestrationEnabled: true,
+      tasksWriteQueue: new WriteQueue(),
+      agentFolderEnabled: false,
+      loopsWriteQueue: new WriteQueue(),
+      parentConvoId: "convo-a",
+    });
     return (server.instance as unknown as {
       _registeredTools: Record<string, { description: string }>;
     })._registeredTools["spawn_task"];
@@ -123,10 +147,17 @@ describe("spawn_task tells the truth about needing an open board", () => {
   it("says so again in the result, which is what the model actually acts on", async () => {
     const { app } = fakeApp();
     const queue = new WriteQueue();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      queue, true, queue, false, undefined, queue, undefined, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: queue,
+      orchestrationEnabled: true,
+      tasksWriteQueue: queue,
+      agentFolderEnabled: false,
+      loopsWriteQueue: queue,
+      parentConvoId: "convo-a",
+    });
     const result: any = await registeredTools(server)["spawn_task"].handler(
       { title: "Research the pricing page", prompt: "Go read it" },
       {}
@@ -139,10 +170,17 @@ describe("spawn_task behavior", () => {
   it("writes a queued child task carrying the parent convo id", async () => {
     const { app, files } = fakeApp();
     const queue = new WriteQueue();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      queue, true, queue, false, undefined, queue, undefined, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: queue,
+      orchestrationEnabled: true,
+      tasksWriteQueue: queue,
+      agentFolderEnabled: false,
+      loopsWriteQueue: queue,
+      parentConvoId: "convo-a",
+    });
     const spawnTask = registeredTools(server)["spawn_task"];
     expect(spawnTask).toBeTruthy();
 
@@ -165,10 +203,17 @@ describe("spawn_task behavior", () => {
     const before = files.get(TASKS_PATH);
 
     const queue = new WriteQueue();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      queue, true, queue, false, undefined, queue, undefined, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: queue,
+      orchestrationEnabled: true,
+      tasksWriteQueue: queue,
+      agentFolderEnabled: false,
+      loopsWriteQueue: queue,
+      parentConvoId: "convo-a",
+    });
     const spawnTask = registeredTools(server)["spawn_task"];
     const gate = canSpawnChild(existing, "convo-a");
     expect(gate.ok).toBe(false);
@@ -195,10 +240,17 @@ describe("spawn_task behavior", () => {
     files.set(TASKS_PATH, serializeTasks(existing));
 
     const queue = new WriteQueue();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      queue, true, queue, false, undefined, queue, undefined, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: queue,
+      orchestrationEnabled: true,
+      tasksWriteQueue: queue,
+      agentFolderEnabled: false,
+      loopsWriteQueue: queue,
+      parentConvoId: "convo-a",
+    });
     const spawnTask = registeredTools(server)["spawn_task"];
 
     const results: any[] = await Promise.all(
@@ -226,10 +278,18 @@ describe("fan-out tools honor a non-legacy configured ExoPaths (not a hardcoded 
     expect(customPaths.tasks).not.toBe(TASKS_PATH);
 
     const queue = new WriteQueue();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      queue, true, queue, false, undefined, queue, customPaths, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: queue,
+      orchestrationEnabled: true,
+      tasksWriteQueue: queue,
+      agentFolderEnabled: false,
+      loopsWriteQueue: queue,
+      paths: customPaths,
+      parentConvoId: "convo-a",
+    });
     const spawnTask = registeredTools(server)["spawn_task"];
     const listTasks = registeredTools(server)["list_tasks"];
 
@@ -257,10 +317,17 @@ describe("list_tasks behavior", () => {
     files.set(TASKS_PATH, serializeTasks(entries));
 
     const queue = new WriteQueue();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      queue, true, queue, false, undefined, queue, undefined, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: queue,
+      orchestrationEnabled: true,
+      tasksWriteQueue: queue,
+      agentFolderEnabled: false,
+      loopsWriteQueue: queue,
+      parentConvoId: "convo-a",
+    });
     const listTasks = registeredTools(server)["list_tasks"];
     expect(listTasks).toBeTruthy();
 
@@ -281,10 +348,17 @@ describe("list_tasks behavior", () => {
     files.set(TASKS_PATH, serializeTasks(entries));
 
     const queue = new WriteQueue();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      queue, true, queue, false, undefined, queue, undefined, "convo-a"
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: queue,
+      orchestrationEnabled: true,
+      tasksWriteQueue: queue,
+      agentFolderEnabled: false,
+      loopsWriteQueue: queue,
+      parentConvoId: "convo-a",
+    });
     const listTasks = registeredTools(server)["list_tasks"];
     const result: any = await listTasks.handler({ all: true }, {});
     const text = result.content[0].text as string;
@@ -295,10 +369,16 @@ describe("list_tasks behavior", () => {
 
   it("is present (and reports no delegated tasks) even with no parentConvoId", async () => {
     const { app } = fakeApp();
-    const server = createObsidianToolServer(
-      app, true, false, undefined, true,
-      new WriteQueue(), true, new WriteQueue(), false, undefined, new WriteQueue(), undefined, undefined
-    );
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: new WriteQueue(),
+      orchestrationEnabled: true,
+      tasksWriteQueue: new WriteQueue(),
+      agentFolderEnabled: false,
+      loopsWriteQueue: new WriteQueue(),
+    });
     const listTasks = registeredTools(server)["list_tasks"];
     expect(listTasks).toBeTruthy();
     const result: any = await listTasks.handler({}, {});

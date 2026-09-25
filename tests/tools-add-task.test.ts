@@ -47,13 +47,25 @@ function fakeApp() {
 describe("add_task tool registration (orchestrationEnabled gating)", () => {
   it("is ABSENT from the tool list when orchestrationEnabled is false (default)", () => {
     const { app } = fakeApp();
-    const server = createObsidianToolServer(app, true, false, undefined, true, new WriteQueue(), false);
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: new WriteQueue(),
+      orchestrationEnabled: false,
+    });
     expect(toolNames(server)).not.toContain("add_task");
   });
 
   it("is PRESENT in the tool list when orchestrationEnabled is true", () => {
     const { app } = fakeApp();
-    const server = createObsidianToolServer(app, true, false, undefined, true, new WriteQueue(), true);
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: new WriteQueue(),
+      orchestrationEnabled: true,
+    });
     expect(toolNames(server)).toContain("add_task");
   });
 
@@ -61,9 +73,15 @@ describe("add_task tool registration (orchestrationEnabled gating)", () => {
     const { app: appA } = fakeApp();
     const { app: appB } = fakeApp();
     // Pre-feature call shape (no orchestrationEnabled / tasksWriteQueue args at all).
-    const before = createObsidianToolServer(appA, true, false, undefined, true);
+    const before = createObsidianToolServer(appA, { alwaysLoad: true, memoryWrite: false, memoryRead: true });
     // Post-feature call shape, flag explicitly off.
-    const after = createObsidianToolServer(appB, true, false, undefined, true, new WriteQueue(), false);
+    const after = createObsidianToolServer(appB, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: new WriteQueue(),
+      orchestrationEnabled: false,
+    });
     expect(toolNames(after)).toEqual(toolNames(before));
   });
 });
@@ -72,7 +90,13 @@ describe("add_task tool behavior (flag on)", () => {
   it("creates a backlog entry in tasks.md via the WriteQueue path — no direct vault write outside it", async () => {
     const { app, files } = fakeApp();
     const queue = new WriteQueue();
-    const server = createObsidianToolServer(app, true, false, undefined, true, queue, true);
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: queue,
+      orchestrationEnabled: true,
+    });
     const registered = (server.instance as unknown as {
       _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
     })._registeredTools;
@@ -94,7 +118,13 @@ describe("add_task tool behavior (flag on)", () => {
   it("respects an optional model argument", async () => {
     const { app, files } = fakeApp();
     const queue = new WriteQueue();
-    const server = createObsidianToolServer(app, true, false, undefined, true, queue, true);
+    const server = createObsidianToolServer(app, {
+      alwaysLoad: true,
+      memoryWrite: false,
+      memoryRead: true,
+      memoryWriteQueue: queue,
+      orchestrationEnabled: true,
+    });
     const registered = (server.instance as unknown as {
       _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
     })._registeredTools;
