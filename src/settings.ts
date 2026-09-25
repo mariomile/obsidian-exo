@@ -141,7 +141,7 @@ export class MVASettingTab extends PluginSettingTab {
 
     new Setting(el)
       .setName("Claude binary path")
-      .setDesc("Path to the `claude` CLI. Leave empty to auto-detect; run `which claude` if detection fails.")
+      .setDesc("Path to the `claude` CLI. Leave empty to auto-detect; run `which claude` (`where claude` on Windows) if detection fails.")
       .addText((t) =>
         t
           .setPlaceholder("auto-detect")
@@ -155,7 +155,7 @@ export class MVASettingTab extends PluginSettingTab {
 
     new Setting(el)
       .setName("Codex binary path")
-      .setDesc("Path to the `codex` CLI. Leave empty to auto-detect; run `which codex` if detection fails.")
+      .setDesc("Path to the `codex` CLI. Leave empty to auto-detect; run `which codex` (`where codex` on Windows) if detection fails.")
       .addText((t) =>
         t
           .setPlaceholder("auto-detect")

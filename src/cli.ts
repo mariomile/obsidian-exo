@@ -1,7 +1,8 @@
 import { spawn } from "child_process";
 import { homedir } from "os";
-import { existsSync, readdirSync, realpathSync } from "fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "fs";
 import { dirname } from "path";
+import { pickWindowsPrefix, resolveWindowsBin, spawnSpec, windowsPathEnv } from "./core/win-cli";
 
 /** A resolved CLI invocation: the binary plus an enriched PATH for the spawn. */
 export interface ResolvedCli {
@@ -41,6 +42,11 @@ export async function resolveCli(name: string, configured: string): Promise<Reso
   const cached = cliCache.get(key);
   if (cached) return cached;
   const home = homedir();
+  if (process.platform === "win32") {
+    const resolved = await resolveWindowsCli(name, configured.trim(), home);
+    cliCache.set(key, resolved);
+    return resolved;
+  }
   const bin =
     (configured && configured.trim()) ||
     firstExisting(fixedPathCandidates(name, home)) ||
@@ -56,6 +62,22 @@ export async function resolveCli(name: string, configured: string): Promise<Reso
   const resolved = { bin, pathEnv: buildPathEnv(bin) };
   cliCache.set(key, resolved);
   return resolved;
+}
+
+/** Windows counterpart of the chain above; the order and the shim unwrapping
+ *  live in `core/win-cli.ts`. `process.env` is case-insensitive on Windows but
+ *  a spread copy is not, so PATH (stored as `Path`) is read off the original. */
+async function resolveWindowsCli(name: string, configured: string, home: string): Promise<ResolvedCli> {
+  const env = process.env;
+  const bin = await resolveWindowsBin(name, configured, {
+    home,
+    env,
+    exists: safeExists,
+    readFile: (p) => readFileSync(p, "utf8"),
+    npmPrefix: getNpmPrefix,
+    where: (n) => loginShellExec(`where ${n}`),
+  });
+  return { bin, pathEnv: windowsPathEnv(bin, home, { ...env, PATH: env.PATH }) };
 }
 
 /* --------------------------- path candidates -------------------------- */
@@ -122,12 +144,15 @@ function nvmVersionDirs(home: string): string[] {
 
 /** Run a command in an *interactive* login shell (sources .zshrc, where nvm /
  *  PATH setup usually lives) and resolve its raw stdout. Interactive rc files
- *  can stall, so we hard-kill after `timeoutMs`. Never rejects — resolves "". */
+ *  can stall, so we hard-kill after `timeoutMs`. Never rejects: resolves "".
+ *  On Windows there is no login shell to source: GUI apps already inherit the
+ *  user PATH, so the command runs through cmd.exe (needed for `npm.cmd`). */
 function loginShellExec(cmd: string, timeoutMs = 6000): Promise<string> {
   return new Promise((resolve) => {
     try {
-      const shell = process.env.SHELL || "/bin/zsh";
-      const c = spawn(shell, ["-ilc", cmd], { env: process.env });
+      const c = process.platform === "win32"
+        ? spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", cmd], { env: process.env, windowsHide: true })
+        : spawn(process.env.SHELL || "/bin/zsh", ["-ilc", cmd], { env: process.env });
       let out = "";
       let settled = false;
       let timer: number | null = null;
@@ -161,6 +186,7 @@ let npmPrefixQuery: Promise<string | null> | null = null;
 function getNpmPrefix(): Promise<string | null> {
   if (!npmPrefixQuery) {
     npmPrefixQuery = loginShellExec("npm prefix -g").then((out) => {
+      if (process.platform === "win32") return pickWindowsPrefix(out);
       const line = out
         .split("\n")
         .map((s) => s.trim())
@@ -246,7 +272,8 @@ export function cliDiagnostics(name: string, configured: string): Promise<CliDia
 function probeVersion(bin: string, pathEnv: string): Promise<string | null> {
   return new Promise((resolve) => {
     try {
-      const c = spawn(bin, ["--version"], { env: { ...process.env, PATH: pathEnv } });
+      const s = spawnSpec(bin, ["--version"]);
+      const c = spawn(s.command, s.args, { env: { ...process.env, PATH: pathEnv }, windowsHide: true });
       let out = "";
       let settled = false;
       let timer: number | null = null;
@@ -317,12 +344,16 @@ export function claudeInstallChannel(
  *  re-resolves the fresh binary. `output` is a bounded tail of stdout+stderr. */
 export function updateClaudeCli(cli: ResolvedCli): Promise<{ ok: boolean; output: string }> {
   const channel = claudeInstallChannel(cli.bin);
-  const shell = process.env.SHELL || "/bin/zsh";
-  return runUpdater(() =>
-    channel === "npm"
-      ? spawn(shell, ["-ilc", "npm install -g @anthropic-ai/claude-code@latest"], { env: process.env })
-      : spawn(cli.bin, ["update"], { env: { ...process.env, PATH: cli.pathEnv } })
-  );
+  const npmInstall = "npm install -g @anthropic-ai/claude-code@latest";
+  return runUpdater(() => {
+    if (channel === "npm") {
+      return process.platform === "win32"
+        ? spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", npmInstall], { env: process.env, windowsHide: true })
+        : spawn(process.env.SHELL || "/bin/zsh", ["-ilc", npmInstall], { env: process.env });
+    }
+    const s = spawnSpec(cli.bin, ["update"]);
+    return spawn(s.command, s.args, { env: { ...process.env, PATH: cli.pathEnv }, windowsHide: true });
+  });
 }
 
 /** Shared update runner: bounded output ring, 3-minute cap, and a resolve/diag
@@ -398,7 +429,8 @@ export function mcpLogin(cli: ResolvedCli, name: string, cwd: string): Promise<{
       if (out.length > 8000) out = out.slice(-8000); // bounded ring
     };
     try {
-      const c = spawn(cli.bin, ["mcp", "login", name], { cwd, env: { ...process.env, PATH: cli.pathEnv } });
+      const s = spawnSpec(cli.bin, ["mcp", "login", name]);
+      const c = spawn(s.command, s.args, { cwd, env: { ...process.env, PATH: cli.pathEnv }, windowsHide: true });
       c.stdout.on("data", append);
       c.stderr.on("data", append);
       c.on("error", (e: Error) => finish({ ok: false, output: e.message }));
@@ -438,7 +470,8 @@ export function mcpLogout(cli: ResolvedCli, name: string, cwd: string): Promise<
       if (out.length > 8000) out = out.slice(-8000);
     };
     try {
-      const c = spawn(cli.bin, ["mcp", "logout", name], { cwd, env: { ...process.env, PATH: cli.pathEnv } });
+      const s = spawnSpec(cli.bin, ["mcp", "logout", name]);
+      const c = spawn(s.command, s.args, { cwd, env: { ...process.env, PATH: cli.pathEnv }, windowsHide: true });
       c.stdout.on("data", append);
       c.stderr.on("data", append);
       c.on("error", (e: Error) => finish({ ok: false, output: e.message }));
@@ -473,7 +506,8 @@ export function isAbort(e: unknown): boolean {
 /** Map a spawn/CLI error to a short, user-facing message. */
 export function describeError(e: unknown, cliName = "CLI"): string {
   if (e && typeof e === "object" && "code" in e && (e as { code?: string }).code === "ENOENT") {
-    return `${cliName} not found. Run \`which ${cliName.toLowerCase()}\` in a terminal and paste the path in Exo settings.`;
+    const finder = process.platform === "win32" ? "where" : "which";
+    return `${cliName} not found. Run \`${finder} ${cliName.toLowerCase()}\` in a terminal and paste the path in Exo settings.`;
   }
   if (e instanceof Error) {
     const msg = e.message || "";

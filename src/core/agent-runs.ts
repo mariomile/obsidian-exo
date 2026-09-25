@@ -312,9 +312,29 @@ export function proposalContract(memoryRootHint: string): string {
  * without this, a `propose` automation never received the contract and had
  * nothing to extract from its output. This is the one place both the manual
  * "Run now" and the scheduled path build that prompt, so they can't drift.
+ * Every run's prompt opens with its trigger line (see `automationTriggerLine`).
  */
-export function automationRunPrompt(prompt: string, proposeEligible: boolean, reportsHint: string): string {
-  return proposeEligible ? [prompt, proposalContract(reportsHint)].join("\n") : prompt;
+export function automationRunPrompt(
+  prompt: string,
+  proposeEligible: boolean,
+  reportsHint: string,
+  trigger: string
+): string {
+  const body = [automationTriggerLine(trigger), "", prompt].join("\n");
+  return proposeEligible ? [body, proposalContract(reportsHint)].join("\n") : body;
+}
+
+/**
+ * The line that tells a prompt-only run what fired it. Agent-backed runs get
+ * the trigger in their `<agent-run trigger=...>` envelope; a prompt-only run
+ * had nothing, so a file-triggered automation could not know WHICH file
+ * fired it. `trigger` is the run's reason: `create Input/Call X.md` for a
+ * vault event, `#tag on path` for a tag, a cadence label for a schedule, and
+ * `manual` for "Run now".
+ */
+export function automationTriggerLine(trigger: string): string {
+  const t = trigger.trim();
+  return t === "manual" ? "Trigger: manual (Run now)" : `Trigger: ${t || "unknown"}`;
 }
 
 /**

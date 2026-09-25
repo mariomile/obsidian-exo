@@ -14,6 +14,7 @@ import type {
 } from "./types";
 import { normalizeUtilization } from "../core/rate-limit";
 import { routeCodexElicitation, type InFlightMcpCall } from "../core/codex-approval";
+import { spawnSpec } from "../core/win-cli";
 
 type RpcId = number | string;
 type RpcMessage = {
@@ -356,9 +357,13 @@ export class CodexSession implements AgentSession {
     }
 
     try {
-      const child = this.runtime.spawn(this.opts.cli.bin, args, {
+      // On Windows an npm-installed codex resolves to its `.js` entry, which
+      // must run through node; spawnSpec is the identity everywhere else.
+      const cmd = spawnSpec(this.opts.cli.bin, args);
+      const child = this.runtime.spawn(cmd.command, cmd.args, {
         cwd: this.opts.cwd,
         env: { ...process.env, PATH: this.opts.cli.pathEnv },
+        windowsHide: true,
       });
       this.child = child;
       child.stdout?.on("data", (chunk: Buffer | string) => this.consume(chunk.toString()));

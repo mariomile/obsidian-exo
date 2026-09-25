@@ -3,6 +3,7 @@ import {
   agentLastRunKey,
   agentTriggerRunKey,
   automationRunPrompt,
+  automationTriggerLine,
   dueScheduledAgentRuns,
   gateAgentRun,
   gateAgentInvoke,
@@ -345,7 +346,7 @@ describe("buildAgentRunPrompt — the proposal channel", () => {
 
 describe("automationRunPrompt: prompt-only automations get the same contract", () => {
   it("appends the proposal contract when the run is propose-eligible", () => {
-    const p = automationRunPrompt("Scan the inbox.", true, "your run report");
+    const p = automationRunPrompt("Scan the inbox.", true, "your run report", "daily 08:00");
     expect(p).toContain("Scan the inbox.");
     expect(p).toContain(AGENT_PROPOSAL_FENCE);
   });
@@ -353,17 +354,54 @@ describe("automationRunPrompt: prompt-only automations get the same contract", (
   // `report` mode (autonomy "notify") and `act` mode both call this with
   // proposeEligible=false. `report` has nothing to propose, `act` already
   // writes, so a contract would let the same change arrive twice.
-  it("leaves the prompt untouched when not propose-eligible (report or act mode)", () => {
-    const p = automationRunPrompt("Scan the inbox.", false, "your run report");
-    expect(p).toBe("Scan the inbox.");
+  it("adds only the trigger line when not propose-eligible (report or act mode)", () => {
+    const p = automationRunPrompt("Scan the inbox.", false, "your run report", "daily 08:00");
+    expect(p).toBe("Trigger: daily 08:00\n\nScan the inbox.");
     expect(p).not.toContain(AGENT_PROPOSAL_FENCE);
   });
 
-  it("leaves the prompt untouched even in propose mode when the kernel is off", () => {
+  it("leaves the contract out even in propose mode when the kernel is off", () => {
     // The caller computes proposeEligible as `mode === "propose" && proposalKernelEnabled`;
     // a disabled kernel means false reaches here regardless of mode.
-    const p = automationRunPrompt("Scan the inbox.", false, "your run report");
+    const p = automationRunPrompt("Scan the inbox.", false, "your run report", "daily 08:00");
     expect(p).not.toContain(AGENT_PROPOSAL_FENCE);
+  });
+});
+
+describe("automationRunPrompt: the run knows what fired it", () => {
+  it("names the file for a vault-event trigger, before the prompt", () => {
+    const p = automationRunPrompt(
+      "Summarize the meeting.",
+      false,
+      "your run report",
+      "create Input/Meeting/Granola/2026-09/Call X.md"
+    );
+    expect(p.split("\n")[0]).toBe("Trigger: create Input/Meeting/Granola/2026-09/Call X.md");
+    expect(p).toContain("Summarize the meeting.");
+  });
+
+  it("carries the tag trigger's path", () => {
+    const p = automationRunPrompt("Triage.", false, "r", "#todo on Inbox/Note.md");
+    expect(p.startsWith("Trigger: #todo on Inbox/Note.md\n")).toBe(true);
+  });
+
+  it("says so when the run is a manual Run now", () => {
+    expect(automationRunPrompt("Triage.", false, "r", "manual").split("\n")[0]).toBe(
+      "Trigger: manual (Run now)"
+    );
+  });
+
+  it("keeps the trigger line first and the contract last in propose mode", () => {
+    const p = automationRunPrompt("Triage.", true, "r", "create A.md");
+    expect(p.indexOf("Trigger: create A.md")).toBe(0);
+    expect(p.indexOf(AGENT_PROPOSAL_FENCE)).toBeGreaterThan(p.indexOf("Triage."));
+  });
+});
+
+describe("automationTriggerLine", () => {
+  it("formats schedule labels verbatim and never renders an empty trigger", () => {
+    expect(automationTriggerLine("daily 08:00")).toBe("Trigger: daily 08:00");
+    expect(automationTriggerLine("  ")).toBe("Trigger: unknown");
   });
 });
 

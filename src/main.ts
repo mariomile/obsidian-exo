@@ -2905,7 +2905,7 @@ export default class ExoPlugin extends Plugin {
     }
     this.agentRunsInFlight.add(key);
     try {
-      return await this.runPromptOnlyAutomation(a);
+      return await this.runPromptOnlyAutomation(a, "manual");
     } finally {
       this.agentRunsInFlight.delete(key);
     }
@@ -2944,7 +2944,7 @@ export default class ExoPlugin extends Plugin {
       // Prompt-only automation → the proven playbook executor.
       this.agentRunsInFlight.add(run.runKey);
       try {
-        await this.runPromptOnlyAutomation(automation);
+        await this.runPromptOnlyAutomation(automation, run.reason);
       } catch (err) {
         console.warn(`[Exo] automation "${automation.name}" failed:`, err);
       } finally {
@@ -2964,9 +2964,9 @@ export default class ExoPlugin extends Plugin {
    * landed as prose in the report and nothing reached the proposals inbox.
    * Mirrors what `runAgent` already does for agent-backed `propose` runs.
    */
-  private async runPromptOnlyAutomation(a: Automation): Promise<boolean> {
+  private async runPromptOnlyAutomation(a: Automation, reason: string): Promise<boolean> {
     const proposeEligible = a.mode === "propose" && this.settings.proposalKernelEnabled;
-    const prompt = automationRunPrompt(a.prompt, proposeEligible, this.paths.reports);
+    const prompt = automationRunPrompt(a.prompt, proposeEligible, this.paths.reports, reason);
     const startedAt = Date.now();
     const { ok, output } = await this.runPlaybook(a.name, prompt, { write: a.mode === "act", slug: a.slug });
     await this.collectAutomationProposals(a, output, startedAt, proposeEligible);
