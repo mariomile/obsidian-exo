@@ -46,9 +46,7 @@ export async function renderOverviewTab(host: HTMLElement, ctx: HubTabContext): 
   const sys = systemStatuses({
     vaultAutoCommit: s.vaultAutoCommit,
     lastAutoCommitEpoch: lastCommit,
-    selfWritingMemory: s.selfWritingMemory,
-    observerCadence: s.observerCadence,
-    observerStepInterval: s.observerStepInterval,
+    autoCapture: ctx.plugin.memoryCaps().autoCapture,
     now,
   });
   for (const st of sys) {

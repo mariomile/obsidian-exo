@@ -6,10 +6,10 @@
  * Store (verbatim facts/preferences/decisions), a loop has a lifecycle: it
  * opens, optionally carries a tickler ("resurface") date, and closes with an
  * append-only outcome note. Closing NEVER deletes the entry — the ledger is
- * append-only in spirit, same as `memory-store.ts`.
+ * append-only in spirit.
  *
  * On-disk shape — a single markdown file (the `paths.openLoops` ledger),
- * one block per entry, mirroring the Memory Union Store's block format:
+ * one block per entry:
  *
  *   ## loop-<epochMs>
  *   - title: <title>

@@ -23,7 +23,7 @@
  *
  * This module only shapes and mutates in-memory strings/content; ALL actual
  * disk writes go through `src/obsidian/task-store.ts`, which enqueues onto the
- * shared `WriteQueue` (same contract as the Memory Union Store and the
+ * shared `WriteQueue` (same contract as the memory write queue and the
  * Open-Loops Ledger) so board-driven and chat-driven task creation never
  * interleave a read-modify-write cycle.
  */
@@ -302,7 +302,7 @@ export function applyTaskMove(
  * Archive a task: sets `status` to `archived`, bumps `updated`. The block
  * itself — title, prompt, history — is NEVER removed from the list; there is
  * no deletion code path for tasks, mirroring the Open-Loops Ledger and Memory
- * Union Store's append-only spirit. Throws if `id` isn't present.
+ * open-loops ledger's append-only spirit. Throws if `id` isn't present.
  */
 export function applyTaskArchive(entries: TaskEntry[], id: string, now: number = Date.now()): TaskEntry[] {
   return applyTaskPatch(entries, id, { status: "archived" }, now);

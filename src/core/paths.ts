@@ -30,7 +30,9 @@ export interface ExoPaths {
   root: string;
   // ── mechanism ────────────────────────────────────────────────────────────
   memory: string;
-  store: string;
+  /** Memory harvest transit: one `YYYY-MM-DD.md` per day for facts with no
+   *  obvious home in the vault. The only file the harvest may create. */
+  inbox: string;
   orchestration: string;
   tasks: string;
   queue: string;
@@ -53,10 +55,7 @@ export interface ExoPaths {
   /** Per-agent compounding memory — a scope under vault memory, not a new store. */
   agentMemory: string;
   openLoops: string;
-  knownFalse: string;
-  sessionLog: string;
   workflowSignals: string;
-  claudememSync: string;
   // ── content (marioverse "Full" template only) ────────────────────────────
   agentDir: string;
   vaultContext: string;
@@ -64,7 +63,6 @@ export interface ExoPaths {
   mentalModel: string;
   rules: string;
   decisions: string;
-  learnings: string;
 }
 
 /** Build the full path set from a root. Falls back to the default root when
@@ -76,7 +74,7 @@ export function exoPaths(root: string): ExoPaths {
   return {
     root: r,
     memory,
-    store: `${memory}/store`,
+    inbox: `${memory}/inbox`,
     orchestration: `${r}/orchestration`,
     tasks: `${r}/orchestration/tasks.md`,
     queue: `${r}/exo-queue`,
@@ -89,17 +87,13 @@ export function exoPaths(root: string): ExoPaths {
     automations: `${r}/automations`,
     agentMemory: `${memory}/agents`,
     openLoops: `${memory}/open-loops.md`,
-    knownFalse: `${memory}/known-false.md`,
-    sessionLog: `${memory}/session-log.md`,
     workflowSignals: `${memory}/workflow-signals.json`,
-    claudememSync: `${memory}/claudemem-sync-state.json`,
     agentDir: `${r}/agent`,
     vaultContext: `${r}/vault-context.md`,
     preferences: `${memory}/preferences/preferences.md`,
     mentalModel: `${memory}/mental-model.md`,
     rules: `${memory}/rules`,
     decisions: `${memory}/decisions`,
-    learnings: `${memory}/learnings`,
   };
 }
 

@@ -50,7 +50,13 @@ const CEILINGS: Record<string, number> = {
   // dedup per conversazione), non un permesso di ricrescita. Al conteggio esatto
   // il file era a ZERO margine, ed e' esattamente il caso in cui ogni riga nuova
   // costa un'estrazione nello stesso commit.
-  "src/view.ts": 6590,
+  //
+  // Abbassato il 2026-09-25 (memory v2): observer, cadenza, proactive recall
+  // e le righe di veto/recall del vecchio union store sono stati cancellati; il
+  // recall per turno vive in `obsidian/turn-recall.ts` + `ui/recall-row.ts`.
+  // 6571 -> 6247 righe reali. Il tetto scende a 6260: 13 righe di margine,
+  // come sugli altri file.
+  "src/view.ts": 6260,
   // Abbassato il 2026-08-07 dopo l'estrazione della registrazione e
   // attivazione delle view in `ui/view-registry.ts`, e di nuovo il 2026-08-08
   // dopo l'estrazione degli SVG di addIcon in `ui/icons.ts` (3492 -> 3460
@@ -74,7 +80,12 @@ const CEILINGS: Record<string, number> = {
   // 3474 -> 3430 righe reali.
   // Il tetto resta a 3445, non a 3430: 15 righe sono il budget dichiarato per
   // il wiring di Exo Collabo dei task 4 e 5, non un permesso di ricrescita.
-  "src/main.ts": 3445,
+  //
+  // Abbassato il 2026-09-25 (memory v2): dream pass (piano, LLM, snapshot,
+  // schedule, modal) cancellato; gli helper git sono in `obsidian/git.ts` e il
+  // wiring della memoria in `obsidian/memory-wiring.ts`. 3316 -> 3040 righe
+  // reali. Il tetto scende a 3050.
+  "src/main.ts": 3050,
   // Abbassato il 2026-08-11 dopo l'estrazione del merge command+skill del menu
   // `/` in `core/slash.ts` (`mergeSlashEntries`): la lista non è UI, è la
   // riconciliazione di due roster che si sovrappongono, e lì è testabile senza
@@ -119,7 +130,10 @@ const CEILINGS: Record<string, number> = {
   // callback — stessa proprietà di `settings-cli.ts` — quindi sono diventate
   // `renderRecallSettings` in `ui/settings-memory.ts`. 1012 -> 946 righe reali.
   // Il tetto resta a 950, non a 946: 4 righe di margine, come sugli altri file.
-  "src/settings.ts": 950,
+  //
+  // Abbassato il 2026-09-25 (memory v2): i toggle del vecchio store, del dream
+  // pass e del defrag sono cancellati. 945 -> 898 righe reali. Tetto 905.
+  "src/settings.ts": 905,
   // Aggiunto il 2026-08-12. Questo file era l'UNICO pannello del repo senza
   // tetto, e nell'ondata chat+cosmos e' passato da 859 a 1020 righe senza che
   // niente lo fermasse — mentre lo stesso commit ABBASSAVA quello di main.ts.

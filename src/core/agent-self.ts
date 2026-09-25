@@ -4,7 +4,7 @@
  * The agent folder (`paths.agentDir`) is the vault's tool-agnostic identity layer: a manifest plus
  * three char-limited Markdown blocks (`SOUL.md`, `USER.md`, `NOW.md`). Exo is
  * the single owner — it hydrates them at boot and maintains them through the
- * governed `rethink_memory` tool and observer proposals; external tools (Claude
+ * governed `rethink_memory` tool; external tools (Claude
  * Code, Codex, Cowork) read them at boot but never write. Single-writer,
  * many-readers (design `2026-07-10-agent-folder-design`).
  *
@@ -21,7 +21,7 @@
  *     an arbitration line appended so the blocks win any later conflict.
  *
  * The Obsidian-side wiring (reading the block files + mtimes, the boot overlay,
- * the `rethink_memory` tool, observer `NOW.md` proposals) lives in
+ * the `rethink_memory` tool) lives in
  * `src/obsidian/memory.ts` / `src/obsidian/tools.ts` / `src/view.ts`.
  */
 
@@ -327,7 +327,7 @@ export function manifestContent(): string {
     "## Contract",
     "",
     "- **Exo owns maintenance.** It hydrates these blocks at boot and updates them",
-    "  through the governed `rethink_memory` tool and observer proposals.",
+    "  through the governed `rethink_memory` tool.",
     "- **External tools: read, don't write.** Read all three blocks at boot to",
     "  understand who the user is; never edit them — Exo is the single writer.",
     "- **Hand-edits by the user are always welcome** — these are plain Markdown,",

@@ -156,7 +156,7 @@ export class CockpitView extends ItemView {
     try {
       const identity = blockPath("NOW", this.plugin.paths.agentDir);
       const path =
-        this.plugin.settings.agentFolderEnabled && (await adapter.exists(identity))
+        this.plugin.memoryCaps().identity && (await adapter.exists(identity))
           ? identity
           : this.plugin.paths.vaultContext;
       const st = await adapter.stat(path);
@@ -401,7 +401,7 @@ export class CockpitView extends ItemView {
     card.querySelector(".mva-ck-card-head")?.after(statusHost);
   }
 
-  /** System tile: MCP servers (live status), plan quota, observer, auto-commit.
+  /** System tile: MCP servers (live status), plan quota, automatic memory, auto-commit.
    *  Every row deep-links to Exo settings, so rows are built without actions
    *  and wired directly — not through `act()`. */
   private renderSystem(grid: HTMLElement): void {
@@ -422,7 +422,7 @@ export class CockpitView extends ItemView {
     for (const m of servers) row(m.name, m.status, m.status !== "connected");
     const quota = quotaValue(this.plugin.lastRateLimit);
     if (quota) row("Plan quota", quota);
-    row("Observer", s.selfWritingMemory ? "on" : "off");
+    row("Automatic memory", this.plugin.memoryCaps().autoCapture ? "on" : "off");
     row("Auto-commit", s.vaultAutoCommit ? "on" : "off");
   }
 }

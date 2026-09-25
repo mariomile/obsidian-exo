@@ -110,8 +110,8 @@ export function afterCommitCheck(state: AutoCommitState, now: number): AutoCommi
  *  to a generic message rather than printing something like "0 files" or
  *  "NaN files".
  *
- *  An optional `summary` (e.g. the dream pass's "dream — merged 3, superseded 1,
- *  imported 12 from claude-mem") overrides the file-count phrasing entirely,
+ *  An optional `summary` (e.g. "digest: 3 notes") overrides the file-count
+ *  phrasing entirely,
  *  producing `exo: <summary>`. A blank/whitespace-only summary is ignored and the
  *  file-count path is used, so callers can pass an empty string unconditionally. */
 export function formatCommitMessage(fileCount?: number | null, summary?: string): string {

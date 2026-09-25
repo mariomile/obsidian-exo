@@ -5,6 +5,7 @@ import {
   OBSIDIAN_READ_TOOLS,
   OBSIDIAN_MEMORY_TOOLS,
 } from "../src/obsidian/tools";
+import { memoryCaps } from "../src/core/memory-caps";
 
 const PREFIX = "mcp__obsidian__";
 
@@ -59,11 +60,12 @@ function registeredBareNames(): Set<string> {
   } as unknown as App;
   const server = createObsidianToolServer(app, {
     alwaysLoad: true,
-    memoryWrite: true,
+    memory: memoryCaps(
+      { memoryReadEnabled: true, memoryWriteEnabled: true, agentFolderEnabled: true, autoMemory: true, backgroundPassesEnabled: true },
+      { surface: "chat" },
+    ),
     askBridge: async () => ({}),
-    memoryRead: true,
     orchestrationEnabled: true,
-    agentFolderEnabled: true,
     rethinkBridge: async () => "",
     parentConvoId: "convo-test",
     browserBridge: fakeBrowserBridge,

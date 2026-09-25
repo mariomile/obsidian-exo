@@ -14,9 +14,9 @@ import type { SessionCaps } from "./providers/types";
  * Persisted anyway (not held only in memory) because it has real UX value: it
  * seeds the $/@// menus and the Capabilities panel immediately after an
  * Obsidian restart, before the first session's init arrives. Slightly stale
- * is fine here — it's menu seeding, not authorization — so this mirrors
- * dream-snapshot.json's contract exactly: simple write, no backup rotation,
- * corrupt/missing collapses to null instead of failing.
+ * is fine here (menu seeding, not authorization), so the contract is
+ * minimal: simple write, no backup rotation, corrupt/missing collapses to null
+ * instead of failing.
  *
  * Adapter is a narrow subset of Obsidian's `DataAdapter`, not the type
  * itself — same convention as `WorkflowSignalStoreAdapter` — so this stays
@@ -30,7 +30,7 @@ export interface SessionCapsCacheAdapter {
 }
 
 // `pluginDir` mirrors `PluginManifest.dir`'s own type (`string | undefined`) —
-// same as main.ts's sibling `dreamFile()`/`convoFile()`, which interpolate it
+// same as main.ts's sibling `convoFile()`, which interpolates it
 // unchecked. In practice Obsidian always sets it for an installed plugin; kept
 // honest here rather than asserted, since the compiler now actually checks it.
 export function sessionCapsCacheFile(pluginDir: string | undefined): string {

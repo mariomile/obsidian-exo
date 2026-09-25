@@ -78,38 +78,16 @@ export interface MVASettings {
   nativeFirst: boolean;
   memoryReadEnabled: boolean;
   memoryWriteEnabled: boolean;
-  /** Master flag for the Memory Union Store (`remember`/`recall`, `log_session`,
-   *  `capture_learning`, the session log, self-writing memory, proactive recall).
-   *  DEFAULT ON so existing vaults are unaffected. OFF keeps `capture_decision`,
-   *  `open_loop`, and `rethink_memory` (identity layer) working — those write to
-   *  decisions/, the open-loops ledger, and the agent folder, none of which is
-   *  the union store. */
-  memoryStoreEnabled: boolean;
-  /** Self-Writing Memory: after each healthy turn, a cheap background observer
-   *  proposes durable memories and writes them to the store (with veto/undo).
-   *  OFF by default — only runs when this AND memoryWriteEnabled are on. */
-  selfWritingMemory: boolean;
-  /** The Agent Is the Folder: hydrate boot from the agent folder (persona/human/now)
-   *  and enable the governed `rethink_memory` tool + observer now-proposals.
+  /** Automatic memory: after each chat goes idle Exo writes the durable facts
+   *  it learned into the user's own notes (memory harvest), and before each
+   *  message it recalls related notes and past chats. Default ON. Spend is
+   *  bounded by `backgroundPassesEnabled` + the daily budget ledger. */
+  autoMemory: boolean;
+  /** The Agent Is the Folder: hydrate boot from the agent folder (SOUL/USER/NOW)
+   *  and enable the governed `rethink_memory` tool.
    *  DEFAULT OFF — with it off, boot is byte-identical and the folder is never read.
    *  Natural rollout: seed the folder → review → flip this on. */
   agentFolderEnabled: boolean;
-  /** Observer cadence (W2-3): "session-end" is the original always-on
-   *  end-of-turn capture (default, behavior-neutral). "every-n-steps" ALSO
-   *  flushes a delta capture every `observerStepInterval` tool-call steps
-   *  within a long turn — Letta-style sleep-time cadence, so context isn't
-   *  lost waiting for a marathon agentic turn to finish. */
-  observerCadence: "session-end" | "every-n-steps";
-  /** Tool-call step interval for `observerCadence: "every-n-steps"`. */
-  observerStepInterval: number;
-  /** Proactive recall: before each user message is sent, run the store's BM25
-   *  scorer and auto-inject the top relevant, not-yet-injected memories into the
-   *  outbound turn (in `[recalled-memory]` blocks). ON by default — this is the
-   *  point of the store. Kill-switch: OFF makes the send path identical to before
-   *  the feature existed. Memory read must also be on. */
-  proactiveRecall: boolean;
-  /** Max memories proactive recall injects per turn (advanced). */
-  proactiveRecallK: number;
   featureSurfacing: boolean;
   featureWikilinkify: boolean;
   /** Open notes the agent edits in a tab beside the chat, live. */
@@ -143,26 +121,6 @@ export interface MVASettings {
    *  deleting the highest-numbered chat handed its number back out. See
    *  `persistViewState`. */
   convoSeed: number;
-  /** Memory dream pass automation: off | daily | weekly. */
-  dreamPassSchedule: "off" | "daily" | "weekly";
-  /** Timestamp of the last dream pass (scheduler bookkeeping). */
-  lastDreamPass: number;
-  /** Dream Pass v2 — LLM proposal stage. When ON, the dream pass runs an extra,
-   *  transient tool-less LLM stage that PROPOSES typed consolidation changes
-   *  (merge/supersede/rule_draft/import); a deterministic gate culls anything
-   *  touching @user entries or matching known-false patterns before preview.
-   *  OFF by default — zero behavior change when off. Claude only. */
-  dreamLlmEnabled: boolean;
-  /** Defrag threshold: when the store/ or learnings/ dir exceeds this many files,
-   *  the dream LLM prompt asks for consolidation merges. */
-  memoryFileBudget: number;
-  /** claude-mem project filter for the import stage. NOT a path-slug — verified
-   *  2026-07-05 against the real DB: claude-mem's `project` column stores the
-   *  vault/repo's directory basename (e.g. "my-vault"), not the CWD-derived
-   *  slug used elsewhere. */
-  claudememProjects: string[];
-  /** Canonical keys of dream proposals already applied — dedup across runs. */
-  appliedProposalKeys: string[];
   /** W0 background-AI master toggle: gates every background LLM pass. */
   backgroundPassesEnabled: boolean;
   /** W0 shared daily token budget for all background passes (0 = unlimited). */
@@ -314,13 +272,8 @@ export const DEFAULT_SETTINGS: MVASettings = {
   nativeFirst: false,
   memoryReadEnabled: true,
   memoryWriteEnabled: true,
-  memoryStoreEnabled: true,
-  selfWritingMemory: false,
+  autoMemory: true,
   agentFolderEnabled: false,
-  observerCadence: "session-end",
-  observerStepInterval: 25,
-  proactiveRecall: true,
-  proactiveRecallK: 3,
   featureSurfacing: true,
   featureWikilinkify: true,
   revealEditedNotes: false,
@@ -334,12 +287,6 @@ export const DEFAULT_SETTINGS: MVASettings = {
   openTabIds: [],
   activeTabId: "",
   convoSeed: 0,
-  dreamPassSchedule: "off",
-  lastDreamPass: 0,
-  dreamLlmEnabled: false,
-  memoryFileBudget: 25,
-  claudememProjects: [],
-  appliedProposalKeys: [],
   backgroundPassesEnabled: true,
   backgroundDailyTokenBudget: 200000,
   backgroundModel: "claude-sonnet-5",
@@ -380,6 +327,37 @@ export const DEFAULT_SETTINGS: MVASettings = {
   collaboApiKey: "",
   collaboShares: {},
 };
+
+/** Keys of settings that no longer exist (the pre-harvest memory subsystem:
+ *  union store, observer, proactive recall, dream pass). `Object.assign` over
+ *  DEFAULT_SETTINGS cannot drop them, so load strips them explicitly. */
+const OBSOLETE_SETTING_KEYS = [
+  "memoryStoreEnabled",
+  "selfWritingMemory",
+  "observerCadence",
+  "observerStepInterval",
+  "proactiveRecall",
+  "proactiveRecallK",
+  "dreamPassSchedule",
+  "lastDreamPass",
+  "dreamLlmEnabled",
+  "memoryFileBudget",
+  "claudememProjects",
+  "appliedProposalKeys",
+] as const;
+
+/** Delete obsolete keys in place; true when anything was removed (caller saves). */
+export function stripObsoleteSettings(s: object): boolean {
+  const rec = s as Record<string, unknown>;
+  let changed = false;
+  for (const key of OBSOLETE_SETTING_KEYS) {
+    if (key in rec) {
+      delete rec[key];
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 /**
  * Write the view's runtime state, with the one rule that cannot be left to the

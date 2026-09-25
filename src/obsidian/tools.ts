@@ -1,4 +1,4 @@
-import { App, TFile, prepareSimpleSearch, getAllTags } from "obsidian";
+import { App, TFile, getAllTags } from "obsidian";
 import { z } from "zod";
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { resolveLink, neighborhood, basename } from "./graph";
@@ -6,15 +6,6 @@ import { exoPaths, LEGACY_MEMORY_ROOT, type ExoPaths } from "../core/paths";
 import { gatherConnections, linkMentionsIn, defaultExcludePrefixes } from "../mentions/connections";
 import { loadIgnoreStore, ignoreMention } from "../mentions/ignore-store";
 import { fold } from "../mentions/tokenizer";
-import {
-  formatEntry,
-  parseStoreFile,
-  monthFileName,
-  scoreEntries,
-  resolveSupersedence,
-  type MemoryEntry,
-} from "../core/memory-store";
-import { currentAsOf, isValidAsOfDate } from "../core/memory-asof";
 import {
   formatLoop,
   parseLoopsFile,
@@ -45,6 +36,14 @@ import { buildCapabilityTools, CAPABILITY_READ_TOOLS } from "./capability-tools"
 import { buildBrowserTools, BROWSER_READ_TOOLS, type BrowserBridge } from "./browser-tools";
 import { buildCollaboTools, COLLABO_READ_TOOLS, collaboBridgeFrom } from "./collabo-tools";
 import { toSdkTools, type AnyTool } from "./sdk-tool";
+import { memoryCaps, type MemoryCaps } from "../core/memory-caps";
+import { DEFAULT_SETTINGS } from "../settings-schema";
+import { buildMemoryTools, MEMORY_READ_TOOLS } from "./memory-tools";
+import { searchVaultNotes } from "./vault-search";
+
+/** Tool-registry memory caps when the caller passes none: a chat with the
+ *  default settings (tests and standalone callers). */
+const DEFAULT_TOOL_MEMORY = memoryCaps(DEFAULT_SETTINGS, { surface: "chat" });
 
 
 /** Structured question shape for `ask_user`. Duplicated from view.ts to avoid a
@@ -67,36 +66,6 @@ export interface RethinkRequest {
 }
 
 const MAX_CONTENT = 8000;
-const SKIP_LARGER_THAN = 200_000;
-const MAX_SCAN_FILES = 2000; // cap the built-in fallback scan (Sonar has no such limit)
-
-/** One hit from Sonar's search service. Mirrors `KeywordHit` in
- *  obsidian-sonar (src/service/search-service.ts) trimmed to the fields
- *  `search_vault` renders — `excerpt.text` is the only excerpt field used. */
-interface SonarSearchHit {
-  path: string;
-  basename: string;
-  score: number;
-  docType: string;
-  matched: string[];
-  excerpt?: { text: string };
-}
-/** Sonar's in-process search service (`plugin.service`, obsidian-sonar
- *  src/service/search-service.ts ~line 381). `getStatus` is checked so a
- *  still-building index falls back to the built-in scorer instead of
- *  returning a partial/empty result set. */
-interface SonarSearchService {
-  query(raw: string, opts: { limit: number; now: number }): Promise<SonarSearchHit[]>;
-  getStatus?(): { ready: boolean };
-}
-/** Resolve Sonar's search service off its plugin instance, or null when the
- *  plugin is absent or its index isn't ready yet. */
-function getSonarSearch(app: App): SonarSearchService | null {
-  const svc = (pluginInstance(app, "sonar") as { service?: Partial<SonarSearchService> } | undefined)?.service;
-  if (!svc || typeof svc.query !== "function") return null;
-  if (typeof svc.getStatus === "function" && !svc.getStatus().ready) return null;
-  return svc as SonarSearchService;
-}
 
 /** AIditor's cross-plugin read/action API (when the aiditor plugin is enabled). */
 interface AIditorAnnotation {
@@ -182,15 +151,11 @@ async function ensureParentFolder(app: App, path: string): Promise<void> {
 export interface ObsidianToolOpts {
   /** Claude server only: load the tools up front instead of deferring them. */
   alwaysLoad?: boolean;
-  memoryWrite?: boolean;
+  /** What memory may do for this session (`memoryCaps(settings, env)`): the one
+   *  gate for every memory tool below. Absent → chat defaults with the agent
+   *  folder off (tests and standalone callers). */
+  memory?: MemoryCaps;
   askBridge?: (questions: AskQuestion[]) => Promise<Record<string, string>>;
-  memoryRead?: boolean;
-  /** Master flag for the Memory Union Store (default ON). OFF drops `remember`,
-   *  `recall`, `log_session`, and `capture_learning` — `capture_decision`,
-   *  `open_loop`, `close_loop`, and `rethink_memory` are unaffected; they write
-   *  to decisions/, the open-loops ledger, and the agent folder, not the store. */
-  memoryStoreEnabled?: boolean;
-  memoryWriteQueue?: WriteQueue;
   loopsWriteQueue?: WriteQueue;
   orchestrationEnabled?: boolean;
   tasksWriteQueue?: WriteQueue;
@@ -203,7 +168,6 @@ export interface ObsidianToolOpts {
    *  tools are not registered at all (feature off, mobile, or headless run):
    *  the tool list must stay byte-identical to before the feature existed. */
   browserBridge?: BrowserBridge;
-  agentFolderEnabled?: boolean;
   rethinkBridge?: (req: RethinkRequest) => Promise<string>;
   /** Resolved memory-layer paths. Absent → the legacy root (test/fallback). */
   paths?: ExoPaths;
@@ -219,21 +183,15 @@ export interface ObsidianToolOpts {
  */
 export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[] {
   const {
-    memoryWrite = true,
+    memory = DEFAULT_TOOL_MEMORY,
     askBridge,
-    memoryRead = true,
-    /** Memory Union Store master flag (default ON). OFF gates `remember`,
-     *  `recall`, `log_session`, `capture_learning` on top of memoryWrite/memoryRead —
-     *  every other memory tool is unaffected (see the field doc on ObsidianToolOpts). */
-    memoryStoreEnabled = true,
-    memoryWriteQueue = new WriteQueue(),
     loopsWriteQueue = new WriteQueue(),
     /** Orchestration Board master flag (default OFF). Gates `add_task` only —
      *  every other tool above is unaffected, and the tool list sent to sessions
      *  must be byte-identical to before this parameter existed when this is false. */
     orchestrationEnabled = false,
     /** Shared write-queue for the tasks ledger (`paths.tasks`),
-     *  injected by the plugin the same way `memoryWriteQueue` is — so `add_task`
+     *  injected by the plugin the same way `loopsWriteQueue` is, so `add_task`
      *  and any future board-side writer serialize on the SAME queue. */
     tasksWriteQueue = new WriteQueue(),
     /** Convo id of the conversation this tool server belongs to. Absent for
@@ -245,10 +203,6 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
      *  a headless run, which must not drive a surface whose whole point is that
      *  Mario watches it. */
     browserBridge,
-    /** The Agent Is the Folder master flag (default OFF). Gates `rethink_memory`
-     *  ONLY (in addition to memoryWrite) — every other tool is byte-identical to
-     *  before this parameter existed when this is false. */
-    agentFolderEnabled = false,
     /** View-side bridge that enacts a `rethink_memory` request: resolves the tier,
      *  writes (now/human) or records a pending proposal card (persona), and renders
      *  the feed diff+undo. Absent → the tool is not registered. */
@@ -260,15 +214,6 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
     if (!f) throw new Error(`Note not found: ${target}`);
     return f;
   };
-
-  /**
-   * One serialized write path for ALL appends to the Memory Union Store. Every
-   * store writer (the `remember` tool, the Self-Writing Memory observer, future
-   * dream passes) MUST enqueue on the SAME instance so concurrent read-modify-write
-   * cycles never interleave or clobber a monthly store file. This is injected by
-   * the plugin (`ExoPlugin.memoryWriteQueue`) and shared with `MemoryObserver`;
-   * the `new WriteQueue()` default only exists for standalone callers (tests).
-   */
 
   /** Serialized write path for the single-file Open-Loops Ledger. The plugin
    *  injects one shared instance across every conversation/session; the local
@@ -282,52 +227,15 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
     { query: z.string(), limit: z.number().optional() },
     async (args) => {
       const limit = Math.min(args.limit ?? 10, 30);
-
-      // Preferred path: Sonar's in-process search service (better ranking, fuzzy, attachments).
-      const sonar = getSonarSearch(app);
-      if (sonar) {
-        try {
-          const hits = await sonar.query(args.query, { limit, now: Date.now() });
-          if (hits.length === 0) return ok(`No matches for "${args.query}".`);
-          return ok(
-            hits
-              .map((h) => `- [[${h.path}]] — ${(h.excerpt?.text ?? "").replace(/\s+/g, " ").trim().slice(0, 160)}`)
-              .join("\n")
-          );
-        } catch {
-          /* Sonar query failed — fall back to the built-in scorer. */
-        }
-      }
-
-      const search = prepareSimpleSearch(args.query);
-      const hits: { path: string; score: number; snippet: string }[] = [];
-      const files = app.vault
-        .getMarkdownFiles()
-        .filter((f) => f.stat.size <= SKIP_LARGER_THAN)
-        .sort((a, b) => b.stat.mtime - a.stat.mtime);
-      const scanned = files.slice(0, MAX_SCAN_FILES);
-      for (const file of scanned) {
-        let text = file.basename;
-        try {
-          text += "\n" + (await app.vault.cachedRead(file));
-        } catch {
-          continue; // skip unreadable
-        }
-        const r = search(text);
-        if (r) {
-          const at = r.matches[0]?.[0] ?? 0;
-          const snippet = text.slice(Math.max(0, at - 40), at + 80).replace(/\s+/g, " ").trim();
-          hits.push({ path: file.path, score: r.score, snippet });
-        }
-      }
-      hits.sort((a, b) => b.score - a.score);
-      const top = hits.slice(0, limit);
-      if (top.length === 0) return ok(`No matches for "${args.query}".`);
-      const body = top.map((h) => `- [[${h.path}]] — ${h.snippet}`).join("\n");
-      const capped = files.length > MAX_SCAN_FILES
-        ? `\n\n(Searched the ${MAX_SCAN_FILES} most recently edited notes of ${files.length}. Install Sonar for full-vault search.)`
+      const { hits, capped } = await searchVaultNotes(app, args.query, limit);
+      if (hits.length === 0) return ok(`No matches for "${args.query}".`);
+      const body = hits
+        .map((h) => `- [[${h.path}]]: ${h.excerpt.replace(/\s+/g, " ").trim().slice(0, 160)}`)
+        .join("\n");
+      const note = capped
+        ? `\n\n(Searched the ${capped.scanned} most recently edited notes of ${capped.total}. Install Sonar for full-vault search.)`
         : "";
-      return ok(body + capped);
+      return ok(body + note);
     }
   );
 
@@ -765,161 +673,11 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
     }
   );
 
-  const logSession = tool(
-    "log_session",
-    `Prepend an entry to ${paths.sessionLog}. type ∈ ingest|query|decision|lint|build|triage.`,
-    { title: z.string(), summary: z.string(), type: z.string().optional() },
-    async (args) => {
-      const path = paths.sessionLog;
-      const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
-      const entry = `## [${stamp}] ${args.type ?? "query"} | ${args.title}\n\n${args.summary}\n\n`;
-      const file = app.vault.getAbstractFileByPath(path);
-      if (file instanceof TFile) {
-        const cur = await app.vault.read(file);
-        await app.vault.modify(file, entry + cur);
-      } else {
-        await ensureParentFolder(app, path);
-        await app.vault.create(path, entry);
-      }
-      return ok("Logged session entry.");
-    }
-  );
-
-  const captureLearning = tool(
-    "capture_learning",
-    `Record a learning/pattern into ${paths.learnings}/. Set provenance='stated' when the user explicitly told you this (trusted higher than 'inferred').`,
-    {
-      title: z.string(),
-      observation: z.string(),
-      evidence: z.string().optional(),
-      context: z.string().optional(),
-      provenance: z.enum(["stated", "inferred"]).optional(),
-      confidence: z.enum(["low", "med", "high"]).optional(),
-    },
-    async (args) => {
-      const path = `${paths.learnings}/${today()}-${slugify(args.title)}.md`;
-      if (app.vault.getAbstractFileByPath(path)) return err(`Already exists: ${path}`);
-      await ensureParentFolder(app, path);
-      const body =
-        `# Learning: ${args.title}\n\n` +
-        `## Osservazione\n${args.observation}\n\n` +
-        (args.evidence ? `## Evidenza\n${args.evidence}\n\n` : "") +
-        (args.context ? `## Contesto\n${args.context}\n` : "");
-      const file = await app.vault.create(path, body);
-      await app.fileManager.processFrontMatter(file, (f: Record<string, unknown>) => {
-        f.type = "memory";
-        f.created_by = "exo";
-        f.created = today();
-        f.provenance = args.provenance ?? "inferred";
-        f.confidence = args.confidence ?? "med";
-        f.evidence = 1;
-        f.status = "candidate";
-        f.last_confirmed = today();
-        f.tags = ["type/memory"];
-      });
-      return ok(`Captured learning → [[${path}]]`);
-    }
-  );
-
-  /* ------------------- memory union store (v1) -------------------- */
-
-  const remember = tool(
-    "remember",
-    "Call this when the user states a durable preference, fact, or decision, or corrects something you got wrong. Store their exact words — do not summarize. If it contradicts an earlier memory, pass that memory's id as supersedes instead of rewording history.",
-    {
-      text: z.string().describe("The user's exact words, stored verbatim."),
-      kind: z.enum(["preference", "fact", "decision", "lesson"]),
-      tags: z.array(z.string()).optional(),
-      supersedes: z.string().optional().describe("Id (mem-…) of an earlier memory this one replaces."),
-    },
-    async (args) => {
-      const at = Date.now();
-      const entry: MemoryEntry = {
-        id: `mem-${at}`,
-        kind: args.kind,
-        at,
-        session: "unknown",
-        tags: args.tags ?? [],
-        // `remember` captures the user's own words — always @user provenance.
-        source: "user",
-        ...(args.supersedes ? { supersedes: args.supersedes } : {}),
-        text: args.text,
-      };
-      const path = `${paths.store}/${monthFileName(at)}`;
-      const block = formatEntry(entry);
-      // Serialize the read-modify-write through the shared queue so concurrent
-      // store writers never interleave or clobber the monthly file.
-      await memoryWriteQueue.enqueue(async () => {
-        const existing = app.vault.getAbstractFileByPath(path);
-        if (existing instanceof TFile) {
-          const cur = await app.vault.read(existing);
-          await app.vault.modify(existing, `${cur.replace(/\s+$/, "")}\n\n${block}\n`);
-        } else {
-          await ensureParentFolder(app, path);
-          await app.vault.create(path, `${block}\n`);
-        }
-      });
-      return ok(
-        `Remembered ${entry.id} (${entry.kind})${entry.supersedes ? `, supersedes ${entry.supersedes}` : ""}.`
-      );
-    }
-  );
-
-  const recall = tool(
-    "recall",
-    "Call this before answering anything that may depend on prior sessions — user preferences, past decisions, project facts. Returns stored memories verbatim. Pass `as_of` (YYYY-MM-DD) for a point-in-time query — 'what did I believe on that date?' — resolving the supersedes chain as of that day (entries superseded only afterwards are still shown, flagged with how they later changed).",
-    { query: z.string(), k: z.number().optional(), as_of: z.string().optional().describe("YYYY-MM-DD — resolve beliefs as of this date instead of now.") },
-    async (args) => {
-      const k = Math.min(Math.max(args.k ?? 5, 1), 12);
-      const asOfDate = args.as_of;
-      if (asOfDate !== undefined && !isValidAsOfDate(asOfDate)) {
-        return err(`Invalid as_of date "${asOfDate}" — expected a real calendar date in YYYY-MM-DD.`);
-      }
-      const files = app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${paths.store}/`));
-      const all: MemoryEntry[] = [];
-      for (const f of files) {
-        try {
-          all.push(...parseStoreFile(await app.vault.cachedRead(f)));
-        } catch {
-          /* skip unreadable file */
-        }
-      }
-      if (all.length === 0) return ok("No memories stored yet.");
-
-      // Point-in-time: resolve the belief set current as of `asOfDate`; else the live set.
-      const asOf = asOfDate ? currentAsOf(all, asOfDate) : undefined;
-      const pool = asOf ? asOf.current : resolveSupersedence(all);
-      const scored = scoreEntries(args.query, pool)
-        .filter((s) => s.score > 0)
-        .slice(0, k);
-      if (scored.length === 0) {
-        return ok(
-          asOfDate
-            ? `No stored memories as of ${asOfDate} match "${args.query}".`
-            : `No stored memories match "${args.query}".`
-        );
-      }
-      const body = scored
-        .map(({ entry }) => {
-          const date = new Date(entry.at).toISOString().slice(0, 10);
-          const tags = entry.tags.length ? ` · tags: ${entry.tags.join(", ")}` : "";
-          // Mark autonomously-written memories; user memories need no marker.
-          const prov = entry.source === "generated" ? " · @generated" : "";
-          // In an as-of query, flag a belief that was superseded AFTER the queried date.
-          const later = asOf?.supersededAfter.get(entry.id);
-          const evolved = later ? ` · (superseded on ${later.on} by ${later.by})` : "";
-          return `${entry.id} · ${entry.kind} · ${date}${tags}${prov}${evolved}\n${entry.text}`;
-        })
-        .join("\n\n");
-      return ok(asOfDate ? `As of ${asOfDate}:\n\n${body}` : body);
-    }
-  );
-
   /* ------------------- agent identity (rethink) ------------------- */
 
   const rethinkMemory = tool(
     "rethink_memory",
-    "Rewrite one shared-kernel block when your MODEL OF THE WORLD changes — not for episodic notes (those go to `remember`). `NOW.md` = what matters right now (hot projects, focus); `USER.md` = your distilled working model of the user (pass a `rationale` — it's surfaced with the change); `SOUL.md` = shared operating principles (this only PROPOSES a change for the user to approve, it does not write). Pass the WHOLE new block content, not a patch.",
+    "Rewrite one shared-kernel block when your MODEL OF THE WORLD changes, not for single facts (those land in the vault automatically after the chat). `NOW.md` = what matters right now (hot projects, focus); `USER.md` = your distilled working model of the user (pass a `rationale`: it's surfaced with the change); `SOUL.md` = shared operating principles (this only PROPOSES a change for the user to approve, it does not write). Pass the WHOLE new block content, not a patch.",
     {
       block: z.enum(["SOUL", "USER", "NOW"]),
       new_content: z.string().describe("The complete new content for the block (replaces it whole; never truncated)."),
@@ -1436,17 +1194,10 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
     listAgents, invokeAgent, manageAgent,
     listAutomations, savePlaybook, manageAutomation, reviewAutomationRun,
     ...buildCapabilityTools(app),
-    // `recall` reads the Memory Union Store — gated on the store flag too.
-    ...(memoryRead && memoryStoreEnabled ? [recall] : []),
-    // `capture_decision`, `open_loop`, and `close_loop` write to decisions/ and the
-    // open-loops ledger — NOT the union store, so they stay up when the store is off.
-    ...(memoryWrite ? [captureDecision, openLoop, closeLoopTool] : []),
-    // `log_session`, `capture_learning`, and `remember` write to the union store
-    // (session log, learnings/, store/) — gated on the store flag on top of memoryWrite.
-    ...(memoryWrite && memoryStoreEnabled ? [logSession, captureLearning, remember] : []),
-    // The Agent Is the Folder: `rethink_memory` needs BOTH memory-write and the
-    // agent-folder flag, plus a live view bridge to render its diff/proposal.
-    ...(memoryWrite && agentFolderEnabled && rethinkBridge ? [rethinkMemory] : []),
+    ...(memory.ledgerWrite ? [captureDecision, openLoop, closeLoopTool] : []),
+    // `rethink_memory` also needs a live view bridge to render its diff/proposal.
+    ...(memory.rethink && rethinkBridge ? [rethinkMemory] : []),
+    ...buildMemoryTools(app, memory),
     ...(orchestrationEnabled ? [addTask, listTasks] : []),
     ...(orchestrationEnabled && parentConvoId ? [spawnTask] : []),
     ...(browserBridge ? buildBrowserTools(browserBridge) : []),
@@ -1484,7 +1235,7 @@ export const OBSIDIAN_READ_TOOLS = new Set([
   "mcp__obsidian__get_active_context",
   "mcp__obsidian__list_annotations",
   "mcp__obsidian__list_sonar_actions",
-  "mcp__obsidian__recall",
+  ...MEMORY_READ_TOOLS,
   "mcp__obsidian__list_loops",
   "mcp__obsidian__list_automations",
   "mcp__obsidian__list_agents",
@@ -1507,12 +1258,10 @@ export const OBSIDIAN_READ_TOOLS = new Set([
 /** Memory-write tool names (gated separately by the memoryWrite setting). */
 export const OBSIDIAN_MEMORY_TOOLS = new Set([
   "mcp__obsidian__capture_decision",
-  "mcp__obsidian__log_session",
-  "mcp__obsidian__capture_learning",
-  "mcp__obsidian__remember",
   "mcp__obsidian__open_loop",
   "mcp__obsidian__close_loop",
   "mcp__obsidian__rethink_memory",
+  "mcp__obsidian__undo_memory_write",
 ]);
 
 // `OBSIDIAN_ORCHESTRATION_TOOLS` used to live here, listing `add_task` alone.

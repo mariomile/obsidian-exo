@@ -3,6 +3,8 @@ import { ChatView, VIEW_TYPE } from "../view";
 import type ExoPlugin from "../main";
 import type { ChatRowSource } from "../core/chat-rows";
 import * as actions from "./chat-actions";
+import type { HarvestSource } from "../obsidian/memory-harvest";
+import type { ChatRecord } from "../core/recent-chats";
 
 /** The mounted ChatView, or null when none is — including when the leaf exists
  *  but is still a deferred placeholder, on which `instanceof` is false. */
@@ -79,4 +81,54 @@ export async function backfillTitles(plugin: ExoPlugin): Promise<void> {
     return;
   }
   await actions.backfillTitles(view, plugin);
+}
+
+/** The chat view as the memory harvest's conversation store: every
+ *  conversation with its watermark, and a setter that persists a new one.
+ *  Null while no view is mounted (the lookup also materialises a deferred one,
+ *  so the next heartbeat finds it). */
+export function harvestSource(app: App): HarvestSource | null {
+  const view = chatView(app);
+  if (!view) return null;
+  return {
+    chats: () =>
+      view.allConvos().map((c) => {
+        let lastAt = c.updatedAt ?? 0;
+        for (const m of c.messages) if (m.role === "user" && typeof m.at === "number") lastAt = Math.max(lastAt, m.at);
+        return {
+          id: c.id,
+          title: c.title,
+          messages: c.messages,
+          harvestedIndex: c.harvestedIndex,
+          streaming: c.streaming,
+          lastActivityAt: lastAt,
+        };
+      }),
+    markHarvested: (id, index) => {
+      const c = view.allConvos().find((x) => x.id === id);
+      if (!c) return;
+      c.harvestedIndex = index;
+      view.persist();
+    },
+  };
+}
+
+/** Every conversation (current + archive) for read-only consumers
+ *  (`recent_chats`): the mounted view's live state when there is one, else the
+ *  two stores on disk. */
+export async function readConversationStore(plugin: ExoPlugin): Promise<ChatRecord[]> {
+  const view = chatView(plugin.app);
+  if (view) {
+    return view.allConvos().map((c) => ({
+      id: c.id,
+      title: c.title,
+      updatedAt: c.updatedAt,
+      archived: c.archived,
+      messages: c.messages,
+    }));
+  }
+  const [live, archived] = await Promise.all([plugin.loadConversations(), plugin.loadArchivedConversations()]);
+  return [...live, ...archived].filter(
+    (d): d is ChatRecord => !!d && typeof d === "object" && Array.isArray((d as ChatRecord).messages),
+  );
 }

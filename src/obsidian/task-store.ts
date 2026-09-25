@@ -4,7 +4,7 @@
  * (chat-driven) and the board's own quick-add UI must create tasks through
  * `createBacklogTask` so every write is serialized on the SAME `WriteQueue`
  * instance — never a direct `vault.modify`/`adapter.write` from a caller —
- * exactly the contract already used for the Memory Union Store
+ * exactly the contract already used for the memory write queue
  * (`memoryWriteQueue`) and the Open-Loops Ledger (`loopsWriteQueue`) in
  * `src/obsidian/tools.ts`.
  *
@@ -212,7 +212,7 @@ export interface LoadedTasks {
  * The ONLY module allowed to touch the tasks ledger. Owns
  * every read and, more importantly, serializes every write through ONE shared
  * `WriteQueue` instance (constructor-injected — same contract as
- * `createBacklogTask` above and the Memory Union Store / Open-Loops Ledger in
+ * `createBacklogTask` above and the Open-Loops Ledger in
  * `src/obsidian/tools.ts`) so the board's own writes and the chat-driven
  * `add_task` tool can never interleave a read-modify-write cycle and clobber
  * each other.

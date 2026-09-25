@@ -7,24 +7,10 @@ import {
   memoryActions,
   systemStatuses,
 } from "../src/core/actions-hub";
-import type { MemoryEntry } from "../src/core/memory-store";
 import type { LoopEntry } from "../src/core/open-loops";
 import type { BudgetLedger } from "../src/core/background-budget";
 
 const NOW = Date.UTC(2026, 6, 6, 12, 0, 0); // 2026-07-06 12:00 UTC
-
-function entry(over: Partial<MemoryEntry> = {}): MemoryEntry {
-  return {
-    id: `mem-${over.id ?? "1"}`,
-    kind: "fact",
-    at: NOW,
-    session: "s1",
-    tags: [],
-    source: "user",
-    text: "x",
-    ...over,
-  };
-}
 
 function loop(over: Partial<LoopEntry> = {}): LoopEntry {
   return {
@@ -96,9 +82,14 @@ describe("formatAge", () => {
 
 describe("memoryStats", () => {
   const ledger: BudgetLedger = { dateUTC: "2026-07-06", tokensUsed: 12000 };
-  it("counts store totals, @generated, loops, dream age and budget", () => {
+  it("shows auto memory, last harvest age, writes this week, loops and budget", () => {
     const stats = memoryStats({
-      storeEntries: [entry({ id: "1" }), entry({ id: "2", source: "generated" }), entry({ id: "3", source: "generated" })],
+      autoMemory: true,
+      harvests: [
+        { at: NOW - 3 * 3_600_000, writes: 3, undone: false },
+        { at: NOW - 2 * 86_400_000, writes: 2, undone: true }, // undone: not counted
+        { at: NOW - 10 * 86_400_000, writes: 5, undone: false }, // older than a week
+      ],
       loops: [
         loop({ id: "1" }), // open, no resurface → due
         loop({ id: "2", resurface: "2026-07-10" }), // open, future → not due
@@ -106,100 +97,71 @@ describe("memoryStats", () => {
       ],
       ledger,
       dailyBudget: 200000,
-      lastDreamPass: NOW - 3 * 3_600_000,
       now: NOW,
     });
     expect(stats).toEqual([
-      { label: "Store", value: "3 · 2 gen" },
+      { label: "Auto memory", value: "on" },
+      { label: "Last harvest", value: "3h ago" },
+      { label: "Writes 7d", value: "3" },
       { label: "Loops", value: "2 open · 1 due" },
-      { label: "Dream", value: "3h ago" },
       { label: "Budget", value: "12k/200k" },
     ]);
   });
-  it("shows never for a zero lastDreamPass and empty stores", () => {
+  it("shows never with no harvests and off when automatic memory is off", () => {
     const stats = memoryStats({
-      storeEntries: [],
+      autoMemory: false,
+      harvests: [],
       loops: [],
       ledger: { dateUTC: "", tokensUsed: 0 },
       dailyBudget: 200000,
-      lastDreamPass: 0,
       now: NOW,
     });
-    expect(stats[0]).toEqual({ label: "Store", value: "0 · 0 gen" });
-    expect(stats[1]).toEqual({ label: "Loops", value: "0 open · 0 due" });
-    expect(stats[2]).toEqual({ label: "Dream", value: "never" });
-    expect(stats[3]).toEqual({ label: "Budget", value: "0/200k" });
+    expect(stats[0]).toEqual({ label: "Auto memory", value: "off" });
+    expect(stats[1]).toEqual({ label: "Last harvest", value: "never" });
+    expect(stats[2]).toEqual({ label: "Writes 7d", value: "0" });
+    expect(stats[4]).toEqual({ label: "Budget", value: "0/200k" });
   });
 });
 
 describe("memoryActions", () => {
-  it("emits the base four rows with dream-undo disabled and no review", () => {
-    const rows = memoryActions({ snapshotPresent: false, reviewExists: false, loops: [], now: NOW, dreamLlmEnabled: true });
-    expect(rows.map((r) => r.id)).toEqual(["dream-run", "dream-undo", "open-store", "open-loops"]);
-    expect(rows.find((r) => r.id === "dream-undo")!.enabled).toBe(false);
+  const base = { canUndo: false, inboxExists: false, reviewExists: false, loops: [] as LoopEntry[], now: NOW };
+  it("emits undo, inbox and loops rows; undo and inbox inert when there is nothing", () => {
+    const rows = memoryActions(base);
+    expect(rows.map((r) => r.id)).toEqual(["undo-harvest", "open-inbox", "open-loops"]);
+    expect(rows.find((r) => r.id === "undo-harvest")!.enabled).toBe(false);
+    expect(rows.find((r) => r.id === "open-inbox")!.enabled).toBe(false);
     expect(rows.find((r) => r.id === "open-loops")!.badge).toBeUndefined();
   });
-  it("enables undo with a snapshot and appends the review row when it exists", () => {
-    const rows = memoryActions({ snapshotPresent: true, reviewExists: true, loops: [], now: NOW, dreamLlmEnabled: true });
-    expect(rows.find((r) => r.id === "dream-undo")!.enabled).toBe(true);
+  it("enables undo and the inbox, and appends the review row when it exists", () => {
+    const rows = memoryActions({ ...base, canUndo: true, inboxExists: true, reviewExists: true });
+    expect(rows.find((r) => r.id === "undo-harvest")!.enabled).toBe(true);
+    expect(rows.find((r) => r.id === "open-inbox")!.enabled).toBe(true);
     expect(rows.map((r) => r.id)).toContain("open-review");
   });
   it("badges open-loops with the due count", () => {
-    const rows = memoryActions({
-      snapshotPresent: false,
-      reviewExists: false,
-      loops: [loop({ id: "1" }), loop({ id: "2" })],
-      now: NOW,
-      dreamLlmEnabled: true,
-    });
+    const rows = memoryActions({ ...base, loops: [loop({ id: "1" }), loop({ id: "2" })] });
     expect(rows.find((r) => r.id === "open-loops")!.badge).toBe("2 due");
-  });
-  it("hints dream-run as LLM-stage-off without disabling it", () => {
-    const rows = memoryActions({ snapshotPresent: false, reviewExists: false, loops: [], now: NOW, dreamLlmEnabled: false });
-    const dreamRun = rows.find((r) => r.id === "dream-run")!;
-    expect(dreamRun.enabled).toBe(true);
-    expect(dreamRun.hint).toBe("LLM stage off");
-  });
-  it("carries no hint on dream-run once the LLM stage is on", () => {
-    const rows = memoryActions({ snapshotPresent: false, reviewExists: false, loops: [], now: NOW, dreamLlmEnabled: true });
-    expect(rows.find((r) => r.id === "dream-run")!.hint).toBeUndefined();
   });
 });
 
 describe("systemStatuses", () => {
-  it("reflects auto-commit on with a last-commit age", () => {
-    const [ac, obs] = systemStatuses({
+  it("reflects auto-commit on with a last-commit age, and automatic memory", () => {
+    const [ac, mem] = systemStatuses({
       vaultAutoCommit: true,
       lastAutoCommitEpoch: NOW - 2 * 3_600_000,
-      selfWritingMemory: true,
-      observerCadence: "session-end",
-      observerStepInterval: 25,
+      autoCapture: true,
       now: NOW,
     });
     expect(ac).toEqual({ id: "autocommit", label: "Auto-commit", value: "on · 2h ago", enabled: true });
-    expect(obs).toEqual({ id: "observer", label: "Observer", value: "on · session-end", enabled: true });
+    expect(mem).toEqual({ id: "memory", label: "Automatic memory", value: "on", enabled: true });
   });
   it("shows a dash placeholder while the git fetch is pending", () => {
-    const [ac] = systemStatuses({
-      vaultAutoCommit: true,
-      lastAutoCommitEpoch: null,
-      selfWritingMemory: false,
-      observerCadence: "session-end",
-      observerStepInterval: 25,
-      now: NOW,
-    });
+    const [ac] = systemStatuses({ vaultAutoCommit: true, lastAutoCommitEpoch: null, autoCapture: false, now: NOW });
     expect(ac.value).toBe("on · —");
   });
-  it("renders off states and the every-n-steps cadence", () => {
-    const [ac, obs] = systemStatuses({
-      vaultAutoCommit: false,
-      lastAutoCommitEpoch: null,
-      selfWritingMemory: true,
-      observerCadence: "every-n-steps",
-      observerStepInterval: 10,
-      now: NOW,
-    });
+  it("renders off states", () => {
+    const [ac, mem] = systemStatuses({ vaultAutoCommit: false, lastAutoCommitEpoch: null, autoCapture: false, now: NOW });
     expect(ac).toEqual({ id: "autocommit", label: "Auto-commit", value: "off", enabled: false });
-    expect(obs.value).toBe("on · every 10 steps");
+    expect(mem.value).toBe("off");
   });
 });

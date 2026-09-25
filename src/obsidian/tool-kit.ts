@@ -2,6 +2,7 @@ import type { Automation } from "../core/automation-model";
 import type { App } from "obsidian";
 import type { AutomationConfig, AutomationRunRecord } from "../core/automations";
 import type { AgentDef } from "../core/agents";
+import type { ChatRecord } from "../core/recent-chats";
 
 /** The shape every in-process tool returns. Free-form human-readable text —
  *  the agent reads it, not a parser. */
@@ -67,6 +68,11 @@ export interface ExoToolHost {
   /** Re-render any open Capabilities hub leaf, so a chat-driven change shows
    *  up in the pane without a manual refresh. */
   refreshHub(): void;
+  /** Every conversation (current + archive): the live view's when mounted,
+   *  else the stores on disk. Read-only. */
+  readConversationStore(): Promise<ChatRecord[]>;
+  /** Revert a memory harvest (latest when `sha` is absent). */
+  undoMemoryWrite(sha?: string): Promise<{ ok: boolean; message: string }>;
 }
 
 /** Another plugin's live instance by id, or undefined when it is absent or
