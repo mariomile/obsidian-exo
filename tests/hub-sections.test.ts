@@ -24,6 +24,12 @@ describe("mcpSections", () => {
     expect(s.inherited.map((i) => i.name)).toEqual(["d"]);
   });
 
+  it("puts skipped servers in their own section, not Connected", () => {
+    const s = mcpSections([mcp("mcp-obsidian", "active", "skipped", "claude-global"), mcp("a", "active", "connected")]);
+    expect(s.skipped.map((i) => i.name)).toEqual(["mcp-obsidian"]);
+    expect(s.connected.map((i) => i.name)).toEqual(["a"]);
+  });
+
   it("keeps needs-auth and failed servers in Connected (live rows with recovery actions)", () => {
     const s = mcpSections([mcp("x", "active", "needs-auth"), mcp("y", "active", "failed")]);
     expect(s.connected.map((i) => i.name)).toEqual(["x", "y"]);

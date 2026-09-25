@@ -13,6 +13,7 @@ import {
 import { connectMcp, disconnectMcp, setMcpEnabled } from "../../core/connections-install";
 import { parseMcpJson, summarizeServer } from "../../core/mcp-config";
 import { mcpSections, matchesQuery } from "../../core/hub-sections";
+import { localScopeServers, markSkippedObsidianMcp } from "../../core/mcp-guard";
 import { findToolRule, toolPermissionStatus } from "../../core/permissions";
 import { MCP_DOCS_DIR, mcpDocPath, mcpDocTemplate, isSafeDocName, hasMcpDocContent, summarizeMcpDoc } from "../../core/mcp-docs";
 import { resolveCli, mcpLogin, mcpLogout } from "../../cli";
@@ -101,7 +102,9 @@ export async function gatherMcp(ctx: HubTabContext): Promise<{ items: DiscoveryI
   // pane reflects ALL connected MCPs, not just the file-backed ones.
   const covered = new Set([...ourNames, ...mcpFromConfig.map((i) => i.name)]);
   const live = scanLiveCaps(caps?.mcpServers ?? [], covered);
-  return { items: [...vaultItems, ...mcpFromConfig, ...live], ourNames };
+  const vaultBase = (ctx.app.vault.adapter as { getBasePath?(): string }).getBasePath?.() ?? "";
+  const localNames = new Set(Object.keys(localScopeServers(claudeJson, vaultBase)));
+  return { items: markSkippedObsidianMcp([...vaultItems, ...mcpFromConfig, ...live], localNames), ourNames };
 }
 
 /** A standing allow/deny rule covering the WHOLE server, if the user wrote one.
@@ -181,6 +184,7 @@ export async function renderMcpTab(host: HTMLElement, ctx: HubTabContext): Promi
   await section("Disabled", sections.disabled);
   await section("Importable", sections.importable);
   await section("Inherited", sections.inherited);
+  await section("Skipped in Exo", sections.skipped);
   reconcileList(host, models);
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fixedPathCandidates, versionManagerCandidates, firstExisting, claudeInstallChannel } from "../src/cli";
+import { buildPathEnv, fixedPathCandidates, versionManagerCandidates, firstExisting, claudeInstallChannel } from "../src/cli";
 
 const HOME = "/home/u";
 
@@ -118,5 +118,31 @@ describe("firstExisting", () => {
     const liveHomebrew = "/opt/homebrew/bin/claude";
     const exists = (p: string) => p === liveHomebrew || p === staleNvm;
     expect(firstExisting([...fixed, ...vm], exists)).toBe(liveHomebrew);
+  });
+});
+
+describe("buildPathEnv", () => {
+  it("puts the bin dir and install dirs first, then the npm global bin, the login-shell PATH, then the app PATH, deduped", () => {
+    const env = buildPathEnv("/home/u/.local/bin/claude", HOME, {
+      npmPrefix: "/home/u/.hermes/node",
+      loginShellPath: "/home/u/.nvm/versions/node/v24.0.0/bin:/usr/local/bin:/usr/bin",
+      appPath: "/usr/bin:/bin",
+    });
+    expect(env.split(":")).toEqual([
+      "/home/u/.local/bin",
+      "/home/u/.local/node/bin",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/home/u/.hermes/node/bin",
+      "/home/u/.nvm/versions/node/v24.0.0/bin",
+      "/usr/bin",
+      "/bin",
+    ]);
+  });
+
+  it("works when neither npm nor the login shell answered", () => {
+    expect(buildPathEnv("claude", HOME, { npmPrefix: null, loginShellPath: "", appPath: "/usr/bin" })).toBe(
+      "/home/u/.local/bin:/home/u/.local/node/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin"
+    );
   });
 });

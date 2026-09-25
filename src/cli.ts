@@ -59,7 +59,14 @@ export async function resolveCli(name: string, configured: string): Promise<Reso
     ) ||
     (await probeLoginShell(name)) ||
     name;
-  const resolved = { bin, pathEnv: buildPathEnv(bin) };
+  const resolved = {
+    bin,
+    pathEnv: buildPathEnv(bin, home, {
+      npmPrefix: await getNpmPrefix(),
+      loginShellPath: await getLoginShellPath(),
+      appPath: process.env.PATH || "",
+    }),
+  };
   cliCache.set(key, resolved);
   return resolved;
 }
@@ -219,17 +226,41 @@ async function probeLoginShell(name: string): Promise<string | null> {
   return null;
 }
 
-function buildPathEnv(bin: string): string {
-  const home = homedir();
+const PATH_MARKER = "__EXO_PATH__";
+let loginShellPathQuery: Promise<string> | null = null;
+
+/** The login shell's PATH (cached). It carries what only `.zshrc`/`.zprofile`
+ *  export (nvm, bun, pnpm...), so CLIs the agent's Bash tool calls resolve like
+ *  in the user's terminal. The marker skips any output the rc files print. */
+function getLoginShellPath(): Promise<string> {
+  if (!loginShellPathQuery) {
+    loginShellPathQuery = loginShellExec(`printf '\\n${PATH_MARKER}%s\\n' "$PATH"`).then((out) => {
+      const line = out.split("\n").find((l) => l.startsWith(PATH_MARKER));
+      return line ? line.slice(PATH_MARKER.length).trim() : "";
+    });
+  }
+  return loginShellPathQuery;
+}
+
+/** PATH for every spawn: the binary's dir, the well-known install dirs, the npm
+ *  global bin (where `npm i -g` lands, often outside the shell PATH), the login
+ *  shell's PATH, then the app's own PATH. First occurrence wins. */
+export function buildPathEnv(
+  bin: string,
+  home: string,
+  src: { npmPrefix: string | null; loginShellPath: string; appPath: string }
+): string {
   const dirs = [
     bin.includes("/") ? dirname(bin) : "",
     `${home}/.local/bin`,
     `${home}/.local/node/bin`,
     "/opt/homebrew/bin",
     "/usr/local/bin",
-    process.env.PATH || "",
+    src.npmPrefix ? `${src.npmPrefix}/bin` : "",
+    ...src.loginShellPath.split(":"),
+    ...src.appPath.split(":"),
   ];
-  return dirs.filter(Boolean).join(":");
+  return [...new Set(dirs.filter(Boolean))].join(":");
 }
 
 function safeExists(p: string): boolean {
