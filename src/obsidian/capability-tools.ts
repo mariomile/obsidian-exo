@@ -30,6 +30,7 @@ import {
 import { connectMcp, disconnectMcp, setMcpEnabled, importSkill, removeSkill } from "../core/connections-install";
 import { parseMcpJson, summarizeServer, buildServerConfig } from "../core/mcp-config";
 import { mcpSections, skillSections } from "../core/hub-sections";
+import { markSkippedObsidianMcp } from "../core/mcp-guard";
 import {
   gatherFromScopes,
   gatherFromVault,
@@ -90,7 +91,7 @@ async function gatherMcp(app: App, exo: ExoToolHost | null): Promise<{ items: Di
   }));
   const covered = new Set([...ourNames, ...fromConfig.map((i) => i.name)]);
   const live = scanLiveCaps(caps?.mcpServers ?? [], covered);
-  return { items: [...vaultItems, ...fromConfig, ...live], ourNames };
+  return { items: markSkippedObsidianMcp([...vaultItems, ...fromConfig, ...live]), ourNames };
 }
 
 /** Same gather the Skills tab runs, minus the DOM. */
@@ -148,6 +149,7 @@ function mcpReport(items: DiscoveryItem[], ourNames: Set<string>, docs: Map<stri
   section("disabled", s.disabled, "");
   section("importable", s.importable, 'add with manage_mcp_server action:"add"');
   section("inherited", s.inherited, "already reaching Exo from their own config — nothing to do");
+  section("skipped in Exo", s.skipped, "external Obsidian servers: Exo already reads the vault directly, use its own tools");
   return lines;
 }
 

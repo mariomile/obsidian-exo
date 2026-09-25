@@ -15,6 +15,30 @@ import type {
   SessionOpts,
 } from "./types";
 import { normalizeUtilization } from "../core/rate-limit";
+import { readFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
+import { claudeCliEnv, configuredMcpServers, obsidianMcpDenyList, type DeniedMcpServer } from "../core/mcp-guard";
+
+/** Read a JSON file, or undefined when absent / unreadable / not JSON. */
+function readJson(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/** `deniedMcpServers` entries for the external Obsidian-vault MCP servers this
+ *  session would otherwise load from the user's Claude config (see
+ *  core/mcp-guard.ts). Sync on purpose: the SDK query options are built in a
+ *  constructor, and the two reads are small local files, once per session. */
+function obsidianMcpDenials(cwd: string): DeniedMcpServer[] {
+  const servers = configuredMcpServers(readJson(join(homedir(), ".claude.json")), readJson(join(cwd, ".mcp.json")), cwd);
+  const deny = obsidianMcpDenyList(servers);
+  if (deny.length) console.debug(`[Exo] skipping ${deny.length} external Obsidian MCP server(s): Exo already reads the vault directly.`);
+  return deny;
+}
 
 /** Built-in file tools disabled in "native-first" mode (use Obsidian tools). */
 const NATIVE_FIRST_DISALLOW = ["Read", "Grep", "Glob", "LS", "Edit", "MultiEdit", "Write", "NotebookEdit"];
@@ -218,7 +242,9 @@ class ClaudeSession implements AgentSession {
         // connected". Pass the enriched PATH that cli.ts already resolves — the
         // same fix the Codex provider carries (codex.ts). HTTP servers (e.g. a
         // local Thymer port) are unaffected: those fail only when their app is down.
-        env: { ...process.env, PATH: opts.cli.pathEnv },
+        // Also defaults an idle timeout for external MCP tool calls, so a hung
+        // server fails the call instead of freezing the turn (core/mcp-guard.ts).
+        env: claudeCliEnv(process.env, opts.cli.pathEnv),
         includePartialMessages: true,
         // Keep a short tail of CLI stderr so an opaque execution error (empty
         // `result`) can still surface actionable detail. Bounded ring buffer.
@@ -244,7 +270,13 @@ class ClaudeSession implements AgentSession {
         ...(opts.runHooks ? {} : { disableAllHooks: true }),
         ...(opts.fastStartup
           ? { strictMcpConfig: true, ...(opts.obsidianServer ? {} : { mcpServers: {} }) }
-          : {}),
+          : (() => {
+              // External MCP is on: still skip external Obsidian-vault servers,
+              // redundant here and a known source of hung turns. Denied via
+              // flag-scope settings, so the user's own config stays untouched.
+              const deny = obsidianMcpDenials(opts.cwd);
+              return deny.length ? { settings: { deniedMcpServers: deny } } : {};
+            })()),
         ...(opts.toolsEnabled
           ? {
               permissionMode: opts.permissionMode,

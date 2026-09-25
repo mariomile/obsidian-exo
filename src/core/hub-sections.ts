@@ -9,6 +9,9 @@ export interface McpSections {
   disabled: DiscoveryItem[];
   importable: DiscoveryItem[];
   inherited: DiscoveryItem[];
+  /** Configured but skipped in Exo sessions (external Obsidian-vault servers,
+   *  see core/mcp-guard.ts). */
+  skipped: DiscoveryItem[];
 }
 
 /** Partition MCP discovery items into the four fixed sections of the MCP tab.
@@ -16,10 +19,11 @@ export interface McpSections {
  *  needs-auth / failed servers — they're live rows with recovery actions). */
 export function mcpSections(items: DiscoveryItem[]): McpSections {
   return {
-    connected: items.filter((i) => i.state === "active" && i.status !== "disabled").sort(byOriginThenName),
+    connected: items.filter((i) => i.state === "active" && i.status !== "disabled" && i.status !== "skipped").sort(byOriginThenName),
     disabled: items.filter((i) => i.state === "active" && i.status === "disabled").sort(byOriginThenName),
     importable: items.filter((i) => i.state === "importable").sort(byOriginThenName),
     inherited: items.filter((i) => i.state === "have").sort(byOriginThenName),
+    skipped: items.filter((i) => i.state === "active" && i.status === "skipped").sort(byOriginThenName),
   };
 }
 
