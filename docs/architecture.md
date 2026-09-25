@@ -85,14 +85,20 @@ Headless runs read but never write; a read-only Codex sandbox gets no write tool
   background model, decides ADD / UPDATE / NOOP per fact with the notes it could
   touch in view (Sonar search, the target lines, the vault's own `## Memory`
   rules from `AGENTS.md`), and applies the result under the guardrails in
-  `core/memory-harvest.ts` + `core/memory-apply.ts`: existing notes only (plus
-  the daily inbox), no hidden, synced or ignored folders, no kernel files, one
-  exact line per UPDATE, a secret filter, at most 8 writes. The touched notes are
-  committed alone (`exo: memory harvest: …`) and recorded in the plugin-folder
-  log `memory-harvests.json` with pre-write snapshots.
+  `core/memory-harvest.ts` + `core/memory-apply.ts`: only notes shown to the
+  decider (plus the daily inbox), existing notes only, no hidden, synced or
+  user-excluded folders, no kernel or Exo mechanism files (`harvestBlocklist`),
+  never frontmatter / headings / tables / fences, one exact plain line per
+  UPDATE, a secret filter, at most 8 writes, every edit through `vault.process`.
+  The watermark settles before writing. Clean notes are committed alone
+  (`exo: memory harvest: …`); notes that already had uncommitted user edits are
+  written but left out of the commit. The plugin-folder log
+  `memory-harvests.json` records the exact lines inserted or replaced, never
+  note bodies.
 - **Undo.** `core/memory-undo.ts`: `git revert` of the harvest commit
-  (`exo: memory revert: <sha>`), or the snapshots without git; both refuse when a
-  touched note changed since.
+  (`exo: memory revert: <sha>`) refused when a touched note changed since;
+  without git, and for the uncommitted notes, the recorded lines are reversed
+  all or nothing, refused when a line is no longer there exactly once.
 - **Recall.** Before each message (`obsidian/turn-recall.ts`), Sonar hits and a
   lexical match over the last 60 days of chats ride the outbound payload in a
   `[vault-recall]` block capped at 2000 chars; never in the rendered bubble.
