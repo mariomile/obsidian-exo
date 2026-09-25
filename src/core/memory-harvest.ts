@@ -395,9 +395,9 @@ export interface TargetEnv {
    *  dot-folder memory root. */
   inboxPath: string;
   /** Kernel and mechanism files Exo owns (see {@link harvestBlocklist}). */
-  blocked(path: string): boolean;
+  blocked: (path: string) => boolean;
   /** Excluded by the user or sync-owned (see core/vault-exclusions). */
-  excluded(path: string): boolean;
+  excluded: (path: string) => boolean;
 }
 
 /**
