@@ -10,8 +10,8 @@ import { AGENT_DIR, isAgentBlock, type BlockName } from "../core/agent-self";
  * impure glue that reads and writes the three block files through the SHARED
  * store write-queue, capturing a before-image so every governed write surfaces a
  * diff-with-undo in the activity feed (non-negotiable #4). It never decides
- * policy — the caller (the `rethink_memory` tool, the observer proposal Apply
- * click) has already resolved the tier via `planRethink`; this just enacts a
+ * policy: the caller (the `rethink_memory` tool, or the Apply click on a SOUL
+ * proposal) has already resolved the tier via `planRethink`; this just enacts a
  * block replacement and hands back the undo snapshot.
  */
 
@@ -69,11 +69,6 @@ export class AgentFolder {
     } catch {
       return null;
     }
-  }
-
-  /** The current `NOW.md` body (""` when absent) — the observer's now-context. */
-  async nowContext(): Promise<string> {
-    return (await this.readBlock("NOW"))?.content ?? "";
   }
 
   /**

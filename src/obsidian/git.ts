@@ -15,9 +15,12 @@ import { promisify } from "node:util";
 export type GitRun = (args: string[]) => Promise<string>;
 
 const execFileAsync = promisify(execFile);
+const GIT_TIMEOUT_MS = 20_000;
 
 export function gitRunner(cwd: string): GitRun {
-  return async (args) => (await execFileAsync("git", args, { cwd })).stdout;
+  // A hung git (index.lock, credential prompt) must fail the call, not stall
+  // the harvest queue forever: 20s is far above any local status/commit.
+  return async (args) => (await execFileAsync("git", args, { cwd, timeout: GIT_TIMEOUT_MS })).stdout;
 }
 
 /** Best-effort text of a node `child_process` error, for matching known-benign

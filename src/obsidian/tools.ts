@@ -37,20 +37,13 @@ import { buildBrowserTools, BROWSER_READ_TOOLS, type BrowserBridge } from "./bro
 import { buildCollaboTools, COLLABO_READ_TOOLS, collaboBridgeFrom } from "./collabo-tools";
 import { toSdkTools, type AnyTool } from "./sdk-tool";
 import { memoryCaps, type MemoryCaps } from "../core/memory-caps";
+import { DEFAULT_SETTINGS } from "../settings-schema";
 import { buildMemoryTools, MEMORY_READ_TOOLS } from "./memory-tools";
 import { searchVaultNotes } from "./vault-search";
 
-/** Tool-registry memory caps when the caller passes none: chat, agent folder off. */
-const DEFAULT_TOOL_MEMORY = memoryCaps(
-  {
-    memoryReadEnabled: true,
-    memoryWriteEnabled: true,
-    agentFolderEnabled: false,
-    autoMemory: true,
-    backgroundPassesEnabled: true,
-  },
-  { surface: "chat" },
-);
+/** Tool-registry memory caps when the caller passes none: a chat with the
+ *  default settings (tests and standalone callers). */
+const DEFAULT_TOOL_MEMORY = memoryCaps(DEFAULT_SETTINGS, { surface: "chat" });
 
 
 /** Structured question shape for `ask_user`. Duplicated from view.ts to avoid a

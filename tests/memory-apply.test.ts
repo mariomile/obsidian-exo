@@ -1,20 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { applyDecisions, type ApplyVault } from "../src/core/memory-apply";
-import { HARVEST_MAX_WRITES, type Decision, type TargetEnv } from "../src/core/memory-harvest";
+import { applyDecisions, type ApplyEnv, type ApplyVault } from "../src/core/memory-apply";
+import { harvestBlocklist, HARVEST_MAX_WRITES, type Decision } from "../src/core/memory-harvest";
+import { exoPaths } from "../src/core/paths";
+import { makeExclusion } from "../src/core/vault-exclusions";
+import { parseLoopsFile } from "../src/core/open-loops";
 
 function fakeVault(files: Record<string, string>) {
   const store = new Map(Object.entries(files));
   const created: string[] = [];
   const vault: ApplyVault = {
     exists: (p) => store.has(p),
-    read: async (p) => {
-      const v = store.get(p);
-      if (v === undefined) throw new Error(`missing ${p}`);
-      return v;
-    },
-    modify: async (p, c) => {
-      if (!store.has(p)) throw new Error(`modify of missing ${p}`);
-      store.set(p, c);
+    edit: async (p, fn) => {
+      const cur = store.get(p);
+      if (cur === undefined) return false;
+      const next = fn(cur);
+      if (next === null) return false;
+      store.set(p, next);
+      return true;
     },
     create: async (p, c) => {
       if (store.has(p)) throw new Error(`create over ${p}`);
@@ -25,32 +27,34 @@ function fakeVault(files: Record<string, string>) {
   return { vault, store, created };
 }
 
+const P = exoPaths("_exo");
 const INBOX = "_exo/memory/inbox/2026-09-25.md";
-function envFor(vault: ApplyVault): TargetEnv & { today: string } {
+function envFor(vault: ApplyVault, offered: string[]): ApplyEnv {
   return {
     exists: (p) => vault.exists(p),
     inboxPath: INBOX,
-    kernelPaths: new Set(["_exo/agent/USER.md", "AGENTS.md"]),
-    ignoredPrefixes: ["Input"],
+    blocked: harvestBlocklist(P),
+    excluded: makeExclusion([], ["Input/"]),
     today: "2026-09-25",
+    now: 1_790_000_000_000,
+    offered: new Set(offered),
+    ledgerPath: P.openLoops,
   };
 }
 
 describe("applyDecisions", () => {
-  it("ADD appends one bullet to the named section and snapshots the file first", async () => {
-    const before = "# Anna\n## Work\n- Designer\n";
-    const { vault, store } = fakeVault({ "CRM/Anna.md": before });
+  it("ADD appends one bullet to the named section and records the exact line", async () => {
+    const { vault, store } = fakeVault({ "CRM/Anna.md": "# Anna\n## Work\n- Designer\n" });
     const res = await applyDecisions(
       vault,
       [{ op: "add", candidate: 0, path: "CRM/Anna.md", section: "Work", text: "Leads design at Acme" }],
-      envFor(vault),
+      envFor(vault, ["CRM/Anna.md"]),
     );
     expect(store.get("CRM/Anna.md")).toBe("# Anna\n## Work\n- Designer\n- Leads design at Acme\n");
-    expect(res.writes).toEqual([{ path: "CRM/Anna.md", op: "add", text: "Leads design at Acme" }]);
-    expect(res.files).toEqual([{ path: "CRM/Anna.md", before, after: store.get("CRM/Anna.md") }]);
+    expect(res.writes).toEqual([{ path: "CRM/Anna.md", op: "add", text: "Leads design at Acme", lines: ["- Leads design at Acme"] }]);
   });
 
-  it("UPDATE replaces only the exact line; a line that is not there exactly once is rejected", async () => {
+  it("UPDATE replaces only the exact line and records both lines; a line not there exactly once is rejected", async () => {
     const { vault, store } = fakeVault({ "P/context.md": "- Status: beta\n- Owner: Mario\n- Owner: Mario\n" });
     const res = await applyDecisions(
       vault,
@@ -59,45 +63,76 @@ describe("applyDecisions", () => {
         { op: "update", candidate: 1, path: "P/context.md", oldLine: "- Owner: Mario", newText: "Owner: Anna" },
         { op: "update", candidate: 2, path: "P/context.md", oldLine: "- Status: alpha", newText: "x" },
       ],
-      envFor(vault),
+      envFor(vault, ["P/context.md"]),
     );
     expect(store.get("P/context.md")).toBe("- Status: live (dal 2026-09-25; prima beta)\n- Owner: Mario\n- Owner: Mario\n");
-    expect(res.writes).toHaveLength(1);
-    expect(res.rejected.map((r) => r.reason)).toEqual(["oldLine not found exactly once", "oldLine not found exactly once"]);
+    expect(res.writes).toEqual([
+      {
+        path: "P/context.md",
+        op: "update",
+        text: "Status: live (dal 2026-09-25; prima beta)",
+        lines: ["- Status: live (dal 2026-09-25; prima beta)"],
+        replaced: "- Status: beta",
+      },
+    ]);
+    expect(res.rejected).toHaveLength(2);
+  });
+
+  it("UPDATE on frontmatter is refused even when the model asks for it", async () => {
+    const before = "---\nstatus: beta\n---\n# P\n";
+    const { vault, store } = fakeVault({ "P/context.md": before });
+    const res = await applyDecisions(
+      vault,
+      [{ op: "update", candidate: 0, path: "P/context.md", oldLine: "status: beta", newText: "status: live" }],
+      envFor(vault, ["P/context.md"]),
+    );
+    expect(res.writes).toEqual([]);
+    expect(store.get("P/context.md")).toBe(before);
   });
 
   it("NOOP writes nothing", async () => {
     const { vault, store } = fakeVault({ "a.md": "x\n" });
-    const res = await applyDecisions(vault, [{ op: "noop", candidate: 0 }], envFor(vault));
+    const res = await applyDecisions(vault, [{ op: "noop", candidate: 0 }], envFor(vault, ["a.md"]));
     expect(res.writes).toEqual([]);
     expect(store.get("a.md")).toBe("x\n");
   });
 
-  it("guardrails reject ignored, kernel and non-existent paths without touching them", async () => {
-    const { vault, store, created } = fakeVault({
+  it("only notes shown to the decider are writable, whatever the model answers", async () => {
+    const { vault, store } = fakeVault({ "CRM/Anna.md": "- a\n", "CRM/Bob.md": "- b\n" });
+    const res = await applyDecisions(
+      vault,
+      [{ op: "add", candidate: 0, path: "CRM/Bob.md", text: "not offered" }],
+      envFor(vault, ["CRM/Anna.md"]),
+    );
+    expect(res.writes).toEqual([]);
+    expect(res.rejected[0].reason).toBe("not a note shown to the decider");
+    expect(store.get("CRM/Bob.md")).toBe("- b\n");
+  });
+
+  it("guardrails reject ignored, kernel, mechanism and non-existent paths without touching them", async () => {
+    const files = {
       "Input/Readwise/Book.md": "book\n",
       "_exo/agent/USER.md": "user\n",
+      "_exo/vault-context.md": "ctx\n",
       ".obsidian/x.md": "cfg\n",
-    });
-    const decisions: Decision[] = [
-      { op: "add", candidate: 0, path: "Input/Readwise/Book.md", text: "note" },
-      { op: "add", candidate: 1, path: "_exo/agent/USER.md", text: "note" },
-      { op: "add", candidate: 2, path: ".obsidian/x.md", text: "note" },
-      { op: "add", candidate: 3, path: "CRM/New Person.md", text: "note" },
-    ];
-    const res = await applyDecisions(vault, decisions, envFor(vault));
+    };
+    const { vault, store, created } = fakeVault(files);
+    const targets = [...Object.keys(files), "CRM/New Person.md"];
+    const decisions: Decision[] = targets.map((path, i) => ({ op: "add", candidate: i, path, text: "note" }));
+    const res = await applyDecisions(vault, decisions, envFor(vault, targets));
     expect(res.writes).toEqual([]);
     expect(res.rejected.map((r) => r.reason)).toEqual([
       "synced source folder",
-      "agent kernel file",
+      "agent kernel or Exo mechanism file",
+      "agent kernel or Exo mechanism file",
       "hidden or config folder",
       "note does not exist",
     ]);
     expect(created).toEqual([]);
-    expect(store.get("_exo/agent/USER.md")).toBe("user\n");
+    for (const [p, c] of Object.entries(files)) expect(store.get(p)).toBe(c);
   });
 
-  it("creates today's inbox note when needed, and records it as created", async () => {
+  it("creates today's inbox note when needed, and records its starter content", async () => {
     const { vault, store, created } = fakeVault({});
     const res = await applyDecisions(
       vault,
@@ -105,11 +140,29 @@ describe("applyDecisions", () => {
         { op: "add", candidate: 0, path: INBOX, text: "rclone has a gdrive remote" },
         { op: "add", candidate: 1, path: INBOX, text: "second fact" },
       ],
-      envFor(vault),
+      envFor(vault, []),
     );
     expect(created).toEqual([INBOX]);
     expect(store.get(INBOX)).toMatch(/# Memory inbox: 2026-09-25\n- rclone has a gdrive remote\n- second fact\n$/);
-    expect(res.files).toEqual([{ path: INBOX, before: null, after: store.get(INBOX) }]);
+    expect(res.writes[0].created).toContain("# Memory inbox: 2026-09-25");
+    expect(res.writes[1].created).toBeUndefined();
+  });
+
+  it("an open loop becomes a well-formed ledger entry; UPDATE on the ledger is refused", async () => {
+    const ledger = "## loop-1\n- title: Old\n- opened: 2026-09-01T00:00:00.000Z\n- status: open\n\nold note\n";
+    const { vault, store } = fakeVault({ [P.openLoops]: ledger });
+    const res = await applyDecisions(
+      vault,
+      [
+        { op: "add", candidate: 0, path: P.openLoops, text: "Call Anna back about the design role" },
+        { op: "update", candidate: 1, path: P.openLoops, oldLine: "- title: Old", newText: "title: New" },
+      ],
+      envFor(vault, [P.openLoops]),
+    );
+    const loops = parseLoopsFile(store.get(P.openLoops)!);
+    expect(loops.map((l) => l.title)).toEqual(["Old", "Call Anna back about the design role"]);
+    expect(loops[0].note).toBe("old note"); // the previous loop is untouched
+    expect(res.rejected.map((r) => r.reason)).toEqual(["the open-loops ledger only takes new loops"]);
   });
 
   it("drops edits that carry a credential", async () => {
@@ -117,7 +170,7 @@ describe("applyDecisions", () => {
     const res = await applyDecisions(
       vault,
       [{ op: "add", candidate: 0, path: "a.md", text: "deploy token: ghp_abcdefghijklmnopqrstuvwxyz0123" }],
-      envFor(vault),
+      envFor(vault, ["a.md"]),
     );
     expect(res.writes).toEqual([]);
     expect(res.rejected[0].reason).toBe("looks like a credential");
@@ -132,22 +185,8 @@ describe("applyDecisions", () => {
       path: "a.md",
       text: `fact number ${i}`,
     }));
-    const res = await applyDecisions(vault, decisions, envFor(vault));
+    const res = await applyDecisions(vault, decisions, envFor(vault, ["a.md"]));
     expect(res.writes).toHaveLength(HARVEST_MAX_WRITES);
     expect(res.rejected.filter((r) => r.reason === "write limit reached")).toHaveLength(3);
-  });
-
-  it("two writes to one note keep the ORIGINAL content as the snapshot", async () => {
-    const { vault, store } = fakeVault({ "a.md": "- one\n" });
-    const res = await applyDecisions(
-      vault,
-      [
-        { op: "add", candidate: 0, path: "a.md", text: "two" },
-        { op: "add", candidate: 1, path: "a.md", text: "three" },
-      ],
-      envFor(vault),
-    );
-    expect(res.files).toEqual([{ path: "a.md", before: "- one\n", after: "- one\n- two\n- three\n" }]);
-    expect(store.get("a.md")).toBe("- one\n- two\n- three\n");
   });
 });

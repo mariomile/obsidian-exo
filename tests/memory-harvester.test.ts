@@ -22,6 +22,11 @@ function fakeApp(initial: Record<string, string>) {
       cachedRead: async (f: TFile) => files.get(f.path)!,
       read: async (f: TFile) => files.get(f.path)!,
       modify: async (f: TFile, c: string) => void files.set(f.path, c),
+      process: async (f: TFile, fn: (c: string) => string) => {
+        const next = fn(files.get(f.path)!);
+        files.set(f.path, next);
+        return next;
+      },
       create: async (p: string, c: string) => void files.set(p, c),
       createFolder: async () => undefined,
       getMarkdownFiles: () => [],
@@ -46,6 +51,7 @@ function setup(opts: {
   replies: string[];
   budget?: boolean;
   git?: (args: string[]) => Promise<string>;
+  source?: HarvestSource | null;
 }) {
   const { app, files } = fakeApp({
     "AGENTS.md": AGENTS,
@@ -72,13 +78,14 @@ function setup(opts: {
         { surface: "chat" },
       ),
     paths: () => exoPaths("_exo"),
-    source: () => source,
+    source: () => (opts.source === undefined ? source : opts.source),
     utility: async (prompt) => {
       prompts.push(prompt);
       return { text: replies.shift() ?? "", tokens: 100 };
     },
     budget: { check: () => opts.budget !== false, record: () => undefined },
     writeQueue: new WriteQueue(),
+    loopsWriteQueue: new WriteQueue(),
     git: () => opts.git ?? null,
     log: new HarvestLog({
       read: async () => logFile.content,
@@ -130,8 +137,9 @@ describe("MemoryHarvester", () => {
     expect(prompts[1]).toContain("line: - Designer at Acme");
     expect(notices[0]).toMatch(/remembered 1 thing from "Team update"/);
     const log = JSON.parse(logFile.content!);
-    expect(log[0].writes).toEqual([{ path: "CRM/People/Anna.md", op: "update", text: expect.stringContaining("Head of design") }]);
-    expect(log[0].files[0].before).toBe("# Anna\n## Work\n- Designer at Acme\n");
+    expect(log[0].writes).toMatchObject([{ path: "CRM/People/Anna.md", op: "update", text: expect.stringContaining("Head of design") }]);
+    expect(log[0].writes[0].replaced).toBe("- Designer at Acme");
+    expect(JSON.stringify(log)).not.toContain("# Anna"); // no note bodies in the log
   });
 
   it("commits ONLY the touched notes with the harvest message and records the sha", async () => {
@@ -213,5 +221,97 @@ describe("MemoryHarvester", () => {
     expect(files.get("AGENTS.md")).toBe(AGENTS);
     expect(marks).toEqual([["c1", 2]]);
     expect(notices).toEqual([]);
+  });
+
+  it("B1: a note with the user's uncommitted edits is written but never committed", async () => {
+    const calls: string[][] = [];
+    const git = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") return "true\n";
+      if (args[0] === "status") return args.includes("CRM/People/Anna.md") ? " M CRM/People/Anna.md\n" : "";
+      return "";
+    };
+    const { harvester, logFile, files } = setup({ chats: [chatWith()], replies: [EXTRACT, DECIDE], git });
+    await harvester.tick();
+    expect(files.get("CRM/People/Anna.md")).toContain("Head of design"); // written…
+    expect(calls.some((c) => c[0] === "add" || c[0] === "commit")).toBe(false); // …but never staged or committed
+    const rec = JSON.parse(logFile.content!)[0];
+    expect(rec.sha).toBeUndefined(); // undo reverses the exact lines instead of git revert
+    expect(rec.writes[0].replaced).toBe("- Designer at Acme");
+  });
+
+  it("B1: with one dirty and one clean note, only the clean one is committed", async () => {
+    const calls: string[][] = [];
+    const git = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") return "true\n";
+      if (args[0] === "rev-parse") return "abc123\n";
+      if (args[0] === "log") return "exo: memory harvest: 1 scritture (Team update)\n";
+      if (args[0] === "status") return args.includes("CRM/People/Anna.md") ? " M CRM/People/Anna.md\n" : "";
+      return "";
+    };
+    const extract = JSON.stringify({
+      facts: [
+        { kind: "person", statement: "Anna is head of design at Acme", entity: "Anna", evidence: "x" },
+        { kind: "other", statement: "rclone has a gdrive remote for backups", evidence: "y" },
+      ],
+    });
+    const decide = JSON.stringify({
+      decisions: [
+        { op: "update", candidate: 0, path: "CRM/People/Anna.md", oldLine: "- Designer at Acme", newText: "Head of design at Acme" },
+        { op: "add", candidate: 1, path: `_exo/memory/inbox/${today}.md`, text: "rclone has a gdrive remote" },
+      ],
+    });
+    const { harvester, logFile } = setup({ chats: [chatWith()], replies: [extract, decide], git });
+    await harvester.tick();
+    const commit = calls.find((c) => c[0] === "commit")!;
+    expect(commit).toEqual(["commit", "-m", "exo: memory harvest: 1 scritture (Team update)", "--", `_exo/memory/inbox/${today}.md`]);
+    const rec = JSON.parse(logFile.content!)[0];
+    expect(rec.sha).toBe("abc123");
+    expect(rec.uncommitted).toEqual(["CRM/People/Anna.md"]);
+  });
+
+  it("M4: a title carrying a credential never reaches the commit, the Notice or the log", async () => {
+    const calls: string[][] = [];
+    const git = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") return "true\n";
+      if (args[0] === "rev-parse") return "abc\n";
+      if (args[0] === "log") return "exo: memory harvest: 1 scritture (chat)\n";
+      return "";
+    };
+    const chat = chatWith({ title: "deploy with GITHUB_TOKEN=ghp_abcdefghijklmnopqrstu" });
+    const { harvester, logFile, notices } = setup({ chats: [chat], replies: [EXTRACT, DECIDE], git });
+    await harvester.tick();
+    expect(calls.find((c) => c[0] === "commit")![2]).toBe("exo: memory harvest: 1 scritture (chat)");
+    expect(notices[0]).toContain('from "chat"');
+    expect(logFile.content).not.toContain("ghp_");
+  });
+
+  it("H1: leaving with no view mounted settles, no re-tick loop", async () => {
+    const { harvester, deps } = setup({ chats: [chatWith()], replies: [], source: null });
+    let calls = 0;
+    const orig = deps.source;
+    deps.source = () => {
+      calls++;
+      return orig();
+    };
+    harvester.leaving("c1");
+    await harvester.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toBeLessThanOrEqual(2);
+  });
+
+  it("M2: the watermark settles before writing, and an unload before apply writes nothing", async () => {
+    const chat = chatWith();
+    const { harvester, files, marks, deps } = setup({ chats: [chat], replies: [EXTRACT] });
+    const util = deps.utility;
+    deps.utility = async (p, sig) => {
+      if (p.includes("FACTS:")) harvester.dispose(); // unload while the decider runs
+      return p.includes("FACTS:") ? { text: DECIDE, tokens: 1 } : util(p, sig);
+    };
+    await harvester.tick();
+    expect(files.get("CRM/People/Anna.md")).toBe("# Anna\n## Work\n- Designer at Acme\n");
+    expect(marks).toEqual([]);
   });
 });

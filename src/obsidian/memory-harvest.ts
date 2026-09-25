@@ -10,8 +10,11 @@ import {
   checkTarget,
   explicitRulePaths,
   harvestCommitMessage,
+  harvestBlocklist,
   harvestSlice,
   isHarvestDue,
+  normalizeTarget,
+  safeTitle,
   keywordsOf,
   matchingLines,
   memoryRulesSection,
@@ -25,11 +28,10 @@ import {
   type TargetEnv,
 } from "../core/memory-harvest";
 import { applyDecisions, type ApplyVault } from "../core/memory-apply";
-import { AGENT_BLOCK_NAMES } from "../core/agent-self";
 import type { WriteQueue } from "../core/write-queue";
-import { checkGitRepo, headSha, runGitCommit, type GitRun } from "./git";
+import { checkGitRepo, headSha, isWorktreeDirty, runGitCommit, type GitRun } from "./git";
 import type { HarvestLog, HarvestRecord } from "./harvest-log";
-import { searchVaultNotes } from "./vault-search";
+import { searchVaultNotes, vaultExclusion } from "./vault-search";
 
 /** A conversation as the harvester sees it. */
 export interface HarvestChat {
@@ -57,6 +59,8 @@ export interface HarvesterDeps {
   budget: { check(estimate: number): boolean; record(tokens: number): void };
   /** Shared memory write queue: harvest writes serialize with rethink_memory. */
   writeQueue: WriteQueue;
+  /** The open-loops ledger's queue, shared with `open_loop`/`close_loop`. */
+  loopsWriteQueue: WriteQueue;
   /** Git runner at the vault root, or null without a filesystem adapter. */
   git(): GitRun | null;
   log: HarvestLog;
@@ -109,15 +113,15 @@ export class MemoryHarvester {
   }
 
   private async runDue(): Promise<void> {
-    if (!this.d.caps().autoCapture || this.abort.signal.aborted) {
-      this.leavingIds.clear();
-      return;
-    }
-    const source = this.d.source();
-    if (!source) return;
-    const now = Date.now();
+    // Claim the pending leaves FIRST: every exit below consumes them, so the
+    // re-tick in `tick()`'s finally only ever follows leaves that arrived
+    // during this run, never loops on ones this run could not serve.
     const leaving = new Set(this.leavingIds);
     this.leavingIds.clear();
+    if (!this.d.caps().autoCapture || this.abort.signal.aborted) return;
+    const source = this.d.source();
+    if (!source) return; // no view yet: the idle heartbeat picks these up later
+    const now = Date.now();
     for (const chat of source.chats()) {
       if (this.abort.signal.aborted) return;
       const backoff = this.failedAt.get(chat.id);
@@ -189,35 +193,67 @@ export class MemoryHarvester {
       return null;
     }
     const decisions = parseDecisions(decided, candidates.length);
+    if (this.abort.signal.aborted) return null; // unloading: write nothing
 
-    // Apply under the guardrails, serialized with every other memory writer.
-    const result = await this.d.writeQueue.enqueue(() => applyDecisions(this.vault(), decisions, { ...env, today }));
-    for (const r of result.rejected) this.d.diag(`harvest rejected ${r.decision.op}: ${r.reason}`);
+    // Settle the watermark BEFORE writing: a crash mid-apply must not replay
+    // these messages into a second harvest of the same facts.
     source.markHarvested(chat.id, end);
+
+    // The notes the decider saw are the only ones it may write (plus the inbox).
+    const offered = new Set([...routingNotes, ...items.flatMap((it) => it.notes)].map((n) => n.path));
+    const targets = [
+      ...new Set(
+        decisions.flatMap((d) => (d.op === "noop" ? [] : [normalizeTarget(d.path)])).filter((p) => p === env.inboxPath || offered.has(p)),
+      ),
+    ];
+    // Notes with the user's uncommitted edits are written but never committed:
+    // committing them would sweep those edits into the harvest (and undo would
+    // then revert them). Checked before writing, so the harvest's own edit
+    // doesn't count.
+    const git = await this.repo();
+    const dirty = new Set<string>();
+    if (git) {
+      for (const p of targets) {
+        try {
+          if (await isWorktreeDirty(git, [p])) dirty.add(p);
+        } catch {
+          dirty.add(p); // unknown state: treat as dirty, never commit it
+        }
+      }
+    }
+
+    // Apply under the guardrails, serialized with every other memory writer
+    // (and with the loops tools when the ledger is a target).
+    const apply = () =>
+      this.d.writeQueue.enqueue(() =>
+        applyDecisions(this.vault(), decisions, { ...env, today, now, offered, ledgerPath: paths.openLoops }),
+      );
+    const result = targets.includes(paths.openLoops) ? await this.d.loopsWriteQueue.enqueue(apply) : await apply();
+    for (const r of result.rejected) this.d.diag(`harvest rejected ${r.decision.op}: ${r.reason}`);
     if (!result.writes.length) {
       this.d.diag(`harvest ${chat.id}: ${candidates.length} facts, nothing new`);
       return null;
     }
 
+    const title = safeTitle(chat.title);
+    const written = [...new Set(result.writes.map((w) => w.path))];
+    const uncommitted = written.filter((p) => dirty.has(p));
+    const clean = written.filter((p) => !dirty.has(p));
+    const cleanWrites = result.writes.filter((w) => !dirty.has(w.path)).length;
+    const sha = git && clean.length ? await this.commit(git, clean, harvestCommitMessage(cleanWrites, title)) : undefined;
     const record: HarvestRecord = {
       id: `h-${now.toString(36)}`,
       at: now,
       convoId: chat.id,
-      title: chat.title,
+      title,
       writes: result.writes,
-      files: result.files,
+      ...(sha ? { sha } : {}),
+      ...(sha && uncommitted.length ? { uncommitted } : {}),
     };
-    const sha = await this.commit(
-      result.files.map((f) => f.path),
-      harvestCommitMessage(result.writes.length, chat.title),
-    );
-    if (sha) record.sha = sha;
     await this.d.log.append(record);
     const n = result.writes.length;
-    this.d.notify(
-      `Exo remembered ${n} ${n === 1 ? "thing" : "things"} from "${chat.title}". Undo: "Undo last memory write".`,
-    );
-    this.d.diag(`harvest ${chat.id}: ${n} writes${sha ? ` ${sha.slice(0, 8)}` : ""}`);
+    this.d.notify(`Exo remembered ${n} ${n === 1 ? "thing" : "things"} from "${title}". Undo: "Undo last memory write".`);
+    this.d.diag(`harvest ${chat.id}: ${n} writes${sha ? ` ${sha.slice(0, 8)}` : ""}${uncommitted.length ? `, ${uncommitted.length} uncommitted` : ""}`);
     return record;
   }
 
@@ -234,22 +270,11 @@ export class MemoryHarvester {
 
   private targetEnv(today: string): TargetEnv {
     const paths = this.d.paths();
-    const vault = this.d.app.vault as unknown as { getConfig?(key: string): unknown };
-    const userIgnored = vault.getConfig?.("userIgnoreFilters");
     return {
       exists: (p) => this.d.app.vault.getAbstractFileByPath(p) instanceof TFile,
       inboxPath: `${paths.inbox}/${today}.md`,
-      kernelPaths: new Set([
-        ...AGENT_BLOCK_NAMES.map((name) => `${paths.agentDir}/${name}.md`),
-        "AGENTS.md",
-        "CLAUDE.md",
-      ]),
-      ignoredPrefixes: [
-        "Input",
-        ...(Array.isArray(userIgnored)
-          ? userIgnored.filter((x): x is string => typeof x === "string").map((x) => x.replace(/\/+$/, ""))
-          : []),
-      ],
+      blocked: harvestBlocklist(paths),
+      excluded: vaultExclusion(this.d.app, ["Input/", `${paths.reports}/`]),
     };
   }
 
@@ -302,7 +327,7 @@ export class MemoryHarvester {
       seen.add(path);
       out.push({ path, headings: noteHeadings(content), lines });
     };
-    const { hits } = await searchVaultNotes(this.d.app, keywords.slice(0, 8).join(" "), NOTES_PER_CANDIDATE * 2);
+    const { hits } = await searchVaultNotes(this.d.app, keywords.slice(0, 8).join(" "), NOTES_PER_CANDIDATE * 2, env.excluded);
     for (const hit of hits) {
       if (out.length >= NOTES_PER_CANDIDATE) break;
       await add(hit.path, false);
@@ -313,15 +338,21 @@ export class MemoryHarvester {
 
   private vault(): ApplyVault {
     const vault = this.d.app.vault;
-    const file = (path: string): TFile => {
-      const f = vault.getAbstractFileByPath(path);
-      if (!(f instanceof TFile)) throw new Error(`Note not found: ${path}`);
-      return f;
-    };
     return {
       exists: (path) => vault.getAbstractFileByPath(path) instanceof TFile,
-      read: (path) => vault.read(file(path)),
-      modify: (path, content) => vault.modify(file(path), content),
+      edit: async (path, fn) => {
+        const f = vault.getAbstractFileByPath(path);
+        if (!(f instanceof TFile)) return false;
+        let changed = false;
+        // vault.process: the read-modify-write is atomic against the editor.
+        await vault.process(f, (current) => {
+          const next = fn(current);
+          if (next === null) return current;
+          changed = true;
+          return next;
+        });
+        return changed;
+      },
       create: async (path, content) => {
         const parts = path.split("/").slice(0, -1);
         for (let i = 1; i <= parts.length; i++) {
@@ -339,14 +370,18 @@ export class MemoryHarvester {
     };
   }
 
-  /** Commit ONLY the touched notes; the harvest commit's sha, or undefined
-   *  when the vault is not a git repo (undo then restores snapshots). */
-  private async commit(paths: string[], message: string): Promise<string | undefined> {
+  /** A git runner for the vault when it is a git repo, else null. */
+  private async repo(): Promise<GitRun | null> {
     const git = this.d.git();
-    if (!git) return undefined;
+    if (!git) return null;
+    const { isGitRepo, gitAvailable } = await checkGitRepo(git);
+    return isGitRepo && gitAvailable ? git : null;
+  }
+
+  /** Commit ONLY `paths`; the harvest commit's sha, or undefined when the
+   *  commit did not happen. */
+  private async commit(git: GitRun, paths: string[], message: string): Promise<string | undefined> {
     try {
-      const { isGitRepo, gitAvailable } = await checkGitRepo(git);
-      if (!isGitRepo || !gitAvailable) return undefined;
       await runGitCommit(git, paths, message);
       const sha = await headSha(git);
       const subject = (await git(["log", "-1", "--format=%s", sha])).trim();

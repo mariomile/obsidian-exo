@@ -1361,7 +1361,7 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
    * call can't leak.
    *
    * @param opts.model    Model id (defaults to the `backgroundModel` setting).
-   * @param opts.timeoutMs Hard ceiling (default 15s).
+   * @param opts.timeoutMs Hard ceiling (default 90s).
    * @param opts.onUsage  W0 cost governance: invoked once with the real
    *                      input+output token count for this call, read from the
    *                      session synchronously right after `send()` resolves

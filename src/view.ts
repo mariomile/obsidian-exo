@@ -39,6 +39,7 @@ import { planRethink, type BlockName } from "./core/agent-self";
 import { BootPreambleCache } from "./obsidian/memory";
 import { memoryCaps, type MemoryCaps } from "./core/memory-caps";
 import { recallForTurn, type TurnRecall } from "./obsidian/turn-recall";
+import { vaultExclusion } from "./obsidian/vault-search";
 import { renderRecallRow } from "./ui/recall-row";
 import { relatedNotes, basename as noteBasename } from "./obsidian/graph";
 import { wikilinkify, type TouchedNote } from "./ui/graph-view";
@@ -2803,7 +2804,7 @@ export class ChatView extends ItemView {
   }
 
   /** Render a compact old→new diff for a block, plus a review·undo row. Reuses the
-   *  `.mva-diff` line recipe (design.md §diff) and the observer-veto row idiom.
+   *  `.mva-diff` line recipe (design.md §diff) and a quiet review·undo row.
    *  When a `rationale` is present (human.md tier), it's surfaced prominently
    *  above the diff (design §3). */
   private renderBlockDiff(el: HTMLElement, write: BlockWrite, rationale?: string): void {
@@ -2843,7 +2844,7 @@ export class ChatView extends ItemView {
     });
   }
 
-  /** Render a pending block proposal card (persona tier or observer now-proposal):
+  /** Render a pending block proposal card (the propose-only SOUL tier):
    *  a diff with Apply / Dismiss. Apply writes through the governed path and
    *  swaps in a review·undo row; Dismiss leaves the block untouched. */
   private renderBlockProposalCard(
@@ -2933,7 +2934,9 @@ export class ChatView extends ItemView {
       archived: x.archived,
       messages: x.messages,
     }));
-    const recall = await recallForTurn(this.app, { message: userText, convoId: c.id, chats, now: Date.now() });
+    // Exo's own reports and anything the user excluded never ride as recall.
+    const exclude = vaultExclusion(this.app, [`${this.plugin.paths.reports}/`]);
+    const recall = await recallForTurn(this.app, { message: userText, convoId: c.id, chats, now: Date.now(), exclude });
     if (recall) this.diag.push("recall", `injected ${recall.notes.length} notes, ${recall.chats.length} chats`);
     return recall;
   }

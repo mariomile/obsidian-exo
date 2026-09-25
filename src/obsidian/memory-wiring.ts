@@ -1,7 +1,7 @@
 import { Notice, TFile } from "obsidian";
 import type ExoPlugin from "../main";
 import { memoryCaps, type MemoryCaps } from "../core/memory-caps";
-import { latestHarvestSha, restoreSnapshots, revertHarvestCommit, type UndoResult } from "../core/memory-undo";
+import { latestHarvestSha, reverseWrites, revertHarvestCommit, type UndoResult } from "../core/memory-undo";
 import { MemoryHarvester } from "./memory-harvest";
 import { HarvestLog } from "./harvest-log";
 import { checkGitRepo, gitRunner, type GitRun } from "./git";
@@ -36,6 +36,7 @@ export function createHarvestLog(plugin: ExoPlugin): HarvestLog {
   return new HarvestLog({
     read: async () => ((await adapter.exists(path)) ? adapter.read(path) : null),
     write: (content) => adapter.write(path, content),
+    preserveCorrupt: (content) => adapter.write(`${plugin.manifest.dir}/memory-harvests.corrupt-${Date.now()}.json`, content),
   });
 }
 
@@ -60,6 +61,7 @@ export function createMemoryHarvester(plugin: ExoPlugin, log: HarvestLog): Memor
       record: (tokens) => plugin.recordBackgroundSpend(tokens),
     },
     writeQueue: plugin.memoryWriteQueue,
+    loopsWriteQueue: plugin.loopsWriteQueue,
     git: () => vaultGit(plugin),
     log,
     notify: (message) => new Notice(message, 8000),
@@ -82,14 +84,27 @@ export async function undoMemoryWrite(plugin: ExoPlugin, log: HarvestLog, target
 
   const git = vaultGit(plugin);
   const repo = git ? await checkGitRepo(git) : { isGitRepo: false, gitAvailable: false };
+  const vault = undoVault(plugin);
   let result: UndoResult;
-  if (git && repo.isGitRepo) {
-    const sha = record ? record.sha : (want ?? (await latestHarvestSha(git)) ?? undefined);
-    if (sha) result = await revertHarvestCommit(git, sha);
-    else if (record) result = await restoreSnapshots(snapshotVault(plugin), record.files);
-    else result = { ok: false, message: "No memory harvest to undo." };
+  if (record && !record.sha) {
+    // Never committed (no git, or every note held uncommitted edits).
+    result = await reverseWrites(vault, record.writes);
+  } else if (git && repo.isGitRepo) {
+    const sha = record?.sha ?? want ?? (await latestHarvestSha(git)) ?? undefined;
+    if (!sha) result = { ok: false, message: "No memory harvest to undo." };
+    else {
+      const loose = record ? record.writes.filter((w) => record.uncommitted?.includes(w.path)) : [];
+      const check = loose.length ? await reverseWrites(vault, loose, { dryRun: true }) : null;
+      result = check && !check.ok ? check : await revertHarvestCommit(git, sha);
+      // Notes written but not committed (they held the user's own edits) are
+      // reversed line by line after the commit is reverted.
+      if (result.ok && loose.length && check?.ok) {
+        const rest = await reverseWrites(vault, loose);
+        result = rest.ok ? result : { ok: false, message: `${result.message} ${rest.message}` };
+      }
+    }
   } else if (record) {
-    result = await restoreSnapshots(snapshotVault(plugin), record.files);
+    result = await reverseWrites(vault, record.writes);
   } else {
     result = { ok: false, message: want ? `No memory harvest ${want} on record.` : "No memory harvest to undo." };
   }
@@ -98,7 +113,7 @@ export async function undoMemoryWrite(plugin: ExoPlugin, log: HarvestLog, target
   return result;
 }
 
-function snapshotVault(plugin: ExoPlugin) {
+function undoVault(plugin: ExoPlugin) {
   const vault = plugin.app.vault;
   return {
     read: async (path: string) => {

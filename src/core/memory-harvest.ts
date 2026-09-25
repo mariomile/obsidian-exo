@@ -10,6 +10,7 @@
  * model; the code only enforces generic guardrails. No Obsidian import.
  */
 import { chatLines, type ChatLine, type ChatMessage } from "./recent-chats";
+import type { ExoPaths } from "./paths";
 
 /* ------------------------------ scheduling ------------------------------ */
 
@@ -81,11 +82,24 @@ const SECRET_PATTERNS: RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
   /\bbearer\s+[A-Za-z0-9._~+/-]{16,}/i,
   /\b(?:password|passwd|pwd|passphrase|api[_ -]?key|secret|token|access[_ -]?key)\s*[:=]\s*\S{6,}/i,
+  // env-style assignments: OPENAI_API_KEY=…, DB_PASSWORD: …
+  /\b[A-Z0-9_]*(?:SECRET|TOKEN|KEY|PASSWORD|PASSWD)[A-Z0-9_]*\s*[:=]\s*\S+/i,
+  /\bsk_(?:live|test)_[A-Za-z0-9]+/,
+  // credentials inside a URL: https://user:pass@host
+  /:\/\/[^/\s:@]+:[^@\s]+@/,
+  // Italian: "la password è …", "password e' …"
+  /\bpassword\s+(?:è|e')\s*\S+/i,
 ];
 
 /** True when `text` carries something that looks like a credential. */
 export function containsSecret(text: string): boolean {
   return SECRET_PATTERNS.some((re) => re.test(text));
+}
+
+/** A chat title safe to put in a commit message, a Notice or the log. */
+export function safeTitle(title: string): string {
+  const t = title.replace(/\s+/g, " ").trim();
+  return !t || containsSecret(t) ? "chat" : t;
 }
 
 /* ------------------------------ step 1: extract ------------------------------ */
@@ -229,20 +243,61 @@ export function keywordsOf(text: string): string[] {
   return [...seen];
 }
 
-/** Non-heading lines of `content` that share a keyword with the statement:
- *  the lines an UPDATE could target, quoted exactly. */
+/**
+ * Lines memory must never touch, per line index: the YAML frontmatter block,
+ * fenced code, headings, table rows, horizontal rules and blank lines. `open`
+ * is true when the frontmatter never closes (then nothing may be appended).
+ */
+export function protectedLines(lines: readonly string[]): { locked: boolean[]; frontmatterEnd: number; open: boolean } {
+  const locked = lines.map(() => false);
+  let frontmatterEnd = -1;
+  let open = false;
+  let start = 0;
+  if (lines[0]?.trim() === "---") {
+    const close = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+    frontmatterEnd = close < 0 ? lines.length - 1 : close;
+    open = close < 0;
+    for (let i = 0; i <= frontmatterEnd; i++) locked[i] = true;
+    start = frontmatterEnd + 1;
+  }
+  let fence: string | null = null;
+  for (let i = start; i < lines.length; i++) {
+    const t = lines[i].trim();
+    const f = /^(```|~~~)/.exec(t);
+    if (fence) {
+      locked[i] = true;
+      if (f && t.startsWith(fence)) fence = null;
+      continue;
+    }
+    if (f) {
+      fence = f[1];
+      locked[i] = true;
+      continue;
+    }
+    if (!t || /^#{1,6}\s/.test(t) || t.startsWith("|") || /^(-{3,}|\*{3,}|_{3,})$/.test(t)) locked[i] = true;
+  }
+  return { locked, frontmatterEnd, open };
+}
+
+/** Text that would turn one line into structure (a heading, a table row, a
+ *  fence, a rule, frontmatter): never written by memory. */
+function structural(line: string): boolean {
+  return /^(#{1,6}\s|\||```|~~~|(-{3,}|\*{3,}|_{3,})$)/.test(line.trim());
+}
+
+/** Plain content lines of `content` that share a keyword with the statement:
+ *  the lines an UPDATE could target, quoted exactly. Frontmatter, headings,
+ *  tables, fences and rules are never offered. */
 export function matchingLines(content: string, keywords: readonly string[], max = 12): string[] {
   if (!keywords.length) return [];
+  const lines = content.split("\n");
+  const { locked } = protectedLines(lines);
   const out: string[] = [];
-  for (const line of content.split("\n")) {
-    const t = line.trim();
-    if (!t || /^#{1,6}\s/.test(t) || t === "---") continue;
-    const folded = t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-    if (keywords.some((k) => folded.includes(k))) {
-      out.push(line.replace(/\s+$/, ""));
-      if (out.length >= max) break;
-    }
-  }
+  lines.forEach((line, i) => {
+    if (locked[i] || out.length >= max) return;
+    const folded = line.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (keywords.some((k) => folded.includes(k))) out.push(line.replace(/\s+$/, ""));
+  });
   return out;
 }
 
@@ -336,12 +391,43 @@ export function parseDecisions(raw: string, candidateCount: number): Decision[] 
 
 export interface TargetEnv {
   exists(path: string): boolean;
-  /** Today's inbox note: the one path that may be created. */
+  /** Today's inbox note: the one path that may be created, even under a
+   *  dot-folder memory root. */
   inboxPath: string;
-  /** Agent kernel files (SOUL/USER/NOW, AGENTS.md, CLAUDE.md): never harvested into. */
-  kernelPaths: ReadonlySet<string>;
-  /** Folder prefixes that are sync-owned or user-excluded (`Input/`, …). */
-  ignoredPrefixes: readonly string[];
+  /** Kernel and mechanism files Exo owns (see {@link harvestBlocklist}). */
+  blocked(path: string): boolean;
+  /** Excluded by the user or sync-owned (see core/vault-exclusions). */
+  excluded(path: string): boolean;
+}
+
+/**
+ * Notes memory harvest must never write: every AGENTS.md / CLAUDE.md, the agent
+ * kernel folder (SOUL/USER/NOW stay governed by `rethink_memory`), and Exo's
+ * mechanism files: vault-context, rules, decisions (the user's own records),
+ * tasks and orchestration, automations, agent contracts, reports, settled
+ * chats, the queue, review and mentions. What stays writable: the user's own
+ * notes, preferences and mental model, the open-loops ledger, per-agent
+ * memory (`memory/agents/`) and the inbox.
+ */
+export function harvestBlocklist(paths: ExoPaths): (path: string) => boolean {
+  const dirs = [
+    paths.agentDir,
+    paths.rules,
+    paths.decisions,
+    paths.orchestration,
+    paths.automations,
+    paths.agents,
+    paths.reports,
+    paths.chats,
+    paths.queue,
+    paths.mentions,
+  ].map((d) => `${d.replace(/\/+$/, "")}/`);
+  const files = new Set([paths.vaultContext, paths.tasks, paths.review]);
+  return (path) => {
+    const base = path.split("/").pop() ?? path;
+    if (base === "AGENTS.md" || base === "CLAUDE.md") return true;
+    return files.has(path) || dirs.some((d) => path.startsWith(d));
+  };
 }
 
 export function normalizeTarget(path: string): string {
@@ -354,13 +440,12 @@ export function checkTarget(path: string, env: TargetEnv): string | null {
   if (!p.endsWith(".md")) return "not a markdown note";
   const parts = p.split("/");
   if (parts.some((part) => part === ".." || part === "")) return "invalid path";
+  if (p === env.inboxPath) return null;
   if (parts.some((part) => part.startsWith("."))) return "hidden or config folder";
   if (parts.slice(0, -1).some((part) => /readwise/i.test(part))) return "synced source folder";
-  if (env.ignoredPrefixes.some((pre) => p === pre || p.startsWith(pre.endsWith("/") ? pre : `${pre}/`))) {
-    return "ignored folder";
-  }
-  if (env.kernelPaths.has(p)) return "agent kernel file";
-  if (!env.exists(p) && p !== env.inboxPath) return "note does not exist";
+  if (env.excluded(p)) return "ignored folder";
+  if (env.blocked(p)) return "agent kernel or Exo mechanism file";
+  if (!env.exists(p)) return "note does not exist";
   return null;
 }
 
@@ -370,45 +455,71 @@ export function oneLine(text: string): string {
 }
 
 /** Append `- text` under `section` (a heading, matched without its #s,
- *  case-insensitively) or at the end of the note when there is no such section. */
-export function applyAdd(content: string, section: string | undefined, text: string): string {
-  const bullet = `- ${oneLine(text)}`;
+ *  case-insensitively, never inside frontmatter or code) or at the end of the
+ *  note. Null when the text would be structure or the note's frontmatter
+ *  never closes. */
+export function applyAdd(content: string, section: string | undefined, text: string): { content: string; line: string } | null {
+  const line = `- ${oneLine(text)}`;
+  if (structural(oneLine(text))) return null;
   const lines = content.replace(/\s+$/, "").split("\n");
+  const { locked, open, frontmatterEnd } = protectedLines(lines);
+  if (open) return null;
+  const heading = (i: number): boolean =>
+    i > frontmatterEnd && /^#{1,6}\s/.test(lines[i]) && !inFence(lines, locked, i, frontmatterEnd);
   const want = section?.replace(/^#+\s*/, "").trim().toLowerCase();
   if (want) {
-    const start = lines.findIndex((l) => /^#{1,6}\s/.test(l) && l.replace(/^#+\s*/, "").trim().toLowerCase() === want);
+    const start = lines.findIndex((l, i) => heading(i) && l.replace(/^#+\s*/, "").trim().toLowerCase() === want);
     if (start >= 0) {
       const level = (lines[start].match(/^#+/) ?? ["#"])[0].length;
       let end = lines.length;
       for (let i = start + 1; i < lines.length; i++) {
         const m = lines[i].match(/^(#{1,6})\s/);
-        if (m && m[1].length <= level) {
+        if (m && heading(i) && m[1].length <= level) {
           end = i;
           break;
         }
       }
       let at = end;
       while (at > start + 1 && !lines[at - 1].trim()) at--;
-      lines.splice(at, 0, bullet);
-      return `${lines.join("\n")}\n`;
+      if (!inFence(lines, locked, at, frontmatterEnd)) {
+        lines.splice(at, 0, line);
+        return { content: `${lines.join("\n")}\n`, line };
+      }
     }
   }
   const body = lines.join("\n");
-  return `${body}${body ? "\n" : ""}${bullet}\n`;
+  return { content: `${body}${body ? "\n" : ""}${line}\n`, line };
 }
 
-/** Replace the ONE line equal (whitespace-trimmed) to `oldLine` with `newText`,
- *  keeping its indentation and bullet. Null unless the line occurs exactly once. */
-export function applyUpdate(content: string, oldLine: string, newText: string): string | null {
+/** True when index `i` sits between an opening and a closing fence. */
+function inFence(lines: readonly string[], locked: readonly boolean[], i: number, frontmatterEnd: number): boolean {
+  let fence = false;
+  for (let k = frontmatterEnd + 1; k < i && k < lines.length; k++) {
+    if (/^(```|~~~)/.test(lines[k].trim()) && locked[k]) fence = !fence;
+  }
+  return fence;
+}
+
+/** Replace the ONE plain content line equal (whitespace-trimmed) to `oldLine`
+ *  with `newText`, keeping its indentation and bullet. Null unless the line
+ *  occurs exactly once, is not frontmatter / heading / table / fence / rule,
+ *  and the new text is not structure either. */
+export function applyUpdate(
+  content: string,
+  oldLine: string,
+  newText: string,
+): { content: string; from: string; to: string } | null {
   const want = oldLine.trim();
-  if (!want) return null;
+  if (!want || structural(oneLine(newText))) return null;
   const lines = content.split("\n");
   const hits = lines.flatMap((l, i) => (l.trim() === want ? [i] : []));
   if (hits.length !== 1) return null;
   const i = hits[0];
+  if (protectedLines(lines).locked[i]) return null;
   const prefix = lines[i].match(/^\s*(?:[-*+]\s+(?:\[.\]\s+)?)?/)?.[0] ?? "";
+  const from = lines[i];
   lines[i] = `${prefix}${oneLine(newText)}`;
-  return lines.join("\n");
+  return { content: lines.join("\n"), from, to: lines[i] };
 }
 
 /** Starter content for a new daily inbox note. */

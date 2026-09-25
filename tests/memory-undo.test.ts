@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { latestHarvestSha, restoreSnapshots, revertHarvestCommit, type UndoVault } from "../src/core/memory-undo";
+import { latestHarvestSha, reverseWrites, revertHarvestCommit, type UndoVault } from "../src/core/memory-undo";
 
 /** Scripted git: answers by the first args, records every call. */
 function fakeGit(answers: Record<string, string | Error>) {
@@ -108,7 +108,7 @@ describe("latestHarvestSha", () => {
   });
 });
 
-describe("restoreSnapshots (no git)", () => {
+describe("reverseWrites (no git, or uncommitted notes)", () => {
   function vault(files: Record<string, string>) {
     const store = new Map(Object.entries(files));
     const v: UndoVault = {
@@ -119,28 +119,68 @@ describe("restoreSnapshots (no git)", () => {
     return { v, store };
   }
 
-  it("restores edited notes and removes a note the harvest created", async () => {
-    const { v, store } = vault({ "a.md": "- one\n- two\n", "inbox.md": "# inbox\n- fact\n" });
-    const res = await restoreSnapshots(v, [
-      { path: "a.md", before: "- one\n", after: "- one\n- two\n" },
-      { path: "inbox.md", before: null, after: "# inbox\n- fact\n" },
+  it("removes inserted lines and restores replaced ones, keeping the user's later edits", async () => {
+    const { v, store } = vault({
+      "a.md": "- one\n- user added later\n- Exo fact\n- Role: head (dal 2026-09-25; prima designer)\n",
+    });
+    const res = await reverseWrites(v, [
+      { path: "a.md", op: "add", text: "Exo fact", lines: ["- Exo fact"] },
+      {
+        path: "a.md",
+        op: "update",
+        text: "Role: head",
+        lines: ["- Role: head (dal 2026-09-25; prima designer)"],
+        replaced: "- Role: designer",
+      },
     ]);
     expect(res.ok).toBe(true);
-    expect(store.get("a.md")).toBe("- one\n");
+    expect(store.get("a.md")).toBe("- one\n- user added later\n- Role: designer\n");
+  });
+
+  it("removes a note the harvest created once only its starter is left", async () => {
+    const starter = "# Memory inbox: 2026-09-25\n";
+    const { v, store } = vault({ "inbox.md": `${starter}- fact\n` });
+    const res = await reverseWrites(v, [{ path: "inbox.md", op: "add", text: "fact", lines: ["- fact"], created: starter }]);
+    expect(res.ok).toBe(true);
     expect(store.has("inbox.md")).toBe(false);
   });
 
-  it("refuses, touching nothing, when any file changed since", async () => {
-    const { v, store } = vault({ "a.md": "- one\n- two\n", "b.md": "edited by hand\n" });
-    const res = await restoreSnapshots(v, [
-      { path: "a.md", before: "- one\n", after: "- one\n- two\n" },
-      { path: "b.md", before: "", after: "- fact\n" },
-    ]);
-    expect(res.ok).toBe(false);
-    expect(store.get("a.md")).toBe("- one\n- two\n");
+  it("keeps a created note the user has since added to", async () => {
+    const starter = "# Memory inbox: 2026-09-25\n";
+    const { v, store } = vault({ "inbox.md": `${starter}- fact\n- mine\n` });
+    await reverseWrites(v, [{ path: "inbox.md", op: "add", text: "fact", lines: ["- fact"], created: starter }]);
+    expect(store.get("inbox.md")).toBe(`${starter}- mine\n`);
   });
 
-  it("refuses without snapshots", async () => {
-    expect((await restoreSnapshots(vault({}).v, [])).ok).toBe(false);
+  it("reverses a multi-line loop block", async () => {
+    const block = ["## loop-9", "- title: Call Anna", "- opened: 2026-09-25T00:00:00.000Z", "- status: open", "", "Call Anna"];
+    const { v, store } = vault({ "loops.md": `## loop-1\n- title: Old\n\nold\n\n${block.join("\n")}\n` });
+    expect((await reverseWrites(v, [{ path: "loops.md", op: "add", text: "Call Anna", lines: block }])).ok).toBe(true);
+    expect(store.get("loops.md")).toBe("## loop-1\n- title: Old\n\nold\n");
+  });
+
+  it("refuses, touching nothing, when any line was edited or duplicated since", async () => {
+    const { v, store } = vault({ "a.md": "- Exo fact\n", "b.md": "- Exo fact reworded by hand\n" });
+    const res = await reverseWrites(v, [
+      { path: "a.md", op: "add", text: "Exo fact", lines: ["- Exo fact"] },
+      { path: "b.md", op: "add", text: "Exo fact", lines: ["- Exo fact"] },
+    ]);
+    expect(res.ok).toBe(false);
+    expect(store.get("a.md")).toBe("- Exo fact\n");
+    const dup = vault({ "a.md": "- x\n- x\n" });
+    expect((await reverseWrites(dup.v, [{ path: "a.md", op: "add", text: "x", lines: ["- x"] }])).ok).toBe(false);
+  });
+
+  it("works on notes of any size (no snapshot limit)", async () => {
+    const big = "- filler line\n".repeat(20_000);
+    const { v, store } = vault({ "big.md": `${big}- fact\n` });
+    expect((await reverseWrites(v, [{ path: "big.md", op: "add", text: "fact", lines: ["- fact"] }])).ok).toBe(true);
+    expect(store.get("big.md")).toBe(big);
+  });
+
+  it("dryRun checks without writing", async () => {
+    const { v, store } = vault({ "a.md": "- fact\n" });
+    expect((await reverseWrites(v, [{ path: "a.md", op: "add", text: "fact", lines: ["- fact"] }], { dryRun: true })).ok).toBe(true);
+    expect(store.get("a.md")).toBe("- fact\n");
   });
 });

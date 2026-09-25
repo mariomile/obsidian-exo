@@ -6,8 +6,10 @@ import {
   containsSecret,
   explicitRulePaths,
   harvestCommitMessage,
+  harvestBlocklist,
   harvestSlice,
   isHarvestDue,
+  safeTitle,
   matchingLines,
   memoryRulesSection,
   parseCandidates,
@@ -19,6 +21,8 @@ import {
   type TargetEnv,
 } from "../src/core/memory-harvest";
 import type { ChatMessage } from "../src/core/recent-chats";
+import { exoPaths } from "../src/core/paths";
+import { makeExclusion } from "../src/core/vault-exclusions";
 
 const NOW = Date.UTC(2026, 8, 25, 12, 0, 0);
 const user = (text: string, at?: number): ChatMessage => ({ role: "user", text, ...(at !== undefined ? { at } : {}) });
@@ -77,6 +81,12 @@ describe("containsSecret", () => {
     "api_key=abcdef123456",
     "Authorization: Bearer abcdefghijklmnopqrstuv",
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    "DATABASE_PASSWORD=correcthorse",
+    "export GITHUB_TOKEN: abc",
+    "stripe sk_live_51Habc",
+    "clone https://mario:hunter2@github.com/x/y",
+    "la password è Gatto123",
+    "password e' gatto",
   ])("flags %s", (text) => {
     expect(containsSecret(text)).toBe(true);
   });
@@ -162,33 +172,80 @@ describe("parseDecisions", () => {
 });
 
 describe("checkTarget guardrails", () => {
-  const existing = new Set(["CRM/People/Anna.md", "_system/agent/USER.md", "Input/Readwise/Book.md", "AGENTS.md"]);
+  const P = exoPaths("_system");
+  const existing = new Set([
+    "CRM/People/Anna.md",
+    "_system/agent/USER.md",
+    "Input/Readwise/Book.md",
+    "AGENTS.md",
+    "Active/Projects/Exo/AGENTS.md",
+    "Knowledge/Identity/mario-mental-model.md",
+    "_system/memory/open-loops.md",
+    "_system/memory/agents/exo.md",
+    "_system/vault-context.md",
+    "_system/memory/rules/_index.md",
+    "_system/memory/decisions/2026-09-25-x.md",
+    "_system/orchestration/tasks.md",
+    "_system/automations/digest.md",
+    "_system/agents/emily.md",
+    "_system/reports/2026-09-25-digest.md",
+    "_system/chats/pricing.md",
+    "Private/diary.md",
+    "Journal/2026/secret.md",
+  ]);
   const env: TargetEnv = {
     exists: (p) => existing.has(p),
     inboxPath: "_system/memory/inbox/2026-09-25.md",
-    kernelPaths: new Set(["_system/agent/SOUL.md", "_system/agent/USER.md", "_system/agent/NOW.md", "AGENTS.md", "CLAUDE.md"]),
-    ignoredPrefixes: ["Input", "Private"],
+    blocked: harvestBlocklist(P),
+    excluded: makeExclusion(["Private/", "/^Journal\\/\\d{4}\\//"], ["Input/"]),
   };
-  it("accepts an existing note and today's inbox", () => {
-    expect(checkTarget("CRM/People/Anna.md", env)).toBeNull();
-    expect(checkTarget("/CRM/People/Anna.md", env)).toBeNull();
-    expect(checkTarget("_system/memory/inbox/2026-09-25.md", env)).toBeNull();
+  it("accepts user notes, the mental model, open loops, agent memory and today's inbox", () => {
+    for (const p of [
+      "CRM/People/Anna.md",
+      "/CRM/People/Anna.md",
+      "Knowledge/Identity/mario-mental-model.md",
+      "_system/memory/open-loops.md",
+      "_system/memory/agents/exo.md",
+      "_system/memory/inbox/2026-09-25.md",
+    ]) {
+      expect(checkTarget(p, env), p).toBeNull();
+    }
   });
   it("rejects notes that do not exist (no note creation besides the inbox)", () => {
     expect(checkTarget("CRM/People/Nobody.md", env)).toBe("note does not exist");
     expect(checkTarget("_system/memory/inbox/2026-09-24.md", env)).toBe("note does not exist");
   });
-  it("rejects kernel files", () => {
-    expect(checkTarget("_system/agent/USER.md", env)).toBe("agent kernel file");
-    expect(checkTarget("AGENTS.md", env)).toBe("agent kernel file");
+  it("rejects kernel and Exo mechanism files, and ANY AGENTS.md / CLAUDE.md", () => {
+    for (const p of [
+      "_system/agent/USER.md",
+      "AGENTS.md",
+      "Active/Projects/Exo/AGENTS.md",
+      "Some/Where/CLAUDE.md",
+      "_system/vault-context.md",
+      "_system/memory/rules/_index.md",
+      "_system/memory/decisions/2026-09-25-x.md",
+      "_system/orchestration/tasks.md",
+      "_system/automations/digest.md",
+      "_system/agents/emily.md",
+      "_system/reports/2026-09-25-digest.md",
+      "_system/chats/pricing.md",
+    ]) {
+      expect(checkTarget(p, env), p).toBe("agent kernel or Exo mechanism file");
+    }
   });
-  it("rejects hidden, synced and ignored folders", () => {
+  it("rejects hidden, synced and user-excluded folders, prefix and /regex/ alike", () => {
     expect(checkTarget(".obsidian/plugins/x/data.md", env)).toBe("hidden or config folder");
     expect(checkTarget(".archive/old.md", env)).toBe("hidden or config folder");
     expect(checkTarget("Input/Readwise/Book.md", env)).toBe("synced source folder");
     expect(checkTarget("Sources/Readwise/Book.md", env)).toBe("synced source folder");
     expect(checkTarget("Input/Clip.md", env)).toBe("ignored folder");
     expect(checkTarget("Private/diary.md", env)).toBe("ignored folder");
+    expect(checkTarget("Journal/2026/secret.md", env)).toBe("ignored folder");
+  });
+  it("allows the inbox even under a dot-folder memory root", () => {
+    const dotEnv = { ...env, inboxPath: ".exo/memory/inbox/2026-09-25.md" };
+    expect(checkTarget(".exo/memory/inbox/2026-09-25.md", dotEnv)).toBeNull();
+    expect(checkTarget(".exo/memory/other.md", dotEnv)).toBe("hidden or config folder");
   });
   it("rejects non-markdown and path tricks", () => {
     expect(checkTarget("CRM/People/Anna.pdf", env)).toBe("not a markdown note");
@@ -199,43 +256,85 @@ describe("checkTarget guardrails", () => {
 describe("applyAdd", () => {
   const note = "# Anna\n\n## Work\n- Designer\n\n## Personal\n- Lives in Milan\n";
   it("appends a bullet at the end of the named section", () => {
-    expect(applyAdd(note, "Work", "Leads design at Acme")).toBe(
-      "# Anna\n\n## Work\n- Designer\n- Leads design at Acme\n\n## Personal\n- Lives in Milan\n",
-    );
+    expect(applyAdd(note, "Work", "Leads design at Acme")).toEqual({
+      content: "# Anna\n\n## Work\n- Designer\n- Leads design at Acme\n\n## Personal\n- Lives in Milan\n",
+      line: "- Leads design at Acme",
+    });
   });
   it("matches the section with or without #s, case-insensitively", () => {
-    expect(applyAdd(note, "## personal", "Has a dog")).toContain("- Lives in Milan\n- Has a dog\n");
+    expect(applyAdd(note, "## personal", "Has a dog")?.content).toContain("- Lives in Milan\n- Has a dog\n");
   });
   it("appends at the end when the section is missing or absent", () => {
-    expect(applyAdd(note, "Nope", "x fact")).toBe(`${note}- x fact\n`);
-    expect(applyAdd(note, undefined, "y fact")).toBe(`${note}- y fact\n`);
+    expect(applyAdd(note, "Nope", "x fact")?.content).toBe(`${note}- x fact\n`);
+    expect(applyAdd(note, undefined, "y fact")?.content).toBe(`${note}- y fact\n`);
   });
   it("writes exactly one line, never a second bullet marker", () => {
-    expect(applyAdd("", undefined, "- multi\nline")).toBe("- multi line\n");
+    expect(applyAdd("", undefined, "- multi\nline")?.content).toBe("- multi line\n");
+  });
+  it("never lands inside frontmatter: a YAML comment is not a section", () => {
+    const fm = "---\ntags: [x]\n# Work\n---\n# Note\nbody\n";
+    expect(applyAdd(fm, "Work", "fact")?.content).toBe(`${fm}- fact\n`);
+  });
+  it("never uses a heading inside a code fence as a section", () => {
+    const code = "# Note\n```md\n## Work\n```\ntext\n";
+    expect(applyAdd(code, "Work", "fact")?.content).toBe(`${code}- fact\n`);
+  });
+  it("refuses a note whose frontmatter never closes, and text that is structure", () => {
+    expect(applyAdd("---\ntitle: x\n", undefined, "fact")).toBeNull();
+    for (const t of ["# Heading", "| a | b |", "```js", "---"]) expect(applyAdd(note, "Work", t), t).toBeNull();
   });
 });
 
 describe("applyUpdate", () => {
   const note = "## Work\n- Role: designer at Acme\n  - Team: 4\n";
-  it("replaces exactly one line, keeping its bullet", () => {
-    expect(applyUpdate(note, "- Role: designer at Acme", "Role: head of design at Acme (dal 2026-09-25; prima designer)")).toBe(
-      "## Work\n- Role: head of design at Acme (dal 2026-09-25; prima designer)\n  - Team: 4\n",
-    );
+  it("replaces exactly one line, keeping its bullet, and reports both lines", () => {
+    expect(applyUpdate(note, "- Role: designer at Acme", "Role: head of design at Acme (dal 2026-09-25; prima designer)")).toEqual({
+      content: "## Work\n- Role: head of design at Acme (dal 2026-09-25; prima designer)\n  - Team: 4\n",
+      from: "- Role: designer at Acme",
+      to: "- Role: head of design at Acme (dal 2026-09-25; prima designer)",
+    });
   });
   it("keeps nested indentation", () => {
-    expect(applyUpdate(note, "- Team: 4", "Team: 6 (dal 2026-09-25; prima 4)")).toContain("\n  - Team: 6 (dal 2026-09-25; prima 4)\n");
+    expect(applyUpdate(note, "- Team: 4", "Team: 6 (dal 2026-09-25; prima 4)")?.content).toContain("\n  - Team: 6 (dal 2026-09-25; prima 4)\n");
   });
   it("refuses a line that is missing or not unique", () => {
     expect(applyUpdate(note, "- Role: CEO", "x")).toBeNull();
     expect(applyUpdate("- a\n- a\n", "- a", "b")).toBeNull();
     expect(applyUpdate(note, "   ", "b")).toBeNull();
   });
+  it("refuses frontmatter, headings, table rows, fences, rules and code, whatever the model says", () => {
+    const doc = [
+      "---",
+      "status: beta",
+      "---",
+      "## Status",
+      "| k | v |",
+      "```",
+      "status = beta",
+      "```",
+      "---",
+      "- plain line",
+    ].join("\n");
+    for (const old of ["status: beta", "## Status", "| k | v |", "```", "status = beta", "---"]) {
+      expect(applyUpdate(doc, old, "live"), old).toBeNull();
+    }
+    expect(applyUpdate(doc, "- plain line", "## Injected heading")).toBeNull();
+    expect(applyUpdate(doc, "- plain line", "new plain line")?.to).toBe("- new plain line");
+  });
 });
 
 describe("matchingLines", () => {
-  it("returns lines sharing a keyword, verbatim, skipping headings", () => {
-    const content = "# Acme\n- Founded 2019\n- Design team led by Anna\n## Anna\n";
+  it("returns plain lines sharing a keyword, verbatim, never structure", () => {
+    const content = "---\nowner: anna\n---\n# Acme\n- Founded 2019\n- Design team led by Anna\n## Anna\n| anna | lead |\n```\nanna()\n```\n";
     expect(matchingLines(content, ["anna"])).toEqual(["- Design team led by Anna"]);
+  });
+});
+
+describe("safeTitle", () => {
+  it("replaces a title carrying a credential, and an empty one, with 'chat'", () => {
+    expect(safeTitle("Pricing call")).toBe("Pricing call");
+    expect(safeTitle("setup with OPENAI_API_KEY=sk-abc123def456")).toBe("chat");
+    expect(safeTitle("  ")).toBe("chat");
   });
 });
 

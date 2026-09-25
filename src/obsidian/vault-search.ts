@@ -1,5 +1,6 @@
 import { App, prepareSimpleSearch } from "obsidian";
 import { pluginInstance } from "./tool-kit";
+import { makeExclusion, type PathFilter } from "../core/vault-exclusions";
 
 /**
  * One vault search for everything that ranks notes: the `search_vault` tool,
@@ -34,33 +35,50 @@ const SKIP_LARGER_THAN = 200_000;
 /** Cap on the built-in fallback scan (Sonar has no such limit). */
 const MAX_SCAN_FILES = 2000;
 
+/** The user's "Excluded files" (Obsidian `userIgnoreFilters`, prefixes and
+ *  `/regex/`), dot-folders, and `extraPrefixes`, as one path filter. */
+export function vaultExclusion(app: App, extraPrefixes: readonly string[] = []): PathFilter {
+  const filters = (app.vault as unknown as { getConfig?(key: string): unknown }).getConfig?.("userIgnoreFilters");
+  return makeExclusion(Array.isArray(filters) ? filters : [], extraPrefixes);
+}
+
 function sonarSearch(app: App): SonarPublicSearch | null {
   const p = pluginInstance(app, "sonar") as Partial<SonarPublicSearch> | undefined;
   return p && typeof p.search === "function" ? (p as SonarPublicSearch) : null;
 }
 
-export async function searchVaultNotes(app: App, query: string, limit: number): Promise<VaultSearchResult> {
+/** `exclude` drops paths from both engines (Sonar is asked for extra hits so
+ *  the filtered list still fills `limit`). */
+export async function searchVaultNotes(
+  app: App,
+  query: string,
+  limit: number,
+  exclude?: PathFilter,
+): Promise<VaultSearchResult> {
   if (!query.trim()) return { hits: [] };
   const sonar = sonarSearch(app);
   if (sonar) {
     try {
-      const hits = await sonar.search(query, { limit });
+      const hits = await sonar.search(query, { limit: exclude ? Math.min(limit * 3, 100) : limit });
       return {
-        hits: hits.map((h) => ({ path: h.path, title: h.title, score: h.score, excerpt: h.excerpt ?? "" })),
+        hits: hits
+          .filter((h) => !exclude?.(h.path))
+          .slice(0, limit)
+          .map((h) => ({ path: h.path, title: h.title, score: h.score, excerpt: h.excerpt ?? "" })),
       };
     } catch {
       /* Sonar failed: the built-in scorer answers instead. */
     }
   }
-  return builtinSearch(app, query, limit);
+  return builtinSearch(app, query, limit, exclude);
 }
 
-async function builtinSearch(app: App, query: string, limit: number): Promise<VaultSearchResult> {
+async function builtinSearch(app: App, query: string, limit: number, exclude?: PathFilter): Promise<VaultSearchResult> {
   const search = prepareSimpleSearch(query);
   const hits: NoteHit[] = [];
   const files = app.vault
     .getMarkdownFiles()
-    .filter((f) => f.stat.size <= SKIP_LARGER_THAN)
+    .filter((f) => f.stat.size <= SKIP_LARGER_THAN && !exclude?.(f.path))
     .sort((a, b) => b.stat.mtime - a.stat.mtime);
   for (const file of files.slice(0, MAX_SCAN_FILES)) {
     let text = file.basename;
