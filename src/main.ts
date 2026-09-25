@@ -360,7 +360,7 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
     // Electron-renderer interop, BEFORE anything can spawn a session: the Agent
     // SDK hands its (DOM-realm) AbortSignals to Node's events.setMaxListeners,
     // which throws ERR_INVALID_ARG_TYPE in Obsidian's renderer and kills every
-    // Claude session at query() setup (first hit: a background utility pass, 2026-07-06 — but it
+    // Claude session at query() setup (first hit: a background utility pass, 2026-07-06, but it
     // breaks chat and headless identically). Mutating the module object is what
     // makes the bundled SDK see the shim (esbuild namespace getters are live).
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- must mutate the live CJS module object, which an ES import binding cannot
@@ -1356,7 +1356,7 @@ export default class ExoPlugin extends Plugin implements ExoToolHost {
    * Run a prompt on a cheap, transient, tool-less Claude CLI session (same
    * lifecycle shape as {@link generateTitle}). The reusable chassis behind every
    * background utility pass: memory harvest, turn suggestions, playbook
-   * distillation. Returns the raw model text, or "" on any failure — never throws,
+   * distillation. Returns the raw model text, or "" on any failure: never throws,
    * aborts silently. A hard timeout plus the caller's `signal` guarantees a hung
    * call can't leak.
    *

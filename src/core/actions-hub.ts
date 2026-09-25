@@ -3,7 +3,7 @@
  *
  * The memory and autonomy machinery (memory harvest, open-loops, background
  * budget, review.md) is scattered across the command palette, settings toggles,
- * and agent-only tools. This module turns plain inputs — harvest summaries,
+ * and agent-only tools. This module turns plain inputs (harvest summaries,
  * loop entries, the budget ledger, timestamps, and a few booleans/flags — into
  * render-ready view models the panel paints as quiet, theme-native chips. It
  * adds NO new capability: every action row maps to an existing command or file
@@ -84,7 +84,7 @@ export function formatBudget(ledger: BudgetLedger, dailyBudget: number, now: num
 
 /** Relative age of `then` (epoch ms) vs `now`: "just now", "5m ago", "3h ago",
  *  "2d ago", else an absolute `YYYY-MM-DD`. Null / non-positive / non-finite →
- *  `fallback` (e.g. "never" for the last harvest, "—" while the git fetch is
+ *  `fallback` (e.g. "never" for the last harvest, a dash while the git fetch is
  *  pending). A future timestamp (clock skew) reads as "just now". */
 export function formatAge(then: number | null | undefined, now: number, fallback: string): string {
   if (then == null || !Number.isFinite(then) || then <= 0) return fallback;

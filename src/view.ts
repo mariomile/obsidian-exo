@@ -5758,7 +5758,7 @@ export class ChatView extends ItemView {
       const recallBlock = recalled?.block ?? "";
       // Cold-spawn rehydration: a session spawned with no resumable session starts
       // on an EMPTY CLI transcript, so a "continua/riprendi" has nothing to continue
-      // — the model forages the vault (open-items, old notes) to reconstruct
+      // and the model forages the vault (open-items, old notes) to reconstruct
       // "which conversation" instead of reading THIS thread. Whenever we spawn cold but the
       // convo already carries real history, reseed it with the same recap the
       // stage-2 recovery uses. This generalizes that narrow path to close every

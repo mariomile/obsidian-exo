@@ -110,7 +110,7 @@ export function afterCommitCheck(state: AutoCommitState, now: number): AutoCommi
  *  to a generic message rather than printing something like "0 files" or
  *  "NaN files".
  *
- *  An optional `summary` (e.g. "digest — 3 notes") overrides the file-count
+ *  An optional `summary` (e.g. "digest: 3 notes") overrides the file-count
  *  phrasing entirely,
  *  producing `exo: <summary>`. A blank/whitespace-only summary is ignored and the
  *  file-count path is used, so callers can pass an empty string unconditionally. */

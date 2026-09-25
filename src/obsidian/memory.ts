@@ -143,7 +143,7 @@ export async function readBootContext(app: App, paths: ExoPaths, opts: BootOpts 
       ...(identity ? [identity] : []),
       "## Vault memory — you are Exo, embedded in this Obsidian vault.",
       "Honor these conventions: prefer the `mcp__obsidian__*` tools for vault operations (they respect links/tags/frontmatter); follow the tag system (#type/*, #domain/*), track status via the `status:` frontmatter property, and the object schema; use [[wikilinks]] for internal references; never create files at the vault root.",
-      "Precedence: the sections below are BACKGROUND from prior sessions. The conversation you are in right now is authoritative — when the user says 'continue', refers to 'the proposed/other things', 'as above', or otherwise points back, resolve it from the CURRENT conversation's own history, never from a prior session's topic.",
+      "Precedence: the sections below are BACKGROUND from prior sessions. The conversation you are in right now is authoritative: when the user says 'continue', refers to 'the proposed/other things', 'as above', or otherwise points back, resolve it from the CURRENT conversation's own history, never from a prior session's topic.",
       ...parts,
     ].join("\n\n"),
     maxBoot

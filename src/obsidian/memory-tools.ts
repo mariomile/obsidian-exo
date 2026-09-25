@@ -37,7 +37,7 @@ export function buildMemoryTools(app: App, caps: MemoryCaps): AnyTool[] {
   const undoMemoryWrite = tool(
     "undo_memory_write",
     "Undo a memory harvest: the lines Exo wrote into notes by itself after a chat. Reverts the latest harvest by default, or the one whose commit sha you pass. Refuses when a touched note changed since.",
-    { sha: z.string().optional().describe("Commit sha of the harvest to revert; omit for the latest.") },
+    { sha: z.string().optional().describe("Commit sha (or prefix) of the harvest to revert; omit for the latest.") },
     async (args) => {
       const exo = getExo(app);
       if (!exo) return err("Exo isn't loaded.");

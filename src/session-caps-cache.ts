@@ -14,7 +14,7 @@ import type { SessionCaps } from "./providers/types";
  * Persisted anyway (not held only in memory) because it has real UX value: it
  * seeds the $/@// menus and the Capabilities panel immediately after an
  * Obsidian restart, before the first session's init arrives. Slightly stale
- * is fine here — it's menu seeding, not authorization — so the contract is
+ * is fine here (menu seeding, not authorization), so the contract is
  * minimal: simple write, no backup rotation, corrupt/missing collapses to null
  * instead of failing.
  *

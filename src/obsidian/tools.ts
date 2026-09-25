@@ -198,7 +198,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
      *  must be byte-identical to before this parameter existed when this is false. */
     orchestrationEnabled = false,
     /** Shared write-queue for the tasks ledger (`paths.tasks`),
-     *  injected by the plugin the same way `loopsWriteQueue` is — so `add_task`
+     *  injected by the plugin the same way `loopsWriteQueue` is, so `add_task`
      *  and any future board-side writer serialize on the SAME queue. */
     tasksWriteQueue = new WriteQueue(),
     /** Convo id of the conversation this tool server belongs to. Absent for
@@ -237,7 +237,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
       const { hits, capped } = await searchVaultNotes(app, args.query, limit);
       if (hits.length === 0) return ok(`No matches for "${args.query}".`);
       const body = hits
-        .map((h) => `- [[${h.path}]] — ${h.excerpt.replace(/\s+/g, " ").trim().slice(0, 160)}`)
+        .map((h) => `- [[${h.path}]]: ${h.excerpt.replace(/\s+/g, " ").trim().slice(0, 160)}`)
         .join("\n");
       const note = capped
         ? `\n\n(Searched the ${capped.scanned} most recently edited notes of ${capped.total}. Install Sonar for full-vault search.)`
@@ -684,7 +684,7 @@ export function buildObsidianTools(app: App, opts?: ObsidianToolOpts): AnyTool[]
 
   const rethinkMemory = tool(
     "rethink_memory",
-    "Rewrite one shared-kernel block when your MODEL OF THE WORLD changes — not for single facts (those land in the vault automatically after the chat). `NOW.md` = what matters right now (hot projects, focus); `USER.md` = your distilled working model of the user (pass a `rationale` — it's surfaced with the change); `SOUL.md` = shared operating principles (this only PROPOSES a change for the user to approve, it does not write). Pass the WHOLE new block content, not a patch.",
+    "Rewrite one shared-kernel block when your MODEL OF THE WORLD changes, not for single facts (those land in the vault automatically after the chat). `NOW.md` = what matters right now (hot projects, focus); `USER.md` = your distilled working model of the user (pass a `rationale`: it's surfaced with the change); `SOUL.md` = shared operating principles (this only PROPOSES a change for the user to approve, it does not write). Pass the WHOLE new block content, not a patch.",
     {
       block: z.enum(["SOUL", "USER", "NOW"]),
       new_content: z.string().describe("The complete new content for the block (replaces it whole; never truncated)."),

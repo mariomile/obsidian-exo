@@ -33,7 +33,7 @@ export type ScaffoldKind = "folder" | "file";
  *  - `none`    → create nothing; memory features stay inert until the user
  *                opts into setup later. Boot reads CLAUDE.md only.
  *  - `minimal` → the tool's own operational layer (task board, open loops,
- *                reports) — no marioverse knowledge-OS.
+ *                reports), no marioverse knowledge-OS.
  *  - `full`    → minimal + the marioverse content scaffold (preferences,
  *                vault-context, rules/decisions folders).
  * `undefined` (setting unset) = not chosen yet → the picker is still offered.
@@ -87,7 +87,7 @@ function allScaffoldItems(paths: ExoPaths): ScaffoldItem[] {
 const FOLDER_README = {
   rules: heading(
     "Rules",
-    "One durable rule per file — patterns confirmed across sessions that Exo should always follow. Add one once you've seen a pattern hold three times."
+    "One durable rule per file: patterns confirmed across sessions that Exo should always follow. Add one once you've seen a pattern hold three times."
   ),
   decisions: heading(
     "Decisions",

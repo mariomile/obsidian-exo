@@ -71,6 +71,34 @@ line), while frontmatter keys and tags the user added are merged and kept; and a
 note is claimed by its `exo_convo` stamp rather than its filename, so renaming or
 moving it does not orphan it.
 
+### Agent memory: the vault is the memory
+
+Exo keeps no parallel memory store. What the agent learns lands as lines in the
+user's own notes, and one pure function, `memoryCaps(settings, env)`
+(`core/memory-caps.ts`), decides what memory may do on each surface: boot read,
+identity, ledger writes, `rethink_memory`, capture, recall, `recent_chats`, undo.
+Headless runs read but never write; a read-only Codex sandbox gets no write tool.
+
+- **Capture (memory harvest).** `obsidian/memory-harvest.ts` finds conversations
+  idle for ten minutes (or left by the user) past their persisted watermark
+  (`harvestedIndex` in `conversations.json`), extracts typed facts with the
+  background model, decides ADD / UPDATE / NOOP per fact with the notes it could
+  touch in view (Sonar search, the target lines, the vault's own `## Memory`
+  rules from `AGENTS.md`), and applies the result under the guardrails in
+  `core/memory-harvest.ts` + `core/memory-apply.ts`: existing notes only (plus
+  the daily inbox), no hidden, synced or ignored folders, no kernel files, one
+  exact line per UPDATE, a secret filter, at most 8 writes. The touched notes are
+  committed alone (`exo: memory harvest: …`) and recorded in the plugin-folder
+  log `memory-harvests.json` with pre-write snapshots.
+- **Undo.** `core/memory-undo.ts`: `git revert` of the harvest commit
+  (`exo: memory revert: <sha>`), or the snapshots without git; both refuse when a
+  touched note changed since.
+- **Recall.** Before each message (`obsidian/turn-recall.ts`), Sonar hits and a
+  lexical match over the last 60 days of chats ride the outbound payload in a
+  `[vault-recall]` block capped at 2000 chars; never in the rendered bubble.
+- **Boot preamble.** `BootPreambleCache` (`obsidian/memory.ts`) rebuilds only
+  when the caps, the memory root or a source note's mtime change.
+
 The context ring in the toolbar reads real `usage` events from the stream; clicking it sends a guided `/compact`. Token pressure is managed where it actually lives — in the CLI session — not simulated in the UI.
 
 ## The Capabilities hub
@@ -87,7 +115,7 @@ the machinery around it. Six tabs, each a self-contained renderer receiving a
 | MCP | add / edit / enable / disable / remove / reconnect / re-auth |
 | Playbooks | custom prompts, schedule badge, read-only Run now |
 | Automations | scheduled runs, Daily Pulse, restorable write runs |
-| Memory | dream pass, store, open-loops, vault-memory files |
+| Memory | automatic memory stats, recent memory writes with Undo, open-loops, vault-memory files |
 
 Two rules keep it coherent. **Rows with inline actions, never cards with
 click-through** — seeing a thing and acting on it are the same gesture.
