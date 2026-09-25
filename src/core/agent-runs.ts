@@ -21,11 +21,12 @@ import {
   triggerKey,
   type AgentAutonomy,
   type AgentBrain,
+  type AgentContract,
   type AgentDef,
   type AgentTrigger,
 } from "./agents";
 import { journalContract } from "./agent-journal";
-import { parseProposalCandidates, type ProposalCandidate } from "./proposals";
+import { parseProposalCandidates, type ProposalCandidate, type ProposalRecord } from "./proposals";
 
 /** Persistence key for "when did this agent last run at all" (cooldown). */
 export function agentLastRunKey(slug: string): string {
@@ -37,6 +38,11 @@ export function agentLastRunKey(slug: string): string {
  *  keeps one slot cursor per schedule. */
 export function agentTriggerRunKey(slug: string, trigger: AgentTrigger): string {
   return `agent:${slug}::${triggerKey(trigger)}`;
+}
+
+/** Every schedule slot cursor an agent owns, one per schedule trigger. */
+export function scheduleSlotKeys(agent: AgentDef): string[] {
+  return agent.contract.triggers.filter((t) => t.on === "schedule").map((t) => agentTriggerRunKey(agent.brain.slug, t));
 }
 
 export interface DueAgentRun {
@@ -302,39 +308,14 @@ export function proposalContract(memoryRootHint: string): string {
 }
 
 /**
- * The prompt a prompt-only automation's run actually gets: unchanged in
- * `report`/`act` mode, and with the same fenced-block contract an
- * agent-backed `propose` run gets (see `agentRunBody` below) appended when
- * the automation is `propose` and the kernel is on.
- *
- * Prompt-only automations (no `agent:` field) skip `agentRunBody` entirely:
- * they go straight to the playbook executor with their raw prompt, so
- * without this, a `propose` automation never received the contract and had
- * nothing to extract from its output. This is the one place both the manual
- * "Run now" and the scheduled path build that prompt, so they can't drift.
- * Every run's prompt opens with its trigger line (see `automationTriggerLine`).
+ * Whether a run takes part in the proposal channel: a `propose` tier AND the
+ * proposal kernel switched on. The one rule for the whole channel, computed
+ * once per run: the prompt builder appends the contract only when it holds,
+ * and the executor collects the fenced block only when it holds, so a run is
+ * never asked for proposals nobody will read (or read for ones never asked).
  */
-export function automationRunPrompt(
-  prompt: string,
-  proposeEligible: boolean,
-  reportsHint: string,
-  trigger: string
-): string {
-  const body = [automationTriggerLine(trigger), "", prompt].join("\n");
-  return proposeEligible ? [body, proposalContract(reportsHint)].join("\n") : body;
-}
-
-/**
- * The line that tells a prompt-only run what fired it. Agent-backed runs get
- * the trigger in their `<agent-run trigger=...>` envelope; a prompt-only run
- * had nothing, so a file-triggered automation could not know WHICH file
- * fired it. `trigger` is the run's reason: `create Input/Call X.md` for a
- * vault event, `#tag on path` for a tag, a cadence label for a schedule, and
- * `manual` for "Run now".
- */
-export function automationTriggerLine(trigger: string): string {
-  const t = trigger.trim();
-  return t === "manual" ? "Trigger: manual (Run now)" : `Trigger: ${t || "unknown"}`;
+export function proposeEligible(contract: Pick<AgentContract, "autonomy">, kernelEnabled: boolean): boolean {
+  return contract.autonomy === "propose" && kernelEnabled;
 }
 
 /**
@@ -364,6 +345,60 @@ export function salvageProposalCandidates(block: string): ProposalCandidate[] {
   return out;
 }
 
+/** What the collector below needs: somewhere to append, and somewhere to say
+ *  what went wrong. Structural so core stays free of the Obsidian-side store. */
+export interface RunProposalDeps {
+  store: { append(candidate: ProposalCandidate, source: ProposalRecord["source"]): Promise<{ status: string }> };
+  diagnostic?: (message: string, error?: unknown) => void;
+}
+
+/**
+ * Turn an unattended run's fenced `exo-proposals` block into pending kernel
+ * proposals. The caller decides eligibility (`proposeEligible`) and only calls
+ * this for a run that was given the contract.
+ *
+ * Never throws: a malformed block or a failed append costs the proposals, not
+ * the run that already did the work. Returns how many landed.
+ */
+export async function collectRunProposals(
+  output: string,
+  source: ProposalRecord["source"],
+  deps: RunProposalDeps
+): Promise<number> {
+  const block = extractProposalBlock(output ?? "");
+  if (!block) return 0;
+  const diagnose = (message: string, error?: unknown) => {
+    try {
+      if (deps.diagnostic) deps.diagnostic(message, error);
+      else console.warn(message, error ?? "");
+    } catch {
+      /* diagnostics must never change the run's outcome */
+    }
+  };
+
+  // Whole-block first; on rejection, salvage the valid entries. Observed on
+  // the first real run: two proposals, the second missing `rationale`, and
+  // all-or-nothing threw away both.
+  const parsed = parseProposalCandidates(block);
+  const candidates = parsed.status === "ok" ? parsed.value : salvageProposalCandidates(block);
+  if (parsed.status !== "ok") {
+    diagnose(
+      `"${source.convoId}" proposal block partly invalid, salvaged ${candidates.length}: ${JSON.stringify(parsed.errors ?? parsed.status)}`
+    );
+  }
+
+  let landed = 0;
+  for (const candidate of candidates) {
+    try {
+      const res = await deps.store.append(candidate, source);
+      if (res.status === "appended") landed++;
+    } catch (err) {
+      diagnose(`proposal append failed for "${source.convoId}"`, err);
+    }
+  }
+  return landed;
+}
+
 /** Report name for a run — also the automation-run record's name, so agent
  *  runs appear in the existing review/restore queue alongside playbooks. */
 export function agentRunName(agent: AgentDef, reason: string): string {
@@ -381,18 +416,25 @@ export function agentRunName(agent: AgentDef, reason: string): string {
  * or acting as the agent directly in the current session (Codex — see
  * `buildDirectAgentRunPrompt`) — only the opening framing differs between the
  * two, so only that part is duplicated.
+ *
+ * A prompt-only automation runs as an inline brain with no agent file
+ * (`invocable` empty): its own prompt IS the standing task, so it is stated
+ * here instead of pointing at a file that does not exist.
  */
 function agentRunBody(
   agent: AgentDef,
   task: { from: string; text: string } | undefined,
   memory: { path: string; excerpt: string } | undefined,
-  reportsHint: string
+  reportsHint: string,
+  propose: boolean
 ): (string | null)[] {
-  const { contract } = agent;
+  const { brain, contract } = agent;
   return [
     task
       ? `Task from ${task.from}: ${task.text.trim()}\n\nDo that specific task, not this agent's standing job. If it turns out to be unnecessary or impossible, say so in one line and stop.`
-      : "Standing task: do this agent's regular job as defined in its own agent file.",
+      : brain.invocable
+        ? "Standing task: do this agent's regular job as defined in its own agent file."
+        : `Standing task:\n${(brain.prompt ?? "").trim()}`,
     "",
     `If nothing needs doing right now, reply with exactly \`${NOTHING_TO_REPORT}\` and nothing else — no preamble, no explanation. An empty run is a good outcome, not a failure to be filled with busywork, and that exact reply is what stops a pointless note being written to the vault.`,
     "",
@@ -413,7 +455,7 @@ function agentRunBody(
       : null,
     memory ? "" : null,
     "Close with a short summary a human can scan in ten seconds.",
-    contract.autonomy === "propose" ? proposalContract(reportsHint) : null,
+    propose ? proposalContract(reportsHint) : null,
     contract.output === "journal" ? journalContract() : null,
   ];
 }
@@ -434,7 +476,9 @@ export function buildAgentRunPrompt(
   /** A specific task, when this run was delegated rather than scheduled. */
   task?: { from: string; text: string },
   /** Where the run report lands — named so a `propose` run knows prose has a home. */
-  reportsHint = "your run report"
+  reportsHint = "your run report",
+  /** `proposeEligible` for this run: whether the proposal contract rides along. */
+  propose = false
 ): string {
   const { brain } = agent;
   // `null` marks a line that dropped out conditionally; "" is a deliberate blank.
@@ -450,7 +494,7 @@ export function buildAgentRunPrompt(
     `Delegate the work to that subagent, and WAIT for it: Agent({ subagent_type: "${brain.invocable}", prompt: <the task below>, run_in_background: false }).`,
     "Do not report that you started it. Report what it actually did, in its words — your reply IS the record of this run, and there is no later turn in which to come back with the result.",
     "",
-    ...agentRunBody(agent, task, memory, reportsHint),
+    ...agentRunBody(agent, task, memory, reportsHint, propose),
     "</agent-run>",
   ];
   return lines.filter((l): l is string => l !== null).join("\n");
@@ -464,13 +508,18 @@ export function buildAgentRunPrompt(
  * session's system prompt (`buildAgentSystemPrompt`), so this message is only
  * the task, addressed to the model as if it already IS the agent — there is no
  * "delegate to X" step because there is nothing to delegate to.
+ *
+ * Also the prompt of a prompt-only automation on either engine: its inline
+ * brain has no agent file, so its prompt is stated as the standing task.
  */
 export function buildDirectAgentRunPrompt(
   agent: AgentDef,
   reason: string,
   memory?: { path: string; excerpt: string },
   task?: { from: string; text: string },
-  reportsHint = "your run report"
+  reportsHint = "your run report",
+  /** `proposeEligible` for this run: whether the proposal contract rides along. */
+  propose = false
 ): string {
   const { brain } = agent;
   const lines: (string | null)[] = [
@@ -479,7 +528,7 @@ export function buildDirectAgentRunPrompt(
       ? `You are the "${brain.name}" agent, running because ${task.from} asked for something specific. No human is watching; there is nobody to ask.`
       : `You are the "${brain.name}" agent, running unattended on its own schedule. No human is watching; there is nobody to ask.`,
     "",
-    ...agentRunBody(agent, task, memory, reportsHint),
+    ...agentRunBody(agent, task, memory, reportsHint, propose),
     "</agent-run>",
   ];
   return lines.filter((l): l is string => l !== null).join("\n");

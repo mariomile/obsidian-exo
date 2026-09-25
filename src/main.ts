@@ -61,7 +61,7 @@ import { DreamModal } from "./ui/dream-modal";
 import { runHeadlessPlaybook, writeReport, restoreRun, type HeadlessOpts, type HeadlessResult } from "./headless";
 import { automationLastRunKey, migrateScheduledRuns, pruneRuns, type AutomationConfig, type AutomationRunRecord } from "./core/automations";
 import { AutomationStore, adaptAppToAutomationVault, migrateToAutomationFiles } from "./obsidian/automation-store";
-import { contractFromAutomation, legacyConfigFromAutomation, scheduleRunKeys, type Automation } from "./core/automation-model";
+import { contractFromAutomation, legacyConfigFromAutomation, type Automation } from "./core/automation-model";
 import { drainExoQueue, countPendingQueue } from "./queue";
 import { parseConversationsSource } from "./core/persistence";
 import { sanitizeTitle, classifyTitleOutcome } from "./core/title";
@@ -86,20 +86,23 @@ import { TaskStore, adaptAppToTaskVault } from "./obsidian/task-store";
 import { AgentStore, createAgentStore, readAgentBrainBody } from "./obsidian/agent-store";
 import type { AgentDef } from "./core/agents";
 import { AgentTriggerDriver, makeNoteReader, todayDailyNotePath } from "./obsidian/agent-triggers";
+import type { ExoToolHost } from "./obsidian/tool-kit";
 import { extractJournalLine, journalLine } from "./core/agent-journal";
 import { agentRunId } from "./core/agent-ledger";
 import {
   agentLastRunKey,
   agentRunName,
   type DueAgentRun,
-  automationRunPrompt,
   buildAgentRunPrompt,
   buildDirectAgentRunPrompt,
   buildAgentSystemPrompt,
+  collectRunProposals,
   dueScheduledAgentRuns,
   isEmptyRun,
   gateAgentInvoke,
   gateAgentRun,
+  proposeEligible,
+  scheduleSlotKeys,
   writeModeFor,
 } from "./core/agent-runs";
 import { makeTolerantSetMaxListeners, isTolerantShim } from "./core/node-interop";
@@ -126,7 +129,6 @@ import {
 } from "./obsidian/daily-pulse";
 import {
   produceTurnProposals,
-  collectRunProposals,
   type ProposalProducerResult,
   type ProposalTurnInput,
 } from "./obsidian/proposal-producer";
@@ -204,7 +206,7 @@ export type WorkflowDistillOutcome =
   | { status: "duplicate" }
   | { status: "failed"; reason: "empty_output" | "invalid_output" | "utility_error" | "store_error" };
 
-export default class ExoPlugin extends Plugin {
+export default class ExoPlugin extends Plugin implements ExoToolHost {
   settings!: MVASettings;
 
   /** Turn-lifecycle diagnostics ring buffer (see core/diag.ts). The view logs
@@ -2258,17 +2260,11 @@ export default class ExoPlugin extends Plugin {
   }
 
   /** Run one playbook headlessly and write its report. Write-enabled runs also
-   *  persist a restorable run record (files touched + pre-write snapshots).
-   *  Returns the raw output alongside `ok`: a prompt-only `propose`
-   *  automation needs it to pull any fenced proposal block out of the run. */
-  async runPlaybook(
-    name: string,
-    prompt: string,
-    opts: { write?: boolean; slug?: string } = {}
-  ): Promise<{ ok: boolean; output: string }> {
+   *  persist a restorable run record (files touched + pre-write snapshots). */
+  async runPlaybook(name: string, prompt: string, opts: { write?: boolean; slug?: string } = {}): Promise<boolean> {
     if (/\{\{\s*[\w-]+\s*\}\}/.test(prompt)) {
       new Notice(`"${name}" has {{variables}} — run it from the composer instead.`);
-      return { ok: false, output: "" };
+      return false;
     }
     const startedAt = Date.now();
     new Notice(`Running playbook "${name}"…`);
@@ -2287,23 +2283,26 @@ export default class ExoPlugin extends Plugin {
     new Notice(
       result.ok ? `Playbook "${name}" done → ${path}` : `Playbook "${name}" failed (report: ${path})`
     );
-    // OS notification when Obsidian isn't focused (scheduled runs usually finish
-    // in the background — this is how the digest announces itself). Click opens
-    // the report. Same gate as the chat's turn notifications.
-    if (this.settings.systemNotifications && !document.hasFocus()) {
-      try {
-        const n = new Notification(`Exo — ${result.ok ? `"${name}" ready` : `"${name}" failed`}`, {
-          body: result.ok ? "The report is in the vault — click to open it." : "The run failed — the report has the error.",
-          silent: false,
-        });
-        n.onclick = () => {
-          void this.app.workspace.openLinkText(path, "", "tab");
-        };
-      } catch {
-        /* notifications unavailable — Notice above already covered it */
-      }
+    this.notifyReportReady(name, result.ok, path);
+    return result.ok;
+  }
+
+  /** OS notification when Obsidian isn't focused: scheduled runs usually finish
+   *  in the background, and this is how the digest announces itself. Click
+   *  opens the report. Same gate as the chat's turn notifications. */
+  private notifyReportReady(name: string, ok: boolean, path: string): void {
+    if (!this.settings.systemNotifications || document.hasFocus()) return;
+    try {
+      const n = new Notification(`Exo — ${ok ? `"${name}" ready` : `"${name}" failed`}`, {
+        body: ok ? "The report is in the vault — click to open it." : "The run failed — the report has the error.",
+        silent: false,
+      });
+      n.onclick = () => {
+        void this.app.workspace.openLinkText(path, "", "tab");
+      };
+    } catch {
+      /* notifications unavailable: the in-app Notice already covered it */
     }
-    return { ok: result.ok, output: result.output };
   }
 
   /** Run any scheduled playbooks that are due (off by default — empty list). */
@@ -2809,44 +2808,43 @@ export default class ExoPlugin extends Plugin {
   }
 
   /**
-   * The run machinery's view of the automation files: one synthetic
-   * `AgentDef` per enabled, non-system automation. Agent-backed automations
-   * borrow the real brain (and keep responding to @mentions with the
-   * automation's own powers); prompt-only automations get a synthetic brain
-   * and are routed to the playbook executor by `runDueAutomation`. Brains
-   * without an automation stay invocable by mention with safe `propose`
-   * autonomy — mention is invocation, not automation.
+   * The run machinery's view of the automation files: one `AgentDef` per
+   * enabled, non-system automation, all run by `runAgent`. Brains without an
+   * automation are NOT listed: see `automationDef`.
    */
   private automationDefs(): AgentDef[] {
     const out: AgentDef[] = [];
-    const boundBrains = new Set<string>();
     for (const a of this.automationStore.list()) {
       if (a.system) continue; // Daily Pulse runs through its own slot runner
-      const contract = contractFromAutomation(a);
-      if (a.agent) {
-        const real = this.agentStore.get(a.agent);
-        if (!real) continue; // brain deleted — the hub shows the problem
-        boundBrains.add(a.agent);
-        out.push({ brain: real.brain, contract: { ...contract, triggers: [...contract.triggers, { on: "note-mention" }] } });
-      } else {
-        out.push({
-          brain: { slug: a.slug, name: a.name, invocable: "", description: a.description, source: "vault", prompt: a.prompt },
-          contract,
-        });
-      }
+      const def = this.automationDef(a);
+      if (def) out.push(def);
     }
-    // Brains with no automation are NOT listed. A brain here would carry a
-    // `note-mention` trigger, and an enabled one fires a run because a human
-    // typed its name in a note — unattended work nobody opted into. Mention
-    // stays invocation: chat, `invoke_agent`, Run now. Only an agent bound to
-    // an enabled automation answers a mention, which is the opt-in.
     return out;
   }
 
-  /** The automation behind a synthetic def, when there is one. */
-  private automationFor(def: AgentDef): Automation | null {
-    const bySlug = this.automationStore.get(def.contract.slug);
-    return bySlug && !bySlug.system ? bySlug : null;
+  /**
+   * One automation as an `AgentDef`. Agent-backed automations borrow the real
+   * brain (and keep responding to @mentions with the automation's own powers);
+   * a prompt-only automation gets an inline brain with no agent file
+   * (`invocable` empty) whose prompt is the run's standing task. Null when the
+   * bound brain was deleted: the hub shows the problem.
+   *
+   * A brain here carries a `note-mention` trigger, and an enabled one fires a
+   * run because a human typed its name in a note. Only an agent bound to an
+   * enabled automation answers a mention, which is the opt-in; mention alone
+   * stays invocation (chat, `invoke_agent`, Run now).
+   */
+  private automationDef(a: Automation): AgentDef | null {
+    const contract = contractFromAutomation(a);
+    if (!a.agent) {
+      return {
+        brain: { slug: a.slug, name: a.name, invocable: "", description: a.description, source: "vault", prompt: a.prompt },
+        contract,
+      };
+    }
+    const real = this.agentStore.get(a.agent);
+    if (!real) return null;
+    return { brain: real.brain, contract: { ...contract, triggers: [...contract.triggers, { on: "note-mention" }] } };
   }
 
   private scheduledRunsBusy = false;
@@ -2876,53 +2874,21 @@ export default class ExoPlugin extends Plugin {
     }
   }
 
-  /** Manual "Run now" from the hub — bypasses the schedule and reuses the
-   *  same executors, so gates, snapshots and records behave identically. */
+  /** Manual "Run now" from the hub: bypasses the schedule and reuses the
+   *  same executor, so gates, snapshots and records behave identically.
+   *  `runAgent` dedups a second concurrent call with the same key. */
   async runAutomationNow(a: Automation): Promise<boolean> {
     if (a.system === "daily-pulse") return this.generateAndPersistDailyPulse(Date.now());
-    if (a.agent) {
-      const real = this.agentStore.get(a.agent);
-      if (!real) {
-        new Notice(`Agent "${a.agent}" not found.`);
-        return false;
-      }
-      const def: AgentDef = { brain: real.brain, contract: contractFromAutomation(a) };
-      // runAgent guards itself against a second concurrent call with the same
-      // key (agentRunsInFlight), so the agent-bound path needs nothing extra.
-      return this.runAgent(def, "manual", `${agentLastRunKey(a.slug)}::manual`);
-    }
-    // The prompt-only path calls runPlaybook directly, which has no dedup of
-    // its own — a double "Run now" (a slow CLI plus an impatient second click)
-    // would otherwise fire two overlapping headless processes against the same
-    // automation, and for `act` mode that means two uncoordinated writers on
-    // the same file. Observed live during testing: a stacked pair of manual
-    // runs left an `act` automation's target file with duplicated content from
-    // both processes racing their edits.
-    const key = `${agentLastRunKey(a.slug)}::manual`;
-    if (this.agentRunsInFlight.has(key)) {
-      new Notice(`"${a.name}" is already running.`);
+    const def = this.automationDef(a);
+    if (!def) {
+      new Notice(`Agent "${a.agent}" not found.`);
       return false;
     }
-    this.agentRunsInFlight.add(key);
-    try {
-      return await this.runPromptOnlyAutomation(a, "manual");
-    } finally {
-      this.agentRunsInFlight.delete(key);
-    }
+    return this.runAgent(def, "manual", `${agentLastRunKey(a.slug)}::manual`);
   }
 
-  /** Mark an automation as just-run: the cooldown key AND every schedule slot,
-   *  so running by hand at 06:59 is not repeated by the 07:00 slot. */
-  private async stampAutomationRun(a: Automation): Promise<void> {
-    const now = Date.now();
-    this.settings.scheduledLastRun[agentLastRunKey(a.slug)] = now;
-    for (const key of scheduleRunKeys(a)) this.settings.scheduledLastRun[key] = now;
-    await this.saveSettings();
-  }
-
-  /** Gate one due automation run, then route it to the right executor:
-   *  agent-backed → the agent runner (subagent delegation, memory, journal);
-   *  prompt-only → the playbook runner. Sequential — one at a time. */
+  /** Gate one due automation run, then hand it to `runAgent`. Sequential:
+   *  one at a time. */
   private async runDueAutomation(run: DueAgentRun): Promise<void> {
     const gate = gateAgentRun({
       agent: run.agent,
@@ -2939,39 +2905,7 @@ export default class ExoPlugin extends Plugin {
       this.diag.push("automations", `run skipped (${gate.reason}): ${gate.detail}`);
       return;
     }
-    const automation = this.automationFor(run.agent);
-    if (automation && !automation.agent) {
-      // Prompt-only automation → the proven playbook executor.
-      this.agentRunsInFlight.add(run.runKey);
-      try {
-        await this.runPromptOnlyAutomation(automation, run.reason);
-      } catch (err) {
-        console.warn(`[Exo] automation "${automation.name}" failed:`, err);
-      } finally {
-        this.agentRunsInFlight.delete(run.runKey);
-      }
-      return;
-    }
     await this.runAgent(run.agent, run.reason, run.runKey);
-  }
-
-  /**
-   * Run a prompt-only automation through the playbook executor: the shared
-   * body for both manual "Run now" and the scheduled path, so the two can't
-   * drift the way they did before. A `propose` automation with no `agent:`
-   * field never got the proposal contract appended to its prompt, and its
-   * fenced block (if it emitted one anyway) was never extracted. Findings
-   * landed as prose in the report and nothing reached the proposals inbox.
-   * Mirrors what `runAgent` already does for agent-backed `propose` runs.
-   */
-  private async runPromptOnlyAutomation(a: Automation, reason: string): Promise<boolean> {
-    const proposeEligible = a.mode === "propose" && this.settings.proposalKernelEnabled;
-    const prompt = automationRunPrompt(a.prompt, proposeEligible, this.paths.reports, reason);
-    const startedAt = Date.now();
-    const { ok, output } = await this.runPlaybook(a.name, prompt, { write: a.mode === "act", slug: a.slug });
-    await this.collectAutomationProposals(a, output, startedAt, proposeEligible);
-    if (ok) await this.stampAutomationRun(a);
-    return ok;
   }
 
   /* ------------------------------ agent runs ----------------------------- */
@@ -3021,6 +2955,9 @@ export default class ExoPlugin extends Plugin {
     const startedAt = Date.now();
     const today = new Date(startedAt).toISOString().slice(0, 10);
     const write = writeModeFor(agent.contract.autonomy);
+    // A prompt-only automation: an inline brain with no agent file to delegate to.
+    const inline = !agent.brain.invocable;
+    const propose = proposeEligible(agent.contract, this.settings.proposalKernelEnabled);
     try {
       new Notice(`${agent.brain.name} — running (${reason})…`);
       const memory = await this.agentStore.loadMemory(agent, today);
@@ -3033,18 +2970,20 @@ export default class ExoPlugin extends Plugin {
       // `collabAgentToolCall` is unrelated and has no notion of a named persona
       // file — so a Codex run instead adopts the agent's own instructions as
       // this session's system prompt and gets a plain first-person task prompt.
+      // An inline brain has neither a subagent nor instructions to adopt: both
+      // engines get the direct prompt with its own prompt as the task.
       const prompt =
-        this.settings.provider === "codex"
-          ? buildDirectAgentRunPrompt(agent, reason, memory, task, this.paths.reports)
-          : buildAgentRunPrompt(agent, reason, memory, task, this.paths.reports);
-      if (this.settings.provider === "codex") {
+        this.settings.provider === "codex" || inline
+          ? buildDirectAgentRunPrompt(agent, reason, memory, task, this.paths.reports, propose)
+          : buildAgentRunPrompt(agent, reason, memory, task, this.paths.reports, propose);
+      if (this.settings.provider === "codex" && !inline) {
         headlessOpts.systemPrompt = buildAgentSystemPrompt(
           agent.brain,
           await readAgentBrainBody(this.app, agent.brain)
         );
       }
       const result = await runHeadlessPlaybook(this.app, this.settings, prompt, headlessOpts);
-      const proposed = await this.collectAgentProposals(agent, result.output, startedAt);
+      const proposed = propose ? await this.collectAgentProposals(agent, result.output, startedAt) : 0;
       // A note is earned, not automatic. An agent watching a folder runs far
       // more often than it finds anything, and a report per run turns a quiet
       // vault into a pile of files saying "no action needed". Anything that
@@ -3094,6 +3033,13 @@ export default class ExoPlugin extends Plugin {
         const now = Date.now();
         this.settings.scheduledLastRun[key] = now;
         this.settings.scheduledLastRun[agentLastRunKey(agent.brain.slug)] = now;
+        // A standing run (a schedule slot, or Run now) covers every schedule
+        // slot, so running by hand at 06:59 is not repeated by the 07:00 slot.
+        // Event runs and delegated tasks are not the standing job: they don't.
+        const slots = scheduleSlotKeys(agent);
+        if (!task && (reason === "manual" || slots.includes(key))) {
+          for (const slot of slots) this.settings.scheduledLastRun[slot] = now;
+        }
         await this.saveSettings();
       }
       this.recordBackgroundSpend(ExoPlugin.AGENT_RUN_TOKEN_ESTIMATE);
@@ -3103,6 +3049,8 @@ export default class ExoPlugin extends Plugin {
       if (!result.ok) new Notice(`${agent.brain.name} failed (report: ${path})`);
       else if (wantsReport) new Notice(`${agent.brain.name} done → ${path}${proposalNote}`);
       else if (journalled) new Notice(`${agent.brain.name} — logged to today's daily note${proposalNote}`);
+      // Prompt-only automations keep the playbook runs' OS notification.
+      if (inline && path) this.notifyReportReady(name, result.ok, path);
       return result.ok;
     } catch (err) {
       console.warn(`[Exo] agent "${agent.brain.slug}" run failed:`, err);
@@ -3138,47 +3086,19 @@ export default class ExoPlugin extends Plugin {
    * validated, deduplicated, inert channel as every other producer. The kernel
    * still disposes; the agent only proposes.
    *
-   * The extraction/validation/persistence itself lives in `collectRunProposals`
-   * (obsidian/proposal-producer.ts), shared with `collectAutomationProposals`
-   * below: an agent-backed run and a prompt-only automation produce the same
-   * fenced block, so both feed it through the same path.
+   * The extraction/validation/persistence itself is `collectRunProposals`
+   * (core/agent-runs.ts). Called only for a `proposeEligible` run, the same
+   * rule that gave its prompt the contract.
    */
   private async collectAgentProposals(agent: AgentDef, output: string, startedAt: number): Promise<number> {
-    const eligible = agent.contract.autonomy === "propose" && this.settings.proposalKernelEnabled;
     return collectRunProposals(
       output,
-      eligible,
       {
         convoId: `agent:${agent.brain.slug}`,
         turnId: agentRunId(agent.brain.slug, startedAt),
         createdAt: startedAt,
       },
-      agent.brain.slug,
       { store: this.proposalStore, diagnostic: (msg, err) => this.diag.push("agents", err ? `${msg}: ${err}` : msg) }
-    );
-  }
-
-  /** Same as `collectAgentProposals`, for a prompt-only automation: the path
-   *  `runPromptOnlyAutomation` uses so a `propose` automation's fenced block
-   *  reaches the inbox the same way an agent-backed run's does. `eligible` is
-   *  passed in rather than recomputed so the prompt built with the contract
-   *  and the output collected from it always agree. */
-  private async collectAutomationProposals(
-    a: Automation,
-    output: string,
-    startedAt: number,
-    eligible: boolean
-  ): Promise<number> {
-    return collectRunProposals(
-      output,
-      eligible,
-      {
-        convoId: `automation:${a.slug}`,
-        turnId: agentRunId(a.slug, startedAt),
-        createdAt: startedAt,
-      },
-      a.slug,
-      { store: this.proposalStore, diagnostic: (msg, err) => this.diag.push("automations", err ? `${msg}: ${err}` : msg) }
     );
   }
 

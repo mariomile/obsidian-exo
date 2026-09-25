@@ -129,7 +129,7 @@ describe("healthRows", () => {
   it("inbox count, stale context, last report", () => {
     const rows = healthRows({
       inboxCount: 4,
-      contextAgeDays: 12,
+      stateNote: { path: "_system/vault-context.md", ageDays: 12 },
       lastReport: { path: "_system/reports/r.md", name: "r", mtime: NOW - DAY },
       now: NOW,
     });
@@ -141,17 +141,19 @@ describe("healthRows", () => {
   it("stale row names the measured state note", () => {
     const rows = healthRows({
       inboxCount: 0,
-      contextAgeDays: 9,
+      stateNote: { path: "_system/agent/NOW.md", ageDays: 9 },
       lastReport: null,
       now: NOW,
-      vaultContextPath: "_system/agent/NOW.md",
     });
     expect(rows[0].label).toBe("NOW.md stale");
     expect(rows[0].action.arg).toContain("_system/agent/NOW.md");
   });
 
   it("healthy vault → no rows", () => {
-    expect(healthRows({ inboxCount: 0, contextAgeDays: 2, lastReport: null, now: NOW })).toEqual([]);
+    expect(
+      healthRows({ inboxCount: 0, stateNote: { path: "_system/vault-context.md", ageDays: 2 }, lastReport: null, now: NOW })
+    ).toEqual([]);
+    expect(healthRows({ inboxCount: 0, stateNote: null, lastReport: null, now: NOW })).toEqual([]);
   });
 });
 

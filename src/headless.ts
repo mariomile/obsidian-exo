@@ -2,7 +2,7 @@ import { App, FileSystemAdapter, TFile } from "obsidian";
 import { resolveCli, describeError } from "./cli";
 import { ADAPTERS } from "./providers/registry";
 import type { AgentEvent } from "./providers/types";
-import { buildObsidianTools, createObsidianToolServer, OBSIDIAN_READ_TOOLS } from "./obsidian/tools";
+import { buildObsidianTools, createObsidianToolServer, OBSIDIAN_READ_TOOLS, type ObsidianToolOpts } from "./obsidian/tools";
 import type { CodexBridge } from "./obsidian/codex-bridge";
 import { READ_ONLY_TOOLS, toolFilePath, toolFilePaths } from "./ui/tools";
 import { isReadOnlyExternalTool } from "./core/headless-tools";
@@ -98,18 +98,24 @@ export async function runHeadlessPlaybook(
   const pendingSnapshots: Promise<void>[] = [];
   let output = "";
 
+  // One tool configuration for both engines. Memory-write stays OFF even in
+  // write mode: automations edit notes, they don't get to rewrite Exo's memory.
+  const toolOpts: ObsidianToolOpts = {
+    memoryRead: settings.memoryReadEnabled,
+    memoryWrite: false,
+    memoryStoreEnabled: settings.memoryStoreEnabled,
+    paths: exoPaths(settings.memoryRoot || LEGACY_MEMORY_ROOT),
+  };
+
   let session: import("./providers/types").AgentSession | null = null;
   try {
     const cli = await resolveCli(provider, bin);
     let codexBridge: import("./providers/types").SessionOpts["codexBridge"];
     if (provider === "codex" && settings.obsidianToolsEnabled && opts.codexBridge) {
       const readNames = new Set([...OBSIDIAN_READ_TOOLS].map((name) => name.replace("mcp__obsidian__", "")));
-      const tools = buildObsidianTools(app, {
-        memoryRead: settings.memoryReadEnabled,
-        memoryWrite: false,
-        memoryStoreEnabled: settings.memoryStoreEnabled,
-        paths: exoPaths(settings.memoryRoot || LEGACY_MEMORY_ROOT),
-      }).filter((tool) => readNames.has(tool.name) || (write && WRITE_TOOLS.test(tool.name)));
+      const tools = buildObsidianTools(app, toolOpts).filter(
+        (tool) => readNames.has(tool.name) || (write && WRITE_TOOLS.test(tool.name))
+      );
       opts.codexBridge.bridge.setTools(tools);
       codexBridge = {
         port: opts.codexBridge.bridge.port,
@@ -130,11 +136,10 @@ export async function runHeadlessPlaybook(
       // opt in per settings: fastStartup=false lets the CLI load external MCP
       // servers; the resolver below still auto-denies anything that mutates.
       fastStartup: !settings.playbookExternalTools,
-      // Claude: in-process vault tools, memory-write OFF even in write mode —
-      // automations edit notes, they don't get to rewrite Exo's memory.
+      // Claude: in-process vault tools, same options as the Codex bridge above.
       obsidianServer:
         provider === "claude" && settings.obsidianToolsEnabled
-          ? createObsidianToolServer(app, true, false)
+          ? createObsidianToolServer(app, toolOpts)
           : undefined,
       // Codex: the sandbox is the gate — workspace-write only in write mode,
       // never ask (nothing can answer).

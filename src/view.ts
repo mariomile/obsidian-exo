@@ -29,6 +29,7 @@ import {
   buildObsidianTools,
   OBSIDIAN_READ_TOOLS,
   OBSIDIAN_MEMORY_TOOLS,
+  type ObsidianToolOpts,
   type RethinkRequest,
 } from "./obsidian/tools";
 import { adaptAppToTaskVault, createBacklogTask } from "./obsidian/task-store";
@@ -727,35 +728,29 @@ export class ChatView extends ItemView {
     // session after the first (new tabs, post-error respawns) boots without the
     // obsidian tools. Build a FRESH server per spawn; it's cheap (plain object +
     // zod schemas), and the settings it depends on are read at creation time.
-    const obsidianServer = useObsidian
-      ? createObsidianToolServer(
-          this.app,
-          !s.contextSavingMode,
-          s.memoryWriteEnabled,
-          (qs) =>
-            // Per-session server + per-convo closure: ask_user always renders into
-            // the conversation that owns this session, never a parallel one.
-            this.askBridge(c, qs),
-          s.memoryReadEnabled,
-          // Inject the plugin's ONE shared store write-queue so the `remember`
-          // tool serializes against the observer's appends/undo (w1-1 contract).
-          this.plugin.memoryWriteQueue,
-          // Orchestration Board flag — gates `add_task` only; everything else
-          // above is unaffected either way (see settings.ts, tools.ts).
-          s.orchestrationEnabled,
-          // Shared tasks-ledger write-queue, mirroring memoryWriteQueue's contract.
-          this.plugin.tasksWriteQueue,
-          // The Agent Is the Folder — gates `rethink_memory` only.
-          s.agentFolderEnabled,
-          // Per-convo bridge: rethink_memory renders into THIS conversation's turn.
-          (req) => this.rethinkBridge(c, req),
-          // Same contract for the single-file Open-Loops Ledger (paths/parentConvoId trail it below).
-          this.plugin.loopsWriteQueue,
-          this.plugin.paths, c.id, // parentConvoId: gates spawn_task
-          browserBridgeFor(this.plugin, c.id), // agent browser: undefined when off/mobile
-          s.memoryStoreEnabled // gates remember/recall/log_session/capture_learning
-        )
-      : undefined;
+    // ONE tool configuration per spawn, shared by the Claude server and the
+    // Codex bridge below (which only narrows it for a read-only sandbox).
+    const toolOpts: ObsidianToolOpts = {
+      alwaysLoad: !s.contextSavingMode,
+      memoryRead: s.memoryReadEnabled,
+      memoryWrite: s.memoryWriteEnabled,
+      memoryStoreEnabled: s.memoryStoreEnabled, // gates remember/recall/log_session/capture_learning
+      // Per-session server + per-convo closures: ask_user and rethink_memory
+      // always render into the conversation that owns this session.
+      askBridge: (qs) => this.askBridge(c, qs),
+      rethinkBridge: (req) => this.rethinkBridge(c, req),
+      // The plugin's ONE shared write-queues, so tool writes serialize against
+      // the observer, the board and the loops ledger (w1-1 contract).
+      memoryWriteQueue: this.plugin.memoryWriteQueue,
+      tasksWriteQueue: this.plugin.tasksWriteQueue,
+      loopsWriteQueue: this.plugin.loopsWriteQueue,
+      orchestrationEnabled: s.orchestrationEnabled, // gates add_task
+      agentFolderEnabled: s.agentFolderEnabled, // gates rethink_memory
+      paths: this.plugin.paths,
+      parentConvoId: c.id, // gates spawn_task
+      browserBridge: browserBridgeFor(this.plugin, c.id), // undefined when off/mobile
+    };
+    const obsidianServer = useObsidian ? createObsidianToolServer(this.app, toolOpts) : undefined;
 
     let memoryPreamble: string | undefined;
     // Provider-agnostic since Tranche A (Codex parity): Claude appends it to
@@ -796,20 +791,10 @@ export class ChatView extends ItemView {
       if (b) {
         const readOnlySandbox = s.codexSandbox === "read-only";
         const all = buildObsidianTools(this.app, {
+          ...toolOpts,
           memoryWrite: s.memoryWriteEnabled && !readOnlySandbox,
-          memoryRead: s.memoryReadEnabled,
-          memoryStoreEnabled: s.memoryStoreEnabled,
-          // Per-session server + per-convo closure: ask_user always renders into
-          // the conversation that owns this session, never a parallel one.
-          askBridge: (qs) => this.askBridge(c, qs),
-          memoryWriteQueue: this.plugin.memoryWriteQueue,
-          loopsWriteQueue: this.plugin.loopsWriteQueue,
           orchestrationEnabled: s.orchestrationEnabled && !readOnlySandbox,
-          tasksWriteQueue: this.plugin.tasksWriteQueue, parentConvoId: c.id,
           agentFolderEnabled: s.agentFolderEnabled && !readOnlySandbox,
-          rethinkBridge: (req) => this.rethinkBridge(c, req),
-          paths: this.plugin.paths,
-          browserBridge: browserBridgeFor(this.plugin, c.id),
         });
         b.bridge.setTools(codexSessionToolset(all, readOnlySandbox, OBSIDIAN_READ_TOOLS));
         codexBridge = {

@@ -45,7 +45,7 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 
 ### Obsidian-native (Claude; all toggleable in settings)
 
-- **Native tools** — an in-process MCP server gives the agent graph- and metadata-aware tools alongside the standard ones: `search_vault`, `read_note`, `get_backlinks`, `get_neighborhood`, `list_notes`, `list_tags`, `get_active_context`, `create_note` (tag/frontmatter aware), `append_to_note`, `update_frontmatter`, `add_links`, `open_note`. `search_vault` uses the **Omnisearch** plugin's index (BM25 + fuzzy, attachments) when installed, and transparently falls back to a built-in scorer otherwise.
+- **Native tools** — an in-process MCP server gives the agent graph- and metadata-aware tools alongside the standard ones: `search_vault`, `read_note`, `get_backlinks`, `get_neighborhood`, `list_notes`, `list_tags`, `get_active_context`, `create_note` (tag/frontmatter aware), `append_to_note`, `update_frontmatter`, `add_links`, `open_note`. `search_vault` uses the **Sonar** plugin's search index when it is installed and ready, and falls back to a built-in scorer otherwise.
 - **Vault memory** — boots each conversation with context from its memory folder (vault-context, preferences, active rules, recent sessions), and can write back via gated tools: `capture_decision`, `log_session`, `capture_learning` (tagged `created_by: exo`).
 - **Touched-notes footer** — after each turn, a grouped footer shows what the agent **Edited** (with an ×N edit count, plus per-note hover **diff** and two-step **revert** on live turns) and what it **Read**. Replies are **wikilink-ified** by default (mentions of existing notes become clickable `[[links]]`); related notes surface in the empty state.
 - **Named agents** *(off by default)* — your `.claude/agents/*.md` become callable teammates. `@agent` in the composer routes one turn to that subagent; `/as <agent>` binds the whole chat. Each agent gets a contract file in your memory root — triggers (schedule, a note landing in a folder, a tag appearing, an `@mention` inside a note), an autonomy tier (`notify` / `propose` / `act`), read and write globs, and an allowlist of agents it may hand work to. Unattended runs go through the same checkpointed headless profile as automations, so every write is restorable, and each one is recorded in an append-only monthly ledger. An **Agents** pane shows what will run without you asking. Turning the feature on never enables an individual agent: each stays off until you flip it. Works on both backends, but not identically: on **Claude**, binding delegates to a real isolated subagent that enforces the brain's declared tools; on **Codex**, which has no subagent primitive, binding instead hands the current turn the agent's own instructions directly — no isolation from the surrounding chat, and the brain's tool list is advisory only. See `docs/specs/2026-08-01-agents-design.md`.
@@ -61,7 +61,7 @@ An agentic AI assistant in your Obsidian sidebar, powered by the **Claude CLI** 
 
 - Desktop Obsidian (uses Node child processes — `isDesktopOnly`).
 - The `claude` and/or `codex` CLI installed and logged in. Paths auto-detect; override in settings if needed.
-- Optional: the [Omnisearch](https://github.com/scambier/obsidian-omnisearch) plugin — if present, `search_vault` uses its index for better ranking.
+- Optional: the [Sonar](https://github.com/mariomile/obsidian-sonar) plugin. If present, `search_vault` uses its index for better ranking.
 
 ## Privacy & Security
 

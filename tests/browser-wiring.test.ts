@@ -19,12 +19,13 @@ const registry = read("src", "ui", "view-registry.ts");
 const styles = read("styles.css");
 
 describe("browser wiring", () => {
-  it("view.ts builds a per-convo browser bridge for the Claude tool server", () => {
-    expect(view).toMatch(/createObsidianToolServer\([\s\S]*?browserBridgeFor\(this\.plugin,\s*c\.id\)/);
+  it("view.ts puts a per-convo browser bridge in the session's tool options", () => {
+    expect(view).toMatch(/browserBridge:\s*browserBridgeFor\(this\.plugin,\s*c\.id\)/);
   });
 
-  it("view.ts passes the bridge to the Codex registry too", () => {
-    expect(view).toMatch(/browserBridge:\s*browserBridgeFor\(this\.plugin,\s*c\.id\)/);
+  it("the same tool options feed the Claude server and the Codex registry", () => {
+    expect(view).toMatch(/createObsidianToolServer\(this\.app,\s*toolOpts\)/);
+    expect(view).toMatch(/buildObsidianTools\(this\.app,\s*\{\s*\.\.\.toolOpts,/);
   });
 
   it("the session signature includes browserEnabled, so flipping the flag respawns", () => {

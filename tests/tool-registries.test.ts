@@ -57,22 +57,17 @@ function registeredBareNames(): Set<string> {
     metadataCache: {},
     plugins: { plugins: { "exo-agent": fakeExoPlugin } },
   } as unknown as App;
-  const server = createObsidianToolServer(
-    app,
-    /* alwaysLoad     */ true,
-    /* memoryWrite    */ true,
-    /* askBridge      */ async () => ({}),
-    /* memoryRead     */ true,
-    /* memoryWriteQueue */ undefined,
-    /* orchestrationEnabled */ true,
-    /* tasksWriteQueue */ undefined,
-    /* agentFolderEnabled */ true,
-    /* rethinkBridge  */ async () => "",
-    /* loopsWriteQueue */ undefined,
-    /* paths          */ undefined,
-    /* parentConvoId  */ "convo-test",
-    /* browserBridge  */ fakeBrowserBridge
-  );
+  const server = createObsidianToolServer(app, {
+    alwaysLoad: true,
+    memoryWrite: true,
+    askBridge: async () => ({}),
+    memoryRead: true,
+    orchestrationEnabled: true,
+    agentFolderEnabled: true,
+    rethinkBridge: async () => "",
+    parentConvoId: "convo-test",
+    browserBridge: fakeBrowserBridge,
+  });
   const reg = (server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools;
   return new Set(Object.keys(reg));
 }
